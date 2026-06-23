@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 
-namespace IntelligentTradingSimulator.Core.Services;
+namespace IntelligentTradingSimulator.App.Simulation;
 
 public sealed class BacktestHistoricalMarketDataService
 {
