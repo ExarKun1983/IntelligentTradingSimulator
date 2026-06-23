@@ -8,7 +8,7 @@ using IntelligentTradingSimulator.Core.Services;
 
 namespace IntelligentTradingSimulator.App.Simulation;
 
-public sealed class BacktestDayProcessor
+public sealed class BacktestDayProcessor : IBacktestDayProcessor
 {
     private readonly BacktestHistoricalMarketDataService _historicalDataService;
     private readonly MarketObservationAnalyzer _analyzer;

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using IntelligentTradingSimulator.Core.Enums;
 
 namespace IntelligentTradingSimulator.Core.Models;
 
@@ -20,6 +21,8 @@ public sealed class BacktestRun
     public decimal TotalProfit { get; set; }
 
     public decimal TotalReturnPercent { get; set; }
+
+    public BacktestRunStatus Status { get; set; }
 
     public DateTime CreatedAt { get; set; }
 
