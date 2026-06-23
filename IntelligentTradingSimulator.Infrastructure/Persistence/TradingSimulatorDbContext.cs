@@ -59,9 +59,6 @@ public sealed class TradingSimulatorDbContext : DbContext
 
         entity.HasKey(x => x.Id);
 
-        //entity.Property(x => x.ObservationDate)
-        //    .IsRequired();
-
         entity.Property(x => x.Symbol)
             .HasMaxLength(20)
             .IsRequired();
@@ -84,15 +81,9 @@ public sealed class TradingSimulatorDbContext : DbContext
         entity.Property(x => x.IsAboveSma5)
             .IsRequired();
 
-        //entity.HasIndex(x => x.ObservationDate);
-
         entity.HasIndex(x => x.Symbol);
 
-        entity.HasIndex(x => new
-        {
-            //x.ObservationDate,
-            x.RankPosition
-        });
+        entity.HasIndex(x => new { x.RankPosition });
 
         entity
         .HasOne(x => x.ObservationRun)
