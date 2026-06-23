@@ -85,6 +85,8 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
         Assert.Equal(10_850m, result.Report.FinalCapital);
         Assert.Equal(850m, result.Report.TotalProfit);
         Assert.Equal(8.5m, result.Report.TotalReturnPercent);
+        Assert.Equal(3, result.Report.TradesCount);
+        Assert.Equal(3, result.Report.RebalancesCount);
         Assert.Equal(3, result.Report.ProcessedDays);
     }
 
@@ -107,7 +109,7 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
                 BacktestRunId = run.Id,
                 Date = new DateTime(2024, 4, 3),
                 PortfolioValue = 5_250m,
-                Cash = 900m,
+                Cash = 1_000m,
                 ProfitLoss = 250m,
                 ReturnPercent = 3.25m
             },
@@ -116,7 +118,7 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
                 BacktestRunId = run.Id,
                 Date = new DateTime(2024, 4, 1),
                 PortfolioValue = 4_900m,
-                Cash = 1_200m,
+                Cash = 900m,
                 ProfitLoss = -100m,
                 ReturnPercent = -2m
             },
@@ -135,8 +137,62 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
 
         Assert.True(result.IsSuccess);
         Assert.NotNull(result.Report);
+        Assert.Equal(2, result.Report.TradesCount);
+        Assert.Equal(2, result.Report.RebalancesCount);
         Assert.Equal(3.25m, result.Report.BestDayReturnPercent);
         Assert.Equal(-2m, result.Report.WorstDayReturnPercent);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_DoesNotCountTradesOrRebalancesWhenCashDoesNotChange()
+    {
+        var run = await CreateCompletedRunAsync(
+            name: "No Rebalance",
+            startDate: new DateTime(2024, 5, 1),
+            endDate: new DateTime(2024, 5, 3),
+            initialCapital: 8_000m,
+            finalCapital: 8_120m,
+            totalProfit: 120m,
+            totalReturnPercent: 1.5m);
+
+        await _snapshotRepository.AddRangeAsync(
+        [
+            new BacktestSnapshot
+            {
+                BacktestRunId = run.Id,
+                Date = new DateTime(2024, 5, 1),
+                PortfolioValue = 8_000m,
+                Cash = 8_000m,
+                ProfitLoss = 0m,
+                ReturnPercent = 0m
+            },
+            new BacktestSnapshot
+            {
+                BacktestRunId = run.Id,
+                Date = new DateTime(2024, 5, 2),
+                PortfolioValue = 8_060m,
+                Cash = 8_000m,
+                ProfitLoss = 60m,
+                ReturnPercent = 0.75m
+            },
+            new BacktestSnapshot
+            {
+                BacktestRunId = run.Id,
+                Date = new DateTime(2024, 5, 3),
+                PortfolioValue = 8_120m,
+                Cash = 8_000m,
+                ProfitLoss = 120m,
+                ReturnPercent = 1.5m
+            }
+        ]);
+
+        var result = await _service.GenerateAsync(run.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.Report);
+        Assert.Equal(0, result.Report.TradesCount);
+        Assert.Equal(0, result.Report.RebalancesCount);
+        Assert.Equal(3, result.Report.ProcessedDays);
     }
 
     [Fact]

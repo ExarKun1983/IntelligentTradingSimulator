@@ -1,7 +1,9 @@
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Interfaces;
+using IntelligentTradingSimulator.Core.Models;
 
 namespace IntelligentTradingSimulator.App.Reporting;
 
@@ -51,6 +53,9 @@ public sealed class BacktestSummaryReportService
             };
         }
 
+        var (tradesCount, rebalancesCount) =
+            CalculateInferredCounts(run.InitialCapital, snapshots);
+
         return new BacktestSummaryReportResult
         {
             RunId = runId,
@@ -64,10 +69,39 @@ public sealed class BacktestSummaryReportService
                 FinalCapital = run.FinalCapital,
                 TotalProfit = run.TotalProfit,
                 TotalReturnPercent = run.TotalReturnPercent,
+                TradesCount = tradesCount,
+                RebalancesCount = rebalancesCount,
                 ProcessedDays = snapshots.Count,
                 BestDayReturnPercent = snapshots.Max(x => x.ReturnPercent),
                 WorstDayReturnPercent = snapshots.Min(x => x.ReturnPercent)
             }
         };
+    }
+
+    private static (int TradesCount, int RebalancesCount) CalculateInferredCounts(
+        decimal initialCapital,
+        IReadOnlyList<BacktestSnapshot> snapshots)
+    {
+        const decimal cashChangeThreshold = 0.0001m;
+
+        var previousCash = initialCapital;
+        var inferredRebalances = 0;
+        var inferredTrades = 0;
+
+        foreach (var snapshot in snapshots)
+        {
+            if (decimal.Abs(snapshot.Cash - previousCash) > cashChangeThreshold)
+            {
+                // Backtest snapshots do not persist per-trade/per-rebalance events.
+                // We infer a reliable minimum: any day with cash movement must have
+                // executed at least one rebalance and at least one trade.
+                inferredRebalances++;
+                inferredTrades++;
+            }
+
+            previousCash = snapshot.Cash;
+        }
+
+        return (inferredTrades, inferredRebalances);
     }
 }

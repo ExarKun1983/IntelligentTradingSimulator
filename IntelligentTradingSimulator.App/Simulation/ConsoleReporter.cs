@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using IntelligentTradingSimulator.App.Reporting;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
 
@@ -206,5 +207,30 @@ public sealed class ConsoleReporter
 
         Console.WriteLine(
             $"CreatedAt: {previousRun.CreatedAt}");
+    }
+
+    public void PrintBacktestSummary(BacktestSummaryReportResult result)
+    {
+        Console.WriteLine();
+        Console.WriteLine("===== BACKTEST SUMMARY =====");
+
+        if (!result.IsSuccess || result.Report is null)
+        {
+            Console.WriteLine(
+                $"Unable to generate backtest summary for run {result.RunId}: {result.ErrorMessage}");
+            return;
+        }
+
+        var report = result.Report;
+
+        Console.WriteLine($"RunId: {report.RunId}");
+        Console.WriteLine($"Name: {report.Name}");
+        Console.WriteLine($"Date Range: {report.StartDate:yyyy-MM-dd} -> {report.EndDate:yyyy-MM-dd}");
+        Console.WriteLine($"Initial Capital: {report.InitialCapital:N2}");
+        Console.WriteLine($"Final Capital: {report.FinalCapital:N2}");
+        Console.WriteLine($"Profit: {report.TotalProfit:N2}");
+        Console.WriteLine($"Return: {report.TotalReturnPercent:N2}%");
+        Console.WriteLine($"Trades: {report.TradesCount}");
+        Console.WriteLine($"Rebalances: {report.RebalancesCount}");
     }
 }

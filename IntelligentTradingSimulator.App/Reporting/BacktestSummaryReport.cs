@@ -20,6 +20,10 @@ public sealed class BacktestSummaryReport
 
     public decimal TotalReturnPercent { get; set; }
 
+    public int TradesCount { get; set; }
+
+    public int RebalancesCount { get; set; }
+
     public int ProcessedDays { get; set; }
 
     public decimal BestDayReturnPercent { get; set; }
