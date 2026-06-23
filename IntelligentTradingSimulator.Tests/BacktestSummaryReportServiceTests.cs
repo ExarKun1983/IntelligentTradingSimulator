@@ -35,6 +35,8 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
     {
         var run = await CreateCompletedRunAsync(
             name: "Momentum Q1",
+            startDate: new DateTime(2024, 1, 1),
+            endDate: new DateTime(2024, 1, 3),
             initialCapital: 10_000m,
             finalCapital: 10_850m,
             totalProfit: 850m,
@@ -91,6 +93,8 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
     {
         var run = await CreateCompletedRunAsync(
             name: "Momentum Q2",
+            startDate: new DateTime(2024, 4, 1),
+            endDate: new DateTime(2024, 4, 3),
             initialCapital: 5_000m,
             finalCapital: 5_250m,
             totalProfit: 250m,
@@ -150,6 +154,8 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
     {
         var run = await CreateCompletedRunAsync(
             name: "No Snapshots",
+            startDate: new DateTime(2024, 1, 1),
+            endDate: new DateTime(2024, 1, 3),
             initialCapital: 10_000m,
             finalCapital: 10_000m,
             totalProfit: 0m,
@@ -166,6 +172,8 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
 
     private async Task<BacktestRun> CreateCompletedRunAsync(
         string name,
+        DateTime startDate,
+        DateTime endDate,
         decimal initialCapital,
         decimal finalCapital,
         decimal totalProfit,
@@ -174,8 +182,8 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
         var run = new BacktestRun
         {
             Name = name,
-            StartDate = new DateTime(2024, 1, 1),
-            EndDate = new DateTime(2024, 1, 3),
+            StartDate = startDate,
+            EndDate = endDate,
             InitialCapital = initialCapital,
             FinalCapital = finalCapital,
             TotalProfit = totalProfit,

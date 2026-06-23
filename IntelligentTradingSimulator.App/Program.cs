@@ -32,7 +32,7 @@ services.AddSingleton<PortfolioContributionService>();
 services.AddSingleton<PortfolioRebalancingService>();
 
 services.AddSingleton<ConsoleReporter>();
-services.AddScoped<BacktestSummaryReportService>();
+services.AddTransient<BacktestSummaryReportService>();
 services.AddScoped<MarketDataWorkflow>();
 services.AddScoped<PortfolioWorkflow>();
 services.AddScoped<SimulationRunner>();
