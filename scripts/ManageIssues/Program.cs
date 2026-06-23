@@ -24,6 +24,12 @@ if (repoParts.Length != 2)
 var owner = repoParts[0];
 var repoName = repoParts[1];
 
+var jsonOptions = new JsonSerializerOptions
+{
+    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+};
+
 var labelColors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 {
     ["backtesting"] = "1D76DB",
@@ -52,75 +58,69 @@ var labelColors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCas
     ["training-data"] = "FCE94F",
     ["explainability"] = "FF9F1C",
     ["evaluation"] = "2ECC71",
-    ["scoring"] = "FFB347",
-    ["milestone-1"] = "000000",
-    ["milestone-2"] = "111111",
-    ["milestone-3"] = "222222",
-    ["milestone-4"] = "333333",
-    ["milestone-5"] = "444444",
-    ["milestone-6"] = "555555"
+    ["scoring"] = "FFB347"
 };
 
 var issueConfig = new Dictionary<int, IssueConfig>
 {
-    [2] = new(new[] { "backtesting", "persistence", "milestone-1" }),
-    [3] = new(new[] { "backtesting", "persistence", "milestone-1" }, "Depends on #2"),
-    [4] = new(new[] { "backtesting", "core-logic", "milestone-1" }, "Blocked by #2, #3, #5, #6"),
-    [5] = new(new[] { "backtesting", "market-data", "milestone-1" }),
-    [6] = new(new[] { "backtesting", "application", "milestone-1" }, "Depends on #5"),
-    [7] = new(new[] { "backtesting", "reporting", "milestone-1" }, "Blocked by #4 and uses data introduced in #3"),
-    [8] = new(new[] { "benchmark", "market-data", "milestone-2" }),
-    [9] = new(new[] { "benchmark", "reporting", "milestone-2" }, "Depends on #8"),
-    [10] = new(new[] { "benchmark", "analytics", "milestone-2" }, "Depends on #8 and #9"),
-    [11] = new(new[] { "risk-management", "strategy", "milestone-2" }),
-    [12] = new(new[] { "risk-management", "allocation", "milestone-2" }),
-    [13] = new(new[] { "risk-management", "analytics", "milestone-2" }, "Depends on #3"),
-    [14] = new(new[] { "risk-management", "analytics", "milestone-2" }, "Depends on #13"),
-    [15] = new(new[] { "reporting", "benchmark", "risk-management", "milestone-2" }, "Blocked by #9, #10, #13, and #14"),
-    [16] = new(new[] { "strategy", "configuration", "milestone-3" }),
-    [17] = new(new[] { "strategy", "persistence", "milestone-3" }, "Depends on #16"),
-    [18] = new(new[] { "strategy", "configuration", "milestone-3" }, "Depends on #16"),
-    [19] = new(new[] { "strategy", "configuration", "milestone-3" }, "Depends on #16 and #18"),
-    [20] = new(new[] { "strategy", "backtesting", "milestone-3" }, "Blocked by #19 and requires backtest execution from #4"),
-    [21] = new(new[] { "reporting", "strategy", "milestone-3" }, "Depends on #20"),
-    [22] = new(new[] { "reporting", "analytics", "milestone-3" }, "Depends on #21"),
-    [23] = new(new[] { "benchmark", "strategy", "reporting", "milestone-3" }, "Depends on #21 and benchmark issues #8, #9, #10"),
-    [24] = new(new[] { "documentation", "strategy", "milestone-3" }),
-    [25] = new(new[] { "advanced-factors", "analytics", "milestone-4" }),
-    [26] = new(new[] { "advanced-factors", "scoring", "milestone-4" }, "Depends on #25"),
-    [27] = new(new[] { "advanced-factors", "analytics", "milestone-4" }),
-    [28] = new(new[] { "advanced-factors", "scoring", "milestone-4" }, "Depends on #27"),
-    [29] = new(new[] { "advanced-factors", "benchmark", "milestone-4" }),
-    [30] = new(new[] { "advanced-factors", "scoring", "milestone-4" }, "Depends on #29"),
-    [31] = new(new[] { "advanced-factors", "analytics", "milestone-4" }),
-    [32] = new(new[] { "advanced-factors", "scoring", "milestone-4" }, "Blocked by #25, #27, #29, #31 and should integrate scoring behavior from #26, #28, #30"),
-    [33] = new(new[] { "advanced-factors", "reporting", "milestone-4" }, "Depends on #32"),
-    [34] = new(new[] { "advanced-factors", "ranking", "milestone-4" }, "Depends on #32"),
-    [35] = new(new[] { "configuration", "advanced-factors", "milestone-4" }, "Depends on #16 and should align with #32"),
-    [36] = new(new[] { "documentation", "advanced-factors", "milestone-4" }),
-    [37] = new(new[] { "risk-management", "execution", "milestone-5" }, "Depends on #39"),
-    [38] = new(new[] { "risk-management", "execution", "milestone-5" }, "Depends on #39"),
-    [39] = new(new[] { "execution", "persistence", "milestone-5" }),
-    [40] = new(new[] { "advanced-factors", "fundamentals", "milestone-5" }),
-    [41] = new(new[] { "fundamentals", "infrastructure", "milestone-5" }, "Depends on #40"),
-    [42] = new(new[] { "advanced-factors", "scoring", "milestone-5" }, "Blocked by #40 and #41"),
-    [43] = new(new[] { "reporting", "export", "milestone-5" }),
-    [44] = new(new[] { "reporting", "export", "milestone-5" }),
-    [45] = new(new[] { "reporting", "export", "milestone-5" }, "Depends on strategy comparison reporting from #21"),
-    [46] = new(new[] { "documentation", "developer-experience", "milestone-5" }),
-    [47] = new(new[] { "documentation", "architecture", "milestone-5" }),
-    [48] = new(new[] { "ai", "architecture", "milestone-6" }),
-    [49] = new(new[] { "ai", "data-model", "milestone-6" }, "Follows architecture abstraction introduced in #48"),
-    [50] = new(new[] { "ai", "persistence", "milestone-6" }, "Depends on #49"),
-    [51] = new(new[] { "ai", "training-data", "milestone-6" }, "Depends on #50"),
-    [52] = new(new[] { "ai", "training-data", "export", "milestone-6" }, "Blocked by #50 and #51"),
-    [53] = new(new[] { "ai", "explainability", "milestone-6" }, "Depends on factor/feature transparency from #33 and feature modeling from #49"),
-    [54] = new(new[] { "ai", "explainability", "reporting", "milestone-6" }, "Depends on reporting from #15 and strategy comparison from #21"),
-    [55] = new(new[] { "ai", "configuration", "milestone-6" }, "Depends on #48"),
-    [56] = new(new[] { "ai", "architecture", "milestone-6" }, "Blocked by #48, #49, and #55"),
-    [57] = new(new[] { "ai", "evaluation", "milestone-6" }, "Depends on #52 and #56"),
-    [58] = new(new[] { "ai", "strategy", "milestone-6" }, "Depends on strategy comparison outputs and evaluation groundwork from #57"),
-    [59] = new(new[] { "documentation", "ai", "architecture", "milestone-6" })
+    [2] = new(new[] { "backtesting", "persistence" }),
+    [3] = new(new[] { "backtesting", "persistence" }, "Depends on #2"),
+    [4] = new(new[] { "backtesting", "core-logic" }, "Blocked by #2, #3, #5, #6"),
+    [5] = new(new[] { "backtesting", "market-data" }),
+    [6] = new(new[] { "backtesting", "application" }, "Depends on #5"),
+    [7] = new(new[] { "backtesting", "reporting" }, "Blocked by #4 and uses data introduced in #3"),
+    [8] = new(new[] { "benchmark", "market-data" }),
+    [9] = new(new[] { "benchmark", "reporting" }, "Depends on #8"),
+    [10] = new(new[] { "benchmark", "analytics" }, "Depends on #8 and #9"),
+    [11] = new(new[] { "risk-management", "strategy" }),
+    [12] = new(new[] { "risk-management", "allocation" }),
+    [13] = new(new[] { "risk-management", "analytics" }, "Depends on #3"),
+    [14] = new(new[] { "risk-management", "analytics" }, "Depends on #13"),
+    [15] = new(new[] { "reporting", "benchmark", "risk-management" }, "Blocked by #9, #10, #13, and #14"),
+    [16] = new(new[] { "strategy", "configuration" }),
+    [17] = new(new[] { "strategy", "persistence" }, "Depends on #16"),
+    [18] = new(new[] { "strategy", "configuration" }, "Depends on #16"),
+    [19] = new(new[] { "strategy", "configuration" }, "Depends on #16 and #18"),
+    [20] = new(new[] { "strategy", "backtesting" }, "Blocked by #19 and requires backtest execution from #4"),
+    [21] = new(new[] { "reporting", "strategy" }, "Depends on #20"),
+    [22] = new(new[] { "reporting", "analytics" }, "Depends on #21"),
+    [23] = new(new[] { "benchmark", "strategy", "reporting" }, "Depends on #21 and benchmark issues #8, #9, #10"),
+    [24] = new(new[] { "documentation", "strategy" }),
+    [25] = new(new[] { "advanced-factors", "analytics" }),
+    [26] = new(new[] { "advanced-factors", "scoring" }, "Depends on #25"),
+    [27] = new(new[] { "advanced-factors", "analytics" }),
+    [28] = new(new[] { "advanced-factors", "scoring" }, "Depends on #27"),
+    [29] = new(new[] { "advanced-factors", "benchmark" }),
+    [30] = new(new[] { "advanced-factors", "scoring" }, "Depends on #29"),
+    [31] = new(new[] { "advanced-factors", "analytics" }),
+    [32] = new(new[] { "advanced-factors", "scoring" }, "Blocked by #25, #27, #29, #31 and should integrate scoring behavior from #26, #28, #30"),
+    [33] = new(new[] { "advanced-factors", "reporting" }, "Depends on #32"),
+    [34] = new(new[] { "advanced-factors", "ranking" }, "Depends on #32"),
+    [35] = new(new[] { "configuration", "advanced-factors" }, "Depends on #16 and should align with #32"),
+    [36] = new(new[] { "documentation", "advanced-factors" }),
+    [37] = new(new[] { "risk-management", "execution" }, "Depends on #39"),
+    [38] = new(new[] { "risk-management", "execution" }, "Depends on #39"),
+    [39] = new(new[] { "execution", "persistence" }),
+    [40] = new(new[] { "advanced-factors", "fundamentals" }),
+    [41] = new(new[] { "fundamentals", "infrastructure" }, "Depends on #40"),
+    [42] = new(new[] { "advanced-factors", "scoring" }, "Blocked by #40 and #41"),
+    [43] = new(new[] { "reporting", "export" }),
+    [44] = new(new[] { "reporting", "export" }),
+    [45] = new(new[] { "reporting", "export" }, "Depends on strategy comparison reporting from #21"),
+    [46] = new(new[] { "documentation", "developer-experience" }),
+    [47] = new(new[] { "documentation", "architecture" }),
+    [48] = new(new[] { "ai", "architecture" }),
+    [49] = new(new[] { "ai", "data-model" }, "Follows architecture abstraction introduced in #48"),
+    [50] = new(new[] { "ai", "persistence" }, "Depends on #49"),
+    [51] = new(new[] { "ai", "training-data" }, "Depends on #50"),
+    [52] = new(new[] { "ai", "training-data", "export" }, "Blocked by #50 and #51"),
+    [53] = new(new[] { "ai", "explainability" }, "Depends on factor/feature transparency from #33 and feature modeling from #49"),
+    [54] = new(new[] { "ai", "explainability", "reporting" }, "Depends on reporting from #15 and strategy comparison from #21"),
+    [55] = new(new[] { "ai", "configuration" }, "Depends on #48"),
+    [56] = new(new[] { "ai", "architecture" }, "Blocked by #48, #49, and #55"),
+    [57] = new(new[] { "ai", "evaluation" }, "Depends on #52 and #56"),
+    [58] = new(new[] { "ai", "strategy" }, "Depends on strategy comparison outputs and evaluation groundwork from #57"),
+    [59] = new(new[] { "documentation", "ai", "architecture" })
 };
 
 using var httpClient = new HttpClient
@@ -177,7 +177,7 @@ async Task<HashSet<string>> GetExistingLabelsAsync()
     {
         var response = await SendAsync(HttpMethod.Get, $"repos/{owner}/{repoName}/labels?per_page=100&page={page}");
         var body = await response.Content.ReadAsStringAsync();
-        var labels = JsonSerializer.Deserialize<List<LabelDto>>(body, JsonOptions) ?? new();
+        var labels = JsonSerializer.Deserialize<List<LabelDto>>(body, jsonOptions) ?? new();
 
         if (labels.Count == 0)
         {
@@ -285,7 +285,7 @@ async Task<List<CommentDto>> GetCommentsAsync(int issueNumber)
     {
         var response = await SendAsync(HttpMethod.Get, $"repos/{owner}/{repoName}/issues/{issueNumber}/comments?per_page=100&page={page}");
         var body = await response.Content.ReadAsStringAsync();
-        var comments = JsonSerializer.Deserialize<List<CommentDto>>(body, JsonOptions) ?? new();
+        var comments = JsonSerializer.Deserialize<List<CommentDto>>(body, jsonOptions) ?? new();
 
         if (comments.Count == 0)
         {
@@ -311,7 +311,7 @@ async Task<HttpResponseMessage> SendAsync(HttpMethod method, string url, object?
 
     if (payload is not null)
     {
-        var json = JsonSerializer.Serialize(payload, JsonOptions);
+        var json = JsonSerializer.Serialize(payload, jsonOptions);
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
     }
 
@@ -324,7 +324,7 @@ async Task<HttpResponseMessage> SendAsync(HttpMethod method, string url, object?
     return response;
 }
 
-static async Task EnsureSuccessAsync(HttpResponseMessage response)
+async Task EnsureSuccessAsync(HttpResponseMessage response)
 {
     if (response.IsSuccessStatusCode)
     {
@@ -334,12 +334,6 @@ static async Task EnsureSuccessAsync(HttpResponseMessage response)
     var content = await response.Content.ReadAsStringAsync();
     throw new InvalidOperationException($"GitHub API request failed: {(int)response.StatusCode} {response.ReasonPhrase}\n{content}");
 }
-
-static readonly JsonSerializerOptions JsonOptions = new()
-{
-    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-};
 
 internal sealed record IssueConfig(IReadOnlyList<string> Labels, string? Comment = null);
 
