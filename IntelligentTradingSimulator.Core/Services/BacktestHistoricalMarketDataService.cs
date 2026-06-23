@@ -73,7 +73,6 @@ public sealed class BacktestHistoricalMarketDataService
 
         return candles
             .Where(x => x.Date.Date <= simulatedDay)
-            .OrderBy(x => x.Date)
             .ToList();
     }
 

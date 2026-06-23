@@ -44,8 +44,7 @@ public sealed class YahooMarketDataProvider
 
         return data
             .Where(x =>
-                x.Date.Date >= fromDate
-                && x.Date.Date <= toDate)
+                x.Date.Date <= toDate)
             .Select(x => new MarketCandle
             {
                 Date = x.Date,
