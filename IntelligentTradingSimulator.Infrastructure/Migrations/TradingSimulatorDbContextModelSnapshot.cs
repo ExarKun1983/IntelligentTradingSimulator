@@ -52,6 +52,9 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     b.Property<DateTime>("StartDate")
                         .HasColumnType("datetime2");
 
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
                     b.Property<decimal>("TotalProfit")
                         .HasPrecision(18, 4)
                         .HasColumnType("decimal(18,4)");

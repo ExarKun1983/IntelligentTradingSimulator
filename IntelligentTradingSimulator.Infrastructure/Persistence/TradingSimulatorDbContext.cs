@@ -132,6 +132,9 @@ public sealed class TradingSimulatorDbContext : DbContext
         entity.Property(x => x.TotalReturnPercent)
             .HasPrecision(18, 4);
 
+        entity.Property(x => x.Status)
+            .IsRequired();
+
         entity.Property(x => x.CreatedAt)
             .IsRequired();
     }
