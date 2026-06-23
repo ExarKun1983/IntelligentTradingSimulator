@@ -1,9 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using IntelligentTradingSimulator.Core.Models;
+﻿using IntelligentTradingSimulator.Core.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace IntelligentTradingSimulator.Infrastructure.Persistence;

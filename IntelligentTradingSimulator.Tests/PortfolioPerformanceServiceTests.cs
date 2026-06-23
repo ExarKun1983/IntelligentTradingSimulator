@@ -28,7 +28,7 @@ public sealed class PortfolioPerformanceServiceTests
     {
         var portfolio = new Portfolio
         {
-            StartingCash = 10_000m,
+            StartingCash = 1_000m,
             Cash = 0m,
             Positions =
             [
@@ -45,7 +45,7 @@ public sealed class PortfolioPerformanceServiceTests
         var result = _service.Calculate(portfolio);
 
         Assert.Equal(1_500m, result.PortfolioValue);
-        Assert.Equal(-8_500m, result.ProfitLoss);
+        Assert.Equal(500m, result.ProfitLoss);
     }
 
     [Fact]

@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using System;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
@@ -14,11 +10,15 @@ public sealed class TradingSimulatorDbContextFactory
 {
     public TradingSimulatorDbContext CreateDbContext(string[] args)
     {
+        var connectionString =
+            Environment.GetEnvironmentVariable("TRADING_DB_CONNECTION")
+            ?? throw new InvalidOperationException(
+                "Set the TRADING_DB_CONNECTION environment variable before running EF migrations.");
+
         var builder =
             new DbContextOptionsBuilder<TradingSimulatorDbContext>();
 
-        builder.UseSqlServer(
-            "Server=192.168.1.45,1433;Database=IntelligentTradingSimulator;User Id=sa;Password=Dom43pak!@#;TrustServerCertificate=True;");
+        builder.UseSqlServer(connectionString);
 
         return new TradingSimulatorDbContext(
             builder.Options);
