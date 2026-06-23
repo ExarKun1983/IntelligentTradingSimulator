@@ -49,6 +49,7 @@ public sealed class BacktestEngine
         {
             var currentDate = request.StartDate.Date;
             var endDate = request.EndDate.Date;
+            BacktestDayResult? lastDayResult = null;
 
             while (currentDate <= endDate)
             {
@@ -62,12 +63,13 @@ public sealed class BacktestEngine
                 };
 
                 var dayResult = await _dayProcessor.ProcessAsync(dayRequest);
+                lastDayResult = dayResult;
 
                 portfolio = dayResult.Portfolio;
                 currentDate = currentDate.AddDays(1);
             }
 
-            var finalValue = portfolio.TotalValue;
+            var finalValue = lastDayResult?.Snapshot.PortfolioValue ?? portfolio.TotalValue;
             run.FinalCapital = Math.Round(finalValue, FinancialPrecision);
             run.TotalProfit = Math.Round(finalValue - request.InitialCapital, FinancialPrecision);
             run.TotalReturnPercent = request.InitialCapital > 0m

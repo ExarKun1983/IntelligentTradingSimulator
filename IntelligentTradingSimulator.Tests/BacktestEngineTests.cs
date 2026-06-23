@@ -133,6 +133,31 @@ public sealed class BacktestEngineTests : IDisposable
         Assert.Equal(BacktestRunStatus.Failed, saved.Status);
     }
 
+    [Fact]
+    public async Task RunAsync_FinalizesMetricsFromLastDaySnapshot_NotPortfolioTotalValue()
+    {
+        var startDate = new DateTime(2024, 6, 1);
+        var endDate = new DateTime(2024, 6, 2);
+        const decimal initialCapital = 10_000m;
+        const decimal snapshotPortfolioValue = 12_500m;
+
+        // Processor returns a snapshot whose PortfolioValue differs from
+        // portfolio.TotalValue to verify the engine uses the snapshot.
+        var processor = new SnapshotOverrideDayProcessor(snapshotPortfolioValue);
+        var engine = BuildEngine(processor);
+
+        var result = await engine.RunAsync(BuildRequest(startDate, endDate, initialCapital));
+
+        Assert.Equal(BacktestRunStatus.Completed, result.Status);
+        Assert.Equal(snapshotPortfolioValue, result.FinalCapital);
+        Assert.Equal(snapshotPortfolioValue - initialCapital, result.TotalProfit);
+
+        var saved = await _runRepository.GetByIdAsync(result.RunId);
+        Assert.NotNull(saved);
+        Assert.Equal(snapshotPortfolioValue, saved.FinalCapital);
+        Assert.Equal(snapshotPortfolioValue - initialCapital, saved.TotalProfit);
+    }
+
     // ── Stubs ──────────────────────────────────────────────────────────────
 
     private sealed class StubDayProcessor : IBacktestDayProcessor
@@ -218,6 +243,33 @@ public sealed class BacktestEngineTests : IDisposable
                     BacktestRunId = request.BacktestRunId,
                     Date = request.CurrentDate.Date,
                     PortfolioValue = request.Portfolio.TotalValue,
+                    Cash = request.Portfolio.Cash
+                },
+                Recommendations = []
+            });
+        }
+    }
+
+    private sealed class SnapshotOverrideDayProcessor : IBacktestDayProcessor
+    {
+        private readonly decimal _snapshotPortfolioValue;
+
+        public SnapshotOverrideDayProcessor(decimal snapshotPortfolioValue)
+        {
+            _snapshotPortfolioValue = snapshotPortfolioValue;
+        }
+
+        public Task<BacktestDayResult> ProcessAsync(BacktestDayRequest request)
+        {
+            return Task.FromResult(new BacktestDayResult
+            {
+                CurrentDate = request.CurrentDate.Date,
+                Portfolio = request.Portfolio,
+                Snapshot = new BacktestSnapshot
+                {
+                    BacktestRunId = request.BacktestRunId,
+                    Date = request.CurrentDate.Date,
+                    PortfolioValue = _snapshotPortfolioValue,
                     Cash = request.Portfolio.Cash
                 },
                 Recommendations = []
