@@ -10,6 +10,10 @@ namespace IntelligentTradingSimulator.App.Reporting;
 
 public sealed class BacktestSummaryReportService
 {
+    // Backtest cash values are persisted with 4-decimal precision.
+    // We ignore differences up to that precision threshold.
+    private const decimal CashChangeThreshold = 0.0001m;
+
     private readonly IBacktestRunRepository _runRepository;
     private readonly IBacktestSnapshotRepository _snapshotRepository;
 
@@ -83,26 +87,22 @@ public sealed class BacktestSummaryReportService
         decimal initialCapital,
         IReadOnlyList<BacktestSnapshot> snapshots)
     {
-        const decimal cashChangeThreshold = 0.0001m;
-
         var previousCash = initialCapital;
-        var inferredRebalances = 0;
-        var inferredTrades = 0;
+        var inferredCashMovementDays = 0;
 
         foreach (var snapshot in snapshots)
         {
-            if (Math.Abs(snapshot.Cash - previousCash) > cashChangeThreshold)
+            if (Math.Abs(snapshot.Cash - previousCash) > CashChangeThreshold)
             {
                 // Backtest snapshots do not persist per-trade/per-rebalance events.
                 // We infer a reliable minimum: any day with cash movement must have
-                // executed at least one rebalance and at least one trade.
-                inferredRebalances++;
-                inferredTrades++;
+                // executed at least one trade as part of rebalance activity.
+                inferredCashMovementDays++;
             }
 
             previousCash = snapshot.Cash;
         }
 
-        return (inferredTrades, inferredRebalances);
+        return (inferredCashMovementDays, inferredCashMovementDays);
     }
 }

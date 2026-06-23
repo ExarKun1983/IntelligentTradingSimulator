@@ -9,7 +9,7 @@ namespace IntelligentTradingSimulator.Tests;
 public sealed class ConsoleReporterBacktestSummaryTests
 {
     [Fact]
-    public void PrintBacktestSummary_PrintsTradesAndRebalances()
+    public void PrintBacktestSummary_OutputsFormattedSummary()
     {
         var reporter =
             new ConsoleReporter(
