@@ -1,4 +1,5 @@
 using System;
+using IntelligentTradingSimulator.App.Reporting;
 using IntelligentTradingSimulator.App.Simulation;
 using IntelligentTradingSimulator.Core.Services;
 using IntelligentTradingSimulator.Infrastructure;
@@ -31,6 +32,7 @@ services.AddSingleton<PortfolioContributionService>();
 services.AddSingleton<PortfolioRebalancingService>();
 
 services.AddSingleton<ConsoleReporter>();
+services.AddScoped<BacktestSummaryReportService>();
 services.AddScoped<MarketDataWorkflow>();
 services.AddScoped<PortfolioWorkflow>();
 services.AddScoped<SimulationRunner>();
