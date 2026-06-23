@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -10,7 +11,7 @@ namespace IntelligentTradingSimulator.Core.Services;
 public sealed class BacktestHistoricalMarketDataService
 {
     private readonly IMarketDataProvider _marketDataProvider;
-    private readonly Dictionary<string, IReadOnlyList<MarketCandle>> _cachedRanges = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Task<IReadOnlyList<MarketCandle>>> _cachedRanges = new(StringComparer.OrdinalIgnoreCase);
 
     public BacktestHistoricalMarketDataService(
         IMarketDataProvider marketDataProvider)
@@ -33,28 +34,12 @@ public sealed class BacktestHistoricalMarketDataService
 
         var cacheKey = BuildCacheKey(symbol, fromDate, toDate);
 
-        if (_cachedRanges.TryGetValue(cacheKey, out var cached))
-        {
-            return cached;
-        }
+        var loadTask =
+            _cachedRanges.GetOrAdd(
+                cacheKey,
+                _ => LoadRangeAsync(symbol, fromDate, toDate));
 
-        var loaded =
-            await _marketDataProvider.GetHistoricalDailyAsync(
-                symbol,
-                fromDate,
-                toDate);
-
-        var normalized =
-            (loaded ?? [])
-            .Where(x =>
-                x.Date.Date >= fromDate
-                && x.Date.Date <= toDate)
-            .OrderBy(x => x.Date)
-            .ToList();
-
-        _cachedRanges[cacheKey] = normalized;
-
-        return normalized;
+        return await loadTask;
     }
 
     public async Task<IReadOnlyList<MarketCandle>> GetHistoricalDailyUpToAsync(
@@ -82,5 +67,24 @@ public sealed class BacktestHistoricalMarketDataService
         DateTime to)
     {
         return $"{symbol.ToUpperInvariant()}|{from:yyyyMMdd}|{to:yyyyMMdd}";
+    }
+
+    private async Task<IReadOnlyList<MarketCandle>> LoadRangeAsync(
+        string symbol,
+        DateTime fromDate,
+        DateTime toDate)
+    {
+        var loaded =
+            await _marketDataProvider.GetHistoricalDailyAsync(
+                symbol,
+                fromDate,
+                toDate);
+
+        return (loaded ?? [])
+            .Where(x =>
+                x.Date.Date >= fromDate
+                && x.Date.Date <= toDate)
+            .OrderBy(x => x.Date)
+            .ToList();
     }
 }

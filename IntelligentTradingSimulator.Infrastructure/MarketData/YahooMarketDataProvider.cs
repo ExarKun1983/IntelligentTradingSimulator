@@ -16,7 +16,7 @@ public sealed class YahooMarketDataProvider
         return GetHistoricalDailyAsync(
             symbol,
             from,
-            DateTime.UtcNow.Date);
+            DateTime.MaxValue.Date);
     }
 
     public async Task<IReadOnlyList<MarketCandle>>
