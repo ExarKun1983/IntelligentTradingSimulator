@@ -1,0 +1,39 @@
+using System.Threading.Tasks;
+
+using IntelligentTradingSimulator.Core.Interfaces;
+using IntelligentTradingSimulator.Core.Models;
+using Microsoft.EntityFrameworkCore;
+
+namespace IntelligentTradingSimulator.Infrastructure.Persistence;
+
+public sealed class BacktestRunRepository : IBacktestRunRepository
+{
+    private readonly TradingSimulatorDbContext _dbContext;
+
+    public BacktestRunRepository(
+        TradingSimulatorDbContext dbContext)
+    {
+        _dbContext = dbContext;
+    }
+
+    public async Task AddAsync(BacktestRun run)
+    {
+        _dbContext.BacktestRuns.Add(run);
+
+        await _dbContext.SaveChangesAsync();
+    }
+
+    public async Task<BacktestRun?> GetByIdAsync(int id)
+    {
+        return await _dbContext.BacktestRuns
+            .Include(x => x.Snapshots)
+            .FirstOrDefaultAsync(x => x.Id == id);
+    }
+
+    public async Task UpdateAsync(BacktestRun run)
+    {
+        _dbContext.BacktestRuns.Update(run);
+
+        await _dbContext.SaveChangesAsync();
+    }
+}

@@ -31,10 +31,20 @@ public sealed class TradingSimulatorDbContext : DbContext
     PositionSnapshots =>
         Set<PositionSnapshot>();
 
+    public DbSet<BacktestRun>
+    BacktestRuns =>
+        Set<BacktestRun>();
+
+    public DbSet<BacktestSnapshot>
+    BacktestSnapshots =>
+        Set<BacktestSnapshot>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         ConfigureObservationRun(modelBuilder);
         ConfigureObservationResult(modelBuilder);
+        ConfigureBacktestRun(modelBuilder);
+        ConfigureBacktestSnapshot(modelBuilder);
     }
 
     private static void ConfigureObservationRun(
@@ -89,5 +99,75 @@ public sealed class TradingSimulatorDbContext : DbContext
         .HasOne(x => x.ObservationRun)
         .WithMany(x => x.Results)
         .HasForeignKey(x => x.ObservationRunId);
+    }
+
+    private static void ConfigureBacktestRun(
+        ModelBuilder modelBuilder)
+    {
+        var entity = modelBuilder.Entity<BacktestRun>();
+
+        entity.ToTable("BacktestRuns");
+
+        entity.HasKey(x => x.Id);
+
+        entity.Property(x => x.Name)
+            .HasMaxLength(200)
+            .IsRequired();
+
+        entity.Property(x => x.StartDate)
+            .IsRequired();
+
+        entity.Property(x => x.EndDate)
+            .IsRequired();
+
+        entity.Property(x => x.InitialCapital)
+            .HasPrecision(18, 4);
+
+        entity.Property(x => x.FinalCapital)
+            .HasPrecision(18, 4);
+
+        entity.Property(x => x.TotalProfit)
+            .HasPrecision(18, 4);
+
+        entity.Property(x => x.TotalReturnPercent)
+            .HasPrecision(18, 4);
+
+        entity.Property(x => x.CreatedAt)
+            .IsRequired();
+    }
+
+    private static void ConfigureBacktestSnapshot(
+        ModelBuilder modelBuilder)
+    {
+        var entity = modelBuilder.Entity<BacktestSnapshot>();
+
+        entity.ToTable("BacktestSnapshots");
+
+        entity.HasKey(x => x.Id);
+
+        entity.Property(x => x.Date)
+            .IsRequired();
+
+        entity.Property(x => x.PortfolioValue)
+            .HasPrecision(18, 4);
+
+        entity.Property(x => x.Cash)
+            .HasPrecision(18, 4);
+
+        entity.Property(x => x.ProfitLoss)
+            .HasPrecision(18, 4);
+
+        entity.Property(x => x.ReturnPercent)
+            .HasPrecision(18, 4);
+
+        entity.HasIndex(x => x.BacktestRunId);
+
+        entity.HasIndex(x => new { x.BacktestRunId, x.Date });
+
+        entity
+            .HasOne(x => x.BacktestRun)
+            .WithMany(x => x.Snapshots)
+            .HasForeignKey(x => x.BacktestRunId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }

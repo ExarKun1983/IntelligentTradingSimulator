@@ -22,6 +22,88 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.BacktestRun", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("EndDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("FinalCapital")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("InitialCapital")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime>("StartDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("TotalProfit")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("TotalReturnPercent")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("BacktestRuns", (string)null);
+                });
+
+            modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.BacktestSnapshot", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("BacktestRunId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("Cash")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<DateTime>("Date")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("PortfolioValue")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("ProfitLoss")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("ReturnPercent")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BacktestRunId");
+
+                    b.HasIndex("BacktestRunId", "Date");
+
+                    b.ToTable("BacktestSnapshots", (string)null);
+                });
+
             modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.ObservationResultEntity", b =>
                 {
                     b.Property<int>("Id")
@@ -241,6 +323,17 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     b.ToTable("Trades");
                 });
 
+            modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.BacktestSnapshot", b =>
+                {
+                    b.HasOne("IntelligentTradingSimulator.Core.Models.BacktestRun", "BacktestRun")
+                        .WithMany("Snapshots")
+                        .HasForeignKey("BacktestRunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("BacktestRun");
+                });
+
             modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.ObservationResultEntity", b =>
                 {
                     b.HasOne("IntelligentTradingSimulator.Core.Models.ObservationRun", "ObservationRun")
@@ -268,6 +361,11 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                         .HasForeignKey("PortfolioId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.BacktestRun", b =>
+                {
+                    b.Navigation("Snapshots");
                 });
 
             modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.ObservationRun", b =>
