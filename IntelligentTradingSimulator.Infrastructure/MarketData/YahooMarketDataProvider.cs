@@ -8,11 +8,31 @@ namespace IntelligentTradingSimulator.Infrastructure.MarketData;
 public sealed class YahooMarketDataProvider
     : IMarketDataProvider
 {
-    public async Task<IReadOnlyList<MarketCandle>>
+    public Task<IReadOnlyList<MarketCandle>>
         GetHistoricalDailyAsync(
             string symbol,
             DateTime from)
     {
+        return GetHistoricalDailyAsync(
+            symbol,
+            from,
+            DateTime.UtcNow.Date);
+    }
+
+    public async Task<IReadOnlyList<MarketCandle>>
+        GetHistoricalDailyAsync(
+            string symbol,
+            DateTime from,
+            DateTime to)
+    {
+        var fromDate = from.Date;
+        var toDate = to.Date;
+
+        if (toDate < fromDate)
+        {
+            return [];
+        }
+
         var yahooClient =
             new YahooClient();
 
@@ -20,9 +40,12 @@ public sealed class YahooMarketDataProvider
             await yahooClient.GetHistoricalDataAsync(
                 symbol,
                 DataFrequency.Daily,
-                from);
+                fromDate);
 
         return data
+            .Where(x =>
+                x.Date.Date >= fromDate
+                && x.Date.Date <= toDate)
             .Select(x => new MarketCandle
             {
                 Date = x.Date,

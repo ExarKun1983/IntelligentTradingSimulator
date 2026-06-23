@@ -14,4 +14,10 @@ public interface IMarketDataProvider
         GetHistoricalDailyAsync(
             string symbol,
             DateTime from);
+
+    Task<IReadOnlyList<MarketCandle>>
+        GetHistoricalDailyAsync(
+            string symbol,
+            DateTime from,
+            DateTime to);
 }
