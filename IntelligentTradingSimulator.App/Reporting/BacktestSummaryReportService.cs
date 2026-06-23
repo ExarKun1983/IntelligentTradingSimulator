@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -90,7 +91,7 @@ public sealed class BacktestSummaryReportService
 
         foreach (var snapshot in snapshots)
         {
-            if (decimal.Abs(snapshot.Cash - previousCash) > cashChangeThreshold)
+            if (Math.Abs(snapshot.Cash - previousCash) > cashChangeThreshold)
             {
                 // Backtest snapshots do not persist per-trade/per-rebalance events.
                 // We infer a reliable minimum: any day with cash movement must have

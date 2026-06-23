@@ -48,7 +48,7 @@ var reporter = scope.ServiceProvider.GetRequiredService<ConsoleReporter>();
 
 await runner.RunAsync();
 
-if (TryGetBacktestRunId(args, out var backtestRunId))
+if (TryParseBacktestRunIdArgument(args, out var backtestRunId))
 {
     var summaryResult =
         await backtestSummaryReportService.GenerateAsync(backtestRunId);
@@ -56,7 +56,7 @@ if (TryGetBacktestRunId(args, out var backtestRunId))
     reporter.PrintBacktestSummary(summaryResult);
 }
 
-static bool TryGetBacktestRunId(string[] args, out int runId)
+static bool TryParseBacktestRunIdArgument(string[] args, out int runId)
 {
     const string argumentPrefix = "--backtest-run-id=";
     runId = 0;
