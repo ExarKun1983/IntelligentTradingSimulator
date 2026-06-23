@@ -1,0 +1,29 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+using IntelligentTradingSimulator.Core.Models;
+
+namespace IntelligentTradingSimulator.Infrastructure.Persistence;
+
+public sealed class PositionSnapshotRepository
+{
+    private readonly TradingSimulatorDbContext _dbContext;
+
+    public PositionSnapshotRepository(
+        TradingSimulatorDbContext dbContext)
+    {
+        _dbContext = dbContext;
+    }
+
+    public async Task SaveAsync(
+        IEnumerable<PositionSnapshot> snapshots)
+    {
+        _dbContext.PositionSnapshots
+            .AddRange(snapshots);
+
+        await _dbContext.SaveChangesAsync();
+    }
+}
