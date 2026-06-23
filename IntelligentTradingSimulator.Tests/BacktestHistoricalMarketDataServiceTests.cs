@@ -4,7 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
-using IntelligentTradingSimulator.Core.Services;
+using IntelligentTradingSimulator.App.Simulation;
 
 namespace IntelligentTradingSimulator.Tests;
 

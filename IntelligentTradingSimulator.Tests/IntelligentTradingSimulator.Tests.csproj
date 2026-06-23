@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\IntelligentTradingSimulator.App\IntelligentTradingSimulator.App.csproj" />
     <ProjectReference Include="..\IntelligentTradingSimulator.Core\IntelligentTradingSimulator.Core.csproj" />
     <ProjectReference Include="..\IntelligentTradingSimulator.Infrastructure\IntelligentTradingSimulator.Infrastructure.csproj" />
   </ItemGroup>
