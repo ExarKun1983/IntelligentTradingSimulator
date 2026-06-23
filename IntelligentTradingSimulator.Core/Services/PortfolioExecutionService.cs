@@ -14,7 +14,7 @@ public sealed class PortfolioExecutionService
     public void ExecuteRecommendations(
         Portfolio portfolio,
         IReadOnlyList<StockRecommendation> recommendations,
-        Dictionary<string, decimal> prices,
+        IReadOnlyDictionary<string, decimal> prices,
         TradingEngine tradingEngine)
     {
         foreach (var recommendation in recommendations)

@@ -18,14 +18,6 @@ public sealed class PortfolioRepository
         _dbContext = dbContext;
     }
 
-    //public async Task AddAsync(
-    //    Portfolio portfolio)
-    //{
-    //    _dbContext.Portfolios.Add(portfolio);
-
-    //    await _dbContext.SaveChangesAsync();
-    //}
-
     public async Task<List<Portfolio>> GetAllAsync()
     {
         return await _dbContext.Portfolios
