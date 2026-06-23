@@ -19,6 +19,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ObservationResultRepository>();
         services.AddScoped<PortfolioSnapshotRepository>();
         services.AddScoped<PositionSnapshotRepository>();
+        services.AddScoped<IBacktestRunRepository, BacktestRunRepository>();
+        services.AddScoped<IBacktestSnapshotRepository, BacktestSnapshotRepository>();
 
         services.AddSingleton<IMarketDataProvider, YahooMarketDataProvider>();
 
