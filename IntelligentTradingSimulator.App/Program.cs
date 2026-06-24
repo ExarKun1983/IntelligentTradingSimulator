@@ -36,6 +36,8 @@ services.AddScoped<MarketDataWorkflow>();
 services.AddScoped<PortfolioWorkflow>();
 services.AddScoped<SimulationRunner>();
 services.AddScoped<IBacktestSummaryReportService, BacktestSummaryReportService>();
+services.AddScoped<BacktestHistoricalMarketDataService>();
+services.AddScoped<IBenchmarkDataService, BenchmarkDataService>();
 
 await using var provider = services.BuildServiceProvider();
 
