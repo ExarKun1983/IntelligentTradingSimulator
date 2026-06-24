@@ -2,9 +2,9 @@ namespace IntelligentTradingSimulator.Core.Models;
 
 public sealed class BacktestBenchmarkComparison
 {
-    public string Symbol { get; set; } = string.Empty;
+    public required string Symbol { get; init; }
 
-    public decimal StrategyReturnPercent { get; set; }
+    public decimal StrategyReturnPercent { get; init; }
 
-    public decimal BenchmarkReturnPercent { get; set; }
+    public decimal BenchmarkReturnPercent { get; init; }
 }
