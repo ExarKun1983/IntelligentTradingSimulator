@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using IntelligentTradingSimulator.Core.Interfaces;
@@ -9,13 +10,16 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
 {
     private readonly IBacktestRunRepository _runRepository;
     private readonly IBacktestSnapshotRepository _snapshotRepository;
+    private readonly IBacktestBenchmarkService _benchmarkService;
 
     public BacktestSummaryReportService(
         IBacktestRunRepository runRepository,
-        IBacktestSnapshotRepository snapshotRepository)
+        IBacktestSnapshotRepository snapshotRepository,
+        IBacktestBenchmarkService benchmarkService)
     {
         _runRepository = runRepository;
         _snapshotRepository = snapshotRepository;
+        _benchmarkService = benchmarkService;
     }
 
     public async Task<BacktestSummaryReportResult> GenerateAsync(int backtestRunId)
@@ -44,6 +48,17 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
 
         var tradesCount = snapshots.Sum(s => s.TradesExecuted);
         var rebalancesCount = snapshots.Count(s => s.RebalanceExecuted);
+        var benchmarkResult = await _benchmarkService.GetForRunAsync(backtestRunId);
+        var benchmarkComparisons = benchmarkResult.IsSuccess
+            ? benchmarkResult.BenchmarkResults
+                .Select(b => new BacktestBenchmarkComparison
+                {
+                    Symbol = b.Symbol,
+                    StrategyReturnPercent = run.TotalReturnPercent,
+                    BenchmarkReturnPercent = b.ReturnPercent
+                })
+                .ToList()
+            : new List<BacktestBenchmarkComparison>();
 
         return new BacktestSummaryReportResult
         {
@@ -55,7 +70,8 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
             Profit = run.TotalProfit,
             ReturnPercent = run.TotalReturnPercent,
             TradesCount = tradesCount,
-            RebalancesCount = rebalancesCount
+            RebalancesCount = rebalancesCount,
+            BenchmarkComparisons = benchmarkComparisons
         };
     }
 }
