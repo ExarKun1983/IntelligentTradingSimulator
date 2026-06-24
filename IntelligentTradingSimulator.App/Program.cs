@@ -1,5 +1,6 @@
 using System;
 using IntelligentTradingSimulator.App.Simulation;
+using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Services;
 using IntelligentTradingSimulator.Infrastructure;
 using Microsoft.Extensions.Configuration;
@@ -34,10 +35,31 @@ services.AddSingleton<ConsoleReporter>();
 services.AddScoped<MarketDataWorkflow>();
 services.AddScoped<PortfolioWorkflow>();
 services.AddScoped<SimulationRunner>();
+services.AddScoped<IBacktestSummaryReportService, BacktestSummaryReportService>();
 
 await using var provider = services.BuildServiceProvider();
 
 using var scope = provider.CreateScope();
+
+var backtestRunIdArg = Array.Find(
+    args,
+    a => a.StartsWith("--backtest-run-id=", StringComparison.OrdinalIgnoreCase));
+
+if (backtestRunIdArg is not null &&
+    int.TryParse(
+        backtestRunIdArg["--backtest-run-id=".Length..],
+        out var backtestRunId))
+{
+    var reportService =
+        scope.ServiceProvider.GetRequiredService<IBacktestSummaryReportService>();
+
+    var reporter =
+        scope.ServiceProvider.GetRequiredService<ConsoleReporter>();
+
+    var result = await reportService.GenerateAsync(backtestRunId);
+    reporter.PrintBacktestSummary(result);
+    return;
+}
 
 var runner = scope.ServiceProvider.GetRequiredService<SimulationRunner>();
 

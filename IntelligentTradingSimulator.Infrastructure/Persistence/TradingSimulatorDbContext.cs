@@ -163,6 +163,12 @@ public sealed class TradingSimulatorDbContext : DbContext
         entity.Property(x => x.ReturnPercent)
             .HasPrecision(18, 4);
 
+        entity.Property(x => x.TradesExecuted)
+            .IsRequired();
+
+        entity.Property(x => x.RebalanceExecuted)
+            .IsRequired();
+
         entity.HasIndex(x => x.BacktestRunId);
 
         entity.HasIndex(x => new { x.BacktestRunId, x.Date });

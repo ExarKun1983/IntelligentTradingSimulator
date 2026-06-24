@@ -20,4 +20,8 @@ public sealed class BacktestSnapshot
     public decimal ProfitLoss { get; set; }
 
     public decimal ReturnPercent { get; set; }
+
+    public int TradesExecuted { get; set; }
+
+    public bool RebalanceExecuted { get; set; }
 }

@@ -94,9 +94,15 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                         .HasPrecision(18, 4)
                         .HasColumnType("decimal(18,4)");
 
+                    b.Property<bool>("RebalanceExecuted")
+                        .HasColumnType("bit");
+
                     b.Property<decimal>("ReturnPercent")
                         .HasPrecision(18, 4)
                         .HasColumnType("decimal(18,4)");
+
+                    b.Property<int>("TradesExecuted")
+                        .HasColumnType("int");
 
                     b.HasKey("Id");
 

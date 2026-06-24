@@ -212,6 +212,87 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.True(result.Snapshot.PortfolioValue > 0m);
     }
 
+    [Fact]
+    public async Task ProcessAsync_SetsZeroTradesExecutedAndFalseRebalanceExecuted_WhenNoRecommendations()
+    {
+        var provider = new FakeMarketDataProvider();
+        var startDate = new DateTime(2024, 6, 1);
+
+        // Only 3 candles — fewer than the minimum of 5, so no recommendations or trades.
+        provider.SetData("AAPL", BuildCandles(startDate, 3, 150m));
+
+        var processor = BuildProcessor(provider);
+
+        var request = new BacktestDayRequest
+        {
+            BacktestRunId = 6,
+            CurrentDate = startDate.AddDays(2),
+            HistoricalStartDate = startDate,
+            Portfolio = new Portfolio { Name = "Backtest", StartingCash = 10_000m, Cash = 10_000m },
+            Symbols = ["AAPL"]
+        };
+
+        var result = await processor.ProcessAsync(request);
+
+        Assert.Equal(0, result.Snapshot.TradesExecuted);
+        Assert.False(result.Snapshot.RebalanceExecuted);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_SetsRebalanceExecutedTrue_WhenRecommendationsExist()
+    {
+        var provider = new FakeMarketDataProvider();
+        var startDate = new DateTime(2024, 7, 1);
+
+        // Enough candles to produce recommendations and trigger rebalancing.
+        provider.SetData("AAPL", BuildCandles(startDate, 10, 100m));
+        provider.SetData("MSFT", BuildCandles(startDate, 10, 200m));
+
+        var processor = BuildProcessor(provider);
+
+        var request = new BacktestDayRequest
+        {
+            BacktestRunId = 7,
+            CurrentDate = startDate.AddDays(9),
+            HistoricalStartDate = startDate,
+            Portfolio = new Portfolio { Name = "Backtest", StartingCash = 10_000m, Cash = 10_000m },
+            Symbols = ["AAPL", "MSFT"]
+        };
+
+        var result = await processor.ProcessAsync(request);
+
+        // Recommendations were available, so rebalance must have been executed.
+        Assert.True(result.Snapshot.RebalanceExecuted);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_TradesExecutedMatchesPortfolioTradesAdded()
+    {
+        var provider = new FakeMarketDataProvider();
+        var startDate = new DateTime(2024, 8, 1);
+
+        provider.SetData("AAPL", BuildCandles(startDate, 10, 100m));
+        provider.SetData("MSFT", BuildCandles(startDate, 10, 200m));
+
+        var processor = BuildProcessor(provider);
+
+        var portfolio = new Portfolio { Name = "Backtest", StartingCash = 10_000m, Cash = 10_000m };
+
+        var request = new BacktestDayRequest
+        {
+            BacktestRunId = 8,
+            CurrentDate = startDate.AddDays(9),
+            HistoricalStartDate = startDate,
+            Portfolio = portfolio,
+            Symbols = ["AAPL", "MSFT"]
+        };
+
+        var result = await processor.ProcessAsync(request);
+
+        // The snapshot must record exactly as many trades as were added to the portfolio.
+        Assert.Equal(result.Portfolio.Trades.Count, result.Snapshot.TradesExecuted);
+    }
+
     private sealed class FakeMarketDataProvider : IMarketDataProvider
     {
         private readonly Dictionary<string, IReadOnlyList<MarketCandle>> _data

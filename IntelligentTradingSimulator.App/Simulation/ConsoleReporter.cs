@@ -207,4 +207,24 @@ public sealed class ConsoleReporter
         Console.WriteLine(
             $"CreatedAt: {previousRun.CreatedAt}");
     }
+
+    public void PrintBacktestSummary(BacktestSummaryReportResult result)
+    {
+        Console.WriteLine();
+        Console.WriteLine("===== BACKTEST SUMMARY =====");
+
+        if (!result.IsSuccess)
+        {
+            Console.WriteLine($"Error: {result.ErrorMessage}");
+            return;
+        }
+
+        Console.WriteLine($"Run: {result.RunName} (Id={result.BacktestRunId})");
+        Console.WriteLine($"Start Capital:  {result.StartCapital:N2}");
+        Console.WriteLine($"Final Capital:  {result.FinalCapital:N2}");
+        Console.WriteLine($"Profit:         {result.Profit:N2}");
+        Console.WriteLine($"Return:         {result.ReturnPercent:N2}%");
+        Console.WriteLine($"Trades:         {result.TradesCount}");
+        Console.WriteLine($"Rebalances:     {result.RebalancesCount}");
+    }
 }
