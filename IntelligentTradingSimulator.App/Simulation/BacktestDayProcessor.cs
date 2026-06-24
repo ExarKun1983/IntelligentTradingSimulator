@@ -94,6 +94,9 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             }
         }
 
+        var tradesBeforeRebalance = portfolio.Trades.Count;
+        var rebalanceExecuted = false;
+
         if (recommendations.Count > 0)
         {
             _rebalancingService.Execute(
@@ -102,7 +105,11 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 prices,
                 _allocationEngine,
                 _tradingEngine);
+
+            rebalanceExecuted = true;
         }
+
+        var tradesExecutedToday = portfolio.Trades.Count - tradesBeforeRebalance;
 
         var performance = _performanceService.Calculate(portfolio);
 
@@ -113,7 +120,9 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             PortfolioValue = Math.Round(performance.PortfolioValue, 4),
             Cash = Math.Round(portfolio.Cash, 4),
             ProfitLoss = Math.Round(performance.ProfitLoss, 4),
-            ReturnPercent = Math.Round(performance.ReturnPercent, 4)
+            ReturnPercent = Math.Round(performance.ReturnPercent, 4),
+            TradesExecuted = tradesExecutedToday,
+            RebalanceExecuted = rebalanceExecuted
         };
 
         await _snapshotRepository.AddAsync(snapshot);
