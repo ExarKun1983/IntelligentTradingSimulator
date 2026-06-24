@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
@@ -380,6 +381,9 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
     private sealed class FakeBacktestBenchmarkService : IBacktestBenchmarkService
     {
         private readonly Dictionary<int, BacktestBenchmarkResult> _responses = new();
+        private readonly List<string> _requestedSymbols = [];
+
+        public IReadOnlyList<string> RequestedSymbols => _requestedSymbols;
 
         public void SetResults(int backtestRunId, IReadOnlyList<BenchmarkResult> results)
         {
@@ -421,6 +425,8 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
             int backtestRunId,
             IEnumerable<string> symbols)
         {
+            _requestedSymbols.Clear();
+            _requestedSymbols.AddRange(symbols);
             return GetForRunAsync(backtestRunId);
         }
     }
