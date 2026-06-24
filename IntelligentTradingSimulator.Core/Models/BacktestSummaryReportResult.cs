@@ -21,4 +21,6 @@ public sealed class BacktestSummaryReportResult
     public int TradesCount { get; set; }
 
     public int RebalancesCount { get; set; }
+
+    public IReadOnlyList<BacktestBenchmarkComparison> BenchmarkComparisons { get; set; } = [];
 }

@@ -19,6 +19,12 @@ public sealed class BacktestBenchmarkService : IBacktestBenchmarkService
     }
 
     public async Task<BacktestBenchmarkResult> GetForRunAsync(
+        int backtestRunId)
+    {
+        return await GetForRunAsync(backtestRunId, BenchmarkUniverse.DefaultSymbols);
+    }
+
+    public async Task<BacktestBenchmarkResult> GetForRunAsync(
         int backtestRunId,
         IEnumerable<string> symbols)
     {
