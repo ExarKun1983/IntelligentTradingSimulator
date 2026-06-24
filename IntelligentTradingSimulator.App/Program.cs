@@ -38,6 +38,7 @@ services.AddScoped<SimulationRunner>();
 services.AddScoped<IBacktestSummaryReportService, BacktestSummaryReportService>();
 services.AddScoped<BacktestHistoricalMarketDataService>();
 services.AddScoped<IBenchmarkDataService, BenchmarkDataService>();
+services.AddScoped<IBacktestBenchmarkService, BacktestBenchmarkService>();
 
 await using var provider = services.BuildServiceProvider();
 
