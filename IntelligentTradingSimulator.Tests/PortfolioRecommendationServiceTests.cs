@@ -100,18 +100,16 @@ public sealed class PortfolioRecommendationServiceTests
         Assert.Equal(2, recommendations.Count);
     }
 
-    [Fact]
-    public void Build_ReturnsEmpty_WhenMaxPositionsIsZero()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Constructor_Throws_WhenMaxPositionsIsNotPositive(int maxPositions)
     {
-        var service = new PortfolioRecommendationService(maxPositions: 0);
+        var exception =
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => new PortfolioRecommendationService(maxPositions));
 
-        var results = new List<ObservationResult>
-        {
-            new() { Symbol = "AAPL", Score = 10m, MomentumPercent = 5m, IsAboveSma5 = true }
-        };
-
-        var recommendations = service.Build(results);
-
-        Assert.Empty(recommendations);
+        Assert.Equal("maxPositions", exception.ParamName);
+        Assert.Contains("greater than zero", exception.Message);
     }
 }
