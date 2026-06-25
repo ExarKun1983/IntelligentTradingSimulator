@@ -46,6 +46,7 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
             };
         }
 
+        var maxDrawdownPercent = GetMaxDrawdownPercent(snapshots);
         var tradesCount = snapshots.Sum(s => s.TradesExecuted);
         var rebalancesCount = snapshots.Count(s => s.RebalanceExecuted);
         var benchmarkResult = await _benchmarkService.GetForRunAsync(backtestRunId);
@@ -72,6 +73,7 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
             FinalCapital = run.FinalCapital,
             Profit = run.TotalProfit,
             ReturnPercent = run.TotalReturnPercent,
+            MaxDrawdownPercent = maxDrawdownPercent,
             TradesCount = tradesCount,
             RebalancesCount = rebalancesCount,
             BenchmarkComparisons = benchmarkComparisons
@@ -107,5 +109,39 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
         decimal benchmarkReturnPercent)
     {
         return GetRelativeReturnPercent(strategyReturnPercent, benchmarkReturnPercent);
+    }
+
+    private static decimal GetMaxDrawdownPercent(
+        IReadOnlyList<BacktestSnapshot> snapshots)
+    {
+        if (snapshots.Count == 0)
+        {
+            return 0m;
+        }
+
+        decimal peak = snapshots[0].PortfolioValue;
+        decimal maxDrawdown = 0m;
+
+        foreach (var snapshot in snapshots)
+        {
+            if (snapshot.PortfolioValue > peak)
+            {
+                peak = snapshot.PortfolioValue;
+            }
+
+            if (peak <= 0m)
+            {
+                continue;
+            }
+
+            var drawdown = (peak - snapshot.PortfolioValue) / peak * 100m;
+
+            if (drawdown > maxDrawdown)
+            {
+                maxDrawdown = drawdown;
+            }
+        }
+
+        return maxDrawdown;
     }
 }

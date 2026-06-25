@@ -18,6 +18,8 @@ public sealed class BacktestSummaryReportResult
 
     public decimal ReturnPercent { get; set; }
 
+    public decimal MaxDrawdownPercent { get; set; }
+
     public int TradesCount { get; set; }
 
     public int RebalancesCount { get; set; }

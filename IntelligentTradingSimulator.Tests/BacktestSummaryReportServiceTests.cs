@@ -259,6 +259,99 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GenerateAsync_CalculatesMaxDrawdownFromSnapshotPortfolioValues()
+    {
+        var run = await CreateRunAsync(initialCapital: 10_000m, finalCapital: 10_700m);
+
+        await _snapshotRepository.AddRangeAsync(
+            [
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 2),
+                    PortfolioValue = 10_000m,
+                    Cash = 4_000m,
+                    TradesExecuted = 1,
+                    RebalanceExecuted = true
+                },
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 3),
+                    PortfolioValue = 12_000m,
+                    Cash = 4_500m,
+                    TradesExecuted = 0,
+                    RebalanceExecuted = false
+                },
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 4),
+                    PortfolioValue = 9_000m,
+                    Cash = 3_000m,
+                    TradesExecuted = 2,
+                    RebalanceExecuted = true
+                },
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 5),
+                    PortfolioValue = 10_700m,
+                    Cash = 3_500m,
+                    TradesExecuted = 0,
+                    RebalanceExecuted = false
+                }
+            ]);
+
+        var result = await _service.GenerateAsync(run.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(25m, result.MaxDrawdownPercent);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_ReturnsZeroMaxDrawdown_WhenPortfolioValueNeverDrops()
+    {
+        var run = await CreateRunAsync(initialCapital: 10_000m, finalCapital: 11_500m);
+
+        await _snapshotRepository.AddRangeAsync(
+            [
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 2),
+                    PortfolioValue = 10_000m,
+                    Cash = 5_000m,
+                    TradesExecuted = 1,
+                    RebalanceExecuted = true
+                },
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 3),
+                    PortfolioValue = 10_750m,
+                    Cash = 4_500m,
+                    TradesExecuted = 0,
+                    RebalanceExecuted = false
+                },
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 4),
+                    PortfolioValue = 11_500m,
+                    Cash = 4_000m,
+                    TradesExecuted = 0,
+                    RebalanceExecuted = false
+                }
+            ]);
+
+        var result = await _service.GenerateAsync(run.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(0m, result.MaxDrawdownPercent);
+    }
+
+    [Fact]
     public async Task GenerateAsync_TradesCountIsNotEqualToRebalancesCount_WhenMultipleTradesPerRebalance()
     {
         var run = await CreateRunAsync();
