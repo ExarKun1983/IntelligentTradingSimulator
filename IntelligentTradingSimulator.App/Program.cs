@@ -25,6 +25,7 @@ var services = new ServiceCollection();
 
 services.AddInfrastructure(connectionString);
 services.AddSingleton(selectedStrategyConfiguration);
+services.AddSingleton<BacktestEngineRequestFactory>();
 
 services.AddSingleton<MarketObservationAnalyzer>();
 services.AddSingleton(
