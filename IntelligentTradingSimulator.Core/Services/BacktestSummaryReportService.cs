@@ -56,6 +56,8 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
                     Symbol = b.Symbol,
                     StrategyReturnPercent = run.TotalReturnPercent,
                     BenchmarkReturnPercent = b.ReturnPercent,
+                    RelativeReturnPercent = GetRelativeReturnPercent(run.TotalReturnPercent, b.ReturnPercent),
+                    AlphaPercent = GetAlphaPercent(run.TotalReturnPercent, b.ReturnPercent),
                     Outcome = GetComparisonOutcome(run.TotalReturnPercent, b.ReturnPercent)
                 })
                 .ToList()
@@ -91,5 +93,19 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
         }
 
         return BacktestBenchmarkComparisonOutcome.Match;
+    }
+
+    private static decimal GetRelativeReturnPercent(
+        decimal strategyReturnPercent,
+        decimal benchmarkReturnPercent)
+    {
+        return strategyReturnPercent - benchmarkReturnPercent;
+    }
+
+    private static decimal GetAlphaPercent(
+        decimal strategyReturnPercent,
+        decimal benchmarkReturnPercent)
+    {
+        return strategyReturnPercent - benchmarkReturnPercent;
     }
 }
