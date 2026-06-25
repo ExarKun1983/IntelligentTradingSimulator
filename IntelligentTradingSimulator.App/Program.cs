@@ -21,6 +21,12 @@ var maxPositions =
     configuration.GetValue<int?>("Strategy:MaxPositions")
     ?? 10;
 
+if (maxPositions <= 0)
+{
+    throw new InvalidOperationException(
+        "Configuration value 'Strategy:MaxPositions' must be greater than zero.");
+}
+
 var services = new ServiceCollection();
 
 services.AddInfrastructure(connectionString);

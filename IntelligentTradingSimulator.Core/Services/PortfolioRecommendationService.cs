@@ -8,7 +8,15 @@ public sealed class PortfolioRecommendationService
 
     public PortfolioRecommendationService(int maxPositions = 10)
     {
-        _maxPositions = Math.Max(0, maxPositions);
+        if (maxPositions <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxPositions),
+                maxPositions,
+                "Max positions must be greater than zero.");
+        }
+
+        _maxPositions = maxPositions;
     }
 
     public IReadOnlyList<StockRecommendation> Build(
