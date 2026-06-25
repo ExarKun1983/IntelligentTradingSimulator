@@ -5,8 +5,11 @@ namespace IntelligentTradingSimulator.Core.Services;
 public sealed class PortfolioRecommendationService
 {
     private readonly int _maxPositions;
+    private readonly decimal _maxPositionWeight;
 
-    public PortfolioRecommendationService(int maxPositions = 10)
+    public PortfolioRecommendationService(
+        int maxPositions = 10,
+        decimal maxPositionWeight = 100m)
     {
         if (maxPositions <= 0)
         {
@@ -16,7 +19,17 @@ public sealed class PortfolioRecommendationService
                 "Max positions must be greater than zero.");
         }
 
+        if (maxPositionWeight <= 0m ||
+            maxPositionWeight > 100m)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxPositionWeight),
+                maxPositionWeight,
+                "Max position weight must be greater than zero and less than or equal to 100.");
+        }
+
         _maxPositions = maxPositions;
+        _maxPositionWeight = maxPositionWeight;
     }
 
     public IReadOnlyList<StockRecommendation> Build(
@@ -47,9 +60,11 @@ public sealed class PortfolioRecommendationService
                 Symbol = x.Symbol,
 
                 AllocationPercent =
-                    Math.Round(
-                        x.Score / totalScore * 100m,
-                        2),
+                    Math.Min(
+                        Math.Round(
+                            x.Score / totalScore * 100m,
+                            2),
+                        _maxPositionWeight),
 
                 Score = x.Score
             })
