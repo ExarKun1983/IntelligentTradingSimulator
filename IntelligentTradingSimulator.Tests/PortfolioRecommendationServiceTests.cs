@@ -64,4 +64,52 @@ public sealed class PortfolioRecommendationServiceTests
 
         Assert.DoesNotContain(recommendations, r => r.Symbol == "NVDA");
     }
+
+    [Fact]
+    public void Build_LimitsRecommendations_ToConfiguredMaxPositions()
+    {
+        var service = new PortfolioRecommendationService(maxPositions: 2);
+
+        var results = new List<ObservationResult>
+        {
+            new() { Symbol = "AAPL", Score = 40m, MomentumPercent = 5m, IsAboveSma5 = true },
+            new() { Symbol = "MSFT", Score = 30m, MomentumPercent = 4m, IsAboveSma5 = true },
+            new() { Symbol = "GOOG", Score = 20m, MomentumPercent = 3m, IsAboveSma5 = true },
+            new() { Symbol = "AMZN", Score = 10m, MomentumPercent = 2m, IsAboveSma5 = true }
+        };
+
+        var recommendations = service.Build(results);
+
+        Assert.Equal(2, recommendations.Count);
+        Assert.Equal(["AAPL", "MSFT"], recommendations.Select(x => x.Symbol).ToArray());
+    }
+
+    [Fact]
+    public void Build_UsesAllAvailable_WhenFewerThanConfiguredMaxPositions()
+    {
+        var service = new PortfolioRecommendationService(maxPositions: 5);
+
+        var results = new List<ObservationResult>
+        {
+            new() { Symbol = "AAPL", Score = 10m, MomentumPercent = 5m, IsAboveSma5 = true },
+            new() { Symbol = "MSFT", Score = 8m, MomentumPercent = 3m, IsAboveSma5 = true }
+        };
+
+        var recommendations = service.Build(results);
+
+        Assert.Equal(2, recommendations.Count);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Constructor_Throws_WhenMaxPositionsIsNotPositive(int maxPositions)
+    {
+        var exception =
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => new PortfolioRecommendationService(maxPositions));
+
+        Assert.Equal("maxPositions", exception.ParamName);
+        Assert.Contains("greater than zero", exception.Message);
+    }
 }

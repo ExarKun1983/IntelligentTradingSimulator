@@ -4,6 +4,21 @@ namespace IntelligentTradingSimulator.Core.Services;
 
 public sealed class PortfolioRecommendationService
 {
+    private readonly int _maxPositions;
+
+    public PortfolioRecommendationService(int maxPositions = 10)
+    {
+        if (maxPositions <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxPositions),
+                maxPositions,
+                "Max positions must be greater than zero.");
+        }
+
+        _maxPositions = maxPositions;
+    }
+
     public IReadOnlyList<StockRecommendation> Build(
         IReadOnlyList<ObservationResult> results)
     {
@@ -15,7 +30,7 @@ public sealed class PortfolioRecommendationService
                     x.IsAboveSma5)
                 .OrderByDescending(x => x.Score)
                 .Where(x => x.Symbol != "NVDA")
-                .Take(10)
+                .Take(_maxPositions)
                 .ToList();
 
         if (!topStocks.Any())
