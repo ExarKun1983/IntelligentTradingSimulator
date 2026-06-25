@@ -224,13 +224,16 @@ public sealed class ConsoleReporter
         Console.WriteLine($"Final Capital:  {result.FinalCapital:N2}");
         Console.WriteLine($"Profit:         {result.Profit:N2}");
         Console.WriteLine($"Return:         {result.ReturnPercent:N2}%");
+        Console.WriteLine($"Trades:         {result.TradesCount}");
+        Console.WriteLine($"Rebalances:     {result.RebalancesCount}");
+
+        Console.WriteLine();
+        Console.WriteLine("--- Risk ---");
         Console.WriteLine($"Max Drawdown:   {result.MaxDrawdownPercent:N2}%");
         Console.WriteLine($"DD Duration:    {result.DrawdownDurationDays} day(s)");
         Console.WriteLine(result.RecoveryTimeDays.HasValue
             ? $"Recovery Time:  {result.RecoveryTimeDays.Value} day(s)"
             : "Recovery Time:  N/A (not recovered)");
-        Console.WriteLine($"Trades:         {result.TradesCount}");
-        Console.WriteLine($"Rebalances:     {result.RebalancesCount}");
 
         if (result.BenchmarkComparisons.Count == 0)
         {
@@ -238,17 +241,16 @@ public sealed class ConsoleReporter
         }
 
         Console.WriteLine();
-        Console.WriteLine("Benchmark Comparison:");
+        Console.WriteLine("--- Benchmark ---");
 
         foreach (var comparison in result.BenchmarkComparisons)
         {
-            Console.WriteLine(
-                $"{comparison.Symbol}" +
-                $" | Strategy Return={comparison.StrategyReturnPercent:N2}%" +
-                $" | Benchmark Return={comparison.BenchmarkReturnPercent:N2}%" +
-                $" | Relative Return={comparison.RelativeReturnPercent:N2}%" +
-                $" | Alpha={comparison.AlphaPercent:N2}%" +
-                $" | Outcome={comparison.Outcome}");
+            Console.WriteLine($"{comparison.Symbol}");
+            Console.WriteLine($"  Strategy Return:  {comparison.StrategyReturnPercent:N2}%");
+            Console.WriteLine($"  Benchmark Return: {comparison.BenchmarkReturnPercent:N2}%");
+            Console.WriteLine($"  Relative Return:  {comparison.RelativeReturnPercent:N2}%");
+            Console.WriteLine($"  Alpha:            {comparison.AlphaPercent:N2}%");
+            Console.WriteLine($"  Outcome:          {comparison.Outcome}");
         }
     }
 }
