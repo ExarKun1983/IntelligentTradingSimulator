@@ -241,6 +241,8 @@ public sealed class ConsoleReporter
                 $"{comparison.Symbol}" +
                 $" | Strategy Return={comparison.StrategyReturnPercent:N2}%" +
                 $" | Benchmark Return={comparison.BenchmarkReturnPercent:N2}%" +
+                $" | Relative Return={comparison.RelativeReturnPercent:N2}%" +
+                $" | Alpha={comparison.AlphaPercent:N2}%" +
                 $" | Outcome={comparison.Outcome}");
         }
     }

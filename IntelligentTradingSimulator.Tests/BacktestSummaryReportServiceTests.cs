@@ -355,18 +355,24 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
             x => x.Symbol == "SPY" &&
                  x.StrategyReturnPercent == 20m &&
                  x.BenchmarkReturnPercent == 10m &&
+                 x.RelativeReturnPercent == 10m &&
+                 x.AlphaPercent == 10m &&
                  x.Outcome == BacktestBenchmarkComparisonOutcome.Outperform);
         Assert.Contains(
             result.BenchmarkComparisons,
             x => x.Symbol == "QQQ" &&
                  x.StrategyReturnPercent == 20m &&
                  x.BenchmarkReturnPercent == 15m &&
+                 x.RelativeReturnPercent == 5m &&
+                 x.AlphaPercent == 5m &&
                  x.Outcome == BacktestBenchmarkComparisonOutcome.Outperform);
         Assert.Contains(
             result.BenchmarkComparisons,
             x => x.Symbol == "IWM" &&
                  x.StrategyReturnPercent == 20m &&
                  x.BenchmarkReturnPercent == 20m &&
+                 x.RelativeReturnPercent == 0m &&
+                 x.AlphaPercent == 0m &&
                  x.Outcome == BacktestBenchmarkComparisonOutcome.Match);
     }
 
@@ -401,6 +407,8 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
 
         Assert.True(result.IsSuccess);
         Assert.Single(result.BenchmarkComparisons);
+        Assert.Equal(-5m, result.BenchmarkComparisons[0].RelativeReturnPercent);
+        Assert.Equal(-5m, result.BenchmarkComparisons[0].AlphaPercent);
         Assert.Equal(
             BacktestBenchmarkComparisonOutcome.Underperform,
             result.BenchmarkComparisons[0].Outcome);
