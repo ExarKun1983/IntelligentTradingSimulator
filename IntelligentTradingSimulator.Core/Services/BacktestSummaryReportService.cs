@@ -46,7 +46,7 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
             };
         }
 
-        var maxDrawdownPercent = GetMaxDrawdownPercent(snapshots);
+        var (maxDrawdownPercent, drawdownDurationDays, recoveryTimeDays) = GetDrawdownMetrics(snapshots);
         var tradesCount = snapshots.Sum(s => s.TradesExecuted);
         var rebalancesCount = snapshots.Count(s => s.RebalanceExecuted);
         var benchmarkResult = await _benchmarkService.GetForRunAsync(backtestRunId);
@@ -74,6 +74,8 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
             Profit = run.TotalProfit,
             ReturnPercent = run.TotalReturnPercent,
             MaxDrawdownPercent = maxDrawdownPercent,
+            DrawdownDurationDays = drawdownDurationDays,
+            RecoveryTimeDays = recoveryTimeDays,
             TradesCount = tradesCount,
             RebalancesCount = rebalancesCount,
             BenchmarkComparisons = benchmarkComparisons
@@ -111,22 +113,28 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
         return GetRelativeReturnPercent(strategyReturnPercent, benchmarkReturnPercent);
     }
 
-    private static decimal GetMaxDrawdownPercent(
-        IReadOnlyList<BacktestSnapshot> snapshots)
+    private static (decimal maxDrawdownPercent, int drawdownDurationDays, int? recoveryTimeDays)
+        GetDrawdownMetrics(IReadOnlyList<BacktestSnapshot> snapshots)
     {
         if (snapshots.Count == 0)
         {
-            return 0m;
+            return (0m, 0, null);
         }
 
         decimal peak = snapshots[0].PortfolioValue;
+        DateTime peakDate = snapshots[0].Date;
+
         decimal maxDrawdown = 0m;
+        decimal maxDrawdownPeakValue = snapshots[0].PortfolioValue;
+        DateTime maxDrawdownPeakDate = snapshots[0].Date;
+        DateTime maxDrawdownTroughDate = snapshots[0].Date;
 
         foreach (var snapshot in snapshots)
         {
             if (snapshot.PortfolioValue > peak)
             {
                 peak = snapshot.PortfolioValue;
+                peakDate = snapshot.Date;
             }
 
             if (peak <= 0m)
@@ -139,9 +147,36 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
             if (drawdown > maxDrawdown)
             {
                 maxDrawdown = drawdown;
+                maxDrawdownPeakValue = peak;
+                maxDrawdownPeakDate = peakDate;
+                maxDrawdownTroughDate = snapshot.Date;
             }
         }
 
-        return maxDrawdown;
+        if (maxDrawdown == 0m)
+        {
+            return (0m, 0, null);
+        }
+
+        var drawdownDurationDays =
+            (int)(maxDrawdownTroughDate - maxDrawdownPeakDate).TotalDays;
+
+        int? recoveryTimeDays = null;
+        var troughIndex = snapshots
+            .Select((s, i) => (snapshot: s, index: i))
+            .First(x => x.snapshot.Date == maxDrawdownTroughDate)
+            .index;
+
+        for (var i = troughIndex + 1; i < snapshots.Count; i++)
+        {
+            if (snapshots[i].PortfolioValue >= maxDrawdownPeakValue)
+            {
+                recoveryTimeDays =
+                    (int)(snapshots[i].Date - maxDrawdownTroughDate).TotalDays;
+                break;
+            }
+        }
+
+        return (maxDrawdown, drawdownDurationDays, recoveryTimeDays);
     }
 }
