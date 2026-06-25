@@ -220,6 +220,7 @@ public sealed class ConsoleReporter
         }
 
         Console.WriteLine($"Run: {result.RunName} (Id={result.BacktestRunId})");
+        Console.WriteLine($"Strategy: {result.StrategyId}");
         Console.WriteLine($"Start Capital:  {result.StartCapital:N2}");
         Console.WriteLine($"Final Capital:  {result.FinalCapital:N2}");
         Console.WriteLine($"Profit:         {result.Profit:N2}");

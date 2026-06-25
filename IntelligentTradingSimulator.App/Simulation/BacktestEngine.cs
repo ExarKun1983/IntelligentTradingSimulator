@@ -6,7 +6,7 @@ using IntelligentTradingSimulator.Core.Models;
 
 namespace IntelligentTradingSimulator.App.Simulation;
 
-public sealed class BacktestEngine
+public sealed class BacktestEngine : IBacktestEngine
 {
     private const int FinancialPrecision = 4;
 

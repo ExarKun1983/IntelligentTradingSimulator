@@ -332,4 +332,29 @@ public sealed class ConsoleReporterTests
         Assert.True(riskPos >= 0, "Risk section header not found");
         Assert.True(maxDrawdownPos > riskPos, "Max Drawdown should appear inside the Risk section");
     }
+
+    [Fact]
+    public void PrintBacktestSummary_IncludesStrategyId_InOutput()
+    {
+        var reporter = CreateReporter();
+        var result = new BacktestSummaryReportResult
+        {
+            IsSuccess = true,
+            BacktestRunId = 5,
+            RunName = "Strategy Identity Test",
+            StrategyId = "momentum-capped-v2",
+            StartCapital = 10_000m,
+            FinalCapital = 11_000m,
+            Profit = 1_000m,
+            ReturnPercent = 10m,
+            MaxDrawdownPercent = 3m,
+            DrawdownDurationDays = 2,
+            TradesCount = 2,
+            RebalancesCount = 1
+        };
+
+        var output = CaptureOutput(() => reporter.PrintBacktestSummary(result));
+
+        Assert.Contains("momentum-capped-v2", output);
+    }
 }

@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using IntelligentTradingSimulator.App.Configuration;
 using IntelligentTradingSimulator.App.Simulation;
+using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Services;
 using IntelligentTradingSimulator.Infrastructure;
@@ -52,6 +54,8 @@ services.AddScoped<IBacktestSummaryReportService, BacktestSummaryReportService>(
 services.AddScoped<BacktestHistoricalMarketDataService>();
 services.AddScoped<IBenchmarkDataService, BenchmarkDataService>();
 services.AddScoped<IBacktestBenchmarkService, BacktestBenchmarkService>();
+services.AddScoped<IBacktestDayProcessor, BacktestDayProcessor>();
+services.AddScoped<IBacktestEngine, BacktestEngine>();
 
 await using var provider = services.BuildServiceProvider();
 
@@ -74,6 +78,70 @@ if (backtestRunIdArg is not null &&
 
     var result = await reportService.GenerateAsync(backtestRunId);
     reporter.PrintBacktestSummary(result);
+    return;
+}
+
+var runBacktestArg = Array.Find(
+    args,
+    a => a.Equals("--run-backtest", StringComparison.OrdinalIgnoreCase));
+
+if (runBacktestArg is not null)
+{
+    var startDateArg = Array.Find(
+        args,
+        a => a.StartsWith("--backtest-start=", StringComparison.OrdinalIgnoreCase));
+
+    var endDateArg = Array.Find(
+        args,
+        a => a.StartsWith("--backtest-end=", StringComparison.OrdinalIgnoreCase));
+
+    var nameArg = Array.Find(
+        args,
+        a => a.StartsWith("--backtest-name=", StringComparison.OrdinalIgnoreCase));
+
+    var endDate = endDateArg is not null &&
+                  DateTime.TryParse(endDateArg["--backtest-end=".Length..], out var parsedEnd)
+        ? parsedEnd
+        : DateTime.Today.AddDays(-1);
+
+    var startDate = startDateArg is not null &&
+                    DateTime.TryParse(startDateArg["--backtest-start=".Length..], out var parsedStart)
+        ? parsedStart
+        : endDate.AddYears(-1);
+
+    var name = nameArg is not null
+        ? nameArg["--backtest-name=".Length..]
+        : $"Backtest {startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}";
+
+    IReadOnlyList<string> symbols = ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA"];
+
+    var requestFactory = scope.ServiceProvider.GetRequiredService<BacktestEngineRequestFactory>();
+    var engine = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
+    var reportService = scope.ServiceProvider.GetRequiredService<IBacktestSummaryReportService>();
+    var reporter = scope.ServiceProvider.GetRequiredService<ConsoleReporter>();
+
+    var request = requestFactory.Create(
+        name: name,
+        startDate: startDate,
+        endDate: endDate,
+        historicalStartDate: startDate.AddDays(-selectedStrategyConfiguration.LookbackDays),
+        initialCapital: 100_000m,
+        symbols: symbols);
+
+    Console.WriteLine($"Starting backtest: {name}");
+    Console.WriteLine($"Strategy:  {selectedStrategyConfiguration.Id}");
+    Console.WriteLine($"Period:    {startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}");
+
+    var engineResult = await engine.RunAsync(request);
+
+    if (engineResult.Status == BacktestRunStatus.Failed)
+    {
+        Console.WriteLine($"Backtest failed: {engineResult.ErrorMessage}");
+        return;
+    }
+
+    var summaryResult = await reportService.GenerateAsync(engineResult.RunId);
+    reporter.PrintBacktestSummary(summaryResult);
     return;
 }
 
