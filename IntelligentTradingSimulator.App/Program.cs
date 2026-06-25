@@ -21,10 +21,21 @@ var maxPositions =
     configuration.GetValue<int?>("Strategy:MaxPositions")
     ?? 10;
 
+var maxPositionWeight =
+    configuration.GetValue<decimal?>("Strategy:MaxPositionWeight")
+    ?? 100m;
+
 if (maxPositions <= 0)
 {
     throw new InvalidOperationException(
         "Configuration value 'Strategy:MaxPositions' must be greater than zero.");
+}
+
+if (maxPositionWeight <= 0m ||
+    maxPositionWeight > 100m)
+{
+    throw new InvalidOperationException(
+        "Configuration value 'Strategy:MaxPositionWeight' must be greater than zero and less than or equal to 100.");
 }
 
 var services = new ServiceCollection();
@@ -33,12 +44,18 @@ services.AddInfrastructure(connectionString);
 
 services.AddSingleton<MarketObservationAnalyzer>();
 services.AddSingleton(
-    _ => new PortfolioRecommendationService(maxPositions));
-services.AddSingleton<PortfolioExecutionService>();
+    _ => new PortfolioRecommendationService(
+        maxPositions));
+services.AddSingleton(
+    _ => new PortfolioExecutionService(
+        maxPositionWeight));
 services.AddSingleton<TradingEngine>();
 services.AddSingleton<PortfolioPerformanceService>();
 services.AddSingleton<PortfolioAllocationService>();
-services.AddSingleton<PortfolioAllocationEngine>();
+services.AddSingleton(
+    sp => new PortfolioAllocationEngine(
+        sp.GetRequiredService<PortfolioAllocationService>(),
+        maxPositionWeight));
 services.AddSingleton<PortfolioContributionService>();
 services.AddSingleton<PortfolioRebalancingService>();
 

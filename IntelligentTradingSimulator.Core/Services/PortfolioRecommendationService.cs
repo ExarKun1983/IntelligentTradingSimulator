@@ -6,7 +6,8 @@ public sealed class PortfolioRecommendationService
 {
     private readonly int _maxPositions;
 
-    public PortfolioRecommendationService(int maxPositions = 10)
+    public PortfolioRecommendationService(
+        int maxPositions = 10)
     {
         if (maxPositions <= 0)
         {
