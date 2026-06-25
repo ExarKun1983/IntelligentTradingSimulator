@@ -225,6 +225,10 @@ public sealed class ConsoleReporter
         Console.WriteLine($"Profit:         {result.Profit:N2}");
         Console.WriteLine($"Return:         {result.ReturnPercent:N2}%");
         Console.WriteLine($"Max Drawdown:   {result.MaxDrawdownPercent:N2}%");
+        Console.WriteLine($"DD Duration:    {result.DrawdownDurationDays} day(s)");
+        Console.WriteLine(result.RecoveryTimeDays.HasValue
+            ? $"Recovery Time:  {result.RecoveryTimeDays.Value} day(s)"
+            : "Recovery Time:  N/A (not recovered)");
         Console.WriteLine($"Trades:         {result.TradesCount}");
         Console.WriteLine($"Rebalances:     {result.RebalancesCount}");
 

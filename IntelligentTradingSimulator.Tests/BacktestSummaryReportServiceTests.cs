@@ -307,6 +307,10 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
 
         Assert.True(result.IsSuccess);
         Assert.Equal(25m, result.MaxDrawdownPercent);
+        // Peak Jan 3 (12,000) → trough Jan 4 (9,000): 1 calendar day
+        Assert.Equal(1, result.DrawdownDurationDays);
+        // Jan 5 value is 10,700 < 12,000 peak, so not recovered
+        Assert.Null(result.RecoveryTimeDays);
     }
 
     [Fact]
@@ -349,6 +353,185 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
 
         Assert.True(result.IsSuccess);
         Assert.Equal(0m, result.MaxDrawdownPercent);
+        Assert.Equal(0, result.DrawdownDurationDays);
+        Assert.Null(result.RecoveryTimeDays);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_CalculatesDrawdownDuration_WhenPortfolioDrops()
+    {
+        // Peak on Jan 3 (12,000), trough on Jan 5 (9,000) => duration = 2 days
+        var run = await CreateRunAsync(initialCapital: 10_000m, finalCapital: 9_000m);
+
+        await _snapshotRepository.AddRangeAsync(
+            [
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 2),
+                    PortfolioValue = 10_000m,
+                    Cash = 4_000m,
+                    TradesExecuted = 0,
+                    RebalanceExecuted = false
+                },
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 3),
+                    PortfolioValue = 12_000m,
+                    Cash = 4_500m,
+                    TradesExecuted = 1,
+                    RebalanceExecuted = true
+                },
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 4),
+                    PortfolioValue = 10_500m,
+                    Cash = 3_500m,
+                    TradesExecuted = 0,
+                    RebalanceExecuted = false
+                },
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 5),
+                    PortfolioValue = 9_000m,
+                    Cash = 3_000m,
+                    TradesExecuted = 0,
+                    RebalanceExecuted = false
+                }
+            ]);
+
+        var result = await _service.GenerateAsync(run.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(25m, result.MaxDrawdownPercent);
+        // Peak Jan 3 → trough Jan 5: 2 calendar days
+        Assert.Equal(2, result.DrawdownDurationDays);
+        // No snapshot recovers to 12,000 after Jan 5
+        Assert.Null(result.RecoveryTimeDays);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_CalculatesRecoveryTime_WhenPortfolioRecoversToPeak()
+    {
+        // Peak on Jan 3 (12,000), trough on Jan 4 (9,000), recovered on Jan 6 (12,000)
+        var run = await CreateRunAsync(initialCapital: 10_000m, finalCapital: 12_000m);
+
+        await _snapshotRepository.AddRangeAsync(
+            [
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 2),
+                    PortfolioValue = 10_000m,
+                    Cash = 4_000m,
+                    TradesExecuted = 0,
+                    RebalanceExecuted = false
+                },
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 3),
+                    PortfolioValue = 12_000m,
+                    Cash = 4_500m,
+                    TradesExecuted = 1,
+                    RebalanceExecuted = true
+                },
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 4),
+                    PortfolioValue = 9_000m,
+                    Cash = 3_000m,
+                    TradesExecuted = 0,
+                    RebalanceExecuted = false
+                },
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 5),
+                    PortfolioValue = 10_500m,
+                    Cash = 3_500m,
+                    TradesExecuted = 0,
+                    RebalanceExecuted = false
+                },
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 6),
+                    PortfolioValue = 12_000m,
+                    Cash = 4_000m,
+                    TradesExecuted = 0,
+                    RebalanceExecuted = false
+                }
+            ]);
+
+        var result = await _service.GenerateAsync(run.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(25m, result.MaxDrawdownPercent);
+        // Peak Jan 3 → trough Jan 4: 1 calendar day
+        Assert.Equal(1, result.DrawdownDurationDays);
+        // Trough Jan 4 → recovered Jan 6: 2 calendar days
+        Assert.Equal(2, result.RecoveryTimeDays);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_RecoveryTimeDays_IsNullWhenNotFullyRecovered()
+    {
+        // Partial recovery but never reaches peak
+        var run = await CreateRunAsync(initialCapital: 10_000m, finalCapital: 10_700m);
+
+        await _snapshotRepository.AddRangeAsync(
+            [
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 2),
+                    PortfolioValue = 10_000m,
+                    Cash = 4_000m,
+                    TradesExecuted = 1,
+                    RebalanceExecuted = true
+                },
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 3),
+                    PortfolioValue = 12_000m,
+                    Cash = 4_500m,
+                    TradesExecuted = 0,
+                    RebalanceExecuted = false
+                },
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 4),
+                    PortfolioValue = 9_000m,
+                    Cash = 3_000m,
+                    TradesExecuted = 2,
+                    RebalanceExecuted = true
+                },
+                new BacktestSnapshot
+                {
+                    BacktestRunId = run.Id,
+                    Date = new DateTime(2024, 1, 5),
+                    PortfolioValue = 10_700m,
+                    Cash = 3_500m,
+                    TradesExecuted = 0,
+                    RebalanceExecuted = false
+                }
+            ]);
+
+        var result = await _service.GenerateAsync(run.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(25m, result.MaxDrawdownPercent);
+        // Peak Jan 3 → trough Jan 4: 1 day
+        Assert.Equal(1, result.DrawdownDurationDays);
+        // 10,700 < 12,000 peak, so not recovered
+        Assert.Null(result.RecoveryTimeDays);
     }
 
     [Fact]

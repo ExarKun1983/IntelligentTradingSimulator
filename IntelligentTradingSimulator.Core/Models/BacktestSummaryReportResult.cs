@@ -20,6 +20,10 @@ public sealed class BacktestSummaryReportResult
 
     public decimal MaxDrawdownPercent { get; set; }
 
+    public int DrawdownDurationDays { get; set; }
+
+    public int? RecoveryTimeDays { get; set; }
+
     public int TradesCount { get; set; }
 
     public int RebalancesCount { get; set; }
