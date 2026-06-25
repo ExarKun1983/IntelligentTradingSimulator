@@ -17,12 +17,17 @@ var connectionString =
     ?? throw new InvalidOperationException(
         "Connection string 'TradingDb' is not configured.");
 
+var maxPositions =
+    configuration.GetValue<int?>("Strategy:MaxPositions")
+    ?? 10;
+
 var services = new ServiceCollection();
 
 services.AddInfrastructure(connectionString);
 
 services.AddSingleton<MarketObservationAnalyzer>();
-services.AddSingleton<PortfolioRecommendationService>();
+services.AddSingleton(
+    _ => new PortfolioRecommendationService(maxPositions));
 services.AddSingleton<PortfolioExecutionService>();
 services.AddSingleton<TradingEngine>();
 services.AddSingleton<PortfolioPerformanceService>();

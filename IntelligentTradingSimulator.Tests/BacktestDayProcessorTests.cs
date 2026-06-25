@@ -28,11 +28,14 @@ public sealed class BacktestDayProcessorTests : IDisposable
 
     public void Dispose() => _dbContext.Dispose();
 
-    private BacktestDayProcessor BuildProcessor(FakeMarketDataProvider provider)
+    private BacktestDayProcessor BuildProcessor(
+        FakeMarketDataProvider provider,
+        int maxPositions = 10)
     {
         var historicalService = new BacktestHistoricalMarketDataService(provider);
         var analyzer = new MarketObservationAnalyzer();
-        var recommendationService = new PortfolioRecommendationService();
+        var recommendationService =
+            new PortfolioRecommendationService(maxPositions);
         var allocationService = new PortfolioAllocationService();
         var allocationEngine = new PortfolioAllocationEngine(allocationService);
         var tradingEngine = new TradingEngine();
@@ -291,6 +294,32 @@ public sealed class BacktestDayProcessorTests : IDisposable
 
         // The snapshot must record exactly as many trades as were added to the portfolio.
         Assert.Equal(result.Portfolio.Trades.Count, result.Snapshot.TradesExecuted);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_RespectsMaxPositionsSetting_WhenBuildingRecommendations()
+    {
+        var provider = new FakeMarketDataProvider();
+        var startDate = new DateTime(2024, 9, 1);
+
+        provider.SetData("AAPL", BuildCandles(startDate, 10, 100m));
+        provider.SetData("MSFT", BuildCandles(startDate, 10, 200m));
+        provider.SetData("GOOG", BuildCandles(startDate, 10, 300m));
+
+        var processor = BuildProcessor(provider, maxPositions: 1);
+
+        var request = new BacktestDayRequest
+        {
+            BacktestRunId = 9,
+            CurrentDate = startDate.AddDays(9),
+            HistoricalStartDate = startDate,
+            Portfolio = new Portfolio { Name = "Backtest", StartingCash = 10_000m, Cash = 10_000m },
+            Symbols = ["AAPL", "MSFT", "GOOG"]
+        };
+
+        var result = await processor.ProcessAsync(request);
+
+        Assert.Single(result.Recommendations);
     }
 
     private sealed class FakeMarketDataProvider : IMarketDataProvider

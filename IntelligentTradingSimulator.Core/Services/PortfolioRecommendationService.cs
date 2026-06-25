@@ -4,9 +4,21 @@ namespace IntelligentTradingSimulator.Core.Services;
 
 public sealed class PortfolioRecommendationService
 {
+    private readonly int _maxPositions;
+
+    public PortfolioRecommendationService(int maxPositions = 10)
+    {
+        _maxPositions = Math.Max(0, maxPositions);
+    }
+
     public IReadOnlyList<StockRecommendation> Build(
         IReadOnlyList<ObservationResult> results)
     {
+        if (_maxPositions == 0)
+        {
+            return [];
+        }
+
         var topStocks =
             results
                 .Where(x =>
@@ -15,7 +27,7 @@ public sealed class PortfolioRecommendationService
                     x.IsAboveSma5)
                 .OrderByDescending(x => x.Score)
                 .Where(x => x.Symbol != "NVDA")
-                .Take(10)
+                .Take(_maxPositions)
                 .ToList();
 
         if (!topStocks.Any())
