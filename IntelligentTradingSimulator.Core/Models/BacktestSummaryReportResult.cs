@@ -10,6 +10,8 @@ public sealed class BacktestSummaryReportResult
 
     public string RunName { get; set; } = string.Empty;
 
+    public string StrategyId { get; set; } = string.Empty;
+
     public decimal StartCapital { get; set; }
 
     public decimal FinalCapital { get; set; }

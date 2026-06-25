@@ -69,6 +69,7 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
             IsSuccess = true,
             BacktestRunId = run.Id,
             RunName = run.Name,
+            StrategyId = run.StrategyId,
             StartCapital = run.InitialCapital,
             FinalCapital = run.FinalCapital,
             Profit = run.TotalProfit,

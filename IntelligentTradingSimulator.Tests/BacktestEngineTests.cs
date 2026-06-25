@@ -31,6 +31,9 @@ public sealed class BacktestEngineTests : IDisposable
     private BacktestEngine BuildEngine(IBacktestDayProcessor dayProcessor)
         => new BacktestEngine(_runRepository, dayProcessor);
 
+    private IBacktestEngine BuildEngineAsInterface(IBacktestDayProcessor dayProcessor)
+        => new BacktestEngine(_runRepository, dayProcessor);
+
     private static BacktestEngineRequest BuildRequest(
         DateTime startDate,
         DateTime endDate,
@@ -206,6 +209,21 @@ public sealed class BacktestEngineTests : IDisposable
         Assert.NotNull(saved);
         Assert.Equal(snapshotPortfolioValue, saved.FinalCapital);
         Assert.Equal(snapshotPortfolioValue - initialCapital, saved.TotalProfit);
+    }
+
+    [Fact]
+    public async Task RunAsync_IsAccessibleViaIBacktestEngineInterface()
+    {
+        var startDate = new DateTime(2024, 7, 1);
+        var endDate = new DateTime(2024, 7, 2);
+
+        var processor = new StubDayProcessor();
+        IBacktestEngine engine = BuildEngineAsInterface(processor);
+
+        var result = await engine.RunAsync(BuildRequest(startDate, endDate));
+
+        Assert.True(result.RunId > 0);
+        Assert.Equal(BacktestRunStatus.Completed, result.Status);
     }
 
     // ── Stubs ──────────────────────────────────────────────────────────────

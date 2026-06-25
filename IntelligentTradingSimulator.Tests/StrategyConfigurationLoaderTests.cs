@@ -171,4 +171,150 @@ public sealed class StrategyConfigurationLoaderTests
             "Configuration value 'ActiveStrategy' must not be empty.",
             exception.Message);
     }
+
+    [Fact]
+    public void Load_BindsLookbackDays_FromConfiguration()
+    {
+        const string activeStrategyId = "momentum-v1";
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = activeStrategyId,
+                        [$"Strategies:{activeStrategyId}:LookbackDays"] = "120"
+                    })
+                .Build();
+
+        var result = StrategyConfigurationLoader.Load(configuration);
+
+        Assert.Equal(120, result.LookbackDays);
+    }
+
+    [Fact]
+    public void Load_UsesDefaultLookbackDays_WhenNotConfigured()
+    {
+        const string activeStrategyId = "default";
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = activeStrategyId,
+                        [$"Strategies:{activeStrategyId}:MaxPositions"] = "5"
+                    })
+                .Build();
+
+        var result = StrategyConfigurationLoader.Load(configuration);
+
+        Assert.Equal(StrategyConfiguration.DefaultLookbackDays, result.LookbackDays);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Load_Throws_WhenLookbackDaysIsInvalid(int lookbackDays)
+    {
+        const string activeStrategyId = "momentum-v1";
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = activeStrategyId,
+                        [$"Strategies:{activeStrategyId}:LookbackDays"] = lookbackDays.ToString()
+                    })
+                .Build();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => StrategyConfigurationLoader.Load(configuration));
+
+        Assert.Equal(
+            "Configuration value 'Strategies:momentum-v1:LookbackDays' must be greater than zero.",
+            exception.Message);
+    }
+
+    [Fact]
+    public void Load_BindsFactorFlags_FromConfiguration()
+    {
+        const string activeStrategyId = "factor-strategy";
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = activeStrategyId,
+                        [$"Strategies:{activeStrategyId}:UseRsi"] = "true",
+                        [$"Strategies:{activeStrategyId}:UseRelativeStrength"] = "false",
+                        [$"Strategies:{activeStrategyId}:Use52WeekHigh"] = "true"
+                    })
+                .Build();
+
+        var result = StrategyConfigurationLoader.Load(configuration);
+
+        Assert.True(result.UseRsi);
+        Assert.False(result.UseRelativeStrength);
+        Assert.True(result.Use52WeekHigh);
+    }
+
+    [Fact]
+    public void Load_UsesFactorFlagDefaults_WhenNotConfigured()
+    {
+        const string activeStrategyId = "default";
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = activeStrategyId,
+                        [$"Strategies:{activeStrategyId}:MaxPositions"] = "5"
+                    })
+                .Build();
+
+        var result = StrategyConfigurationLoader.Load(configuration);
+
+        Assert.False(result.UseRsi);
+        Assert.True(result.UseRelativeStrength);
+        Assert.False(result.Use52WeekHigh);
+    }
+
+    [Fact]
+    public void Load_ReadsNewFields_FromAppsettingsJsonShape()
+    {
+        const string json = """
+                            {
+                             "ActiveStrategy": "extended-strategy",
+                             "Strategies": {
+                               "extended-strategy": {
+                                 "MaxPositions": 8,
+                                 "MaxPositionWeight": 20,
+                                 "LookbackDays": 60,
+                                 "UseRsi": true,
+                                 "UseRelativeStrength": true,
+                                 "Use52WeekHigh": false
+                               }
+                              }
+                            }
+                            """;
+
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddJsonStream(stream)
+                .Build();
+
+        var result = StrategyConfigurationLoader.Load(configuration);
+
+        Assert.Equal("extended-strategy", result.Id);
+        Assert.Equal(60, result.LookbackDays);
+        Assert.True(result.UseRsi);
+        Assert.True(result.UseRelativeStrength);
+        Assert.False(result.Use52WeekHigh);
+    }
 }
