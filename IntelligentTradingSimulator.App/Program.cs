@@ -24,7 +24,7 @@ var maxPositions =
 if (maxPositions <= 0)
 {
     throw new InvalidOperationException(
-        "Configuration value 'Strategy:MaxPositions' must be greater than 0.");
+        "Configuration value 'Strategy:MaxPositions' must be greater than zero.");
 }
 
 var services = new ServiceCollection();
