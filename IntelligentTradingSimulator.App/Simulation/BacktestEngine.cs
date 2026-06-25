@@ -26,6 +26,7 @@ public sealed class BacktestEngine
         var run = new BacktestRun
         {
             Name = request.Name,
+            StrategyId = request.StrategyId,
             StartDate = request.StartDate.Date,
             EndDate = request.EndDate.Date,
             InitialCapital = request.InitialCapital,

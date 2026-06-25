@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using IntelligentTradingSimulator.App.Configuration;
 using IntelligentTradingSimulator.App.Simulation;
 using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace IntelligentTradingSimulator.Tests;
 
@@ -36,12 +38,30 @@ public sealed class BacktestEngineTests : IDisposable
         => new BacktestEngineRequest
         {
             Name = "Test Run",
+            StrategyId = "momentum-default",
             StartDate = startDate,
             EndDate = endDate,
             HistoricalStartDate = startDate.AddDays(-30),
             InitialCapital = initialCapital,
             Symbols = ["AAPL", "MSFT"]
         };
+
+    private static StrategyConfiguration LoadSelectedStrategyConfiguration(
+        string strategyId)
+    {
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = strategyId,
+                        [$"Strategies:{strategyId}:MaxPositions"] = "8",
+                        [$"Strategies:{strategyId}:MaxPositionWeight"] = "25"
+                    })
+                .Build();
+
+        return StrategyConfigurationLoader.Load(configuration);
+    }
 
     [Fact]
     public async Task RunAsync_CreatesRunAndCompletesOverDateRange()
@@ -60,8 +80,38 @@ public sealed class BacktestEngineTests : IDisposable
         var saved = await _runRepository.GetByIdAsync(result.RunId);
         Assert.NotNull(saved);
         Assert.Equal("Test Run", saved.Name);
+        Assert.Equal("momentum-default", saved.StrategyId);
         Assert.Equal(startDate.Date, saved.StartDate);
         Assert.Equal(endDate.Date, saved.EndDate);
+    }
+
+    [Fact]
+    public async Task RunAsync_PersistsStrategyIdentityInBacktestRun()
+    {
+        var startDate = new DateTime(2024, 1, 1);
+        var endDate = new DateTime(2024, 1, 1);
+        var selectedStrategyConfiguration =
+            LoadSelectedStrategyConfiguration("risk-capped-v1");
+        var requestFactory =
+            new BacktestEngineRequestFactory(selectedStrategyConfiguration);
+
+        var processor = new StubDayProcessor();
+        var engine = BuildEngine(processor);
+        var request =
+            requestFactory.Create(
+                name: "Test Run",
+                startDate: startDate,
+                endDate: endDate,
+                historicalStartDate: startDate.AddDays(-30),
+                initialCapital: 10_000m,
+                symbols: ["AAPL", "MSFT"]);
+
+        var result = await engine.RunAsync(request);
+
+        var saved = await _runRepository.GetByIdAsync(result.RunId);
+
+        Assert.NotNull(saved);
+        Assert.Equal(selectedStrategyConfiguration.Id, saved.StrategyId);
     }
 
     [Fact]

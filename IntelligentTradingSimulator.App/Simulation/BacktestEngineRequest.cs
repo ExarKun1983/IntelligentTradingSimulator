@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
+using IntelligentTradingSimulator.Core.Models;
 
 namespace IntelligentTradingSimulator.App.Simulation;
 
 public sealed class BacktestEngineRequest
 {
     public string Name { get; set; } = string.Empty;
+
+    public string StrategyId { get; set; } = StrategyConfiguration.DefaultId;
 
     public DateTime StartDate { get; set; }
 

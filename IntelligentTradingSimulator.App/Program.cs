@@ -1,4 +1,5 @@
 using System;
+using IntelligentTradingSimulator.App.Configuration;
 using IntelligentTradingSimulator.App.Simulation;
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Services;
@@ -17,45 +18,29 @@ var connectionString =
     ?? throw new InvalidOperationException(
         "Connection string 'TradingDb' is not configured.");
 
-var maxPositions =
-    configuration.GetValue<int?>("Strategy:MaxPositions")
-    ?? 10;
-
-var maxPositionWeight =
-    configuration.GetValue<decimal?>("Strategy:MaxPositionWeight")
-    ?? 100m;
-
-if (maxPositions <= 0)
-{
-    throw new InvalidOperationException(
-        "Configuration value 'Strategy:MaxPositions' must be greater than zero.");
-}
-
-if (maxPositionWeight <= 0m ||
-    maxPositionWeight > 100m)
-{
-    throw new InvalidOperationException(
-        "Configuration value 'Strategy:MaxPositionWeight' must be greater than zero and less than or equal to 100.");
-}
+var selectedStrategyConfiguration =
+    StrategyConfigurationLoader.Load(configuration);
 
 var services = new ServiceCollection();
 
 services.AddInfrastructure(connectionString);
+services.AddSingleton(selectedStrategyConfiguration);
+services.AddSingleton<BacktestEngineRequestFactory>();
 
 services.AddSingleton<MarketObservationAnalyzer>();
 services.AddSingleton(
     _ => new PortfolioRecommendationService(
-        maxPositions));
+        selectedStrategyConfiguration.MaxPositions));
 services.AddSingleton(
     _ => new PortfolioExecutionService(
-        maxPositionWeight));
+        selectedStrategyConfiguration.MaxPositionWeight));
 services.AddSingleton<TradingEngine>();
 services.AddSingleton<PortfolioPerformanceService>();
 services.AddSingleton<PortfolioAllocationService>();
 services.AddSingleton(
     sp => new PortfolioAllocationEngine(
         sp.GetRequiredService<PortfolioAllocationService>(),
-        maxPositionWeight));
+        selectedStrategyConfiguration.MaxPositionWeight));
 services.AddSingleton<PortfolioContributionService>();
 services.AddSingleton<PortfolioRebalancingService>();
 

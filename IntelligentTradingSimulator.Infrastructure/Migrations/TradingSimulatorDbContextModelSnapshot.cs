@@ -55,6 +55,11 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     b.Property<int>("Status")
                         .HasColumnType("int");
 
+                    b.Property<string>("StrategyId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.Property<decimal>("TotalProfit")
                         .HasPrecision(18, 4)
                         .HasColumnType("decimal(18,4)");
