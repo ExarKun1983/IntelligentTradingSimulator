@@ -92,11 +92,19 @@ public sealed class BacktestEngineTests : IDisposable
         var endDate = new DateTime(2024, 1, 1);
         var selectedStrategyConfiguration =
             LoadSelectedStrategyConfiguration("risk-capped-v1");
+        var requestFactory =
+            new BacktestEngineRequestFactory(selectedStrategyConfiguration);
 
         var processor = new StubDayProcessor();
         var engine = BuildEngine(processor);
-        var request = BuildRequest(startDate, endDate);
-        request.StrategyId = selectedStrategyConfiguration.Id;
+        var request =
+            requestFactory.Create(
+                name: "Test Run",
+                startDate: startDate,
+                endDate: endDate,
+                historicalStartDate: startDate.AddDays(-30),
+                initialCapital: 10_000m,
+                symbols: ["AAPL", "MSFT"]);
 
         var result = await engine.RunAsync(request);
 
