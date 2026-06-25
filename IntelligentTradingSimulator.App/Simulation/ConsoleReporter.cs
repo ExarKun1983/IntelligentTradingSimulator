@@ -226,5 +226,22 @@ public sealed class ConsoleReporter
         Console.WriteLine($"Return:         {result.ReturnPercent:N2}%");
         Console.WriteLine($"Trades:         {result.TradesCount}");
         Console.WriteLine($"Rebalances:     {result.RebalancesCount}");
+
+        if (result.BenchmarkComparisons.Count == 0)
+        {
+            return;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("Benchmark Comparison:");
+
+        foreach (var comparison in result.BenchmarkComparisons)
+        {
+            Console.WriteLine(
+                $"{comparison.Symbol}" +
+                $" | Strategy Return={comparison.StrategyReturnPercent:N2}%" +
+                $" | Benchmark Return={comparison.BenchmarkReturnPercent:N2}%" +
+                $" | Outcome={comparison.Outcome}");
+        }
     }
 }

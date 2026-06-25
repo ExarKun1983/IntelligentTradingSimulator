@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
+using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
@@ -13,6 +15,7 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
     private readonly TradingSimulatorDbContext _dbContext;
     private readonly BacktestRunRepository _runRepository;
     private readonly BacktestSnapshotRepository _snapshotRepository;
+    private readonly FakeBacktestBenchmarkService _benchmarkService;
     private readonly BacktestSummaryReportService _service;
 
     public BacktestSummaryReportServiceTests()
@@ -24,7 +27,11 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
         _dbContext = new TradingSimulatorDbContext(options);
         _runRepository = new BacktestRunRepository(_dbContext);
         _snapshotRepository = new BacktestSnapshotRepository(_dbContext);
-        _service = new BacktestSummaryReportService(_runRepository, _snapshotRepository);
+        _benchmarkService = new FakeBacktestBenchmarkService();
+        _service = new BacktestSummaryReportService(
+            _runRepository,
+            _snapshotRepository,
+            _benchmarkService);
     }
 
     public void Dispose() => _dbContext.Dispose();
@@ -296,5 +303,182 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
         Assert.Equal(7, result.TradesCount);
         Assert.Equal(2, result.RebalancesCount);
         Assert.NotEqual(result.TradesCount, result.RebalancesCount);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_ReturnsBenchmarkComparisonsWithOutcomes_ForRun()
+    {
+        var run = await CreateRunAsync(initialCapital: 10_000m, finalCapital: 12_000m);
+
+        await _snapshotRepository.AddAsync(new BacktestSnapshot
+        {
+            BacktestRunId = run.Id,
+            Date = new DateTime(2024, 1, 15),
+            PortfolioValue = 12_000m,
+            Cash = 4_000m,
+            TradesExecuted = 1,
+            RebalanceExecuted = true
+        });
+
+        _benchmarkService.SetResults(
+            run.Id,
+            [
+                new BenchmarkResult
+                {
+                    Symbol = "SPY",
+                    StartPrice = 100m,
+                    EndPrice = 110m,
+                    ReturnPercent = 10m
+                },
+                new BenchmarkResult
+                {
+                    Symbol = "QQQ",
+                    StartPrice = 200m,
+                    EndPrice = 230m,
+                    ReturnPercent = 15m
+                },
+                new BenchmarkResult
+                {
+                    Symbol = "IWM",
+                    StartPrice = 50m,
+                    EndPrice = 60m,
+                    ReturnPercent = 20m
+                }
+            ]);
+
+        var result = await _service.GenerateAsync(run.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(3, result.BenchmarkComparisons.Count);
+        Assert.Contains(
+            result.BenchmarkComparisons,
+            x => x.Symbol == "SPY" &&
+                 x.StrategyReturnPercent == 20m &&
+                 x.BenchmarkReturnPercent == 10m &&
+                 x.Outcome == BacktestBenchmarkComparisonOutcome.Outperform);
+        Assert.Contains(
+            result.BenchmarkComparisons,
+            x => x.Symbol == "QQQ" &&
+                 x.StrategyReturnPercent == 20m &&
+                 x.BenchmarkReturnPercent == 15m &&
+                 x.Outcome == BacktestBenchmarkComparisonOutcome.Outperform);
+        Assert.Contains(
+            result.BenchmarkComparisons,
+            x => x.Symbol == "IWM" &&
+                 x.StrategyReturnPercent == 20m &&
+                 x.BenchmarkReturnPercent == 20m &&
+                 x.Outcome == BacktestBenchmarkComparisonOutcome.Match);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_ReturnsUnderperformOutcome_WhenBenchmarkReturnIsHigher()
+    {
+        var run = await CreateRunAsync(initialCapital: 10_000m, finalCapital: 11_000m);
+
+        await _snapshotRepository.AddAsync(new BacktestSnapshot
+        {
+            BacktestRunId = run.Id,
+            Date = new DateTime(2024, 1, 15),
+            PortfolioValue = 11_000m,
+            Cash = 4_000m,
+            TradesExecuted = 1,
+            RebalanceExecuted = true
+        });
+
+        _benchmarkService.SetResults(
+            run.Id,
+            [
+                new BenchmarkResult
+                {
+                    Symbol = "SPY",
+                    StartPrice = 100m,
+                    EndPrice = 115m,
+                    ReturnPercent = 15m
+                }
+            ]);
+
+        var result = await _service.GenerateAsync(run.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Single(result.BenchmarkComparisons);
+        Assert.Equal(
+            BacktestBenchmarkComparisonOutcome.Underperform,
+            result.BenchmarkComparisons[0].Outcome);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_ReturnsEmptyBenchmarkComparisons_WhenBenchmarkDataUnavailable()
+    {
+        var run = await CreateRunAsync();
+
+        await _snapshotRepository.AddAsync(new BacktestSnapshot
+        {
+            BacktestRunId = run.Id,
+            Date = new DateTime(2024, 1, 15),
+            PortfolioValue = 11_000m,
+            Cash = 4_000m,
+            TradesExecuted = 1,
+            RebalanceExecuted = true
+        });
+
+        _benchmarkService.SetFailure(run.Id, "Benchmark data unavailable.");
+
+        var result = await _service.GenerateAsync(run.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Empty(result.BenchmarkComparisons);
+    }
+
+    private sealed class FakeBacktestBenchmarkService : IBacktestBenchmarkService
+    {
+        private readonly Dictionary<int, BacktestBenchmarkResult> _responses = new();
+        private readonly List<string> _requestedSymbols = [];
+
+        public IReadOnlyList<string> RequestedSymbols => _requestedSymbols;
+
+        public void SetResults(int backtestRunId, IReadOnlyList<BenchmarkResult> results)
+        {
+            _responses[backtestRunId] = new BacktestBenchmarkResult
+            {
+                IsSuccess = true,
+                BacktestRunId = backtestRunId,
+                BenchmarkResults = results
+            };
+        }
+
+        public void SetFailure(int backtestRunId, string errorMessage)
+        {
+            _responses[backtestRunId] = new BacktestBenchmarkResult
+            {
+                IsSuccess = false,
+                BacktestRunId = backtestRunId,
+                ErrorMessage = errorMessage,
+                BenchmarkResults = []
+            };
+        }
+
+        public Task<BacktestBenchmarkResult> GetForRunAsync(int backtestRunId)
+        {
+            if (_responses.TryGetValue(backtestRunId, out var response))
+            {
+                return Task.FromResult(response);
+            }
+
+            return Task.FromResult(new BacktestBenchmarkResult
+            {
+                IsSuccess = true,
+                BacktestRunId = backtestRunId,
+                BenchmarkResults = []
+            });
+        }
+
+        public Task<BacktestBenchmarkResult> GetForRunAsync(
+            int backtestRunId,
+            IEnumerable<string> symbols)
+        {
+            _requestedSymbols.Clear();
+            _requestedSymbols.AddRange(symbols);
+            return GetForRunAsync(backtestRunId);
+        }
     }
 }
