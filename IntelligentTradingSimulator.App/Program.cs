@@ -18,28 +18,28 @@ var connectionString =
     ?? throw new InvalidOperationException(
         "Connection string 'TradingDb' is not configured.");
 
-var strategyConfiguration =
+var selectedStrategyConfiguration =
     StrategyConfigurationLoader.Load(configuration);
 
 var services = new ServiceCollection();
 
 services.AddInfrastructure(connectionString);
-services.AddSingleton(strategyConfiguration);
+services.AddSingleton(selectedStrategyConfiguration);
 
 services.AddSingleton<MarketObservationAnalyzer>();
 services.AddSingleton(
     _ => new PortfolioRecommendationService(
-        strategyConfiguration.MaxPositions));
+        selectedStrategyConfiguration.MaxPositions));
 services.AddSingleton(
     _ => new PortfolioExecutionService(
-        strategyConfiguration.MaxPositionWeight));
+        selectedStrategyConfiguration.MaxPositionWeight));
 services.AddSingleton<TradingEngine>();
 services.AddSingleton<PortfolioPerformanceService>();
 services.AddSingleton<PortfolioAllocationService>();
 services.AddSingleton(
     sp => new PortfolioAllocationEngine(
         sp.GetRequiredService<PortfolioAllocationService>(),
-        strategyConfiguration.MaxPositionWeight));
+        selectedStrategyConfiguration.MaxPositionWeight));
 services.AddSingleton<PortfolioContributionService>();
 services.AddSingleton<PortfolioRebalancingService>();
 
