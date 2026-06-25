@@ -36,6 +36,7 @@ public sealed class BacktestPersistenceTests : IDisposable
         var run = new BacktestRun
         {
             Name = "Test Run",
+            StrategyId = "default",
             StartDate = new DateTime(2024, 1, 1),
             EndDate = new DateTime(2024, 6, 30),
             InitialCapital = 100_000m,
@@ -51,6 +52,7 @@ public sealed class BacktestPersistenceTests : IDisposable
 
         Assert.NotNull(loaded);
         Assert.Equal("Test Run", loaded.Name);
+        Assert.Equal("default", loaded.StrategyId);
         Assert.Equal(new DateTime(2024, 1, 1), loaded.StartDate);
         Assert.Equal(new DateTime(2024, 6, 30), loaded.EndDate);
         Assert.Equal(100_000m, loaded.InitialCapital);
@@ -62,6 +64,7 @@ public sealed class BacktestPersistenceTests : IDisposable
         var run = new BacktestRun
         {
             Name = "Update Test Run",
+            StrategyId = "default",
             StartDate = new DateTime(2024, 1, 1),
             EndDate = new DateTime(2024, 12, 31),
             InitialCapital = 50_000m,
@@ -93,6 +96,7 @@ public sealed class BacktestPersistenceTests : IDisposable
         var run = new BacktestRun
         {
             Name = "Snapshot Test Run",
+            StrategyId = "default",
             StartDate = new DateTime(2024, 1, 1),
             EndDate = new DateTime(2024, 3, 31),
             InitialCapital = 10_000m,
@@ -131,6 +135,7 @@ public sealed class BacktestPersistenceTests : IDisposable
         var run = new BacktestRun
         {
             Name = "Multi-Snapshot Run",
+            StrategyId = "default",
             StartDate = new DateTime(2024, 1, 1),
             EndDate = new DateTime(2024, 3, 31),
             InitialCapital = 10_000m,
@@ -197,6 +202,7 @@ public sealed class BacktestPersistenceTests : IDisposable
         var run = new BacktestRun
         {
             Name = "Empty Snapshots Run",
+            StrategyId = "default",
             StartDate = new DateTime(2024, 1, 1),
             EndDate = new DateTime(2024, 3, 31),
             InitialCapital = 10_000m,

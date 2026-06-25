@@ -43,6 +43,7 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
         var run = new BacktestRun
         {
             Name = "Test Run",
+            StrategyId = "default",
             StartDate = new DateTime(2024, 1, 1),
             EndDate = new DateTime(2024, 1, 31),
             InitialCapital = initialCapital,

@@ -42,6 +42,7 @@ public sealed class BacktestBenchmarkServiceTests : IDisposable
         var run = new BacktestRun
         {
             Name = "Test Run",
+            StrategyId = "default",
             StartDate = startDate,
             EndDate = endDate,
             InitialCapital = 10_000m,
