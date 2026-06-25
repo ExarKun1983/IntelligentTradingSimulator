@@ -106,6 +106,6 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
         decimal strategyReturnPercent,
         decimal benchmarkReturnPercent)
     {
-        return strategyReturnPercent - benchmarkReturnPercent;
+        return GetRelativeReturnPercent(strategyReturnPercent, benchmarkReturnPercent);
     }
 }
