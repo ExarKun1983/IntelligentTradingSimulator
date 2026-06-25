@@ -45,13 +45,15 @@ services.AddInfrastructure(connectionString);
 services.AddSingleton<MarketObservationAnalyzer>();
 services.AddSingleton(
     _ => new PortfolioRecommendationService(
-        maxPositions,
-        maxPositionWeight));
+        maxPositions));
 services.AddSingleton<PortfolioExecutionService>();
 services.AddSingleton<TradingEngine>();
 services.AddSingleton<PortfolioPerformanceService>();
 services.AddSingleton<PortfolioAllocationService>();
-services.AddSingleton<PortfolioAllocationEngine>();
+services.AddSingleton(
+    sp => new PortfolioAllocationEngine(
+        sp.GetRequiredService<PortfolioAllocationService>(),
+        maxPositionWeight));
 services.AddSingleton<PortfolioContributionService>();
 services.AddSingleton<PortfolioRebalancingService>();
 

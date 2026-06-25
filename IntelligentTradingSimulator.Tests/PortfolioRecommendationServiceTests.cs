@@ -112,42 +112,4 @@ public sealed class PortfolioRecommendationServiceTests
         Assert.Equal("maxPositions", exception.ParamName);
         Assert.Contains("greater than zero", exception.Message);
     }
-
-    [Fact]
-    public void Build_CapsAllocation_ToConfiguredMaxPositionWeight_WithoutRedistribution()
-    {
-        var service =
-            new PortfolioRecommendationService(
-                maxPositions: 10,
-                maxPositionWeight: 40m);
-
-        var results = new List<ObservationResult>
-        {
-            new() { Symbol = "AAPL", Score = 100m, MomentumPercent = 5m, IsAboveSma5 = true },
-            new() { Symbol = "MSFT", Score = 10m, MomentumPercent = 3m, IsAboveSma5 = true }
-        };
-
-        var recommendations = service.Build(results);
-
-        Assert.Equal(2, recommendations.Count);
-        Assert.Equal(40m, recommendations[0].AllocationPercent);
-        Assert.Equal(9.09m, recommendations[1].AllocationPercent);
-        Assert.True(recommendations.Sum(x => x.AllocationPercent) < 100m);
-    }
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(-1)]
-    [InlineData(100.01)]
-    public void Constructor_Throws_WhenMaxPositionWeightIsOutOfRange(decimal maxPositionWeight)
-    {
-        var exception =
-            Assert.Throws<ArgumentOutOfRangeException>(
-                () => new PortfolioRecommendationService(
-                    maxPositions: 10,
-                    maxPositionWeight: maxPositionWeight));
-
-        Assert.Equal("maxPositionWeight", exception.ParamName);
-        Assert.Contains("less than or equal to 100", exception.Message);
-    }
 }
