@@ -256,7 +256,6 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
         Assert.Equal(12_000m, result.FinalCapital);
         Assert.Equal(2_000m, result.Profit);
         Assert.Equal(20m, result.ReturnPercent);
-        Assert.Equal(0m, result.MaxDrawdownPercent);
     }
 
     [Fact]

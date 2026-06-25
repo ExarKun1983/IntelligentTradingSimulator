@@ -114,7 +114,12 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
     private static decimal GetMaxDrawdownPercent(
         IReadOnlyList<BacktestSnapshot> snapshots)
     {
-        decimal peak = 0m;
+        if (snapshots.Count == 0)
+        {
+            return 0m;
+        }
+
+        decimal peak = snapshots[0].PortfolioValue;
         decimal maxDrawdown = 0m;
 
         foreach (var snapshot in snapshots)
@@ -124,7 +129,7 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
                 peak = snapshot.PortfolioValue;
             }
 
-            if (peak == 0m)
+            if (peak <= 0m)
             {
                 continue;
             }
