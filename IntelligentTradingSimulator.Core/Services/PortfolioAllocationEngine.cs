@@ -13,6 +13,8 @@ public sealed class PortfolioAllocationEngine
     private readonly PortfolioAllocationService
         _allocationService;
 
+    private readonly decimal _maxPositionWeight;
+
     public IReadOnlyList<AllocationTrade>
     BuildTrades(
         Portfolio portfolio,
@@ -54,9 +56,20 @@ public sealed class PortfolioAllocationEngine
     }
 
     public PortfolioAllocationEngine(
-        PortfolioAllocationService allocationService)
+        PortfolioAllocationService allocationService,
+        decimal maxPositionWeight = 100m)
     {
+        if (maxPositionWeight <= 0m ||
+            maxPositionWeight > 100m)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxPositionWeight),
+                maxPositionWeight,
+                "Max position weight must be greater than zero and less than or equal to 100.");
+        }
+
         _allocationService = allocationService;
+        _maxPositionWeight = maxPositionWeight;
     }
 
     public IReadOnlyList<AllocationInstruction>
@@ -69,11 +82,24 @@ public sealed class PortfolioAllocationEngine
 
         foreach (var recommendation in recommendations)
         {
+            var cappedPercent =
+                Math.Min(
+                    recommendation.AllocationPercent,
+                    _maxPositionWeight);
+
+            var cappedRecommendation =
+                new StockRecommendation
+                {
+                    Symbol = recommendation.Symbol,
+                    AllocationPercent = cappedPercent,
+                    Score = recommendation.Score
+                };
+
             var difference =
                 _allocationService
                     .CalculateDifference(
                         portfolio,
-                        recommendation);
+                        cappedRecommendation);
 
             if (Math.Abs(difference) < 100m)
             {
