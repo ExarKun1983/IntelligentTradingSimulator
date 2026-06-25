@@ -14,11 +14,6 @@ public sealed class PortfolioRecommendationService
     public IReadOnlyList<StockRecommendation> Build(
         IReadOnlyList<ObservationResult> results)
     {
-        if (_maxPositions == 0)
-        {
-            return [];
-        }
-
         var topStocks =
             results
                 .Where(x =>
