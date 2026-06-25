@@ -46,7 +46,9 @@ services.AddSingleton<MarketObservationAnalyzer>();
 services.AddSingleton(
     _ => new PortfolioRecommendationService(
         maxPositions));
-services.AddSingleton<PortfolioExecutionService>();
+services.AddSingleton(
+    _ => new PortfolioExecutionService(
+        maxPositionWeight));
 services.AddSingleton<TradingEngine>();
 services.AddSingleton<PortfolioPerformanceService>();
 services.AddSingleton<PortfolioAllocationService>();

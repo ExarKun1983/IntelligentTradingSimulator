@@ -30,14 +30,17 @@ public sealed class BacktestDayProcessorTests : IDisposable
 
     private BacktestDayProcessor BuildProcessor(
         FakeMarketDataProvider provider,
-        int maxPositions = 10)
+        int maxPositions = 10,
+        decimal maxPositionWeight = 100m)
     {
         var historicalService = new BacktestHistoricalMarketDataService(provider);
         var analyzer = new MarketObservationAnalyzer();
         var recommendationService =
             new PortfolioRecommendationService(maxPositions);
         var allocationService = new PortfolioAllocationService();
-        var allocationEngine = new PortfolioAllocationEngine(allocationService);
+        var allocationEngine = new PortfolioAllocationEngine(
+            allocationService,
+            maxPositionWeight);
         var tradingEngine = new TradingEngine();
         var rebalancingService = new PortfolioRebalancingService();
         var performanceService = new PortfolioPerformanceService();
@@ -320,6 +323,91 @@ public sealed class BacktestDayProcessorTests : IDisposable
         var result = await processor.ProcessAsync(request);
 
         Assert.Single(result.Recommendations);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_EnforcesMaxPositionWeight_InBacktestFinalAllocationFlow()
+    {
+        var provider = new FakeMarketDataProvider();
+        var startDate = new DateTime(2024, 10, 1);
+
+        provider.SetData("AAPL", BuildCandles(startDate, 10, 10m));
+        provider.SetData("MSFT", BuildCandles(startDate, 10, 200m));
+        provider.SetData("GOOG", BuildCandles(startDate, 10, 250m));
+
+        const decimal maxPositionWeight = 25m;
+
+        var processor = BuildProcessor(
+            provider,
+            maxPositionWeight: maxPositionWeight);
+
+        var request = new BacktestDayRequest
+        {
+            BacktestRunId = 10,
+            CurrentDate = startDate.AddDays(9),
+            HistoricalStartDate = startDate,
+            Portfolio = new Portfolio { Name = "Backtest", StartingCash = 10_000m, Cash = 10_000m },
+            Symbols = ["AAPL", "MSFT", "GOOG"]
+        };
+
+        var result = await processor.ProcessAsync(request);
+
+        var totalValue =
+            result.Portfolio.Cash +
+            result.Portfolio.Positions.Sum(
+                x => x.Quantity * x.CurrentPrice);
+
+        Assert.All(
+            result.Portfolio.Positions,
+            position =>
+            {
+                var weight =
+                    position.Quantity *
+                    position.CurrentPrice /
+                    totalValue * 100m;
+
+                Assert.True(weight <= maxPositionWeight + 0.01m);
+            });
+
+        Assert.True(result.Portfolio.Cash > 0m);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_UncappedFlowStillAllowsNaturalHigherWeight()
+    {
+        var provider = new FakeMarketDataProvider();
+        var startDate = new DateTime(2024, 11, 1);
+
+        provider.SetData("AAPL", BuildCandles(startDate, 10, 10m));
+        provider.SetData("MSFT", BuildCandles(startDate, 10, 200m));
+        provider.SetData("GOOG", BuildCandles(startDate, 10, 250m));
+
+        var processor = BuildProcessor(provider, maxPositionWeight: 100m);
+
+        var request = new BacktestDayRequest
+        {
+            BacktestRunId = 11,
+            CurrentDate = startDate.AddDays(9),
+            HistoricalStartDate = startDate,
+            Portfolio = new Portfolio { Name = "Backtest", StartingCash = 10_000m, Cash = 10_000m },
+            Symbols = ["AAPL", "MSFT", "GOOG"]
+        };
+
+        var result = await processor.ProcessAsync(request);
+
+        var totalValue =
+            result.Portfolio.Cash +
+            result.Portfolio.Positions.Sum(
+                x => x.Quantity * x.CurrentPrice);
+
+        var highestWeight =
+            result.Portfolio.Positions
+                .Select(
+                    x => x.Quantity * x.CurrentPrice / totalValue * 100m)
+                .DefaultIfEmpty(0m)
+                .Max();
+
+        Assert.True(highestWeight > 25m);
     }
 
     private sealed class FakeMarketDataProvider : IMarketDataProvider

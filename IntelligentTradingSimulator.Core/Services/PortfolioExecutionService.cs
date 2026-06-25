@@ -11,19 +11,43 @@ namespace IntelligentTradingSimulator.Core.Services;
 
 public sealed class PortfolioExecutionService
 {
+    private readonly decimal _maxPositionWeight;
+
+    public PortfolioExecutionService(
+        decimal maxPositionWeight = 100m)
+    {
+        if (maxPositionWeight <= 0m ||
+            maxPositionWeight > 100m)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxPositionWeight),
+                maxPositionWeight,
+                "Max position weight must be greater than zero and less than or equal to 100.");
+        }
+
+        _maxPositionWeight =
+            maxPositionWeight;
+    }
+
     public void ExecuteRecommendations(
         Portfolio portfolio,
         IReadOnlyList<StockRecommendation> recommendations,
         IReadOnlyDictionary<string, decimal> prices,
         TradingEngine tradingEngine)
     {
+        var capitalToInvest =
+            portfolio.StartingCash * 0.80m;
+
         foreach (var recommendation in recommendations)
         {
-            var capitalToInvest = portfolio.StartingCash * 0.80m;
+            var allocationPercent =
+                Math.Min(
+                    recommendation.AllocationPercent,
+                    _maxPositionWeight);
 
             var amount =
                 capitalToInvest
-                * recommendation.AllocationPercent
+                * allocationPercent
                 / 100m;
 
             var decision =
