@@ -153,27 +153,26 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
             }
         }
 
-        var drawdownDurationDays =
-            (int)(maxDrawdownTroughDate - maxDrawdownPeakDate).TotalDays;
-
         if (maxDrawdown == 0m)
         {
             return (0m, 0, null);
         }
 
+        var drawdownDurationDays =
+            (int)(maxDrawdownTroughDate - maxDrawdownPeakDate).TotalDays;
+
         int? recoveryTimeDays = null;
+        var troughIndex = snapshots
+            .Select((s, i) => (snapshot: s, index: i))
+            .First(x => x.snapshot.Date == maxDrawdownTroughDate)
+            .index;
 
-        foreach (var snapshot in snapshots)
+        for (var i = troughIndex + 1; i < snapshots.Count; i++)
         {
-            if (snapshot.Date <= maxDrawdownTroughDate)
-            {
-                continue;
-            }
-
-            if (snapshot.PortfolioValue >= maxDrawdownPeakValue)
+            if (snapshots[i].PortfolioValue >= maxDrawdownPeakValue)
             {
                 recoveryTimeDays =
-                    (int)(snapshot.Date - maxDrawdownTroughDate).TotalDays;
+                    (int)(snapshots[i].Date - maxDrawdownTroughDate).TotalDays;
                 break;
             }
         }
