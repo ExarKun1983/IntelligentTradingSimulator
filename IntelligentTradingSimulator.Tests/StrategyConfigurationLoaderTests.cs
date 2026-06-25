@@ -10,32 +10,39 @@ namespace IntelligentTradingSimulator.Tests;
 public sealed class StrategyConfigurationLoaderTests
 {
     [Fact]
-    public void Load_BindsStrategyConfigurationFromAppSettingsValues()
+    public void Load_BindsSelectedNamedStrategyConfigurationFromAppSettingsValues()
     {
         var configuration =
             new ConfigurationBuilder()
                 .AddInMemoryCollection(
                     new Dictionary<string, string?>
                     {
-                        ["Strategy:Id"] = "momentum-v1",
-                        ["Strategy:MaxPositions"] = "7",
-                        ["Strategy:MaxPositionWeight"] = "35"
+                        ["ActiveStrategy"] = "momentum-v2",
+                        ["Strategies:momentum-v1:MaxPositions"] = "7",
+                        ["Strategies:momentum-v1:MaxPositionWeight"] = "35",
+                        ["Strategies:momentum-v2:MaxPositions"] = "12",
+                        ["Strategies:momentum-v2:MaxPositionWeight"] = "20"
                     })
                 .Build();
 
         var result = StrategyConfigurationLoader.Load(configuration);
 
-        Assert.Equal("momentum-v1", result.Id);
-        Assert.Equal(7, result.MaxPositions);
-        Assert.Equal(35m, result.MaxPositionWeight);
+        Assert.Equal("momentum-v2", result.Id);
+        Assert.Equal(12, result.MaxPositions);
+        Assert.Equal(20m, result.MaxPositionWeight);
     }
 
     [Fact]
-    public void Load_UsesStrategyConfigurationDefaults_WhenValuesMissing()
+    public void Load_UsesStrategyConfigurationDefaults_WhenSelectedStrategyValuesMissing()
     {
         var configuration =
             new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?>())
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = "default",
+                        ["Strategies:default:DisplayName"] = "Defaults Only"
+                    })
                 .Build();
 
         var result = StrategyConfigurationLoader.Load(configuration);
@@ -50,10 +57,12 @@ public sealed class StrategyConfigurationLoaderTests
     {
         const string json = """
                             {
-                              "Strategy": {
-                                "Id": "strategy-from-json",
-                                "MaxPositions": 5,
-                                "MaxPositionWeight": 45
+                             "ActiveStrategy": "strategy-from-json",
+                             "Strategies": {
+                               "strategy-from-json": {
+                                 "MaxPositions": 5,
+                                 "MaxPositionWeight": 45
+                               }
                               }
                             }
                             """;
@@ -77,12 +86,15 @@ public sealed class StrategyConfigurationLoaderTests
     [InlineData(-1)]
     public void Load_Throws_WhenMaxPositionsIsInvalid(int maxPositions)
     {
+        const string activeStrategyId = "momentum-v1";
+
         var configuration =
             new ConfigurationBuilder()
                 .AddInMemoryCollection(
                     new Dictionary<string, string?>
                     {
-                        ["Strategy:MaxPositions"] = maxPositions.ToString()
+                        ["ActiveStrategy"] = activeStrategyId,
+                        [$"Strategies:{activeStrategyId}:MaxPositions"] = maxPositions.ToString()
                     })
                 .Build();
 
@@ -90,7 +102,7 @@ public sealed class StrategyConfigurationLoaderTests
             () => StrategyConfigurationLoader.Load(configuration));
 
         Assert.Equal(
-            "Configuration value 'Strategy:MaxPositions' must be greater than zero.",
+            "Configuration value 'Strategies:momentum-v1:MaxPositions' must be greater than zero.",
             exception.Message);
     }
 
@@ -100,12 +112,15 @@ public sealed class StrategyConfigurationLoaderTests
     [InlineData("100.01")]
     public void Load_Throws_WhenMaxPositionWeightIsInvalid(string maxPositionWeight)
     {
+        const string activeStrategyId = "momentum-v1";
+
         var configuration =
             new ConfigurationBuilder()
                 .AddInMemoryCollection(
                     new Dictionary<string, string?>
                     {
-                        ["Strategy:MaxPositionWeight"] = maxPositionWeight
+                        ["ActiveStrategy"] = activeStrategyId,
+                        [$"Strategies:{activeStrategyId}:MaxPositionWeight"] = maxPositionWeight
                     })
                 .Build();
 
@@ -113,19 +128,19 @@ public sealed class StrategyConfigurationLoaderTests
             () => StrategyConfigurationLoader.Load(configuration));
 
         Assert.Equal(
-            "Configuration value 'Strategy:MaxPositionWeight' must be greater than zero and less than or equal to 100.",
+            "Configuration value 'Strategies:momentum-v1:MaxPositionWeight' must be greater than zero and less than or equal to 100.",
             exception.Message);
     }
 
     [Fact]
-    public void Load_Throws_WhenStrategyIdIsEmpty()
+    public void Load_Throws_WhenSelectedStrategyDefinitionIsMissing()
     {
         var configuration =
             new ConfigurationBuilder()
                 .AddInMemoryCollection(
                     new Dictionary<string, string?>
                     {
-                        ["Strategy:Id"] = " "
+                        ["ActiveStrategy"] = "momentum-v1"
                     })
                 .Build();
 
@@ -133,7 +148,27 @@ public sealed class StrategyConfigurationLoaderTests
             () => StrategyConfigurationLoader.Load(configuration));
 
         Assert.Equal(
-            "Configuration value 'Strategy:Id' must not be empty.",
+            "Configuration section 'Strategies:momentum-v1' is missing for selected active strategy.",
+            exception.Message);
+    }
+
+    [Fact]
+    public void Load_Throws_WhenActiveStrategyIsEmpty()
+    {
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = " "
+                    })
+                .Build();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => StrategyConfigurationLoader.Load(configuration));
+
+        Assert.Equal(
+            "Configuration value 'ActiveStrategy' must not be empty.",
             exception.Message);
     }
 }
