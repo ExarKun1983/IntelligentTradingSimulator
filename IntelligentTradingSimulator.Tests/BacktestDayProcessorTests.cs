@@ -328,6 +328,8 @@ public sealed class BacktestDayProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_EnforcesMaxPositionWeight_InBacktestFinalAllocationFlow()
     {
+        const decimal weightTolerance = 0.01m;
+
         var provider = new FakeMarketDataProvider();
         var startDate = new DateTime(2024, 10, 1);
 
@@ -366,7 +368,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
                     position.CurrentPrice /
                     totalValue * 100m;
 
-                Assert.True(weight <= maxPositionWeight + 0.01m);
+                Assert.True(weight <= maxPositionWeight + weightTolerance);
             });
 
         Assert.True(result.Portfolio.Cash > 0m);
@@ -375,6 +377,8 @@ public sealed class BacktestDayProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_UncappedFlowStillAllowsNaturalHigherWeight()
     {
+        const decimal cappedThreshold = 25m;
+
         var provider = new FakeMarketDataProvider();
         var startDate = new DateTime(2024, 11, 1);
 
@@ -407,7 +411,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
                 .DefaultIfEmpty(0m)
                 .Max();
 
-        Assert.True(highestWeight > 25m);
+        Assert.True(highestWeight > cappedThreshold);
     }
 
     private sealed class FakeMarketDataProvider : IMarketDataProvider
