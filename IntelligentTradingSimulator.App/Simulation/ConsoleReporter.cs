@@ -224,6 +224,7 @@ public sealed class ConsoleReporter
         Console.WriteLine($"Final Capital:  {result.FinalCapital:N2}");
         Console.WriteLine($"Profit:         {result.Profit:N2}");
         Console.WriteLine($"Return:         {result.ReturnPercent:N2}%");
+        Console.WriteLine($"Max Drawdown:   {result.MaxDrawdownPercent:N2}%");
         Console.WriteLine($"Trades:         {result.TradesCount}");
         Console.WriteLine($"Rebalances:     {result.RebalancesCount}");
 
