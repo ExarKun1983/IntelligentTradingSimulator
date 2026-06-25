@@ -306,7 +306,7 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GenerateAsync_ReturnsBenchmarkComparisons_ForRun()
+    public async Task GenerateAsync_ReturnsBenchmarkComparisonsWithOutcomes_ForRun()
     {
         var run = await CreateRunAsync(initialCapital: 10_000m, finalCapital: 12_000m);
 
@@ -336,23 +336,74 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
                     StartPrice = 200m,
                     EndPrice = 230m,
                     ReturnPercent = 15m
+                },
+                new BenchmarkResult
+                {
+                    Symbol = "IWM",
+                    StartPrice = 50m,
+                    EndPrice = 60m,
+                    ReturnPercent = 20m
                 }
             ]);
 
         var result = await _service.GenerateAsync(run.Id);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal(2, result.BenchmarkComparisons.Count);
+        Assert.Equal(3, result.BenchmarkComparisons.Count);
         Assert.Contains(
             result.BenchmarkComparisons,
             x => x.Symbol == "SPY" &&
                  x.StrategyReturnPercent == 20m &&
-                 x.BenchmarkReturnPercent == 10m);
+                 x.BenchmarkReturnPercent == 10m &&
+                 x.Outcome == BacktestBenchmarkComparisonOutcome.Outperform);
         Assert.Contains(
             result.BenchmarkComparisons,
             x => x.Symbol == "QQQ" &&
                  x.StrategyReturnPercent == 20m &&
-                 x.BenchmarkReturnPercent == 15m);
+                 x.BenchmarkReturnPercent == 15m &&
+                 x.Outcome == BacktestBenchmarkComparisonOutcome.Outperform);
+        Assert.Contains(
+            result.BenchmarkComparisons,
+            x => x.Symbol == "IWM" &&
+                 x.StrategyReturnPercent == 20m &&
+                 x.BenchmarkReturnPercent == 20m &&
+                 x.Outcome == BacktestBenchmarkComparisonOutcome.Match);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_ReturnsUnderperformOutcome_WhenBenchmarkReturnIsHigher()
+    {
+        var run = await CreateRunAsync(initialCapital: 10_000m, finalCapital: 11_000m);
+
+        await _snapshotRepository.AddAsync(new BacktestSnapshot
+        {
+            BacktestRunId = run.Id,
+            Date = new DateTime(2024, 1, 15),
+            PortfolioValue = 11_000m,
+            Cash = 4_000m,
+            TradesExecuted = 1,
+            RebalanceExecuted = true
+        });
+
+        _benchmarkService.SetResults(
+            run.Id,
+            [
+                new BenchmarkResult
+                {
+                    Symbol = "SPY",
+                    StartPrice = 100m,
+                    EndPrice = 115m,
+                    ReturnPercent = 15m
+                }
+            ]);
+
+        var result = await _service.GenerateAsync(run.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Single(result.BenchmarkComparisons);
+        Assert.Equal(
+            BacktestBenchmarkComparisonOutcome.Underperform,
+            result.BenchmarkComparisons[0].Outcome);
     }
 
     [Fact]

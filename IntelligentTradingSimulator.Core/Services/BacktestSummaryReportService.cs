@@ -55,7 +55,8 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
                 {
                     Symbol = b.Symbol,
                     StrategyReturnPercent = run.TotalReturnPercent,
-                    BenchmarkReturnPercent = b.ReturnPercent
+                    BenchmarkReturnPercent = b.ReturnPercent,
+                    Outcome = GetComparisonOutcome(run.TotalReturnPercent, b.ReturnPercent)
                 })
                 .ToList()
             : new List<BacktestBenchmarkComparison>();
@@ -73,5 +74,22 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
             RebalancesCount = rebalancesCount,
             BenchmarkComparisons = benchmarkComparisons
         };
+    }
+
+    private static BacktestBenchmarkComparisonOutcome GetComparisonOutcome(
+        decimal strategyReturnPercent,
+        decimal benchmarkReturnPercent)
+    {
+        if (strategyReturnPercent > benchmarkReturnPercent)
+        {
+            return BacktestBenchmarkComparisonOutcome.Outperform;
+        }
+
+        if (strategyReturnPercent < benchmarkReturnPercent)
+        {
+            return BacktestBenchmarkComparisonOutcome.Underperform;
+        }
+
+        return BacktestBenchmarkComparisonOutcome.Match;
     }
 }

@@ -240,7 +240,8 @@ public sealed class ConsoleReporter
             Console.WriteLine(
                 $"{comparison.Symbol}" +
                 $" | Strategy Return={comparison.StrategyReturnPercent:N2}%" +
-                $" | Benchmark Return={comparison.BenchmarkReturnPercent:N2}%");
+                $" | Benchmark Return={comparison.BenchmarkReturnPercent:N2}%" +
+                $" | Outcome={comparison.Outcome}");
         }
     }
 }

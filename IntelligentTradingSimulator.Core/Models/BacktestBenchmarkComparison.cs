@@ -7,4 +7,6 @@ public sealed class BacktestBenchmarkComparison
     public decimal StrategyReturnPercent { get; init; }
 
     public decimal BenchmarkReturnPercent { get; init; }
+
+    public BacktestBenchmarkComparisonOutcome Outcome { get; init; }
 }
