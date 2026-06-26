@@ -89,4 +89,66 @@ public sealed class MarketObservationAnalyzerTests
 
         Assert.Equal("AAPL", result.Symbol);
     }
+
+    [Fact]
+    public void Analyze_HighVolatility_GetsNegativeScore_WhenQualityFilterEnabled()
+    {
+        var configWithFilter = new StrategyConfiguration { UseQualityFilter = true };
+        var analyzer = new MarketObservationAnalyzer(configWithFilter);
+
+        // candles with 5% intraday range (volatility > 3% threshold)
+        var candles = new List<MarketCandle>
+        {
+            Candle(100m, high: 102.5m, low: 97.5m),
+            Candle(101m, high: 103.5m, low: 98.5m),
+            Candle(103m, high: 105.5m, low: 100.5m),
+            Candle(105m, high: 107.5m, low: 102.5m),
+            Candle(107m, high: 109.5m, low: 104.5m),
+            Candle(110m, high: 112.5m, low: 107.5m)
+        };
+
+        var result = analyzer.Analyze("TEST", candles);
+
+        Assert.True(result.Score < 0);
+    }
+
+    [Fact]
+    public void Analyze_HighVolatility_CanGetPositiveScore_WhenQualityFilterDisabled()
+    {
+        var configWithoutFilter = new StrategyConfiguration { UseQualityFilter = false };
+        var analyzer = new MarketObservationAnalyzer(configWithoutFilter);
+
+        // same candles: rising price (good momentum), 5% intraday range
+        var candles = new List<MarketCandle>
+        {
+            Candle(100m, high: 102.5m, low: 97.5m),
+            Candle(101m, high: 103.5m, low: 98.5m),
+            Candle(103m, high: 105.5m, low: 100.5m),
+            Candle(105m, high: 107.5m, low: 102.5m),
+            Candle(107m, high: 109.5m, low: 104.5m),
+            Candle(110m, high: 112.5m, low: 107.5m)
+        };
+
+        var result = analyzer.Analyze("TEST", candles);
+
+        Assert.True(result.Score > 0);
+    }
+
+    [Fact]
+    public void Analyze_QualityFilter_DoesNotPenalizeLowVolatilityStock()
+    {
+        var configWithFilter = new StrategyConfiguration { UseQualityFilter = true };
+        var analyzer = new MarketObservationAnalyzer(configWithFilter);
+
+        // default candles have ~2% range — below the 3% threshold
+        var candles = new List<MarketCandle>
+        {
+            Candle(100m), Candle(101m), Candle(102m),
+            Candle(103m), Candle(104m), Candle(110m)
+        };
+
+        var result = analyzer.Analyze("TEST", candles);
+
+        Assert.True(result.Score > 0);
+    }
 }

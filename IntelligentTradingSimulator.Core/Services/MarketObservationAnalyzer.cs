@@ -1,8 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 using IntelligentTradingSimulator.Core.Models;
 
@@ -10,6 +8,15 @@ namespace IntelligentTradingSimulator.Core.Services;
 
 public sealed class MarketObservationAnalyzer
 {
+    private readonly StrategyConfiguration _strategyConfiguration;
+
+    public MarketObservationAnalyzer(
+        StrategyConfiguration? strategyConfiguration = null)
+    {
+        _strategyConfiguration =
+            strategyConfiguration ?? new StrategyConfiguration();
+    }
+
     public ObservationResult Analyze(
         string symbol,
         IReadOnlyList<MarketCandle> candles)
@@ -59,12 +66,18 @@ public sealed class MarketObservationAnalyzer
 
         if (!isAboveSma5)
         {
-            score = -999m;
+            score = StrategyConfiguration.DisqualifiedScore;
         }
 
         if (isAboveSma5)
         {
             score += 5m;
+        }
+
+        if (_strategyConfiguration.UseQualityFilter &&
+            volatility > StrategyConfiguration.QualityVolatilityThresholdPercent)
+        {
+            score = StrategyConfiguration.DisqualifiedScore;
         }
 
         return new ObservationResult

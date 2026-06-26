@@ -35,7 +35,17 @@ public static class StrategyConfigurationLoader
             MaxPositions = strategySection.GetValue<int?>("MaxPositions")
                 ?? StrategyConfiguration.DefaultMaxPositions,
             MaxPositionWeight = strategySection.GetValue<decimal?>("MaxPositionWeight")
-                ?? StrategyConfiguration.DefaultMaxPositionWeight
+                ?? StrategyConfiguration.DefaultMaxPositionWeight,
+            LookbackDays = strategySection.GetValue<int?>("LookbackDays")
+                ?? StrategyConfiguration.DefaultLookbackDays,
+            UseRsi = strategySection.GetValue<bool?>("UseRsi")
+                ?? false,
+            UseRelativeStrength = strategySection.GetValue<bool?>("UseRelativeStrength")
+                ?? true,
+            Use52WeekHigh = strategySection.GetValue<bool?>("Use52WeekHigh")
+                ?? false,
+            UseQualityFilter = strategySection.GetValue<bool?>("UseQualityFilter")
+                ?? false
         };
 
         if (strategyConfiguration.MaxPositions <= 0)
@@ -49,6 +59,12 @@ public static class StrategyConfigurationLoader
         {
             throw new InvalidOperationException(
                 $"Configuration value 'Strategies:{activeStrategyId}:MaxPositionWeight' must be greater than zero and less than or equal to 100.");
+        }
+
+        if (strategyConfiguration.LookbackDays <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Configuration value 'Strategies:{activeStrategyId}:LookbackDays' must be greater than zero.");
         }
 
         return strategyConfiguration;
