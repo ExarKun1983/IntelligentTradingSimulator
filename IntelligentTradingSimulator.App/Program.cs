@@ -152,27 +152,27 @@ var runVariantsArg = Array.Find(
 
 if (runVariantsArg is not null)
 {
-    var startDateArg2 = Array.Find(
+    var variantsStartDateArg = Array.Find(
         args,
         a => a.StartsWith("--backtest-start=", StringComparison.OrdinalIgnoreCase));
 
-    var endDateArg2 = Array.Find(
+    var variantsEndDateArg = Array.Find(
         args,
         a => a.StartsWith("--backtest-end=", StringComparison.OrdinalIgnoreCase));
 
-    var endDate2 = endDateArg2 is not null &&
-                   DateTime.TryParse(endDateArg2["--backtest-end=".Length..], out var parsedEnd2)
-        ? parsedEnd2
+    var variantsEndDate = variantsEndDateArg is not null &&
+                   DateTime.TryParse(variantsEndDateArg["--backtest-end=".Length..], out var parsedVariantsEnd)
+        ? parsedVariantsEnd
         : DateTime.Today.AddDays(-1);
 
-    var startDate2 = startDateArg2 is not null &&
-                     DateTime.TryParse(startDateArg2["--backtest-start=".Length..], out var parsedStart2)
-        ? parsedStart2
-        : endDate2.AddYears(-1);
+    var variantsStartDate = variantsStartDateArg is not null &&
+                     DateTime.TryParse(variantsStartDateArg["--backtest-start=".Length..], out var parsedVariantsStart)
+        ? parsedVariantsStart
+        : variantsEndDate.AddYears(-1);
 
     var allVariants = StrategyConfigurationLoader.LoadAll(configuration);
 
-    IReadOnlyList<string> symbols2 = ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA"];
+    IReadOnlyList<string> variantsSymbols = ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA"];
 
     var longestLookback = 0;
     foreach (var v in allVariants)
@@ -183,20 +183,20 @@ if (runVariantsArg is not null)
 
     var variantRunRequest = new StrategyVariantRunRequest
     {
-        NamePrefix = $"Backtest {startDate2:yyyy-MM-dd} to {endDate2:yyyy-MM-dd}",
-        StartDate = startDate2,
-        EndDate = endDate2,
-        HistoricalStartDate = startDate2.AddDays(-longestLookback),
+        NamePrefix = $"Backtest {variantsStartDate:yyyy-MM-dd} to {variantsEndDate:yyyy-MM-dd}",
+        StartDate = variantsStartDate,
+        EndDate = variantsEndDate,
+        HistoricalStartDate = variantsStartDate.AddDays(-longestLookback),
         InitialCapital = 100_000m,
-        Symbols = symbols2
+        Symbols = variantsSymbols
     };
 
     var variantRunner = scope.ServiceProvider.GetRequiredService<IStrategyVariantRunner>();
-    var reportService2 = scope.ServiceProvider.GetRequiredService<IBacktestSummaryReportService>();
-    var reporter2 = scope.ServiceProvider.GetRequiredService<ConsoleReporter>();
+    var variantsReportService = scope.ServiceProvider.GetRequiredService<IBacktestSummaryReportService>();
+    var variantsReporter = scope.ServiceProvider.GetRequiredService<ConsoleReporter>();
 
     Console.WriteLine($"Running {allVariants.Count} strategy variant(s)...");
-    Console.WriteLine($"Period: {startDate2:yyyy-MM-dd} to {endDate2:yyyy-MM-dd}");
+    Console.WriteLine($"Period: {variantsStartDate:yyyy-MM-dd} to {variantsEndDate:yyyy-MM-dd}");
 
     var batchResult = await variantRunner.RunAsync(allVariants, variantRunRequest);
 
@@ -211,8 +211,8 @@ if (runVariantsArg is not null)
             continue;
         }
 
-        var summary2 = await reportService2.GenerateAsync(variantResult.EngineResult.RunId);
-        reporter2.PrintBacktestSummary(summary2);
+        var variantSummary = await variantsReportService.GenerateAsync(variantResult.EngineResult.RunId);
+        variantsReporter.PrintBacktestSummary(variantSummary);
     }
 
     return;
