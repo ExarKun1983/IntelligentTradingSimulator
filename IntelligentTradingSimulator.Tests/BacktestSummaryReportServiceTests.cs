@@ -714,6 +714,40 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
         Assert.Empty(result.BenchmarkComparisons);
     }
 
+    [Fact]
+    public async Task GenerateAsync_PopulatesStrategyIdFromBacktestRun()
+    {
+        var run = new BacktestRun
+        {
+            Name = "Strategy Identity Test",
+            StrategyId = "momentum-capped-v2",
+            StartDate = new DateTime(2024, 1, 1),
+            EndDate = new DateTime(2024, 1, 31),
+            InitialCapital = 10_000m,
+            FinalCapital = 11_000m,
+            TotalProfit = 1_000m,
+            TotalReturnPercent = 10m,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        await _runRepository.AddAsync(run);
+
+        await _snapshotRepository.AddAsync(new BacktestSnapshot
+        {
+            BacktestRunId = run.Id,
+            Date = new DateTime(2024, 1, 15),
+            PortfolioValue = 11_000m,
+            Cash = 5_000m,
+            TradesExecuted = 1,
+            RebalanceExecuted = true
+        });
+
+        var result = await _service.GenerateAsync(run.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("momentum-capped-v2", result.StrategyId);
+    }
+
     private sealed class FakeBacktestBenchmarkService : IBacktestBenchmarkService
     {
         private readonly Dictionary<int, BacktestBenchmarkResult> _responses = new();
