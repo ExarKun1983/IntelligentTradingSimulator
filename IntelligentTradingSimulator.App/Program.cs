@@ -1,11 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using IntelligentTradingSimulator.App;
 using IntelligentTradingSimulator.App.Configuration;
 using IntelligentTradingSimulator.App.Simulation;
 using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Interfaces;
+using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
 using IntelligentTradingSimulator.Infrastructure;
 using Microsoft.Extensions.Configuration;
@@ -211,7 +211,7 @@ if (runVariantsArg is not null)
 
     var batchResult = await variantRunner.RunAsync(allVariants, variantRunRequest);
 
-    var summaries = new List<IntelligentTradingSimulator.Core.Models.BacktestSummaryReportResult>(batchResult.Results.Count);
+    var summaries = new List<BacktestSummaryReportResult>(batchResult.Results.Count);
 
     foreach (var variantResult in batchResult.Results)
     {
@@ -221,7 +221,7 @@ if (runVariantsArg is not null)
         if (variantResult.EngineResult.Status == BacktestRunStatus.Failed)
         {
             Console.WriteLine($"  Failed: {variantResult.EngineResult.ErrorMessage}");
-            summaries.Add(new IntelligentTradingSimulator.Core.Models.BacktestSummaryReportResult
+            summaries.Add(new BacktestSummaryReportResult
             {
                 IsSuccess = false,
                 StrategyId = variantResult.StrategyId,
