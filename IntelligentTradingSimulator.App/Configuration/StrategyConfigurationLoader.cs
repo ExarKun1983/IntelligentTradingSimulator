@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using IntelligentTradingSimulator.Core.Models;
 using Microsoft.Extensions.Configuration;
 
@@ -6,6 +7,32 @@ namespace IntelligentTradingSimulator.App.Configuration;
 
 public static class StrategyConfigurationLoader
 {
+    public static IReadOnlyList<StrategyConfiguration> LoadAll(IConfiguration configuration)
+    {
+        var strategiesSection = configuration.GetSection("Strategies");
+
+        if (!strategiesSection.Exists())
+        {
+            throw new InvalidOperationException(
+                "Configuration section 'Strategies' is missing or empty.");
+        }
+
+        var results = new List<StrategyConfiguration>();
+
+        foreach (var section in strategiesSection.GetChildren())
+        {
+            results.Add(BindAndValidate(section.Key, section));
+        }
+
+        if (results.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Configuration section 'Strategies' contains no strategy definitions.");
+        }
+
+        return results;
+    }
+
     public static StrategyConfiguration Load(IConfiguration configuration)
     {
         var activeStrategyId =
@@ -29,44 +56,48 @@ public static class StrategyConfigurationLoader
                 $"Configuration section 'Strategies:{activeStrategyId}' is missing for selected active strategy.");
         }
 
-        var strategyConfiguration = new StrategyConfiguration
+        return BindAndValidate(activeStrategyId, strategySection);
+    }
+
+    private static StrategyConfiguration BindAndValidate(string id, IConfigurationSection section)
+    {
+        var config = new StrategyConfiguration
         {
-            Id = activeStrategyId,
-            MaxPositions = strategySection.GetValue<int?>("MaxPositions")
+            Id = id,
+            MaxPositions = section.GetValue<int?>("MaxPositions")
                 ?? StrategyConfiguration.DefaultMaxPositions,
-            MaxPositionWeight = strategySection.GetValue<decimal?>("MaxPositionWeight")
+            MaxPositionWeight = section.GetValue<decimal?>("MaxPositionWeight")
                 ?? StrategyConfiguration.DefaultMaxPositionWeight,
-            LookbackDays = strategySection.GetValue<int?>("LookbackDays")
+            LookbackDays = section.GetValue<int?>("LookbackDays")
                 ?? StrategyConfiguration.DefaultLookbackDays,
-            UseRsi = strategySection.GetValue<bool?>("UseRsi")
+            UseRsi = section.GetValue<bool?>("UseRsi")
                 ?? false,
-            UseRelativeStrength = strategySection.GetValue<bool?>("UseRelativeStrength")
+            UseRelativeStrength = section.GetValue<bool?>("UseRelativeStrength")
                 ?? true,
-            Use52WeekHigh = strategySection.GetValue<bool?>("Use52WeekHigh")
+            Use52WeekHigh = section.GetValue<bool?>("Use52WeekHigh")
                 ?? false,
-            UseQualityFilter = strategySection.GetValue<bool?>("UseQualityFilter")
+            UseQualityFilter = section.GetValue<bool?>("UseQualityFilter")
                 ?? false
         };
 
-        if (strategyConfiguration.MaxPositions <= 0)
+        if (config.MaxPositions <= 0)
         {
             throw new InvalidOperationException(
-                $"Configuration value 'Strategies:{activeStrategyId}:MaxPositions' must be greater than zero.");
+                $"Configuration value 'Strategies:{id}:MaxPositions' must be greater than zero.");
         }
 
-        if (strategyConfiguration.MaxPositionWeight <= 0m ||
-            strategyConfiguration.MaxPositionWeight > 100m)
+        if (config.MaxPositionWeight <= 0m || config.MaxPositionWeight > 100m)
         {
             throw new InvalidOperationException(
-                $"Configuration value 'Strategies:{activeStrategyId}:MaxPositionWeight' must be greater than zero and less than or equal to 100.");
+                $"Configuration value 'Strategies:{id}:MaxPositionWeight' must be greater than zero and less than or equal to 100.");
         }
 
-        if (strategyConfiguration.LookbackDays <= 0)
+        if (config.LookbackDays <= 0)
         {
             throw new InvalidOperationException(
-                $"Configuration value 'Strategies:{activeStrategyId}:LookbackDays' must be greater than zero.");
+                $"Configuration value 'Strategies:{id}:LookbackDays' must be greater than zero.");
         }
 
-        return strategyConfiguration;
+        return config;
     }
 }
