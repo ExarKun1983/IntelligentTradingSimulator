@@ -170,6 +170,13 @@ if (runVariantsArg is not null)
         ? parsedVariantsStart
         : variantsEndDate.AddYears(-1);
 
+    if (variantsStartDate > variantsEndDate)
+    {
+        Console.WriteLine(
+            $"Error: --backtest-start ({variantsStartDate:yyyy-MM-dd}) must not be after --backtest-end ({variantsEndDate:yyyy-MM-dd}).");
+        return;
+    }
+
     var allVariants = StrategyConfigurationLoader.LoadAll(configuration);
 
     IReadOnlyList<string> variantsSymbols = ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA"];

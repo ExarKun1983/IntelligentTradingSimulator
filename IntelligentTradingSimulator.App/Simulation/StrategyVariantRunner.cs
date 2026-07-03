@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Models;
 
 namespace IntelligentTradingSimulator.App.Simulation;
@@ -38,7 +39,19 @@ public sealed class StrategyVariantRunner : IStrategyVariantRunner
                 initialCapital: request.InitialCapital,
                 symbols: request.Symbols);
 
-            var engineResult = await _engine.RunAsync(engineRequest);
+            BacktestEngineResult engineResult;
+            try
+            {
+                engineResult = await _engine.RunAsync(engineRequest);
+            }
+            catch (Exception ex)
+            {
+                engineResult = new BacktestEngineResult
+                {
+                    Status = BacktestRunStatus.Failed,
+                    ErrorMessage = ex.Message
+                };
+            }
 
             results.Add(new StrategyVariantRunResult
             {

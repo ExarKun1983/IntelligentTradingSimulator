@@ -247,6 +247,55 @@ public sealed class StrategyVariantRunnerTests : IDisposable
             () => runner.RunAsync([BuildVariant("x")], null!));
     }
 
+    [Fact]
+    public async Task RunAsync_WhenOneVariantThrows_RemainingVariantsStillRun()
+    {
+        var throwingEngine = new ThrowingEngine(throwOnStrategyId: "bad-variant");
+        var runner = new StrategyVariantRunner(throwingEngine);
+
+        var variants = new List<StrategyConfiguration>
+        {
+            BuildVariant("good-v1"),
+            BuildVariant("bad-variant"),
+            BuildVariant("good-v2")
+        };
+
+        var request = BuildRunRequest(
+            startDate: new DateTime(2024, 8, 1),
+            endDate: new DateTime(2024, 8, 1));
+
+        var batchResult = await runner.RunAsync(variants, request);
+
+        Assert.Equal(3, batchResult.Results.Count);
+        Assert.Equal(BacktestRunStatus.Completed, batchResult.Results[0].EngineResult.Status);
+        Assert.Equal(BacktestRunStatus.Failed, batchResult.Results[1].EngineResult.Status);
+        Assert.Equal(BacktestRunStatus.Completed, batchResult.Results[2].EngineResult.Status);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenOneVariantThrows_FailedResultContainsErrorMessage()
+    {
+        var throwingEngine = new ThrowingEngine(throwOnStrategyId: "exploding-variant");
+        var runner = new StrategyVariantRunner(throwingEngine);
+
+        var variants = new List<StrategyConfiguration>
+        {
+            BuildVariant("exploding-variant"),
+            BuildVariant("safe-variant")
+        };
+
+        var request = BuildRunRequest(
+            startDate: new DateTime(2024, 9, 1),
+            endDate: new DateTime(2024, 9, 1));
+
+        var batchResult = await runner.RunAsync(variants, request);
+
+        Assert.Equal(2, batchResult.Results.Count);
+        Assert.Equal(BacktestRunStatus.Failed, batchResult.Results[0].EngineResult.Status);
+        Assert.NotNull(batchResult.Results[0].EngineResult.ErrorMessage);
+        Assert.Equal(BacktestRunStatus.Completed, batchResult.Results[1].EngineResult.Status);
+    }
+
     // ── Stubs ──────────────────────────────────────────────────────────────
 
     private sealed class StubDayProcessor : IBacktestDayProcessor
@@ -265,6 +314,35 @@ public sealed class StrategyVariantRunnerTests : IDisposable
                     Cash = request.Portfolio.Cash
                 },
                 Recommendations = []
+            });
+        }
+    }
+
+    /// <summary>
+    /// Stub engine that throws <see cref="InvalidOperationException"/> for a
+    /// nominated strategy ID and succeeds (returning a completed result) for
+    /// all others. Used to verify that the runner isolates per-variant failures.
+    /// </summary>
+    private sealed class ThrowingEngine : IBacktestEngine
+    {
+        private readonly string _throwOnStrategyId;
+        private int _runId;
+
+        public ThrowingEngine(string throwOnStrategyId)
+            => _throwOnStrategyId = throwOnStrategyId;
+
+        public Task<BacktestEngineResult> RunAsync(BacktestEngineRequest request)
+        {
+            if (string.Equals(request.StrategyId, _throwOnStrategyId, StringComparison.Ordinal))
+                throw new InvalidOperationException($"Simulated engine failure for strategy '{request.StrategyId}'.");
+
+            return Task.FromResult(new BacktestEngineResult
+            {
+                RunId = ++_runId,
+                Status = BacktestRunStatus.Completed,
+                FinalCapital = request.InitialCapital,
+                TotalProfit = 0m,
+                TotalReturnPercent = 0m
             });
         }
     }
