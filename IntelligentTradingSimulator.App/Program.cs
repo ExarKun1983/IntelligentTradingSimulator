@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using IntelligentTradingSimulator.App;
 using IntelligentTradingSimulator.App.Configuration;
 using IntelligentTradingSimulator.App.Simulation;
 using IntelligentTradingSimulator.Core.Enums;
@@ -114,7 +115,7 @@ if (runBacktestArg is not null)
         ? nameArg["--backtest-name=".Length..]
         : $"Backtest {startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}";
 
-    IReadOnlyList<string> symbols = ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA"];
+    IReadOnlyList<string> symbols = StockUniverse.Symbols;
 
     var requestFactory = scope.ServiceProvider.GetRequiredService<BacktestEngineRequestFactory>();
     var engine = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
@@ -179,7 +180,7 @@ if (runVariantsArg is not null)
 
     var allVariants = StrategyConfigurationLoader.LoadAll(configuration);
 
-    IReadOnlyList<string> variantsSymbols = ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA"];
+    IReadOnlyList<string> variantsSymbols = StockUniverse.Symbols;
 
     var longestLookback = 0;
     foreach (var v in allVariants)
