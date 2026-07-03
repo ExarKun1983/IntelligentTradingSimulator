@@ -33,6 +33,34 @@ public sealed class StrategyConfigurationLoaderTests
     }
 
     [Fact]
+    public void Load_BindsStrategyFlags_WhenExplicitlyConfigured()
+    {
+        const string strategyId = "flags-strategy";
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = strategyId,
+                        [$"Strategies:{strategyId}:LookbackDays"] = "60",
+                        [$"Strategies:{strategyId}:UseRsi"] = "true",
+                        [$"Strategies:{strategyId}:UseRelativeStrength"] = "false",
+                        [$"Strategies:{strategyId}:Use52WeekHigh"] = "true",
+                        [$"Strategies:{strategyId}:UseQualityFilter"] = "true"
+                    })
+                .Build();
+
+        var result = StrategyConfigurationLoader.Load(configuration);
+
+        Assert.Equal(60, result.LookbackDays);
+        Assert.True(result.UseRsi);
+        Assert.False(result.UseRelativeStrength);
+        Assert.True(result.Use52WeekHigh);
+        Assert.True(result.UseQualityFilter);
+    }
+
+    [Fact]
     public void Load_UsesStrategyConfigurationDefaults_WhenSelectedStrategyValuesMissing()
     {
         var configuration =
@@ -50,6 +78,11 @@ public sealed class StrategyConfigurationLoaderTests
         Assert.Equal(StrategyConfiguration.DefaultId, result.Id);
         Assert.Equal(StrategyConfiguration.DefaultMaxPositions, result.MaxPositions);
         Assert.Equal(StrategyConfiguration.DefaultMaxPositionWeight, result.MaxPositionWeight);
+        Assert.Equal(StrategyConfiguration.DefaultLookbackDays, result.LookbackDays);
+        Assert.False(result.UseRsi);
+        Assert.True(result.UseRelativeStrength);
+        Assert.False(result.Use52WeekHigh);
+        Assert.False(result.UseQualityFilter);
     }
 
     [Fact]
@@ -129,6 +162,31 @@ public sealed class StrategyConfigurationLoaderTests
 
         Assert.Equal(
             "Configuration value 'Strategies:momentum-v1:MaxPositionWeight' must be greater than zero and less than or equal to 100.",
+            exception.Message);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Load_Throws_WhenLookbackDaysIsInvalid(int lookbackDays)
+    {
+        const string activeStrategyId = "momentum-v1";
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = activeStrategyId,
+                        [$"Strategies:{activeStrategyId}:LookbackDays"] = lookbackDays.ToString()
+                    })
+                .Build();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => StrategyConfigurationLoader.Load(configuration));
+
+        Assert.Equal(
+            "Configuration value 'Strategies:momentum-v1:LookbackDays' must be greater than zero.",
             exception.Message);
     }
 
