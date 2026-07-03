@@ -229,4 +229,147 @@ public sealed class StrategyConfigurationLoaderTests
             "Configuration value 'ActiveStrategy' must not be empty.",
             exception.Message);
     }
+
+    // ── LoadAll tests ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void LoadAll_ReturnsAllDefinedVariants()
+    {
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["Strategies:alpha:MaxPositions"] = "5",
+                        ["Strategies:alpha:MaxPositionWeight"] = "30",
+                        ["Strategies:beta:MaxPositions"] = "8",
+                        ["Strategies:beta:MaxPositionWeight"] = "20"
+                    })
+                .Build();
+
+        var results = StrategyConfigurationLoader.LoadAll(configuration);
+
+        Assert.Equal(2, results.Count);
+        Assert.Contains(results, r => r.Id == "alpha" && r.MaxPositions == 5);
+        Assert.Contains(results, r => r.Id == "beta" && r.MaxPositions == 8);
+    }
+
+    [Fact]
+    public void LoadAll_BindsAllFieldsForEachVariant()
+    {
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["Strategies:v1:MaxPositions"] = "6",
+                        ["Strategies:v1:MaxPositionWeight"] = "40",
+                        ["Strategies:v1:LookbackDays"] = "120",
+                        ["Strategies:v1:UseRsi"] = "true",
+                        ["Strategies:v1:UseRelativeStrength"] = "false",
+                        ["Strategies:v1:Use52WeekHigh"] = "true",
+                        ["Strategies:v1:UseQualityFilter"] = "true"
+                    })
+                .Build();
+
+        var results = StrategyConfigurationLoader.LoadAll(configuration);
+
+        Assert.Single(results);
+        var v1 = results[0];
+        Assert.Equal("v1", v1.Id);
+        Assert.Equal(6, v1.MaxPositions);
+        Assert.Equal(40m, v1.MaxPositionWeight);
+        Assert.Equal(120, v1.LookbackDays);
+        Assert.True(v1.UseRsi);
+        Assert.False(v1.UseRelativeStrength);
+        Assert.True(v1.Use52WeekHigh);
+        Assert.True(v1.UseQualityFilter);
+    }
+
+    [Fact]
+    public void LoadAll_UsesDefaultsWhenOptionalFieldsMissing()
+    {
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["Strategies:minimal:MaxPositions"] = "5",
+                        ["Strategies:minimal:MaxPositionWeight"] = "25"
+                    })
+                .Build();
+
+        var results = StrategyConfigurationLoader.LoadAll(configuration);
+
+        Assert.Single(results);
+        var minimal = results[0];
+        Assert.Equal(StrategyConfiguration.DefaultLookbackDays, minimal.LookbackDays);
+        Assert.False(minimal.UseRsi);
+        Assert.True(minimal.UseRelativeStrength);
+        Assert.False(minimal.Use52WeekHigh);
+        Assert.False(minimal.UseQualityFilter);
+    }
+
+    [Fact]
+    public void LoadAll_Throws_WhenStrategiesSectionMissing()
+    {
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>())
+                .Build();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => StrategyConfigurationLoader.LoadAll(configuration));
+
+        Assert.Equal(
+            "Configuration section 'Strategies' is missing or empty.",
+            exception.Message);
+    }
+
+    [Fact]
+    public void LoadAll_Throws_WhenOneVariantHasInvalidMaxPositions()
+    {
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["Strategies:bad:MaxPositions"] = "0",
+                        ["Strategies:bad:MaxPositionWeight"] = "25"
+                    })
+                .Build();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => StrategyConfigurationLoader.LoadAll(configuration));
+
+        Assert.Contains("MaxPositions", exception.Message);
+    }
+
+    [Fact]
+    public void LoadAll_ReadsVariants_FromJsonShape()
+    {
+        const string json = """
+                            {
+                              "Strategies": {
+                                "conservative": {
+                                  "MaxPositions": 5,
+                                  "MaxPositionWeight": 25
+                                },
+                                "aggressive": {
+                                  "MaxPositions": 15,
+                                  "MaxPositionWeight": 10
+                                }
+                              }
+                            }
+                            """;
+
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+        var configuration = new ConfigurationBuilder().AddJsonStream(stream).Build();
+
+        var results = StrategyConfigurationLoader.LoadAll(configuration);
+
+        Assert.Equal(2, results.Count);
+        Assert.Contains(results, r => r.Id == "conservative" && r.MaxPositions == 5);
+        Assert.Contains(results, r => r.Id == "aggressive" && r.MaxPositions == 15);
+    }
 }

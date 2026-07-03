@@ -56,6 +56,7 @@ services.AddScoped<IBenchmarkDataService, BenchmarkDataService>();
 services.AddScoped<IBacktestBenchmarkService, BacktestBenchmarkService>();
 services.AddScoped<IBacktestDayProcessor, BacktestDayProcessor>();
 services.AddScoped<IBacktestEngine, BacktestEngine>();
+services.AddScoped<IStrategyVariantRunner, StrategyVariantRunner>();
 
 await using var provider = services.BuildServiceProvider();
 
@@ -142,6 +143,78 @@ if (runBacktestArg is not null)
 
     var summaryResult = await reportService.GenerateAsync(engineResult.RunId);
     reporter.PrintBacktestSummary(summaryResult);
+    return;
+}
+
+var runVariantsArg = Array.Find(
+    args,
+    a => a.Equals("--run-variants", StringComparison.OrdinalIgnoreCase));
+
+if (runVariantsArg is not null)
+{
+    var startDateArg2 = Array.Find(
+        args,
+        a => a.StartsWith("--backtest-start=", StringComparison.OrdinalIgnoreCase));
+
+    var endDateArg2 = Array.Find(
+        args,
+        a => a.StartsWith("--backtest-end=", StringComparison.OrdinalIgnoreCase));
+
+    var endDate2 = endDateArg2 is not null &&
+                   DateTime.TryParse(endDateArg2["--backtest-end=".Length..], out var parsedEnd2)
+        ? parsedEnd2
+        : DateTime.Today.AddDays(-1);
+
+    var startDate2 = startDateArg2 is not null &&
+                     DateTime.TryParse(startDateArg2["--backtest-start=".Length..], out var parsedStart2)
+        ? parsedStart2
+        : endDate2.AddYears(-1);
+
+    var allVariants = StrategyConfigurationLoader.LoadAll(configuration);
+
+    IReadOnlyList<string> symbols2 = ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA"];
+
+    var longestLookback = 0;
+    foreach (var v in allVariants)
+    {
+        if (v.LookbackDays > longestLookback)
+            longestLookback = v.LookbackDays;
+    }
+
+    var variantRunRequest = new StrategyVariantRunRequest
+    {
+        NamePrefix = $"Backtest {startDate2:yyyy-MM-dd} to {endDate2:yyyy-MM-dd}",
+        StartDate = startDate2,
+        EndDate = endDate2,
+        HistoricalStartDate = startDate2.AddDays(-longestLookback),
+        InitialCapital = 100_000m,
+        Symbols = symbols2
+    };
+
+    var variantRunner = scope.ServiceProvider.GetRequiredService<IStrategyVariantRunner>();
+    var reportService2 = scope.ServiceProvider.GetRequiredService<IBacktestSummaryReportService>();
+    var reporter2 = scope.ServiceProvider.GetRequiredService<ConsoleReporter>();
+
+    Console.WriteLine($"Running {allVariants.Count} strategy variant(s)...");
+    Console.WriteLine($"Period: {startDate2:yyyy-MM-dd} to {endDate2:yyyy-MM-dd}");
+
+    var batchResult = await variantRunner.RunAsync(allVariants, variantRunRequest);
+
+    foreach (var variantResult in batchResult.Results)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"── Variant: {variantResult.StrategyId} ──");
+
+        if (variantResult.EngineResult.Status == BacktestRunStatus.Failed)
+        {
+            Console.WriteLine($"  Failed: {variantResult.EngineResult.ErrorMessage}");
+            continue;
+        }
+
+        var summary2 = await reportService2.GenerateAsync(variantResult.EngineResult.RunId);
+        reporter2.PrintBacktestSummary(summary2);
+    }
+
     return;
 }
 
