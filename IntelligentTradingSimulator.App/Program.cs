@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using IntelligentTradingSimulator.App;
 using IntelligentTradingSimulator.App.Configuration;
 using IntelligentTradingSimulator.App.Simulation;
 using IntelligentTradingSimulator.Core.Enums;
@@ -56,6 +57,7 @@ services.AddScoped<IBenchmarkDataService, BenchmarkDataService>();
 services.AddScoped<IBacktestBenchmarkService, BacktestBenchmarkService>();
 services.AddScoped<IBacktestDayProcessor, BacktestDayProcessor>();
 services.AddScoped<IBacktestEngine, BacktestEngine>();
+services.AddScoped<IStrategyVariantRunner, StrategyVariantRunner>();
 
 await using var provider = services.BuildServiceProvider();
 
@@ -113,7 +115,7 @@ if (runBacktestArg is not null)
         ? nameArg["--backtest-name=".Length..]
         : $"Backtest {startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}";
 
-    IReadOnlyList<string> symbols = ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA"];
+    IReadOnlyList<string> symbols = StockUniverse.Symbols;
 
     var requestFactory = scope.ServiceProvider.GetRequiredService<BacktestEngineRequestFactory>();
     var engine = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
@@ -142,6 +144,85 @@ if (runBacktestArg is not null)
 
     var summaryResult = await reportService.GenerateAsync(engineResult.RunId);
     reporter.PrintBacktestSummary(summaryResult);
+    return;
+}
+
+var runVariantsArg = Array.Find(
+    args,
+    a => a.Equals("--run-variants", StringComparison.OrdinalIgnoreCase));
+
+if (runVariantsArg is not null)
+{
+    var variantsStartDateArg = Array.Find(
+        args,
+        a => a.StartsWith("--backtest-start=", StringComparison.OrdinalIgnoreCase));
+
+    var variantsEndDateArg = Array.Find(
+        args,
+        a => a.StartsWith("--backtest-end=", StringComparison.OrdinalIgnoreCase));
+
+    var variantsEndDate = variantsEndDateArg is not null &&
+                   DateTime.TryParse(variantsEndDateArg["--backtest-end=".Length..], out var parsedVariantsEnd)
+        ? parsedVariantsEnd
+        : DateTime.Today.AddDays(-1);
+
+    var variantsStartDate = variantsStartDateArg is not null &&
+                     DateTime.TryParse(variantsStartDateArg["--backtest-start=".Length..], out var parsedVariantsStart)
+        ? parsedVariantsStart
+        : variantsEndDate.AddYears(-1);
+
+    if (variantsStartDate > variantsEndDate)
+    {
+        Console.WriteLine(
+            $"Error: --backtest-start ({variantsStartDate:yyyy-MM-dd}) must not be after --backtest-end ({variantsEndDate:yyyy-MM-dd}).");
+        return;
+    }
+
+    var allVariants = StrategyConfigurationLoader.LoadAll(configuration);
+
+    IReadOnlyList<string> variantsSymbols = StockUniverse.Symbols;
+
+    var longestLookback = 0;
+    foreach (var v in allVariants)
+    {
+        if (v.LookbackDays > longestLookback)
+            longestLookback = v.LookbackDays;
+    }
+
+    var variantRunRequest = new StrategyVariantRunRequest
+    {
+        NamePrefix = $"Backtest {variantsStartDate:yyyy-MM-dd} to {variantsEndDate:yyyy-MM-dd}",
+        StartDate = variantsStartDate,
+        EndDate = variantsEndDate,
+        HistoricalStartDate = variantsStartDate.AddDays(-longestLookback),
+        InitialCapital = 100_000m,
+        Symbols = variantsSymbols
+    };
+
+    var variantRunner = scope.ServiceProvider.GetRequiredService<IStrategyVariantRunner>();
+    var variantsReportService = scope.ServiceProvider.GetRequiredService<IBacktestSummaryReportService>();
+    var variantsReporter = scope.ServiceProvider.GetRequiredService<ConsoleReporter>();
+
+    Console.WriteLine($"Running {allVariants.Count} strategy variant(s)...");
+    Console.WriteLine($"Period: {variantsStartDate:yyyy-MM-dd} to {variantsEndDate:yyyy-MM-dd}");
+
+    var batchResult = await variantRunner.RunAsync(allVariants, variantRunRequest);
+
+    foreach (var variantResult in batchResult.Results)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"── Variant: {variantResult.StrategyId} ──");
+
+        if (variantResult.EngineResult.Status == BacktestRunStatus.Failed)
+        {
+            Console.WriteLine($"  Failed: {variantResult.EngineResult.ErrorMessage}");
+            continue;
+        }
+
+        var variantSummary = await variantsReportService.GenerateAsync(variantResult.EngineResult.RunId);
+        variantsReporter.PrintBacktestSummary(variantSummary);
+    }
+
     return;
 }
 
