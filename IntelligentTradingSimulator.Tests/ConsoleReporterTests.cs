@@ -37,12 +37,13 @@ public sealed class ConsoleReporterTests
 
         var output = CaptureOutput(() => reporter.PrintMarketRanking(
         [
-            new ObservationResult { Symbol = "RSI", Rsi = 55.5m },
+            new ObservationResult { Symbol = "RSI", Rsi = 55.5m, Score = 12.34m },
             new ObservationResult { Symbol = "NONE" }
         ]));
 
         Assert.Contains("RSI=55.50", output);
         Assert.Contains("RSI=N/A", output);
+        Assert.Contains("Score=12.34", output);
     }
 
     [Fact]

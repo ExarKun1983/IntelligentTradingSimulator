@@ -175,6 +175,7 @@ public sealed class MarketObservationAnalyzerTests
         Assert.Equal(result.VolumeTrendPercent, engine.LastContext.VolumeTrendPercent);
         Assert.Equal(result.VolatilityPercent, engine.LastContext.VolatilityPercent);
         Assert.Equal(result.IsAboveSma5, engine.LastContext.IsAboveSma5);
+        Assert.Equal(result.Rsi, engine.LastContext.Rsi);
     }
 
     [Fact]
@@ -227,6 +228,40 @@ public sealed class MarketObservationAnalyzerTests
         var result = _analyzer.Analyze("TEST", candles);
 
         Assert.Null(result.Rsi);
+    }
+
+    [Fact]
+    public void Analyze_UsesRsiAdjustedScore_WhenStrategyEnablesRsi()
+    {
+        var strategy = new StrategyConfiguration
+        {
+            UseRsi = true,
+            RsiPreferredMinimum = 50m,
+            RsiPreferredMaximum = 70m,
+            RsiOverboughtThreshold = 80m,
+            RsiPreferredRangeBonus = 2m,
+            RsiOverboughtPenalty = 4m
+        };
+        var analyzer = new MarketObservationAnalyzer(strategy);
+        var candles = Enumerable.Range(0, 15)
+            .Select(index => Candle(100m + index))
+            .ToList();
+
+        var result = analyzer.Analyze("TEST", candles);
+
+        var expected = new RuleBasedScoringEngine(strategy).CalculateScore(
+            new ScoringContext
+            {
+                Symbol = "TEST",
+                MomentumPercent = result.MomentumPercent,
+                AverageVolume = result.AverageVolume,
+                VolumeTrendPercent = result.VolumeTrendPercent,
+                VolatilityPercent = result.VolatilityPercent,
+                IsAboveSma5 = result.IsAboveSma5,
+                Rsi = result.Rsi
+            });
+
+        Assert.Equal(expected, result.Score);
     }
 
     private sealed class CapturingScoringEngine : IScoringEngine

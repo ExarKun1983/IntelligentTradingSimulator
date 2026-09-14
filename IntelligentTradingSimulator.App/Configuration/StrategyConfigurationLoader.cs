@@ -72,6 +72,16 @@ public static class StrategyConfigurationLoader
                 ?? StrategyConfiguration.DefaultLookbackDays,
             UseRsi = section.GetValue<bool?>("UseRsi")
                 ?? false,
+            RsiPreferredMinimum = section.GetValue<decimal?>("RsiPreferredMinimum")
+                ?? StrategyConfiguration.DefaultRsiPreferredMinimum,
+            RsiPreferredMaximum = section.GetValue<decimal?>("RsiPreferredMaximum")
+                ?? StrategyConfiguration.DefaultRsiPreferredMaximum,
+            RsiOverboughtThreshold = section.GetValue<decimal?>("RsiOverboughtThreshold")
+                ?? StrategyConfiguration.DefaultRsiOverboughtThreshold,
+            RsiPreferredRangeBonus = section.GetValue<decimal?>("RsiPreferredRangeBonus")
+                ?? StrategyConfiguration.DefaultRsiPreferredRangeBonus,
+            RsiOverboughtPenalty = section.GetValue<decimal?>("RsiOverboughtPenalty")
+                ?? StrategyConfiguration.DefaultRsiOverboughtPenalty,
             UseRelativeStrength = section.GetValue<bool?>("UseRelativeStrength")
                 ?? true,
             Use52WeekHigh = section.GetValue<bool?>("Use52WeekHigh")
@@ -96,6 +106,48 @@ public static class StrategyConfigurationLoader
         {
             throw new InvalidOperationException(
                 $"Configuration value 'Strategies:{id}:LookbackDays' must be greater than zero.");
+        }
+
+        if (config.RsiPreferredMinimum < 0m || config.RsiPreferredMinimum > 100m)
+        {
+            throw new InvalidOperationException(
+                $"Configuration value 'Strategies:{id}:RsiPreferredMinimum' must be between 0 and 100.");
+        }
+
+        if (config.RsiPreferredMaximum < 0m || config.RsiPreferredMaximum > 100m)
+        {
+            throw new InvalidOperationException(
+                $"Configuration value 'Strategies:{id}:RsiPreferredMaximum' must be between 0 and 100.");
+        }
+
+        if (config.RsiPreferredMinimum > config.RsiPreferredMaximum)
+        {
+            throw new InvalidOperationException(
+                $"Configuration values 'Strategies:{id}:RsiPreferredMinimum' and 'Strategies:{id}:RsiPreferredMaximum' must satisfy minimum less than or equal to maximum.");
+        }
+
+        if (config.RsiOverboughtThreshold < 0m || config.RsiOverboughtThreshold > 100m)
+        {
+            throw new InvalidOperationException(
+                $"Configuration value 'Strategies:{id}:RsiOverboughtThreshold' must be between 0 and 100.");
+        }
+
+        if (config.RsiOverboughtThreshold < config.RsiPreferredMaximum)
+        {
+            throw new InvalidOperationException(
+                $"Configuration value 'Strategies:{id}:RsiOverboughtThreshold' must be greater than or equal to 'Strategies:{id}:RsiPreferredMaximum'.");
+        }
+
+        if (config.RsiPreferredRangeBonus < 0m)
+        {
+            throw new InvalidOperationException(
+                $"Configuration value 'Strategies:{id}:RsiPreferredRangeBonus' must be greater than or equal to zero.");
+        }
+
+        if (config.RsiOverboughtPenalty < 0m)
+        {
+            throw new InvalidOperationException(
+                $"Configuration value 'Strategies:{id}:RsiOverboughtPenalty' must be greater than or equal to zero.");
         }
 
         return config;

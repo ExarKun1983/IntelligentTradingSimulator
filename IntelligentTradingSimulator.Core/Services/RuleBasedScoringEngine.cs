@@ -45,6 +45,23 @@ public sealed class RuleBasedScoringEngine : IScoringEngine
             score = StrategyConfiguration.DisqualifiedScore;
         }
 
+        if (_strategyConfiguration.UseRsi &&
+            context.Rsi.HasValue &&
+            score != StrategyConfiguration.DisqualifiedScore)
+        {
+            var rsi = context.Rsi.Value;
+
+            if (rsi >= _strategyConfiguration.RsiOverboughtThreshold)
+            {
+                score -= _strategyConfiguration.RsiOverboughtPenalty;
+            }
+            else if (rsi >= _strategyConfiguration.RsiPreferredMinimum &&
+                     rsi <= _strategyConfiguration.RsiPreferredMaximum)
+            {
+                score += _strategyConfiguration.RsiPreferredRangeBonus;
+            }
+        }
+
         return score;
     }
 }
