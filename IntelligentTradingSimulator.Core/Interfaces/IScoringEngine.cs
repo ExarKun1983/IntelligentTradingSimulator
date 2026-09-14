@@ -9,5 +9,11 @@ namespace IntelligentTradingSimulator.Core.Interfaces;
 /// </summary>
 public interface IScoringEngine
 {
+    /// <param name="context">Metrics calculated for a single symbol.</param>
+    /// <returns>
+    /// The ranking score. Implementations may return
+    /// <see cref="Models.StrategyConfiguration.DisqualifiedScore"/> to mark the
+    /// symbol as not eligible for the ranking.
+    /// </returns>
     decimal CalculateScore(ScoringContext context);
 }
