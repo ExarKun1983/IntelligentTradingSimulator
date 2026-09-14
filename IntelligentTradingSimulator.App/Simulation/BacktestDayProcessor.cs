@@ -55,12 +55,20 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 var candles =
                     await _historicalDataService.GetHistoricalDailyUpToAsync(
                         symbol,
-                        request.HistoricalStartDate,
+                        MarketHistoryRequirements.GetEffectiveStartDate(
+                            request.HistoricalStartDate,
+                            request.CurrentDate),
                         request.CurrentDate,
                         request.CurrentDate);
 
-                var usableCandles =
+                var historicalCandles =
                     candles.OrderBy(x => x.Date).ToList();
+                var usableCandles =
+                    historicalCandles
+                        .Where(x =>
+                            x.Date.Date >=
+                            request.HistoricalStartDate.Date)
+                        .ToList();
 
                 if (usableCandles.Count < 5)
                 {
@@ -68,7 +76,10 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 }
 
                 observationResults.Add(
-                    analyzer.Analyze(symbol, usableCandles));
+                    analyzer.Analyze(
+                        symbol,
+                        usableCandles,
+                        historicalCandles));
 
                 prices[symbol] = usableCandles.Last().Close;
             }
