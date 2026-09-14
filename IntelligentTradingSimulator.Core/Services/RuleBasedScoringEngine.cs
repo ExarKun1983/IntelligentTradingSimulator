@@ -31,18 +31,29 @@ public sealed class RuleBasedScoringEngine : IScoringEngine
 
         if (!context.IsAboveSma5)
         {
-            score = StrategyConfiguration.DisqualifiedScore;
+            return StrategyConfiguration.DisqualifiedScore;
         }
 
-        if (context.IsAboveSma5)
-        {
-            score += 5m;
-        }
+        score += 5m;
 
         if (_strategyConfiguration.UseQualityFilter &&
             context.VolatilityPercent > StrategyConfiguration.QualityVolatilityThresholdPercent)
         {
-            score = StrategyConfiguration.DisqualifiedScore;
+            return StrategyConfiguration.DisqualifiedScore;
+        }
+
+        if (_strategyConfiguration.UseRsi &&
+            context.Rsi.HasValue &&
+            context.Rsi.Value >= _strategyConfiguration.RsiOverboughtThreshold)
+        {
+            score -= _strategyConfiguration.RsiOverboughtPenalty;
+        }
+        else if (_strategyConfiguration.UseRsi &&
+                 context.Rsi.HasValue &&
+                 context.Rsi.Value >= _strategyConfiguration.RsiPreferredMinimum &&
+                 context.Rsi.Value <= _strategyConfiguration.RsiPreferredMaximum)
+        {
+            score += _strategyConfiguration.RsiPreferredRangeBonus;
         }
 
         return score;

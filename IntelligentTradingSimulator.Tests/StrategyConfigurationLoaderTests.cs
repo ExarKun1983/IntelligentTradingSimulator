@@ -45,6 +45,11 @@ public sealed class StrategyConfigurationLoaderTests
                         ["ActiveStrategy"] = strategyId,
                         [$"Strategies:{strategyId}:LookbackDays"] = "60",
                         [$"Strategies:{strategyId}:UseRsi"] = "true",
+                        [$"Strategies:{strategyId}:RsiPreferredMinimum"] = "45",
+                        [$"Strategies:{strategyId}:RsiPreferredMaximum"] = "68",
+                        [$"Strategies:{strategyId}:RsiOverboughtThreshold"] = "78",
+                        [$"Strategies:{strategyId}:RsiPreferredRangeBonus"] = "2.5",
+                        [$"Strategies:{strategyId}:RsiOverboughtPenalty"] = "3.5",
                         [$"Strategies:{strategyId}:UseRelativeStrength"] = "false",
                         [$"Strategies:{strategyId}:Use52WeekHigh"] = "true",
                         [$"Strategies:{strategyId}:UseQualityFilter"] = "true"
@@ -55,6 +60,11 @@ public sealed class StrategyConfigurationLoaderTests
 
         Assert.Equal(60, result.LookbackDays);
         Assert.True(result.UseRsi);
+        Assert.Equal(45m, result.RsiPreferredMinimum);
+        Assert.Equal(68m, result.RsiPreferredMaximum);
+        Assert.Equal(78m, result.RsiOverboughtThreshold);
+        Assert.Equal(2.5m, result.RsiPreferredRangeBonus);
+        Assert.Equal(3.5m, result.RsiOverboughtPenalty);
         Assert.False(result.UseRelativeStrength);
         Assert.True(result.Use52WeekHigh);
         Assert.True(result.UseQualityFilter);
@@ -80,6 +90,11 @@ public sealed class StrategyConfigurationLoaderTests
         Assert.Equal(StrategyConfiguration.DefaultMaxPositionWeight, result.MaxPositionWeight);
         Assert.Equal(StrategyConfiguration.DefaultLookbackDays, result.LookbackDays);
         Assert.False(result.UseRsi);
+        Assert.Equal(StrategyConfiguration.DefaultRsiPreferredMinimum, result.RsiPreferredMinimum);
+        Assert.Equal(StrategyConfiguration.DefaultRsiPreferredMaximum, result.RsiPreferredMaximum);
+        Assert.Equal(StrategyConfiguration.DefaultRsiOverboughtThreshold, result.RsiOverboughtThreshold);
+        Assert.Equal(StrategyConfiguration.DefaultRsiPreferredRangeBonus, result.RsiPreferredRangeBonus);
+        Assert.Equal(StrategyConfiguration.DefaultRsiOverboughtPenalty, result.RsiOverboughtPenalty);
         Assert.True(result.UseRelativeStrength);
         Assert.False(result.Use52WeekHigh);
         Assert.False(result.UseQualityFilter);
@@ -190,6 +205,102 @@ public sealed class StrategyConfigurationLoaderTests
             exception.Message);
     }
 
+    [Theory]
+    [InlineData("RsiPreferredMinimum", "-1")]
+    [InlineData("RsiPreferredMinimum", "100.01")]
+    [InlineData("RsiPreferredMaximum", "-1")]
+    [InlineData("RsiPreferredMaximum", "100.01")]
+    [InlineData("RsiOverboughtThreshold", "-1")]
+    [InlineData("RsiOverboughtThreshold", "100.01")]
+    public void Load_Throws_WhenRsiLevelIsOutsideZeroToHundred(string key, string value)
+    {
+        const string activeStrategyId = "momentum-v1";
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = activeStrategyId,
+                        [$"Strategies:{activeStrategyId}:{key}"] = value
+                    })
+                .Build();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => StrategyConfigurationLoader.Load(configuration));
+
+        Assert.Contains($"Strategies:{activeStrategyId}:{key}", exception.Message);
+    }
+
+    [Fact]
+    public void Load_Throws_WhenRsiPreferredMinimumExceedsMaximum()
+    {
+        const string activeStrategyId = "momentum-v1";
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = activeStrategyId,
+                        [$"Strategies:{activeStrategyId}:RsiPreferredMinimum"] = "71",
+                        [$"Strategies:{activeStrategyId}:RsiPreferredMaximum"] = "70"
+                    })
+                .Build();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => StrategyConfigurationLoader.Load(configuration));
+
+        Assert.Contains("RsiPreferredMinimum", exception.Message);
+        Assert.Contains("RsiPreferredMaximum", exception.Message);
+    }
+
+    [Fact]
+    public void Load_Throws_WhenRsiOverboughtThresholdIsBelowPreferredMaximum()
+    {
+        const string activeStrategyId = "momentum-v1";
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = activeStrategyId,
+                        [$"Strategies:{activeStrategyId}:RsiPreferredMaximum"] = "70",
+                        [$"Strategies:{activeStrategyId}:RsiOverboughtThreshold"] = "69.99"
+                    })
+                .Build();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => StrategyConfigurationLoader.Load(configuration));
+
+        Assert.Contains("RsiOverboughtThreshold", exception.Message);
+        Assert.Contains("RsiPreferredMaximum", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("RsiPreferredRangeBonus")]
+    [InlineData("RsiOverboughtPenalty")]
+    public void Load_Throws_WhenRsiWeightIsNegative(string key)
+    {
+        const string activeStrategyId = "momentum-v1";
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = activeStrategyId,
+                        [$"Strategies:{activeStrategyId}:{key}"] = "-0.01"
+                    })
+                .Build();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => StrategyConfigurationLoader.Load(configuration));
+
+        Assert.Contains($"Strategies:{activeStrategyId}:{key}", exception.Message);
+    }
+
     [Fact]
     public void Load_Throws_WhenSelectedStrategyDefinitionIsMissing()
     {
@@ -266,6 +377,11 @@ public sealed class StrategyConfigurationLoaderTests
                         ["Strategies:v1:MaxPositionWeight"] = "40",
                         ["Strategies:v1:LookbackDays"] = "120",
                         ["Strategies:v1:UseRsi"] = "true",
+                        ["Strategies:v1:RsiPreferredMinimum"] = "48",
+                        ["Strategies:v1:RsiPreferredMaximum"] = "69",
+                        ["Strategies:v1:RsiOverboughtThreshold"] = "82",
+                        ["Strategies:v1:RsiPreferredRangeBonus"] = "1.5",
+                        ["Strategies:v1:RsiOverboughtPenalty"] = "2.25",
                         ["Strategies:v1:UseRelativeStrength"] = "false",
                         ["Strategies:v1:Use52WeekHigh"] = "true",
                         ["Strategies:v1:UseQualityFilter"] = "true"
@@ -281,6 +397,11 @@ public sealed class StrategyConfigurationLoaderTests
         Assert.Equal(40m, v1.MaxPositionWeight);
         Assert.Equal(120, v1.LookbackDays);
         Assert.True(v1.UseRsi);
+        Assert.Equal(48m, v1.RsiPreferredMinimum);
+        Assert.Equal(69m, v1.RsiPreferredMaximum);
+        Assert.Equal(82m, v1.RsiOverboughtThreshold);
+        Assert.Equal(1.5m, v1.RsiPreferredRangeBonus);
+        Assert.Equal(2.25m, v1.RsiOverboughtPenalty);
         Assert.False(v1.UseRelativeStrength);
         Assert.True(v1.Use52WeekHigh);
         Assert.True(v1.UseQualityFilter);
@@ -305,6 +426,11 @@ public sealed class StrategyConfigurationLoaderTests
         var minimal = results[0];
         Assert.Equal(StrategyConfiguration.DefaultLookbackDays, minimal.LookbackDays);
         Assert.False(minimal.UseRsi);
+        Assert.Equal(StrategyConfiguration.DefaultRsiPreferredMinimum, minimal.RsiPreferredMinimum);
+        Assert.Equal(StrategyConfiguration.DefaultRsiPreferredMaximum, minimal.RsiPreferredMaximum);
+        Assert.Equal(StrategyConfiguration.DefaultRsiOverboughtThreshold, minimal.RsiOverboughtThreshold);
+        Assert.Equal(StrategyConfiguration.DefaultRsiPreferredRangeBonus, minimal.RsiPreferredRangeBonus);
+        Assert.Equal(StrategyConfiguration.DefaultRsiOverboughtPenalty, minimal.RsiOverboughtPenalty);
         Assert.True(minimal.UseRelativeStrength);
         Assert.False(minimal.Use52WeekHigh);
         Assert.False(minimal.UseQualityFilter);

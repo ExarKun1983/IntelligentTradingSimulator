@@ -83,7 +83,8 @@ public sealed class MarketObservationAnalyzer
                     AverageVolume = averageVolume,
                     VolumeTrendPercent = volumeTrend,
                     VolatilityPercent = volatility,
-                    IsAboveSma5 = isAboveSma5
+                    IsAboveSma5 = isAboveSma5,
+                    Rsi = rsi
                 });
 
         return new ObservationResult

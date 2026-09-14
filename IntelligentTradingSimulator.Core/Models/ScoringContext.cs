@@ -17,4 +17,6 @@ public sealed class ScoringContext
     public decimal VolatilityPercent { get; init; }
 
     public bool IsAboveSma5 { get; init; }
+
+    public decimal? Rsi { get; init; }
 }
