@@ -232,6 +232,7 @@ public sealed class ConsoleReporter
             }
 
             Console.WriteLine($"  Status:       Completed");
+            Console.WriteLine($"  Start Capital:  {entry.StartCapital:N2}");
             Console.WriteLine($"  Final Capital:  {entry.FinalCapital:N2}");
             Console.WriteLine($"  Return:         {entry.ReturnPercent:N2}%");
             Console.WriteLine($"  Max Drawdown:   {entry.MaxDrawdownPercent:N2}%");

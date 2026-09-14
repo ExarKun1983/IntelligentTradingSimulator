@@ -8,6 +8,8 @@ public sealed class StrategyComparisonReportEntry
 
     public string? ErrorMessage { get; set; }
 
+    public decimal StartCapital { get; set; }
+
     public decimal FinalCapital { get; set; }
 
     public decimal ReturnPercent { get; set; }

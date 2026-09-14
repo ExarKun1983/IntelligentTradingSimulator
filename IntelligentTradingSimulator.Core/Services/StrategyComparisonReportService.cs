@@ -15,6 +15,7 @@ public sealed class StrategyComparisonReportService : IStrategyComparisonReportS
                 StrategyId = s.StrategyId,
                 IsSuccess = s.IsSuccess,
                 ErrorMessage = s.ErrorMessage,
+                StartCapital = s.StartCapital,
                 FinalCapital = s.FinalCapital,
                 ReturnPercent = s.ReturnPercent,
                 MaxDrawdownPercent = s.MaxDrawdownPercent,
