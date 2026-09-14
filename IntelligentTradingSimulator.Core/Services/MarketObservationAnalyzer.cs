@@ -39,6 +39,14 @@ public sealed class MarketObservationAnalyzer
         string symbol,
         IReadOnlyList<MarketCandle> candles)
     {
+        return Analyze(symbol, candles, candles);
+    }
+
+    public ObservationResult Analyze(
+        string symbol,
+        IReadOnlyList<MarketCandle> candles,
+        IReadOnlyList<MarketCandle> week52HighCandles)
+    {
         var first =
             candles.First();
 
@@ -80,7 +88,7 @@ public sealed class MarketObservationAnalyzer
                 candles.Select(x => x.Close).ToList());
 
         var week52High =
-            _week52HighCalculator.Calculate(candles);
+            _week52HighCalculator.Calculate(week52HighCandles);
 
         var score =
             _scoringEngine.CalculateScore(

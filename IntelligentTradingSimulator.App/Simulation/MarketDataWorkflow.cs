@@ -40,10 +40,18 @@ public sealed class MarketDataWorkflow
             try
             {
                 var candles =
-                    await _provider.GetHistoricalDailyAsync(symbol, from);
+                    await _provider.GetHistoricalDailyAsync(
+                        symbol,
+                        MarketHistoryRequirements.GetEffectiveStartDate(
+                            from,
+                            DateTime.Today));
 
-                var usableCandles =
+                var historicalCandles =
                     candles.OrderBy(x => x.Date).ToList();
+                var usableCandles =
+                    historicalCandles
+                        .Where(x => x.Date.Date >= from.Date)
+                        .ToList();
 
                 if (usableCandles.Count < 5)
                 {
@@ -53,7 +61,11 @@ public sealed class MarketDataWorkflow
                     continue;
                 }
 
-                results.Add(_analyzer.Analyze(symbol, usableCandles));
+                results.Add(
+                    _analyzer.Analyze(
+                        symbol,
+                        usableCandles,
+                        historicalCandles));
 
                 prices[symbol] = usableCandles.Last().Close;
             }
