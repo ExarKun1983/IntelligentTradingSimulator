@@ -494,6 +494,16 @@ public sealed class ConsoleReporterTests
                     StrategyId = "beta",
                     IsSuccess = false,
                     ErrorMessage = "Data unavailable"
+                },
+                new StrategyComparisonReportEntry
+                {
+                    StrategyId = "gamma",
+                    IsSuccess = true,
+                    StartCapital = 100_000m,
+                    FinalCapital = 95_000m,
+                    ReturnPercent = -5m,
+                    MaxDrawdownPercent = 12m,
+                    TradesCount = 2
                 }
             ]
         };
@@ -502,6 +512,7 @@ public sealed class ConsoleReporterTests
 
         Assert.Contains("alpha", output);
         Assert.Contains("beta", output);
+        Assert.Contains("gamma", output);
         Assert.Contains("Failed", output);
         Assert.Contains("Data unavailable", output);
         Assert.DoesNotContain("Start Capital:  0.00", output);
