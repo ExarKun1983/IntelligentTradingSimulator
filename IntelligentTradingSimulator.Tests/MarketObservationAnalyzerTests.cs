@@ -1,3 +1,4 @@
+﻿using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
 
@@ -150,5 +151,69 @@ public sealed class MarketObservationAnalyzerTests
         var result = analyzer.Analyze("TEST", candles);
 
         Assert.True(result.Score > 0);
+    }
+
+    [Fact]
+    public void Analyze_DelegatesScoringToScoringEngine()
+    {
+        var engine = new CapturingScoringEngine(42m);
+        var analyzer = new MarketObservationAnalyzer(engine);
+
+        var candles = new List<MarketCandle>
+        {
+            Candle(100m), Candle(101m), Candle(102m),
+            Candle(103m), Candle(104m), Candle(110m)
+        };
+
+        var result = analyzer.Analyze("TEST", candles);
+
+        Assert.Equal(42m, result.Score);
+        Assert.NotNull(engine.LastContext);
+        Assert.Equal("TEST", engine.LastContext!.Symbol);
+        Assert.Equal(result.MomentumPercent, engine.LastContext.MomentumPercent);
+        Assert.Equal(result.AverageVolume, engine.LastContext.AverageVolume);
+        Assert.Equal(result.VolumeTrendPercent, engine.LastContext.VolumeTrendPercent);
+        Assert.Equal(result.VolatilityPercent, engine.LastContext.VolatilityPercent);
+        Assert.Equal(result.IsAboveSma5, engine.LastContext.IsAboveSma5);
+    }
+
+    [Fact]
+    public void Analyze_ScoreMatchesRuleBasedScoringEngine()
+    {
+        var candles = new List<MarketCandle>
+        {
+            Candle(100m), Candle(101m), Candle(102m),
+            Candle(103m), Candle(104m), Candle(110m)
+        };
+
+        var result = _analyzer.Analyze("TEST", candles);
+
+        var expected = new RuleBasedScoringEngine().CalculateScore(
+            new ScoringContext
+            {
+                Symbol = "TEST",
+                MomentumPercent = result.MomentumPercent,
+                AverageVolume = result.AverageVolume,
+                VolumeTrendPercent = result.VolumeTrendPercent,
+                VolatilityPercent = result.VolatilityPercent,
+                IsAboveSma5 = result.IsAboveSma5
+            });
+
+        Assert.Equal(expected, result.Score);
+    }
+
+    private sealed class CapturingScoringEngine : IScoringEngine
+    {
+        private readonly decimal _score;
+
+        public CapturingScoringEngine(decimal score) => _score = score;
+
+        public ScoringContext? LastContext { get; private set; }
+
+        public decimal CalculateScore(ScoringContext context)
+        {
+            LastContext = context;
+            return _score;
+        }
     }
 }

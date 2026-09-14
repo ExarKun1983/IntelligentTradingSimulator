@@ -2,19 +2,27 @@
 using System.Collections.Generic;
 using System.Linq;
 
+using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 
 namespace IntelligentTradingSimulator.Core.Services;
 
 public sealed class MarketObservationAnalyzer
 {
-    private readonly StrategyConfiguration _strategyConfiguration;
+    private readonly IScoringEngine _scoringEngine;
 
     public MarketObservationAnalyzer(
         StrategyConfiguration? strategyConfiguration = null)
+        : this(new RuleBasedScoringEngine(strategyConfiguration))
     {
-        _strategyConfiguration =
-            strategyConfiguration ?? new StrategyConfiguration();
+    }
+
+    public MarketObservationAnalyzer(
+        IScoringEngine scoringEngine)
+    {
+        _scoringEngine =
+            scoringEngine
+            ?? throw new ArgumentNullException(nameof(scoringEngine));
     }
 
     public ObservationResult Analyze(
@@ -58,27 +66,17 @@ public sealed class MarketObservationAnalyzer
             last.Close > sma5;
 
 
-
         var score =
-            momentum * 10m
-            + volumeTrend * 0.05m
-            - volatility;
-
-        if (!isAboveSma5)
-        {
-            score = StrategyConfiguration.DisqualifiedScore;
-        }
-
-        if (isAboveSma5)
-        {
-            score += 5m;
-        }
-
-        if (_strategyConfiguration.UseQualityFilter &&
-            volatility > StrategyConfiguration.QualityVolatilityThresholdPercent)
-        {
-            score = StrategyConfiguration.DisqualifiedScore;
-        }
+            _scoringEngine.CalculateScore(
+                new ScoringContext
+                {
+                    Symbol = symbol,
+                    MomentumPercent = momentum,
+                    AverageVolume = averageVolume,
+                    VolumeTrendPercent = volumeTrend,
+                    VolatilityPercent = volatility,
+                    IsAboveSma5 = isAboveSma5
+                });
 
         return new ObservationResult
         {
