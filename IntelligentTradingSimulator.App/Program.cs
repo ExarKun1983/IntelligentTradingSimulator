@@ -5,6 +5,7 @@ using IntelligentTradingSimulator.App.Configuration;
 using IntelligentTradingSimulator.App.Simulation;
 using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Interfaces;
+using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
 using IntelligentTradingSimulator.Infrastructure;
 using Microsoft.Extensions.Configuration;
@@ -58,6 +59,7 @@ services.AddScoped<IBacktestBenchmarkService, BacktestBenchmarkService>();
 services.AddScoped<IBacktestDayProcessor, BacktestDayProcessor>();
 services.AddScoped<IBacktestEngine, BacktestEngine>();
 services.AddScoped<IStrategyVariantRunner, StrategyVariantRunner>();
+services.AddSingleton<IStrategyComparisonReportService, StrategyComparisonReportService>();
 
 await using var provider = services.BuildServiceProvider();
 
@@ -202,11 +204,14 @@ if (runVariantsArg is not null)
     var variantRunner = scope.ServiceProvider.GetRequiredService<IStrategyVariantRunner>();
     var variantsReportService = scope.ServiceProvider.GetRequiredService<IBacktestSummaryReportService>();
     var variantsReporter = scope.ServiceProvider.GetRequiredService<ConsoleReporter>();
+    var comparisonService = scope.ServiceProvider.GetRequiredService<IStrategyComparisonReportService>();
 
     Console.WriteLine($"Running {allVariants.Count} strategy variant(s)...");
     Console.WriteLine($"Period: {variantsStartDate:yyyy-MM-dd} to {variantsEndDate:yyyy-MM-dd}");
 
     var batchResult = await variantRunner.RunAsync(allVariants, variantRunRequest);
+
+    var summaries = new List<BacktestSummaryReportResult>(batchResult.Results.Count);
 
     foreach (var variantResult in batchResult.Results)
     {
@@ -216,12 +221,22 @@ if (runVariantsArg is not null)
         if (variantResult.EngineResult.Status == BacktestRunStatus.Failed)
         {
             Console.WriteLine($"  Failed: {variantResult.EngineResult.ErrorMessage}");
+            summaries.Add(new BacktestSummaryReportResult
+            {
+                IsSuccess = false,
+                StrategyId = variantResult.StrategyId,
+                ErrorMessage = variantResult.EngineResult.ErrorMessage
+            });
             continue;
         }
 
         var variantSummary = await variantsReportService.GenerateAsync(variantResult.EngineResult.RunId);
         variantsReporter.PrintBacktestSummary(variantSummary);
+        summaries.Add(variantSummary);
     }
+
+    var comparisonReport = comparisonService.Build(summaries);
+    variantsReporter.PrintVariantComparisonReport(comparisonReport);
 
     return;
 }

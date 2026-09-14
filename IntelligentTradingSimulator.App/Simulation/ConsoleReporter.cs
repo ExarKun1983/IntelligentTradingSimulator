@@ -208,6 +208,37 @@ public sealed class ConsoleReporter
             $"CreatedAt: {previousRun.CreatedAt}");
     }
 
+    public void PrintVariantComparisonReport(StrategyComparisonReport report)
+    {
+        Console.WriteLine();
+        Console.WriteLine("===== STRATEGY COMPARISON REPORT =====");
+
+        if (report.Entries.Count == 0)
+        {
+            Console.WriteLine("No variant results to compare.");
+            return;
+        }
+
+        foreach (var entry in report.Entries)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"Strategy:       {entry.StrategyId}");
+
+            if (!entry.IsSuccess)
+            {
+                Console.WriteLine($"  Status:       Failed");
+                Console.WriteLine($"  Error:        {entry.ErrorMessage}");
+                continue;
+            }
+
+            Console.WriteLine($"  Status:       Completed");
+            Console.WriteLine($"  Final Capital:  {entry.FinalCapital:N2}");
+            Console.WriteLine($"  Return:         {entry.ReturnPercent:N2}%");
+            Console.WriteLine($"  Max Drawdown:   {entry.MaxDrawdownPercent:N2}%");
+            Console.WriteLine($"  Trades:         {entry.TradesCount}");
+        }
+    }
+
     public void PrintBacktestSummary(BacktestSummaryReportResult result)
     {
         Console.WriteLine();

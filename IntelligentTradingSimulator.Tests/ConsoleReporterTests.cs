@@ -357,4 +357,150 @@ public sealed class ConsoleReporterTests
 
         Assert.Contains("momentum-capped-v2", output);
     }
+
+    [Fact]
+    public void PrintVariantComparisonReport_IncludesHeader()
+    {
+        var reporter = CreateReporter();
+        var report = new StrategyComparisonReport
+        {
+            Entries =
+            [
+                new StrategyComparisonReportEntry
+                {
+                    StrategyId = "v1",
+                    IsSuccess = true,
+                    FinalCapital = 110_000m,
+                    ReturnPercent = 10m,
+                    MaxDrawdownPercent = 5m,
+                    TradesCount = 4
+                }
+            ]
+        };
+
+        var output = CaptureOutput(() => reporter.PrintVariantComparisonReport(report));
+
+        Assert.Contains("STRATEGY COMPARISON REPORT", output);
+    }
+
+    [Fact]
+    public void PrintVariantComparisonReport_IncludesStrategyId()
+    {
+        var reporter = CreateReporter();
+        var report = new StrategyComparisonReport
+        {
+            Entries =
+            [
+                new StrategyComparisonReportEntry
+                {
+                    StrategyId = "momentum-capped-v3",
+                    IsSuccess = true,
+                    FinalCapital = 105_000m,
+                    ReturnPercent = 5m,
+                    MaxDrawdownPercent = 2m,
+                    TradesCount = 2
+                }
+            ]
+        };
+
+        var output = CaptureOutput(() => reporter.PrintVariantComparisonReport(report));
+
+        Assert.Contains("momentum-capped-v3", output);
+    }
+
+    [Fact]
+    public void PrintVariantComparisonReport_ShowsFailedStatus_ForFailedEntry()
+    {
+        var reporter = CreateReporter();
+        var report = new StrategyComparisonReport
+        {
+            Entries =
+            [
+                new StrategyComparisonReportEntry
+                {
+                    StrategyId = "broken-variant",
+                    IsSuccess = false,
+                    ErrorMessage = "Data unavailable"
+                }
+            ]
+        };
+
+        var output = CaptureOutput(() => reporter.PrintVariantComparisonReport(report));
+
+        Assert.Contains("broken-variant", output);
+        Assert.Contains("Failed", output);
+        Assert.Contains("Data unavailable", output);
+    }
+
+    [Fact]
+    public void PrintVariantComparisonReport_ShowsReturnAndCapital_ForSuccessfulEntry()
+    {
+        var reporter = CreateReporter();
+        var report = new StrategyComparisonReport
+        {
+            Entries =
+            [
+                new StrategyComparisonReportEntry
+                {
+                    StrategyId = "good-variant",
+                    IsSuccess = true,
+                    FinalCapital = 120_000m,
+                    ReturnPercent = 20m,
+                    MaxDrawdownPercent = 6m,
+                    TradesCount = 8
+                }
+            ]
+        };
+
+        var output = CaptureOutput(() => reporter.PrintVariantComparisonReport(report));
+
+        Assert.Contains("120,000.00", output);
+        Assert.Contains("20.00%", output);
+    }
+
+    [Fact]
+    public void PrintVariantComparisonReport_EmptyEntries_ShowsNoVariantsMessage()
+    {
+        var reporter = CreateReporter();
+        var report = new StrategyComparisonReport { Entries = [] };
+
+        var output = CaptureOutput(() => reporter.PrintVariantComparisonReport(report));
+
+        Assert.Contains("No variant results to compare", output);
+    }
+
+    [Fact]
+    public void PrintVariantComparisonReport_IncludesAllVariantsInOutput()
+    {
+        var reporter = CreateReporter();
+        var report = new StrategyComparisonReport
+        {
+            Entries =
+            [
+                new StrategyComparisonReportEntry
+                {
+                    StrategyId = "alpha",
+                    IsSuccess = true,
+                    FinalCapital = 110_000m,
+                    ReturnPercent = 10m,
+                    MaxDrawdownPercent = 3m,
+                    TradesCount = 5
+                },
+                new StrategyComparisonReportEntry
+                {
+                    StrategyId = "beta",
+                    IsSuccess = true,
+                    FinalCapital = 95_000m,
+                    ReturnPercent = -5m,
+                    MaxDrawdownPercent = 12m,
+                    TradesCount = 2
+                }
+            ]
+        };
+
+        var output = CaptureOutput(() => reporter.PrintVariantComparisonReport(report));
+
+        Assert.Contains("alpha", output);
+        Assert.Contains("beta", output);
+    }
 }
