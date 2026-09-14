@@ -28,10 +28,12 @@ public sealed class RuleBasedScoringEngine : IScoringEngine
             context.MomentumPercent * 10m
             + context.VolumeTrendPercent * 0.05m
             - context.VolatilityPercent;
+        var isDisqualified = false;
 
         if (!context.IsAboveSma5)
         {
             score = StrategyConfiguration.DisqualifiedScore;
+            isDisqualified = true;
         }
 
         if (context.IsAboveSma5)
@@ -43,11 +45,12 @@ public sealed class RuleBasedScoringEngine : IScoringEngine
             context.VolatilityPercent > StrategyConfiguration.QualityVolatilityThresholdPercent)
         {
             score = StrategyConfiguration.DisqualifiedScore;
+            isDisqualified = true;
         }
 
         if (_strategyConfiguration.UseRsi &&
             context.Rsi.HasValue &&
-            score != StrategyConfiguration.DisqualifiedScore)
+            !isDisqualified)
         {
             var rsi = context.Rsi.Value;
 
