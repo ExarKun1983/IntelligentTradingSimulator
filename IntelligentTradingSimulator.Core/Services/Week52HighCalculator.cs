@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 
 using IntelligentTradingSimulator.Core.Models;
 
@@ -15,7 +14,10 @@ public sealed class Week52HighCalculator
     {
         if (tradingSessions < 1)
         {
-            throw new ArgumentOutOfRangeException(nameof(tradingSessions));
+            throw new ArgumentOutOfRangeException(
+                nameof(tradingSessions),
+                tradingSessions,
+                "Trading sessions must be greater than zero.");
         }
 
         TradingSessions = tradingSessions;
@@ -24,12 +26,14 @@ public sealed class Week52HighCalculator
     public int TradingSessions { get; }
 
     /// <summary>
-    /// Calculates the highest high over the trailing 52-week window for
-    /// chronological market candles. The repository models stock history as
-    /// ordered trading sessions, so 52 weeks is defined deterministically as
-    /// 252 trading sessions. The distance formula is
-    /// (current close - 52-week high) / 52-week high * 100, which returns 0 at
-    /// the high and a negative value below it.
+    /// Calculates the highest high over the configured trailing session
+    /// window for chronological market candles. The repository models stock
+    /// history as ordered trading sessions, so the default 52-week window is
+    /// defined deterministically as 252 trading sessions. The distance formula
+    /// is (current close - 52-week high) / 52-week high * 100, which returns 0
+    /// at the high and a negative value below it. Values are null when history
+    /// is shorter than the configured window, and distance is null when the
+    /// high is non-positive.
     /// </summary>
     public Week52HighResult Calculate(
         IReadOnlyList<MarketCandle> candles)
@@ -44,10 +48,19 @@ public sealed class Week52HighCalculator
             return new Week52HighResult();
         }
 
+        var startIndex =
+            candles.Count - TradingSessions;
+
         var week52High =
-            candles
-                .Skip(candles.Count - TradingSessions)
-                .Max(x => x.High);
+            candles[startIndex].High;
+
+        for (var index = startIndex + 1; index < candles.Count; index++)
+        {
+            if (candles[index].High > week52High)
+            {
+                week52High = candles[index].High;
+            }
+        }
 
         if (week52High <= 0m)
         {
