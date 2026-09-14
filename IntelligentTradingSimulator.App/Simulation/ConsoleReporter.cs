@@ -35,6 +35,7 @@ public sealed class ConsoleReporter
                 $" | VolumeTrend={result.VolumeTrendPercent:N2}%" +
                 $" | Volatility={result.VolatilityPercent:N2}%" +
                 $" | AboveSMA5={result.IsAboveSma5}" +
+                $" | RSI={(result.Rsi.HasValue ? result.Rsi.Value.ToString("N2") : "N/A")}" +
                 $" | Score={result.Score:N2}");
         }
     }

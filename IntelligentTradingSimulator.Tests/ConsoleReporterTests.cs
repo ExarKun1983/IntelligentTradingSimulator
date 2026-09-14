@@ -31,6 +31,21 @@ public sealed class ConsoleReporterTests
     }
 
     [Fact]
+    public void PrintMarketRanking_IncludesRsiOrMissingValue()
+    {
+        var reporter = CreateReporter();
+
+        var output = CaptureOutput(() => reporter.PrintMarketRanking(
+        [
+            new ObservationResult { Symbol = "RSI", Rsi = 55.5m },
+            new ObservationResult { Symbol = "NONE" }
+        ]));
+
+        Assert.Contains("RSI=55.50", output);
+        Assert.Contains("RSI=N/A", output);
+    }
+
+    [Fact]
     public void PrintBacktestSummary_IncludesRiskSectionHeader()
     {
         var reporter = CreateReporter();

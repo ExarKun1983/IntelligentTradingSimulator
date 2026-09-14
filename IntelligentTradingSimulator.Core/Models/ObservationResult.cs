@@ -20,5 +20,7 @@ public sealed class ObservationResult
 
     public bool IsAboveSma5 { get; set; }
 
+    public decimal? Rsi { get; set; }
+
     public decimal Score { get; set; }
 }
