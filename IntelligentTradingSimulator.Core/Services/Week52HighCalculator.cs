@@ -64,10 +64,7 @@ public sealed class Week52HighCalculator
 
         if (week52High <= 0m)
         {
-            return new Week52HighResult
-            {
-                Week52High = week52High
-            };
+            return new Week52HighResult();
         }
 
         var currentPrice =

@@ -93,7 +93,7 @@ public sealed class Week52HighCalculatorTests
     }
 
     [Fact]
-    public void Calculate_ReturnsNullDistance_WhenHighIsNonPositive()
+    public void Calculate_ReturnsNullValues_WhenHighIsNonPositive()
     {
         var calculator = new Week52HighCalculator();
         var candles = Enumerable.Range(0, 252)
@@ -102,7 +102,7 @@ public sealed class Week52HighCalculatorTests
 
         var result = calculator.Calculate(candles);
 
-        Assert.Equal(0m, result.Week52High);
+        Assert.Null(result.Week52High);
         Assert.Null(result.DistanceFromWeek52HighPercent);
     }
 
