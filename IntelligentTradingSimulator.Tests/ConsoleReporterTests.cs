@@ -483,6 +483,7 @@ public sealed class ConsoleReporterTests
                 {
                     StrategyId = "alpha",
                     IsSuccess = true,
+                    StartCapital = 100_000m,
                     FinalCapital = 110_000m,
                     ReturnPercent = 10m,
                     MaxDrawdownPercent = 3m,
