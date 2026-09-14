@@ -42,6 +42,10 @@ public sealed class BacktestEngineTests : IDisposable
         {
             Name = "Test Run",
             StrategyId = "momentum-default",
+            StrategyConfiguration = new StrategyConfiguration
+            {
+                Id = "momentum-default"
+            },
             StartDate = startDate,
             EndDate = endDate,
             HistoricalStartDate = startDate.AddDays(-30),
@@ -115,6 +119,30 @@ public sealed class BacktestEngineTests : IDisposable
 
         Assert.NotNull(saved);
         Assert.Equal(selectedStrategyConfiguration.Id, saved.StrategyId);
+        Assert.Same(
+            selectedStrategyConfiguration,
+            request.StrategyConfiguration);
+    }
+
+    [Fact]
+    public async Task RunAsync_PassesStrategyConfigurationToEachDayRequest()
+    {
+        var startDate = new DateTime(2024, 1, 1);
+        var configuration = new StrategyConfiguration
+        {
+            Id = "request-specific",
+            UseRsi = true
+        };
+        var request = BuildRequest(startDate, startDate.AddDays(1));
+        request.StrategyId = configuration.Id;
+        request.StrategyConfiguration = configuration;
+        var processor = new StubDayProcessor();
+        var engine = BuildEngine(processor);
+
+        await engine.RunAsync(request);
+
+        Assert.Equal(2, processor.CallCount);
+        Assert.Same(configuration, processor.LastStrategyConfiguration);
     }
 
     [Fact]
@@ -233,6 +261,7 @@ public sealed class BacktestEngineTests : IDisposable
         public int CallCount { get; private set; }
         public DateTime FirstRequestDate { get; private set; }
         public DateTime LastRequestDate { get; private set; }
+        public StrategyConfiguration? LastStrategyConfiguration { get; private set; }
 
         public Task<BacktestDayResult> ProcessAsync(BacktestDayRequest request)
         {
@@ -241,6 +270,7 @@ public sealed class BacktestEngineTests : IDisposable
 
             CallCount++;
             LastRequestDate = request.CurrentDate.Date;
+            LastStrategyConfiguration = request.StrategyConfiguration;
 
             return Task.FromResult(new BacktestDayResult
             {
