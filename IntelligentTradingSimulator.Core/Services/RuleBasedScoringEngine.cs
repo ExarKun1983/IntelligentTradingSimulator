@@ -28,41 +28,32 @@ public sealed class RuleBasedScoringEngine : IScoringEngine
             context.MomentumPercent * 10m
             + context.VolumeTrendPercent * 0.05m
             - context.VolatilityPercent;
-        var isDisqualified = false;
 
         if (!context.IsAboveSma5)
         {
-            score = StrategyConfiguration.DisqualifiedScore;
-            isDisqualified = true;
+            return StrategyConfiguration.DisqualifiedScore;
         }
 
-        if (context.IsAboveSma5)
-        {
-            score += 5m;
-        }
+        score += 5m;
 
         if (_strategyConfiguration.UseQualityFilter &&
             context.VolatilityPercent > StrategyConfiguration.QualityVolatilityThresholdPercent)
         {
-            score = StrategyConfiguration.DisqualifiedScore;
-            isDisqualified = true;
+            return StrategyConfiguration.DisqualifiedScore;
         }
 
         if (_strategyConfiguration.UseRsi &&
             context.Rsi.HasValue &&
-            !isDisqualified)
+            context.Rsi.Value >= _strategyConfiguration.RsiOverboughtThreshold)
         {
-            var rsi = context.Rsi.Value;
-
-            if (rsi >= _strategyConfiguration.RsiOverboughtThreshold)
-            {
-                score -= _strategyConfiguration.RsiOverboughtPenalty;
-            }
-            else if (rsi >= _strategyConfiguration.RsiPreferredMinimum &&
-                     rsi <= _strategyConfiguration.RsiPreferredMaximum)
-            {
-                score += _strategyConfiguration.RsiPreferredRangeBonus;
-            }
+            score -= _strategyConfiguration.RsiOverboughtPenalty;
+        }
+        else if (_strategyConfiguration.UseRsi &&
+                 context.Rsi.HasValue &&
+                 context.Rsi.Value >= _strategyConfiguration.RsiPreferredMinimum &&
+                 context.Rsi.Value <= _strategyConfiguration.RsiPreferredMaximum)
+        {
+            score += _strategyConfiguration.RsiPreferredRangeBonus;
         }
 
         return score;

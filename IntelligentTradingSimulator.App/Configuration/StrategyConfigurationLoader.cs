@@ -123,7 +123,7 @@ public static class StrategyConfigurationLoader
         if (config.RsiPreferredMinimum > config.RsiPreferredMaximum)
         {
             throw new InvalidOperationException(
-                $"Configuration values 'Strategies:{id}:RsiPreferredMinimum' ({config.RsiPreferredMinimum}) and 'Strategies:{id}:RsiPreferredMaximum' ({config.RsiPreferredMaximum}) must satisfy minimum less than or equal to maximum.");
+                $"Configuration value 'Strategies:{id}:RsiPreferredMinimum' ({config.RsiPreferredMinimum}) must be less than or equal to 'Strategies:{id}:RsiPreferredMaximum' ({config.RsiPreferredMaximum}).");
         }
 
         if (config.RsiOverboughtThreshold < 0m || config.RsiOverboughtThreshold > 100m)
