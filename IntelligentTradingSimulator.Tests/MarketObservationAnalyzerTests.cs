@@ -202,6 +202,33 @@ public sealed class MarketObservationAnalyzerTests
         Assert.Equal(expected, result.Score);
     }
 
+    [Fact]
+    public void Analyze_ExposesRsi_WithoutChangingScore()
+    {
+        var engine = new CapturingScoringEngine(42m);
+        var analyzer = new MarketObservationAnalyzer(engine);
+        var candles = Enumerable.Range(0, 15)
+            .Select(index => Candle(100m + index))
+            .ToList();
+
+        var result = analyzer.Analyze("TEST", candles);
+
+        Assert.Equal(100m, result.Rsi);
+        Assert.Equal(42m, result.Score);
+    }
+
+    [Fact]
+    public void Analyze_RsiIsNull_WhenExistingFiveCandleHistoryIsInsufficient()
+    {
+        var candles = Enumerable.Range(0, 5)
+            .Select(index => Candle(100m + index))
+            .ToList();
+
+        var result = _analyzer.Analyze("TEST", candles);
+
+        Assert.Null(result.Rsi);
+    }
+
     private sealed class CapturingScoringEngine : IScoringEngine
     {
         private readonly decimal _score;

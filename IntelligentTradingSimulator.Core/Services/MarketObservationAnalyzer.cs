@@ -10,19 +10,24 @@ namespace IntelligentTradingSimulator.Core.Services;
 public sealed class MarketObservationAnalyzer
 {
     private readonly IScoringEngine _scoringEngine;
+    private readonly RsiCalculator _rsiCalculator;
 
     public MarketObservationAnalyzer(
         StrategyConfiguration? strategyConfiguration = null)
-        : this(new RuleBasedScoringEngine(strategyConfiguration))
+        : this(
+            new RuleBasedScoringEngine(strategyConfiguration),
+            new RsiCalculator())
     {
     }
 
     public MarketObservationAnalyzer(
-        IScoringEngine scoringEngine)
+        IScoringEngine scoringEngine,
+        RsiCalculator? rsiCalculator = null)
     {
         _scoringEngine =
             scoringEngine
             ?? throw new ArgumentNullException(nameof(scoringEngine));
+        _rsiCalculator = rsiCalculator ?? new RsiCalculator();
     }
 
     public ObservationResult Analyze(
@@ -65,6 +70,9 @@ public sealed class MarketObservationAnalyzer
         var isAboveSma5 =
             last.Close > sma5;
 
+        var rsi =
+            _rsiCalculator.Calculate(
+                candles.Select(x => x.Close).ToList());
 
         var score =
             _scoringEngine.CalculateScore(
@@ -86,6 +94,7 @@ public sealed class MarketObservationAnalyzer
             VolumeTrendPercent = volumeTrend,
             VolatilityPercent = volatility,
             IsAboveSma5 = isAboveSma5,
+            Rsi = rsi,
             Score = score
         };
     }
