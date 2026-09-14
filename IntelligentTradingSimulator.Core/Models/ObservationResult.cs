@@ -22,5 +22,9 @@ public sealed class ObservationResult
 
     public decimal? Rsi { get; set; }
 
+    public decimal? Week52High { get; set; }
+
+    public decimal? DistanceFromWeek52HighPercent { get; set; }
+
     public decimal Score { get; set; }
 }

@@ -31,18 +31,29 @@ public sealed class ConsoleReporterTests
     }
 
     [Fact]
-    public void PrintMarketRanking_IncludesRsiOrMissingValue()
+    public void PrintMarketRanking_IncludesAnalysisDetailsOrMissingValue()
     {
         var reporter = CreateReporter();
 
         var output = CaptureOutput(() => reporter.PrintMarketRanking(
         [
-            new ObservationResult { Symbol = "RSI", Rsi = 55.5m, Score = 12.34m },
+            new ObservationResult
+            {
+                Symbol = "RSI",
+                Rsi = 55.5m,
+                Week52High = 120m,
+                DistanceFromWeek52HighPercent = -10m,
+                Score = 12.34m
+            },
             new ObservationResult { Symbol = "NONE" }
         ]));
 
         Assert.Contains("RSI=55.50", output);
         Assert.Contains("RSI=N/A", output);
+        Assert.Contains("52WHigh=120.00", output);
+        Assert.Contains("52WHigh=N/A", output);
+        Assert.Contains("52WDist=-10.00%", output);
+        Assert.Contains("52WDist=N/A", output);
         Assert.Contains("Score=12.34", output);
     }
 

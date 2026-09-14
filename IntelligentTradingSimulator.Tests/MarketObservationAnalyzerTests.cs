@@ -219,6 +219,48 @@ public sealed class MarketObservationAnalyzerTests
     }
 
     [Fact]
+    public void Analyze_ExposesWeek52High_WithoutChangingScore()
+    {
+        var engine = new CapturingScoringEngine(42m);
+        var analyzer = new MarketObservationAnalyzer(
+            engine,
+            week52HighCalculator: new Week52HighCalculator(3));
+        var candles = new List<MarketCandle>
+        {
+            Candle(100m, high: 100m),
+            Candle(120m, high: 120m),
+            Candle(108m, high: 108m)
+        };
+
+        var result = analyzer.Analyze("TEST", candles);
+
+        Assert.Equal(120m, result.Week52High);
+        Assert.Equal(-10m, result.DistanceFromWeek52HighPercent);
+        Assert.Equal(42m, result.Score);
+        Assert.NotNull(engine.LastContext);
+        Assert.Equal(result.Rsi, engine.LastContext!.Rsi);
+    }
+
+    [Fact]
+    public void Analyze_Week52HighIsNull_WhenHistoryIsInsufficient()
+    {
+        var analyzer = new MarketObservationAnalyzer(
+            new CapturingScoringEngine(42m),
+            week52HighCalculator: new Week52HighCalculator(3));
+        var candles = new List<MarketCandle>
+        {
+            Candle(100m),
+            Candle(101m)
+        };
+
+        var result = analyzer.Analyze("TEST", candles);
+
+        Assert.Null(result.Week52High);
+        Assert.Null(result.DistanceFromWeek52HighPercent);
+        Assert.Equal(42m, result.Score);
+    }
+
+    [Fact]
     public void Analyze_RsiIsNull_WhenExistingFiveCandleHistoryIsInsufficient()
     {
         var candles = Enumerable.Range(0, 5)

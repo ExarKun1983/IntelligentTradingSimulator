@@ -11,23 +11,28 @@ public sealed class MarketObservationAnalyzer
 {
     private readonly IScoringEngine _scoringEngine;
     private readonly RsiCalculator _rsiCalculator;
+    private readonly Week52HighCalculator _week52HighCalculator;
 
     public MarketObservationAnalyzer(
         StrategyConfiguration? strategyConfiguration = null)
         : this(
             new RuleBasedScoringEngine(strategyConfiguration),
-            new RsiCalculator())
+            new RsiCalculator(),
+            new Week52HighCalculator())
     {
     }
 
     public MarketObservationAnalyzer(
         IScoringEngine scoringEngine,
-        RsiCalculator? rsiCalculator = null)
+        RsiCalculator? rsiCalculator = null,
+        Week52HighCalculator? week52HighCalculator = null)
     {
         _scoringEngine =
             scoringEngine
             ?? throw new ArgumentNullException(nameof(scoringEngine));
         _rsiCalculator = rsiCalculator ?? new RsiCalculator();
+        _week52HighCalculator =
+            week52HighCalculator ?? new Week52HighCalculator();
     }
 
     public ObservationResult Analyze(
@@ -74,6 +79,9 @@ public sealed class MarketObservationAnalyzer
             _rsiCalculator.Calculate(
                 candles.Select(x => x.Close).ToList());
 
+        var week52High =
+            _week52HighCalculator.Calculate(candles);
+
         var score =
             _scoringEngine.CalculateScore(
                 new ScoringContext
@@ -96,6 +104,9 @@ public sealed class MarketObservationAnalyzer
             VolatilityPercent = volatility,
             IsAboveSma5 = isAboveSma5,
             Rsi = rsi,
+            Week52High = week52High.Week52High,
+            DistanceFromWeek52HighPercent =
+                week52High.DistanceFromWeek52HighPercent,
             Score = score
         };
     }
