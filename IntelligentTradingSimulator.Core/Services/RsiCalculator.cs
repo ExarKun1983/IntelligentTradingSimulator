@@ -21,7 +21,8 @@ public sealed class RsiCalculator
 
     /// <summary>
     /// Calculates RSI using Wilder smoothing for chronological closing prices.
-    /// Returns <see langword="null"/> until at least <c>Period + 1</c> prices are available.
+    /// Returns <see langword="null"/> when fewer than <c>Period + 1</c> prices are available.
+    /// A sequence with no price changes returns the neutral value of 50.
     /// </summary>
     public decimal? Calculate(IReadOnlyList<decimal> closingPrices)
     {
