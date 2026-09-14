@@ -82,6 +82,7 @@ public sealed class StrategyComparisonReportServiceTests
 
         var entry = report.Entries[0];
         Assert.True(entry.IsSuccess);
+        Assert.Equal(100_000m, entry.StartCapital);
         Assert.Equal(115_000m, entry.FinalCapital);
         Assert.Equal(15m, entry.ReturnPercent);
         Assert.Equal(8m, entry.MaxDrawdownPercent);
