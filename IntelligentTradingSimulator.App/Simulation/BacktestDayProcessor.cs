@@ -11,7 +11,7 @@ namespace IntelligentTradingSimulator.App.Simulation;
 public sealed class BacktestDayProcessor : IBacktestDayProcessor
 {
     private readonly BacktestHistoricalMarketDataService _historicalDataService;
-    private readonly MarketObservationAnalyzer _analyzer;
+    private readonly MarketObservationAnalyzerFactory _analyzerFactory;
     private readonly PortfolioRecommendationService _recommendationService;
     private readonly PortfolioRebalancingService _rebalancingService;
     private readonly PortfolioAllocationEngine _allocationEngine;
@@ -21,7 +21,7 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
 
     public BacktestDayProcessor(
         BacktestHistoricalMarketDataService historicalDataService,
-        MarketObservationAnalyzer analyzer,
+        MarketObservationAnalyzerFactory analyzerFactory,
         PortfolioRecommendationService recommendationService,
         PortfolioRebalancingService rebalancingService,
         PortfolioAllocationEngine allocationEngine,
@@ -30,7 +30,7 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
         IBacktestSnapshotRepository snapshotRepository)
     {
         _historicalDataService = historicalDataService;
-        _analyzer = analyzer;
+        _analyzerFactory = analyzerFactory;
         _recommendationService = recommendationService;
         _rebalancingService = rebalancingService;
         _allocationEngine = allocationEngine;
@@ -41,6 +41,8 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
 
     public async Task<BacktestDayResult> ProcessAsync(BacktestDayRequest request)
     {
+        var analyzer =
+            _analyzerFactory.Create(request.StrategyConfiguration);
         var observationResults = new List<ObservationResult>();
         var prices = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
 
@@ -66,7 +68,7 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 }
 
                 observationResults.Add(
-                    _analyzer.Analyze(symbol, usableCandles));
+                    analyzer.Analyze(symbol, usableCandles));
 
                 prices[symbol] = usableCandles.Last().Close;
             }

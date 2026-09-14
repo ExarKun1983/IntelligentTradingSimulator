@@ -36,6 +36,7 @@ services.AddSingleton<IScoringEngine>(
 services.AddSingleton(
     sp => new MarketObservationAnalyzer(
         sp.GetRequiredService<IScoringEngine>()));
+services.AddSingleton<MarketObservationAnalyzerFactory>();
 services.AddSingleton(
     _ => new PortfolioRecommendationService(
         selectedStrategyConfiguration.MaxPositions));

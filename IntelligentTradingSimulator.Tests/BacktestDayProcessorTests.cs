@@ -34,7 +34,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
         decimal maxPositionWeight = 100m)
     {
         var historicalService = new BacktestHistoricalMarketDataService(provider);
-        var analyzer = new MarketObservationAnalyzer();
+        var analyzerFactory = new MarketObservationAnalyzerFactory();
         var recommendationService =
             new PortfolioRecommendationService(maxPositions);
         var allocationService = new PortfolioAllocationService();
@@ -47,7 +47,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
 
         return new BacktestDayProcessor(
             historicalService,
-            analyzer,
+            analyzerFactory,
             recommendationService,
             rebalancingService,
             allocationEngine,
@@ -157,6 +157,66 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.NotNull(result);
         Assert.NotNull(result.Snapshot);
         Assert.Equal(3, result.Snapshot.BacktestRunId);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_BuildsAnalyzerFromEachRequestConfiguration()
+    {
+        var provider = new FakeMarketDataProvider();
+        var startDate = new DateTime(2024, 3, 1);
+        var candles = BuildCandles(startDate, 10);
+
+        foreach (var candle in candles)
+        {
+            candle.High = candle.Close + 3m;
+            candle.Low = candle.Close - 3m;
+        }
+
+        provider.SetData("AAPL", candles);
+        var processor = BuildProcessor(provider);
+
+        var withoutFilter = await processor.ProcessAsync(
+            new BacktestDayRequest
+            {
+                BacktestRunId = 12,
+                CurrentDate = startDate.AddDays(9),
+                HistoricalStartDate = startDate,
+                StrategyConfiguration = new StrategyConfiguration
+                {
+                    Id = "without-filter",
+                    UseQualityFilter = false
+                },
+                Portfolio = new Portfolio
+                {
+                    Name = "Without filter",
+                    StartingCash = 10_000m,
+                    Cash = 10_000m
+                },
+                Symbols = ["AAPL"]
+            });
+
+        var withFilter = await processor.ProcessAsync(
+            new BacktestDayRequest
+            {
+                BacktestRunId = 13,
+                CurrentDate = startDate.AddDays(9),
+                HistoricalStartDate = startDate,
+                StrategyConfiguration = new StrategyConfiguration
+                {
+                    Id = "with-filter",
+                    UseQualityFilter = true
+                },
+                Portfolio = new Portfolio
+                {
+                    Name = "With filter",
+                    StartingCash = 10_000m,
+                    Cash = 10_000m
+                },
+                Symbols = ["AAPL"]
+            });
+
+        Assert.Single(withoutFilter.Recommendations);
+        Assert.Empty(withFilter.Recommendations);
     }
 
     [Fact]

@@ -10,6 +10,8 @@ public sealed class BacktestEngineRequest
 
     public string StrategyId { get; set; } = StrategyConfiguration.DefaultId;
 
+    public StrategyConfiguration StrategyConfiguration { get; set; } = new();
+
     public DateTime StartDate { get; set; }
 
     public DateTime EndDate { get; set; }

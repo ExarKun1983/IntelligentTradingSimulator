@@ -150,6 +150,38 @@ public sealed class StrategyVariantRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_EachRequestCarriesItsVariantConfiguration()
+    {
+        var engine = new CapturingEngine();
+        var runner = new StrategyVariantRunner(engine);
+        var variants = new List<StrategyConfiguration>
+        {
+            new()
+            {
+                Id = "without-rsi",
+                UseRsi = false
+            },
+            new()
+            {
+                Id = "with-rsi",
+                UseRsi = true
+            }
+        };
+
+        await runner.RunAsync(
+            variants,
+            BuildRunRequest(
+                new DateTime(2024, 4, 1),
+                new DateTime(2024, 4, 1)));
+
+        Assert.Equal(2, engine.Requests.Count);
+        Assert.Same(variants[0], engine.Requests[0].StrategyConfiguration);
+        Assert.False(engine.Requests[0].StrategyConfiguration.UseRsi);
+        Assert.Same(variants[1], engine.Requests[1].StrategyConfiguration);
+        Assert.True(engine.Requests[1].StrategyConfiguration.UseRsi);
+    }
+
+    [Fact]
     public async Task RunAsync_PersistedBacktestRunsHaveCorrectStrategyIds()
     {
         var engine = BuildEngine();
@@ -343,6 +375,22 @@ public sealed class StrategyVariantRunnerTests : IDisposable
                 FinalCapital = request.InitialCapital,
                 TotalProfit = 0m,
                 TotalReturnPercent = 0m
+            });
+        }
+    }
+
+    private sealed class CapturingEngine : IBacktestEngine
+    {
+        public List<BacktestEngineRequest> Requests { get; } = [];
+
+        public Task<BacktestEngineResult> RunAsync(BacktestEngineRequest request)
+        {
+            Requests.Add(request);
+
+            return Task.FromResult(new BacktestEngineResult
+            {
+                RunId = Requests.Count,
+                Status = BacktestRunStatus.Completed
             });
         }
     }

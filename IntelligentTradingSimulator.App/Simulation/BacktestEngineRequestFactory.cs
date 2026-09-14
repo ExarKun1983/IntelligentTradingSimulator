@@ -27,6 +27,7 @@ public sealed class BacktestEngineRequestFactory
         {
             Name = name,
             StrategyId = _selectedStrategyConfiguration.Id,
+            StrategyConfiguration = _selectedStrategyConfiguration,
             StartDate = startDate,
             EndDate = endDate,
             HistoricalStartDate = historicalStartDate,

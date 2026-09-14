@@ -59,6 +59,7 @@ public sealed class BacktestEngine : IBacktestEngine
                     BacktestRunId = run.Id,
                     CurrentDate = currentDate,
                     HistoricalStartDate = request.HistoricalStartDate,
+                    StrategyConfiguration = request.StrategyConfiguration,
                     Portfolio = portfolio,
                     Symbols = request.Symbols
                 };
