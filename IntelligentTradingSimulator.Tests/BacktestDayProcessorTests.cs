@@ -220,6 +220,63 @@ public sealed class BacktestDayProcessorTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessAsync_ExtendsHistoryWithoutChangingStrategyLookbackScore()
+    {
+        var provider = new FakeMarketDataProvider();
+        var currentDate = new DateTime(2025, 1, 31);
+        var candles =
+            BuildCandles(
+                currentDate.AddDays(
+                    -Week52HighCalculator.DefaultTradingSessions + 1),
+                Week52HighCalculator.DefaultTradingSessions);
+        candles[0].High = 1_000m;
+        provider.SetData("AAPL", candles);
+        var processor = BuildProcessor(provider);
+        var strategy = new StrategyConfiguration
+        {
+            Id = "short-lookback",
+            LookbackDays = 60,
+            UseRsi = true
+        };
+        var historicalStartDate =
+            currentDate.AddDays(-strategy.LookbackDays);
+        var expected =
+            new MarketObservationAnalyzer(strategy)
+                .Analyze(
+                    "AAPL",
+                    candles
+                        .Where(x =>
+                            x.Date.Date >= historicalStartDate.Date)
+                        .ToList());
+
+        var result =
+            await processor.ProcessAsync(
+                new BacktestDayRequest
+                {
+                    BacktestRunId = 14,
+                    CurrentDate = currentDate,
+                    HistoricalStartDate = historicalStartDate,
+                    StrategyConfiguration = strategy,
+                    Portfolio = new Portfolio
+                    {
+                        Name = "Short lookback",
+                        StartingCash = 10_000m,
+                        Cash = 10_000m
+                    },
+                    Symbols = ["AAPL"]
+                });
+
+        var recommendation = Assert.Single(result.Recommendations);
+        Assert.Equal(expected.Score, recommendation.Score);
+        Assert.Equal(
+            MarketHistoryRequirements.GetEffectiveStartDate(
+                historicalStartDate,
+                currentDate),
+            provider.LastRangeFrom);
+        Assert.Equal(currentDate.Date, provider.LastRangeTo);
+    }
+
+    [Fact]
     public async Task ProcessAsync_StillCompletesWhenNoRecommendations()
     {
         var provider = new FakeMarketDataProvider();
@@ -481,6 +538,8 @@ public sealed class BacktestDayProcessorTests : IDisposable
 
         public DateTime LastRangeTo { get; private set; }
 
+        public DateTime LastRangeFrom { get; private set; }
+
         public void SetData(string symbol, IReadOnlyList<MarketCandle> candles)
         {
             _data[symbol] = candles;
@@ -498,6 +557,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
             DateTime from,
             DateTime to)
         {
+            LastRangeFrom = from.Date;
             LastRangeTo = to.Date;
 
             if (!_data.TryGetValue(symbol, out var candles))
