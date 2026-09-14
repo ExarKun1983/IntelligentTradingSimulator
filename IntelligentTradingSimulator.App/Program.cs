@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using IntelligentTradingSimulator.App;
 using IntelligentTradingSimulator.App.Configuration;
@@ -31,7 +31,11 @@ services.AddInfrastructure(connectionString);
 services.AddSingleton(selectedStrategyConfiguration);
 services.AddSingleton<BacktestEngineRequestFactory>();
 
-services.AddSingleton<MarketObservationAnalyzer>();
+services.AddSingleton<IScoringEngine>(
+    _ => new RuleBasedScoringEngine(selectedStrategyConfiguration));
+services.AddSingleton(
+    sp => new MarketObservationAnalyzer(
+        sp.GetRequiredService<IScoringEngine>()));
 services.AddSingleton(
     _ => new PortfolioRecommendationService(
         selectedStrategyConfiguration.MaxPositions));
