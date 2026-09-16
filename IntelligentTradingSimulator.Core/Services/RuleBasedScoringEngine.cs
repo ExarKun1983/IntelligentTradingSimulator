@@ -56,6 +56,28 @@ public sealed class RuleBasedScoringEngine : IScoringEngine
             score += _strategyConfiguration.RsiPreferredRangeBonus;
         }
 
+        if (_strategyConfiguration.Use52WeekHigh &&
+            context.DistanceFromWeek52HighPercent.HasValue)
+        {
+            score += CalculateWeek52HighContribution(
+                context.DistanceFromWeek52HighPercent.Value);
+        }
+
         return score;
+    }
+
+    private decimal CalculateWeek52HighContribution(
+        decimal distanceFromWeek52HighPercent)
+    {
+        var boundedDistance =
+            Math.Clamp(
+                distanceFromWeek52HighPercent,
+                -100m,
+                0m);
+
+        var scoreMultiplier =
+            (boundedDistance + 50m) / 50m;
+
+        return scoreMultiplier * _strategyConfiguration.Week52HighScoreWeight;
     }
 }

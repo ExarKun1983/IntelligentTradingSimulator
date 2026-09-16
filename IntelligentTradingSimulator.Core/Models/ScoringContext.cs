@@ -19,4 +19,6 @@ public sealed class ScoringContext
     public bool IsAboveSma5 { get; init; }
 
     public decimal? Rsi { get; init; }
+
+    public decimal? DistanceFromWeek52HighPercent { get; init; }
 }

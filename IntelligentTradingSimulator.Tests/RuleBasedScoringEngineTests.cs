@@ -11,7 +11,8 @@ public sealed class RuleBasedScoringEngineTests
         decimal volumeTrend,
         decimal volatility,
         bool isAboveSma5,
-        decimal? rsi = null) =>
+        decimal? rsi = null,
+        decimal? distanceFromWeek52HighPercent = null) =>
         new()
         {
             Symbol = "TEST",
@@ -20,7 +21,8 @@ public sealed class RuleBasedScoringEngineTests
             VolumeTrendPercent = volumeTrend,
             VolatilityPercent = volatility,
             IsAboveSma5 = isAboveSma5,
-            Rsi = rsi
+            Rsi = rsi,
+            DistanceFromWeek52HighPercent = distanceFromWeek52HighPercent
         };
 
     [Fact]
@@ -256,5 +258,88 @@ public sealed class RuleBasedScoringEngineTests
                 rsi: 60m));
 
         Assert.Equal(StrategyConfiguration.DisqualifiedScore, score);
+    }
+
+    [Fact]
+    public void CalculateScore_LeavesLegacyScoreUnchanged_WhenWeek52HighDisabled()
+    {
+        var strategy = new StrategyConfiguration
+        {
+            Use52WeekHigh = false,
+            Week52HighScoreWeight = 10m
+        };
+        var engine = new RuleBasedScoringEngine(strategy);
+
+        var score = engine.CalculateScore(
+            Context(
+                momentum: 2m,
+                volumeTrend: 20m,
+                volatility: 1m,
+                isAboveSma5: true,
+                distanceFromWeek52HighPercent: 0m));
+
+        Assert.Equal(2m * 10m + 20m * 0.05m - 1m + 5m, score);
+    }
+
+    [Fact]
+    public void CalculateScore_AddsConfiguredContribution_WhenAtWeek52High()
+    {
+        var strategy = new StrategyConfiguration
+        {
+            Use52WeekHigh = true,
+            Week52HighScoreWeight = 7m
+        };
+        var engine = new RuleBasedScoringEngine(strategy);
+
+        var score = engine.CalculateScore(
+            Context(
+                momentum: 1m,
+                volumeTrend: 0m,
+                volatility: 1m,
+                isAboveSma5: true,
+                distanceFromWeek52HighPercent: 0m));
+
+        Assert.Equal(1m * 10m - 1m + 5m + 7m, score);
+    }
+
+    [Fact]
+    public void CalculateScore_AppliesNegativeContribution_WhenFarBelowWeek52High()
+    {
+        var strategy = new StrategyConfiguration
+        {
+            Use52WeekHigh = true,
+            Week52HighScoreWeight = 6m
+        };
+        var engine = new RuleBasedScoringEngine(strategy);
+
+        var score = engine.CalculateScore(
+            Context(
+                momentum: 1m,
+                volumeTrend: 0m,
+                volatility: 1m,
+                isAboveSma5: true,
+                distanceFromWeek52HighPercent: -75m));
+
+        Assert.Equal(1m * 10m - 1m + 5m - 3m, score);
+    }
+
+    [Fact]
+    public void CalculateScore_LeavesScoreUnchanged_WhenWeek52HighDistanceIsMissing()
+    {
+        var strategy = new StrategyConfiguration
+        {
+            Use52WeekHigh = true,
+            Week52HighScoreWeight = 6m
+        };
+        var engine = new RuleBasedScoringEngine(strategy);
+
+        var score = engine.CalculateScore(
+            Context(
+                momentum: 1m,
+                volumeTrend: 0m,
+                volatility: 1m,
+                isAboveSma5: true));
+
+        Assert.Equal(1m * 10m - 1m + 5m, score);
     }
 }

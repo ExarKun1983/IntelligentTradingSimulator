@@ -100,7 +100,9 @@ public sealed class MarketObservationAnalyzer
                     VolumeTrendPercent = volumeTrend,
                     VolatilityPercent = volatility,
                     IsAboveSma5 = isAboveSma5,
-                    Rsi = rsi
+                    Rsi = rsi,
+                    DistanceFromWeek52HighPercent =
+                        week52High.DistanceFromWeek52HighPercent
                 });
 
         return new ObservationResult
