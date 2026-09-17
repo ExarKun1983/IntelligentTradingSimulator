@@ -52,6 +52,7 @@ public sealed class StrategyConfigurationLoaderTests
                         [$"Strategies:{strategyId}:RsiOverboughtPenalty"] = "3.5",
                         [$"Strategies:{strategyId}:UseRelativeStrength"] = "false",
                         [$"Strategies:{strategyId}:Use52WeekHigh"] = "true",
+                        [$"Strategies:{strategyId}:Week52HighScoreWeight"] = "4.5",
                         [$"Strategies:{strategyId}:UseQualityFilter"] = "true"
                     })
                 .Build();
@@ -67,6 +68,7 @@ public sealed class StrategyConfigurationLoaderTests
         Assert.Equal(3.5m, result.RsiOverboughtPenalty);
         Assert.False(result.UseRelativeStrength);
         Assert.True(result.Use52WeekHigh);
+        Assert.Equal(4.5m, result.Week52HighScoreWeight);
         Assert.True(result.UseQualityFilter);
     }
 
@@ -97,6 +99,9 @@ public sealed class StrategyConfigurationLoaderTests
         Assert.Equal(StrategyConfiguration.DefaultRsiOverboughtPenalty, result.RsiOverboughtPenalty);
         Assert.True(result.UseRelativeStrength);
         Assert.False(result.Use52WeekHigh);
+        Assert.Equal(
+            StrategyConfiguration.DefaultWeek52HighScoreWeight,
+            result.Week52HighScoreWeight);
         Assert.False(result.UseQualityFilter);
     }
 
@@ -302,6 +307,29 @@ public sealed class StrategyConfigurationLoaderTests
     }
 
     [Fact]
+    public void Load_Throws_WhenWeek52HighScoreWeightIsNegative()
+    {
+        const string activeStrategyId = "momentum-v1";
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = activeStrategyId,
+                        [$"Strategies:{activeStrategyId}:Week52HighScoreWeight"] = "-0.01"
+                    })
+                .Build();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => StrategyConfigurationLoader.Load(configuration));
+
+        Assert.Equal(
+            "Configuration value 'Strategies:momentum-v1:Week52HighScoreWeight' must be greater than or equal to zero.",
+            exception.Message);
+    }
+
+    [Fact]
     public void Load_Throws_WhenSelectedStrategyDefinitionIsMissing()
     {
         var configuration =
@@ -384,6 +412,7 @@ public sealed class StrategyConfigurationLoaderTests
                         ["Strategies:v1:RsiOverboughtPenalty"] = "2.25",
                         ["Strategies:v1:UseRelativeStrength"] = "false",
                         ["Strategies:v1:Use52WeekHigh"] = "true",
+                        ["Strategies:v1:Week52HighScoreWeight"] = "3.75",
                         ["Strategies:v1:UseQualityFilter"] = "true"
                     })
                 .Build();
@@ -404,6 +433,7 @@ public sealed class StrategyConfigurationLoaderTests
         Assert.Equal(2.25m, v1.RsiOverboughtPenalty);
         Assert.False(v1.UseRelativeStrength);
         Assert.True(v1.Use52WeekHigh);
+        Assert.Equal(3.75m, v1.Week52HighScoreWeight);
         Assert.True(v1.UseQualityFilter);
     }
 
@@ -433,6 +463,9 @@ public sealed class StrategyConfigurationLoaderTests
         Assert.Equal(StrategyConfiguration.DefaultRsiOverboughtPenalty, minimal.RsiOverboughtPenalty);
         Assert.True(minimal.UseRelativeStrength);
         Assert.False(minimal.Use52WeekHigh);
+        Assert.Equal(
+            StrategyConfiguration.DefaultWeek52HighScoreWeight,
+            minimal.Week52HighScoreWeight);
         Assert.False(minimal.UseQualityFilter);
     }
 

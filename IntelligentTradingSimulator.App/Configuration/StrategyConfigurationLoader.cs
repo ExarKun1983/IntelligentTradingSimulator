@@ -86,6 +86,8 @@ public static class StrategyConfigurationLoader
                 ?? true,
             Use52WeekHigh = section.GetValue<bool?>("Use52WeekHigh")
                 ?? false,
+            Week52HighScoreWeight = section.GetValue<decimal?>("Week52HighScoreWeight")
+                ?? StrategyConfiguration.DefaultWeek52HighScoreWeight,
             UseQualityFilter = section.GetValue<bool?>("UseQualityFilter")
                 ?? false
         };
@@ -148,6 +150,12 @@ public static class StrategyConfigurationLoader
         {
             throw new InvalidOperationException(
                 $"Configuration value 'Strategies:{id}:RsiOverboughtPenalty' must be greater than or equal to zero.");
+        }
+
+        if (config.Week52HighScoreWeight < 0m)
+        {
+            throw new InvalidOperationException(
+                $"Configuration value 'Strategies:{id}:Week52HighScoreWeight' must be greater than or equal to zero.");
         }
 
         return config;

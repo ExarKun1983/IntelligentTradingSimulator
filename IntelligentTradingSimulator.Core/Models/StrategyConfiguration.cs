@@ -13,6 +13,7 @@ public sealed class StrategyConfiguration
     public const decimal DefaultRsiOverboughtThreshold = 80m;
     public const decimal DefaultRsiPreferredRangeBonus = 5m;
     public const decimal DefaultRsiOverboughtPenalty = 5m;
+    public const decimal DefaultWeek52HighScoreWeight = 5m;
 
     public string Id { get; set; } = DefaultId;
 
@@ -37,6 +38,14 @@ public sealed class StrategyConfiguration
     public bool UseRelativeStrength { get; set; } = true;
 
     public bool Use52WeekHigh { get; set; } = false;
+
+    /// <summary>
+    /// Maximum absolute score contribution from the 52-week-high distance factor.
+    /// A 0% distance contributes +weight, -50% contributes 0, and -100% or worse
+    /// contributes -weight when <see cref="Use52WeekHigh"/> is enabled.
+    /// </summary>
+    public decimal Week52HighScoreWeight { get; set; } =
+        DefaultWeek52HighScoreWeight;
 
     public bool UseQualityFilter { get; set; } = false;
 }

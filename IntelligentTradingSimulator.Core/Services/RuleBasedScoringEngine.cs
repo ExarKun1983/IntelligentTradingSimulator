@@ -11,6 +11,10 @@ namespace IntelligentTradingSimulator.Core.Services;
 /// </summary>
 public sealed class RuleBasedScoringEngine : IScoringEngine
 {
+    private const decimal MinimumWeek52HighDistancePercent = -100m;
+    private const decimal MaximumWeek52HighDistancePercent = 0m;
+    private const decimal NeutralWeek52HighDistancePercent = -50m;
+
     private readonly StrategyConfiguration _strategyConfiguration;
 
     public RuleBasedScoringEngine(
@@ -56,6 +60,29 @@ public sealed class RuleBasedScoringEngine : IScoringEngine
             score += _strategyConfiguration.RsiPreferredRangeBonus;
         }
 
+        if (_strategyConfiguration.Use52WeekHigh &&
+            context.DistanceFromWeek52HighPercent.HasValue)
+        {
+            score += CalculateWeek52HighContribution(
+                context.DistanceFromWeek52HighPercent.Value);
+        }
+
         return score;
+    }
+
+    private decimal CalculateWeek52HighContribution(
+        decimal distanceFromWeek52HighPercent)
+    {
+        var boundedDistance =
+            Math.Clamp(
+                distanceFromWeek52HighPercent,
+                MinimumWeek52HighDistancePercent,
+                MaximumWeek52HighDistancePercent);
+
+        var scoreMultiplier =
+            (boundedDistance - NeutralWeek52HighDistancePercent)
+            / -NeutralWeek52HighDistancePercent;
+
+        return scoreMultiplier * _strategyConfiguration.Week52HighScoreWeight;
     }
 }

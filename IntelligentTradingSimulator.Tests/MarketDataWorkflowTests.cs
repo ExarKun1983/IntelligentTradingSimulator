@@ -86,6 +86,42 @@ public sealed class MarketDataWorkflowTests : IDisposable
             provider.LastFrom);
     }
 
+    [Fact]
+    public async Task CollectAndAnalyzeAsync_RanksByWeek52HighAdjustedScore_WhenEnabled()
+    {
+        var today = DateTime.Today;
+        var nearHighCandles = BuildCandles(today.AddDays(-251), 252);
+        var farBelowHighCandles = BuildCandles(today.AddDays(-251), 252);
+        farBelowHighCandles[0].High = 1_000m;
+
+        var provider = new FakeMarketDataProvider(
+            new Dictionary<string, IReadOnlyList<MarketCandle>>
+            {
+                ["FAR"] = farBelowHighCandles,
+                ["NEAR"] = nearHighCandles
+            });
+        var strategy = new StrategyConfiguration
+        {
+            LookbackDays = 89,
+            Use52WeekHigh = true,
+            Week52HighScoreWeight = 10m
+        };
+        var workflow = BuildWorkflow(provider, strategy);
+
+        var result =
+            await workflow.CollectAndAnalyzeAsync(
+                ["FAR", "NEAR"],
+                today.AddDays(-89));
+
+        Assert.Collection(
+            result.RankedResults,
+            first => Assert.Equal("NEAR", first.Symbol),
+            second => Assert.Equal("FAR", second.Symbol));
+        Assert.True(
+            result.RankedResults[0].Score >
+            result.RankedResults[1].Score);
+    }
+
     private MarketDataWorkflow BuildWorkflow(
         IMarketDataProvider provider,
         StrategyConfiguration? strategy = null)
@@ -114,10 +150,25 @@ public sealed class MarketDataWorkflowTests : IDisposable
             .ToList();
     }
 
-    private sealed class FakeMarketDataProvider(
-        IReadOnlyList<MarketCandle> candles)
-        : IMarketDataProvider
+    private sealed class FakeMarketDataProvider : IMarketDataProvider
     {
+        private readonly IReadOnlyDictionary<string, IReadOnlyList<MarketCandle>>
+            _candlesBySymbol;
+
+        public FakeMarketDataProvider(IReadOnlyList<MarketCandle> candles)
+            : this(
+                new Dictionary<string, IReadOnlyList<MarketCandle>>
+                {
+                    ["TEST"] = candles
+                })
+        {
+        }
+
+        public FakeMarketDataProvider(
+            IReadOnlyDictionary<string, IReadOnlyList<MarketCandle>>
+                candlesBySymbol) =>
+            _candlesBySymbol = candlesBySymbol;
+
         public DateTime LastFrom { get; private set; }
 
         public Task<IReadOnlyList<MarketCandle>> GetHistoricalDailyAsync(
@@ -127,7 +178,7 @@ public sealed class MarketDataWorkflowTests : IDisposable
             LastFrom = from.Date;
 
             return Task.FromResult<IReadOnlyList<MarketCandle>>(
-                candles
+                _candlesBySymbol[symbol]
                     .Where(x => x.Date.Date >= from.Date)
                     .OrderBy(x => x.Date)
                     .ToList());
@@ -139,7 +190,7 @@ public sealed class MarketDataWorkflowTests : IDisposable
             DateTime to)
         {
             return Task.FromResult<IReadOnlyList<MarketCandle>>(
-                candles
+                _candlesBySymbol[symbol]
                     .Where(x =>
                         x.Date.Date >= from.Date
                         && x.Date.Date <= to.Date)

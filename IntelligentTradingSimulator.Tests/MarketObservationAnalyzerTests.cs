@@ -239,6 +239,9 @@ public sealed class MarketObservationAnalyzerTests
         Assert.Equal(42m, result.Score);
         Assert.NotNull(engine.LastContext);
         Assert.Equal(result.Rsi, engine.LastContext!.Rsi);
+        Assert.Equal(
+            result.DistanceFromWeek52HighPercent,
+            engine.LastContext.DistanceFromWeek52HighPercent);
     }
 
     [Fact]
@@ -300,9 +303,50 @@ public sealed class MarketObservationAnalyzerTests
                 VolumeTrendPercent = result.VolumeTrendPercent,
                 VolatilityPercent = result.VolatilityPercent,
                 IsAboveSma5 = result.IsAboveSma5,
-                Rsi = result.Rsi
+                Rsi = result.Rsi,
+                DistanceFromWeek52HighPercent =
+                    result.DistanceFromWeek52HighPercent
             });
 
+        Assert.Equal(expected, result.Score);
+    }
+
+    [Fact]
+    public void Analyze_UsesWeek52HighAdjustedScore_WhenStrategyEnablesWeek52High()
+    {
+        var strategy = new StrategyConfiguration
+        {
+            Use52WeekHigh = true,
+            Week52HighScoreWeight = 6m
+        };
+        var analyzer = new MarketObservationAnalyzer(
+            new RuleBasedScoringEngine(strategy),
+            week52HighCalculator: new Week52HighCalculator(3));
+        var candles = new List<MarketCandle>
+        {
+            Candle(100m, high: 100m),
+            Candle(120m, high: 120m),
+            Candle(90m, high: 90m),
+            Candle(108m, high: 108m)
+        };
+
+        var result = analyzer.Analyze("TEST", candles);
+
+        var expected = new RuleBasedScoringEngine(strategy).CalculateScore(
+            new ScoringContext
+            {
+                Symbol = "TEST",
+                MomentumPercent = result.MomentumPercent,
+                AverageVolume = result.AverageVolume,
+                VolumeTrendPercent = result.VolumeTrendPercent,
+                VolatilityPercent = result.VolatilityPercent,
+                IsAboveSma5 = result.IsAboveSma5,
+                Rsi = result.Rsi,
+                DistanceFromWeek52HighPercent =
+                    result.DistanceFromWeek52HighPercent
+            });
+
+        Assert.Equal(-10m, result.DistanceFromWeek52HighPercent);
         Assert.Equal(expected, result.Score);
     }
 
