@@ -146,6 +146,12 @@ To run the test suite using the Debug configuration:
 dotnet test IntelligentTradingSimulator.sln --configuration Debug --verbosity normal
 ```
 
+To run the test suite using the Release configuration:
+
+```bash
+dotnet test IntelligentTradingSimulator.sln --configuration Release --verbosity normal
+```
+
 ## Troubleshooting
 
 - **`Connection string 'TradingDb' is not configured.`** Check that `ConnectionStrings:TradingDb` exists in `IntelligentTradingSimulator.App/appsettings.json` and that the updated file is copied to the app's output directory. The app does not read `TRADING_DB_CONNECTION`.
