@@ -132,7 +132,7 @@ This captures human-readable console output, not a machine-readable export.
 
 ## Verify local setup
 
-From the repository root, restore, build, and test the solution using the SDK configured in `global.json`. The tests use in-memory databases and do not require a running SQL Server or Yahoo Finance access:
+From the repository root, use the SDK configured in `global.json` to restore, verify that the Release build succeeds, and run the test suite. A successful build exits with code 0. The tests use in-memory databases and do not require a running SQL Server or Yahoo Finance access:
 
 ```bash
 dotnet restore IntelligentTradingSimulator.sln
