@@ -11,15 +11,19 @@ on:
   issues:
     types: [labeled, closed]
   pull_request:
-    types: [opened, reopened, ready_for_review, synchronize, closed]
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, closed]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
 
 permissions:
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
+  actions: read
 
 concurrency:
-  group: agent-orchestrator-${{ github.event.issue.number || github.event.pull_request.number || github.ref }}
+  group: agent-orchestrator-${{ github.event.issue.number || github.event.pull_request.number || github.event.workflow_run.id || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -31,90 +35,53 @@ env:
 
 jobs:
   bootstrap-labels:
-    name: Create or update agent labels
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - name: Create labels idempotently
+      - name: Create labels
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-        shell: bash
         run: |
           set -euo pipefail
-          gh label create "$READY_LABEL" --repo "$REPOSITORY" --color "0E8A16" --description "Ready to be delegated to Copilot cloud agent" --force
-          gh label create "$WORKING_LABEL" --repo "$REPOSITORY" --color "FBCA04" --description "Copilot cloud agent is implementing this issue" --force
-          gh label create "$REVIEW_LABEL" --repo "$REPOSITORY" --color "1D76DB" --description "A linked pull request is ready for human review" --force
-          gh label create "$BLOCKED_LABEL" --repo "$REPOSITORY" --color "D93F0B" --description "Automation stopped and needs human attention" --force
+          gh label create "$READY_LABEL" --repo "$REPOSITORY" --color 0E8A16 --description "Ready to be delegated to Copilot cloud agent" --force
+          gh label create "$WORKING_LABEL" --repo "$REPOSITORY" --color FBCA04 --description "Copilot cloud agent is implementing this issue" --force
+          gh label create "$REVIEW_LABEL" --repo "$REPOSITORY" --color 1D76DB --description "A linked pull request is ready for human review" --force
+          gh label create "$BLOCKED_LABEL" --repo "$REPOSITORY" --color D93F0B --description "Automation stopped and needs human attention" --force
 
   start-agent:
-    name: Delegate ready issue to Copilot
     if: >-
       github.event_name == 'issues' &&
       github.event.action == 'labeled' &&
       github.event.label.name == 'agent:ready' &&
-      github.event.issue.state == 'open' &&
-      github.event.sender.login == github.repository_owner
+      github.event.issue.state == 'open'
     runs-on: ubuntu-latest
     steps:
-      - name: Validate issue state
-        id: validate
+      - name: Move issue to working
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
-        shell: bash
         run: |
           set -euo pipefail
-          labels="$(gh issue view "$ISSUE_NUMBER" --repo "$REPOSITORY" --json labels --jq '.labels[].name')"
-          for label in "$WORKING_LABEL" "$REVIEW_LABEL" "$BLOCKED_LABEL"; do
-            if grep -Fxq "$label" <<< "$labels"; then
-              echo "Issue already has $label."
-              echo "start=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          done
-          echo "start=true" >> "$GITHUB_OUTPUT"
-
-      - name: Move issue to working
-        if: steps.validate.outputs.start == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-        run: |
           gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY" --remove-label "$READY_LABEL" --add-label "$WORKING_LABEL"
 
       - name: Start Copilot cloud agent task
-        if: steps.validate.outputs.start == 'true'
-        id: start
         env:
           COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
-        shell: bash
         run: |
           set -euo pipefail
           test -n "${COPILOT_AGENT_TOKEN:-}" || { echo "Missing COPILOT_AGENT_TOKEN" >&2; exit 1; }
-
           payload="$(jq -n \
             --arg n "$ISSUE_NUMBER" \
             --arg title "$ISSUE_TITLE" \
             --arg body "$ISSUE_BODY" \
             --arg base "$BASE_BRANCH" \
-            '{
-              prompt: (
-                "Implement GitHub Issue #" + $n + ": " + $title + "\n\n" + $body + "\n\n" +
-                "Follow .github/copilot-instructions.md. Keep changes focused. Run restore, build, and tests. " +
-                "Create a pull request against " + $base + ". The pull request body must include a standalone line: Closes #" + $n + ". " +
-                "Do not merge the pull request."
-              ),
-              base_ref: $base,
-              create_pull_request: true
-            }')"
-
+            '{prompt:("Implement GitHub Issue #"+$n+": "+$title+"\n\n"+$body+"\n\nFollow .github/copilot-instructions.md. Keep changes focused. Run restore, build, and tests. Create a pull request against "+$base+". The pull request body must include a standalone line: Closes #"+$n+". Do not merge the pull request."),base_ref:$base,create_pull_request:true}')"
           response="$(mktemp)"
           code="$(curl --silent --show-error --output "$response" --write-out '%{http_code}' \
             --request POST \
@@ -125,172 +92,109 @@ jobs:
             --data "$payload")"
           cat "$response"
           [[ "$code" == 2* ]] || { echo "Agent API returned HTTP $code" >&2; exit 1; }
-          echo "task_id=$(jq -r '.id // .task_id // empty' "$response")" >> "$GITHUB_OUTPUT"
 
-      - name: Comment with task status
-        if: steps.validate.outputs.start == 'true' && success()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          TASK_ID: ${{ steps.start.outputs.task_id }}
-        run: |
-          text="Copilot cloud agent task started automatically. Status: \`agent:working\`."
-          [ -z "${TASK_ID:-}" ] || text="$text Task ID: \`$TASK_ID\`."
-          gh issue comment "$ISSUE_NUMBER" --repo "$REPOSITORY" --body "$text"
-
-      - name: Mark blocked when delegation fails
-        if: steps.validate.outputs.start == 'true' && failure()
+      - name: Mark blocked if delegation failed
+        if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY" --remove-label "$WORKING_LABEL" --add-label "$BLOCKED_LABEL"
-          gh issue comment "$ISSUE_NUMBER" --repo "$REPOSITORY" --body "Automatic delegation failed. Status: \`agent:blocked\`. Check the Agent orchestrator run."
 
-  reconcile:
-    name: Reconcile issue and pull request states
+  promote-after-ci:
+    name: Promote successful Copilot PR to review
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule' ||
-      github.event_name == 'push' ||
-      github.event_name == 'pull_request'
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
-      - name: Reconcile all active agent issues
+      - name: Mark successful draft Copilot PR ready for review
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_ACTION: ${{ github.event.action }}
-          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
-        shell: bash
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
 
-          has_label() {
-            local labels="$1" wanted="$2"
-            jq -e --arg x "$wanted" 'map(.name) | index($x) != null' <<< "$labels" >/dev/null
-          }
+          # The orchestrator only owns Copilot branches created by this workflow.
+          [[ "$HEAD_BRANCH" == copilot/* ]] || { echo "Not a Copilot branch: $HEAD_BRANCH"; exit 0; }
 
-          set_state() {
-            local issue="$1" target="$2" labels="$3"
-            local args=(issue edit "$issue" --repo "$REPOSITORY")
-            for label in "$READY_LABEL" "$WORKING_LABEL" "$REVIEW_LABEL" "$BLOCKED_LABEL"; do
-              if has_label "$labels" "$label"; then args+=(--remove-label "$label"); fi
+          pr="$(gh pr list --repo "$REPOSITORY" --state open --head "$HEAD_BRANCH" --limit 1 \
+            --json number,isDraft,headRefName,url \
+            | jq -c '.[0] // empty')"
+          [ -n "$pr" ] || { echo "No open PR for $HEAD_BRANCH"; exit 0; }
+
+          pr_number="$(jq -r '.number' <<< "$pr")"
+          is_draft="$(jq -r '.isDraft' <<< "$pr")"
+
+          if [ "$is_draft" = "true" ]; then
+            gh pr ready "$pr_number" --repo "$REPOSITORY"
+          fi
+
+          # Update any open issue that GitHub links to the PR.
+          issues="$(gh pr view "$pr_number" --repo "$REPOSITORY" --json closingIssuesReferences \
+            --jq '.closingIssuesReferences[].number')"
+          while IFS= read -r issue_number; do
+            [ -z "$issue_number" ] && continue
+            labels="$(gh issue view "$issue_number" --repo "$REPOSITORY" --json labels --jq '.labels[].name')"
+            for label in "$READY_LABEL" "$WORKING_LABEL" "$BLOCKED_LABEL"; do
+              if grep -Fxq "$label" <<< "$labels"; then
+                gh issue edit "$issue_number" --repo "$REPOSITORY" --remove-label "$label"
+              fi
             done
-            if [ -n "$target" ]; then args+=(--add-label "$target"); fi
-            gh "${args[@]}"
-          }
-
-          issues="$(gh issue list --repo "$REPOSITORY" --state all --limit 1000 \
-            --json number,state,labels \
-            | jq --arg working "$WORKING_LABEL" \
-                 --arg review "$REVIEW_LABEL" \
-                 --arg blocked "$BLOCKED_LABEL" \
-                 '[.[] |
-                   select(
-                     (.labels | map(.name)) as $names |
-                     (($names | index($working)) != null) or
-                     (($names | index($review)) != null) or
-                     (($names | index($blocked)) != null)
-                   )
-                 ]')"
-
-          jq -c '.[]' <<< "$issues" | while read -r issue; do
-            number="$(jq -r '.number' <<< "$issue")"
-            state="$(jq -r '.state' <<< "$issue")"
-            labels="$(jq -c '.labels' <<< "$issue")"
-
-            if [ "$state" = "CLOSED" ]; then
-              set_state "$number" "" "$labels"
-              continue
+            if ! grep -Fxq "$REVIEW_LABEL" <<< "$labels"; then
+              gh issue edit "$issue_number" --repo "$REPOSITORY" --add-label "$REVIEW_LABEL"
             fi
+          done <<< "$issues"
 
-            prs="$(gh pr list --repo "$REPOSITORY" --state all --limit 1000 \
-              --json number,state,isDraft,mergedAt,url,closingIssuesReferences \
-              | jq --argjson issue_number "$number" \
-                  '[.[] | select(any(.closingIssuesReferences[]?; .number == $issue_number))]')"
-
-            count="$(jq 'length' <<< "$prs")"
-            if [ "$count" -eq 0 ]; then
-              continue
-            fi
-
-            pr="$(jq 'sort_by(.number) | last' <<< "$prs")"
-            pr_state="$(jq -r '.state' <<< "$pr")"
-            is_draft="$(jq -r '.isDraft' <<< "$pr")"
-            merged_at="$(jq -r '.mergedAt // empty' <<< "$pr")"
-
-            if [ -n "$merged_at" ]; then
-              gh issue close "$number" --repo "$REPOSITORY" --reason completed || true
-              set_state "$number" "" "$labels"
-            elif [ "$pr_state" = "CLOSED" ]; then
-              set_state "$number" "$BLOCKED_LABEL" "$labels"
-            elif [ "$is_draft" = "false" ]; then
-              set_state "$number" "$REVIEW_LABEL" "$labels"
-            else
-              set_state "$number" "$WORKING_LABEL" "$labels"
-            fi
-          done
-
-      - name: Reconcile current pull request by closing references
-        if: github.event_name == 'pull_request'
+  reconcile-pr-event:
+    name: Synchronize issue from pull request
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Synchronize linked issues
         env:
           GH_TOKEN: ${{ github.token }}
-          OWNER: ${{ github.repository_owner }}
-          REPOSITORY_NAME: ${{ github.event.repository.name }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_ACTION: ${{ github.event.action }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
           PR_MERGED: ${{ github.event.pull_request.merged }}
-        shell: bash
         run: |
           set -euo pipefail
-          numbers="$(gh api graphql \
-            -f query='query($owner:String!, $repo:String!, $number:Int!) {
-              repository(owner:$owner, name:$repo) {
-                pullRequest(number:$number) {
-                  closingIssuesReferences(first:50) { nodes { number state } }
-                }
-              }
-            }' \
-            -F owner="$OWNER" -F repo="$REPOSITORY_NAME" -F number="$PR_NUMBER" \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[] | select(.state == "OPEN") | .number')"
-
-          while IFS= read -r issue; do
-            [ -z "$issue" ] && continue
-            labels="$(gh issue view "$issue" --repo "$REPOSITORY" --json labels --jq '.labels[].name')"
+          issues="$(gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json closingIssuesReferences --jq '.closingIssuesReferences[].number')"
+          while IFS= read -r issue_number; do
+            [ -z "$issue_number" ] && continue
+            labels="$(gh issue view "$issue_number" --repo "$REPOSITORY" --json labels --jq '.labels[].name')"
             for label in "$READY_LABEL" "$WORKING_LABEL" "$REVIEW_LABEL" "$BLOCKED_LABEL"; do
               if grep -Fxq "$label" <<< "$labels"; then
-                gh issue edit "$issue" --repo "$REPOSITORY" --remove-label "$label"
+                gh issue edit "$issue_number" --repo "$REPOSITORY" --remove-label "$label"
               fi
             done
 
             if [ "$PR_MERGED" = "true" ]; then
-              gh issue close "$issue" --repo "$REPOSITORY" --reason completed || true
+              gh issue close "$issue_number" --repo "$REPOSITORY" --reason completed || true
             elif [ "$PR_ACTION" = "closed" ]; then
-              gh issue edit "$issue" --repo "$REPOSITORY" --add-label "$BLOCKED_LABEL"
+              gh issue edit "$issue_number" --repo "$REPOSITORY" --add-label "$BLOCKED_LABEL"
             elif [ "$PR_DRAFT" = "false" ]; then
-              gh issue edit "$issue" --repo "$REPOSITORY" --add-label "$REVIEW_LABEL"
+              gh issue edit "$issue_number" --repo "$REPOSITORY" --add-label "$REVIEW_LABEL"
             else
-              gh issue edit "$issue" --repo "$REPOSITORY" --add-label "$WORKING_LABEL"
+              gh issue edit "$issue_number" --repo "$REPOSITORY" --add-label "$WORKING_LABEL"
             fi
-          done <<< "$numbers"
+          done <<< "$issues"
 
   cleanup-closed-issue:
-    name: Clear agent labels from closed issue
     if: github.event_name == 'issues' && github.event.action == 'closed'
     runs-on: ubuntu-latest
     steps:
-      - name: Remove workflow labels
+      - name: Remove agent labels
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
+          set -euo pipefail
           labels="$(gh issue view "$ISSUE_NUMBER" --repo "$REPOSITORY" --json labels --jq '.labels[].name')"
           for label in "$READY_LABEL" "$WORKING_LABEL" "$REVIEW_LABEL" "$BLOCKED_LABEL"; do
             if grep -Fxq "$label" <<< "$labels"; then
