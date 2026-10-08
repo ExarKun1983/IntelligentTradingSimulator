@@ -90,6 +90,39 @@ public sealed class StrategyComparisonReportServiceTests
     }
 
     [Fact]
+    public void Build_MapsRiskAndBenchmarkMetricsForSuccessfulEntry()
+    {
+        var service = CreateService();
+        var summary = BuildSuccess("v1");
+        summary.DrawdownDurationDays = 12;
+        summary.RecoveryTimeDays = 8;
+        summary.BenchmarkComparisons =
+        [
+            new BacktestBenchmarkComparison
+            {
+                Symbol = "SPY",
+                StrategyReturnPercent = 10m,
+                BenchmarkReturnPercent = 7m,
+                RelativeReturnPercent = 3m,
+                AlphaPercent = 3m,
+                Outcome = BacktestBenchmarkComparisonOutcome.Outperform
+            }
+        ];
+
+        var report = service.Build([summary]);
+
+        var entry = Assert.Single(report.Entries);
+        Assert.Equal(12, entry.DrawdownDurationDays);
+        Assert.Equal(8, entry.RecoveryTimeDays);
+        var comparison = Assert.Single(entry.BenchmarkComparisons);
+        Assert.Equal("SPY", comparison.Symbol);
+        Assert.Equal(7m, comparison.BenchmarkReturnPercent);
+        Assert.Equal(3m, comparison.RelativeReturnPercent);
+        Assert.Equal(3m, comparison.AlphaPercent);
+        Assert.Equal(BacktestBenchmarkComparisonOutcome.Outperform, comparison.Outcome);
+    }
+
+    [Fact]
     public void Build_FailedSummary_IsMarkedAsFailure()
     {
         var service = CreateService();

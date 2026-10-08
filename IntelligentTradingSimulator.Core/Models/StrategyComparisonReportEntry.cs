@@ -16,5 +16,11 @@ public sealed class StrategyComparisonReportEntry
 
     public decimal MaxDrawdownPercent { get; set; }
 
+    public int DrawdownDurationDays { get; set; }
+
+    public int? RecoveryTimeDays { get; set; }
+
     public int TradesCount { get; set; }
+
+    public IReadOnlyList<BacktestBenchmarkComparison> BenchmarkComparisons { get; set; } = [];
 }

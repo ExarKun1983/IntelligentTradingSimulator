@@ -239,7 +239,26 @@ public sealed class ConsoleReporter
             Console.WriteLine($"  Final Capital:  {entry.FinalCapital:N2}");
             Console.WriteLine($"  Return:         {entry.ReturnPercent:N2}%");
             Console.WriteLine($"  Max Drawdown:   {entry.MaxDrawdownPercent:N2}%");
+            Console.WriteLine($"  DD Duration:    {entry.DrawdownDurationDays} day(s)");
+            Console.WriteLine(entry.RecoveryTimeDays.HasValue
+                ? $"  Recovery Time:  {entry.RecoveryTimeDays.Value} day(s)"
+                : "  Recovery Time:  N/A (not recovered)");
             Console.WriteLine($"  Trades:         {entry.TradesCount}");
+
+            if (entry.BenchmarkComparisons.Count == 0)
+            {
+                continue;
+            }
+
+            Console.WriteLine("  --- Benchmark ---");
+            foreach (var comparison in entry.BenchmarkComparisons)
+            {
+                Console.WriteLine($"  {comparison.Symbol}");
+                Console.WriteLine($"    Benchmark Return: {comparison.BenchmarkReturnPercent:N2}%");
+                Console.WriteLine($"    Relative Return:  {comparison.RelativeReturnPercent:N2}%");
+                Console.WriteLine($"    Alpha:            {comparison.AlphaPercent:N2}%");
+                Console.WriteLine($"    Outcome:          {comparison.Outcome}");
+            }
         }
     }
 
