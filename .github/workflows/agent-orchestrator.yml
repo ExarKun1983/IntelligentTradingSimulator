@@ -189,10 +189,14 @@ jobs:
             | jq --arg working "$WORKING_LABEL" \
                  --arg review "$REVIEW_LABEL" \
                  --arg blocked "$BLOCKED_LABEL" \
-                 '[.[] | select((.labels | map(.name)) as $names | \
-                   ($names | index($working)) != null or \
-                   ($names | index($review)) != null or \
-                   ($names | index($blocked)) != null)]')"
+                 '[.[] |
+                   select(
+                     (.labels | map(.name)) as $names |
+                     (($names | index($working)) != null) or
+                     (($names | index($review)) != null) or
+                     (($names | index($blocked)) != null)
+                   )
+                 ]')"
 
           jq -c '.[]' <<< "$issues" | while read -r issue; do
             number="$(jq -r '.number' <<< "$issue")"
