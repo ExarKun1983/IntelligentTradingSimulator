@@ -11,7 +11,7 @@ This guide covers the current console application and its SQL Server and Yahoo F
 
 ## Set up the database and application
 
-From the repository root, restore and build the solution:
+From the repository root, restore the solution and build it in Release configuration:
 
 ```bash
 dotnet restore IntelligentTradingSimulator.sln
