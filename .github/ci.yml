@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SOLUTION_FILE: IntelligentTradingSimulator.sln
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Display .NET information
+        run: dotnet --info
+
+      - name: Restore dependencies
+        run: dotnet restore "$SOLUTION_FILE"
+
+      - name: Build solution
+        run: dotnet build "$SOLUTION_FILE" --configuration Release --no-restore
+
+      - name: Run tests
+        run: >-
+          dotnet test "$SOLUTION_FILE"
+          --configuration Release
+          --no-build
+          --verbosity normal
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory "${{ runner.temp }}/test-results"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: ${{ runner.temp }}/test-results
+          if-no-files-found: warn
+          retention-days: 14
