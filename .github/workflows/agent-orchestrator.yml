@@ -111,13 +111,11 @@ jobs:
     steps:
       - name: Mark successful draft Copilot PR ready for review
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
-
-          # The orchestrator only owns Copilot branches created by this workflow.
           [[ "$HEAD_BRANCH" == copilot/* ]] || { echo "Not a Copilot branch: $HEAD_BRANCH"; exit 0; }
 
           pr="$(gh pr list --repo "$REPOSITORY" --state open --head "$HEAD_BRANCH" --limit 1 \
@@ -127,14 +125,11 @@ jobs:
 
           pr_number="$(jq -r '.number' <<< "$pr")"
           is_draft="$(jq -r '.isDraft' <<< "$pr")"
-
           if [ "$is_draft" = "true" ]; then
             gh pr ready "$pr_number" --repo "$REPOSITORY"
           fi
 
-          # Update any open issue that GitHub links to the PR.
-          issues="$(gh pr view "$pr_number" --repo "$REPOSITORY" --json closingIssuesReferences \
-            --jq '.closingIssuesReferences[].number')"
+          issues="$(gh pr view "$pr_number" --repo "$REPOSITORY" --json closingIssuesReferences --jq '.closingIssuesReferences[].number')"
           while IFS= read -r issue_number; do
             [ -z "$issue_number" ] && continue
             labels="$(gh issue view "$issue_number" --repo "$REPOSITORY" --json labels --jq '.labels[].name')"
@@ -172,7 +167,6 @@ jobs:
                 gh issue edit "$issue_number" --repo "$REPOSITORY" --remove-label "$label"
               fi
             done
-
             if [ "$PR_MERGED" = "true" ]; then
               gh issue close "$issue_number" --repo "$REPOSITORY" --reason completed || true
             elif [ "$PR_ACTION" = "closed" ]; then
