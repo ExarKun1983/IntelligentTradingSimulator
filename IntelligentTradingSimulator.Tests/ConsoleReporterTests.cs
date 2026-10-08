@@ -488,6 +488,99 @@ public sealed class ConsoleReporterTests
     }
 
     [Fact]
+    public void PrintVariantComparisonReport_IncludesRiskAndBenchmarkMetrics()
+    {
+        var reporter = CreateReporter();
+        var report = new StrategyComparisonReport
+        {
+            Entries =
+            [
+                new StrategyComparisonReportEntry
+                {
+                    StrategyId = "benchmark-aware",
+                    IsSuccess = true,
+                    ReturnPercent = 12m,
+                    MaxDrawdownPercent = 6m,
+                    DrawdownDurationDays = 14,
+                    RecoveryTimeDays = null,
+                    BenchmarkComparisons =
+                    [
+                        new BacktestBenchmarkComparison
+                        {
+                            Symbol = "SPY",
+                            StrategyReturnPercent = 12m,
+                            BenchmarkReturnPercent = 8m,
+                            RelativeReturnPercent = 4m,
+                            AlphaPercent = 4m,
+                            Outcome = BacktestBenchmarkComparisonOutcome.Outperform
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var output = CaptureOutput(() => reporter.PrintVariantComparisonReport(report));
+
+        Assert.Contains("Max Drawdown:   6.00%", output);
+        Assert.Contains("DD Duration:    14 day(s)", output);
+        Assert.Contains("Recovery Time:  N/A (not recovered)", output);
+        Assert.Contains("--- Benchmark ---", output);
+        Assert.Contains("SPY", output);
+        Assert.Contains("Benchmark Return: 8.00%", output);
+        Assert.Contains("Relative Return:  4.00%", output);
+        Assert.Contains("Alpha:            4.00%", output);
+        Assert.Contains("Outperform", output);
+    }
+
+    [Fact]
+    public void PrintVariantComparisonReport_ShowsNoDrawdown_WhenDurationIsZero()
+    {
+        var reporter = CreateReporter();
+        var report = new StrategyComparisonReport
+        {
+            Entries =
+            [
+                new StrategyComparisonReportEntry
+                {
+                    StrategyId = "no-drawdown",
+                    IsSuccess = true,
+                    DrawdownDurationDays = 0,
+                    RecoveryTimeDays = null
+                }
+            ]
+        };
+
+        var output = CaptureOutput(() => reporter.PrintVariantComparisonReport(report));
+
+        Assert.Contains("Recovery Time:  N/A (no drawdown)", output);
+        Assert.DoesNotContain("Recovery Time:  N/A (not recovered)", output);
+    }
+
+    [Fact]
+    public void PrintVariantComparisonReport_ShowsNotRecovered_WhenDrawdownDurationIsPositive()
+    {
+        var reporter = CreateReporter();
+        var report = new StrategyComparisonReport
+        {
+            Entries =
+            [
+                new StrategyComparisonReportEntry
+                {
+                    StrategyId = "unrecovered-drawdown",
+                    IsSuccess = true,
+                    DrawdownDurationDays = 1,
+                    RecoveryTimeDays = null
+                }
+            ]
+        };
+
+        var output = CaptureOutput(() => reporter.PrintVariantComparisonReport(report));
+
+        Assert.Contains("Recovery Time:  N/A (not recovered)", output);
+        Assert.DoesNotContain("Recovery Time:  N/A (no drawdown)", output);
+    }
+
+    [Fact]
     public void PrintVariantComparisonReport_EmptyEntries_ShowsNoVariantsMessage()
     {
         var reporter = CreateReporter();

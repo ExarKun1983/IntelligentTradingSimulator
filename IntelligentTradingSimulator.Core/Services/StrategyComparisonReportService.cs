@@ -19,7 +19,10 @@ public sealed class StrategyComparisonReportService : IStrategyComparisonReportS
                 FinalCapital = s.FinalCapital,
                 ReturnPercent = s.ReturnPercent,
                 MaxDrawdownPercent = s.MaxDrawdownPercent,
-                TradesCount = s.TradesCount
+                DrawdownDurationDays = s.DrawdownDurationDays,
+                RecoveryTimeDays = s.RecoveryTimeDays,
+                TradesCount = s.TradesCount,
+                BenchmarkComparisons = s.BenchmarkComparisons
             })
             .ToList();
 
