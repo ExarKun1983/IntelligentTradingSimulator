@@ -533,6 +533,54 @@ public sealed class ConsoleReporterTests
     }
 
     [Fact]
+    public void PrintVariantComparisonReport_ShowsNoDrawdown_WhenDurationIsZero()
+    {
+        var reporter = CreateReporter();
+        var report = new StrategyComparisonReport
+        {
+            Entries =
+            [
+                new StrategyComparisonReportEntry
+                {
+                    StrategyId = "no-drawdown",
+                    IsSuccess = true,
+                    DrawdownDurationDays = 0,
+                    RecoveryTimeDays = null
+                }
+            ]
+        };
+
+        var output = CaptureOutput(() => reporter.PrintVariantComparisonReport(report));
+
+        Assert.Contains("Recovery Time:  N/A (no drawdown)", output);
+        Assert.DoesNotContain("Recovery Time:  N/A (not recovered)", output);
+    }
+
+    [Fact]
+    public void PrintVariantComparisonReport_ShowsNotRecovered_WhenDrawdownDurationIsPositive()
+    {
+        var reporter = CreateReporter();
+        var report = new StrategyComparisonReport
+        {
+            Entries =
+            [
+                new StrategyComparisonReportEntry
+                {
+                    StrategyId = "unrecovered-drawdown",
+                    IsSuccess = true,
+                    DrawdownDurationDays = 1,
+                    RecoveryTimeDays = null
+                }
+            ]
+        };
+
+        var output = CaptureOutput(() => reporter.PrintVariantComparisonReport(report));
+
+        Assert.Contains("Recovery Time:  N/A (not recovered)", output);
+        Assert.DoesNotContain("Recovery Time:  N/A (no drawdown)", output);
+    }
+
+    [Fact]
     public void PrintVariantComparisonReport_EmptyEntries_ShowsNoVariantsMessage()
     {
         var reporter = CreateReporter();

@@ -242,7 +242,9 @@ public sealed class ConsoleReporter
             Console.WriteLine($"  DD Duration:    {entry.DrawdownDurationDays} day(s)");
             Console.WriteLine(entry.RecoveryTimeDays.HasValue
                 ? $"  Recovery Time:  {entry.RecoveryTimeDays.Value} day(s)"
-                : "  Recovery Time:  N/A (not recovered)");
+                : entry.DrawdownDurationDays == 0
+                    ? "  Recovery Time:  N/A (no drawdown)"
+                    : "  Recovery Time:  N/A (not recovered)");
             Console.WriteLine($"  Trades:         {entry.TradesCount}");
 
             if (entry.BenchmarkComparisons.Count == 0)
