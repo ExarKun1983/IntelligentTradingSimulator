@@ -1,0 +1,342 @@
+name: Agent orchestrator
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/agent-orchestrator.yml
+  issues:
+    types:
+      - labeled
+      - closed
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - ready_for_review
+      - synchronize
+      - closed
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: agent-orchestrator-${{ github.event.issue.number || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+env:
+  READY_LABEL: agent:ready
+  WORKING_LABEL: agent:working
+  REVIEW_LABEL: agent:review
+  BLOCKED_LABEL: agent:blocked
+  BASE_BRANCH: master
+
+jobs:
+  bootstrap-labels:
+    name: Create or update agent labels
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create labels idempotently
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh label create "$READY_LABEL" \
+            --repo "$REPOSITORY" \
+            --color "0E8A16" \
+            --description "Ready to be delegated to Copilot cloud agent" \
+            --force
+
+          gh label create "$WORKING_LABEL" \
+            --repo "$REPOSITORY" \
+            --color "FBCA04" \
+            --description "Copilot cloud agent is implementing this issue" \
+            --force
+
+          gh label create "$REVIEW_LABEL" \
+            --repo "$REPOSITORY" \
+            --color "1D76DB" \
+            --description "A linked pull request is ready for human review" \
+            --force
+
+          gh label create "$BLOCKED_LABEL" \
+            --repo "$REPOSITORY" \
+            --color "D93F0B" \
+            --description "Automation stopped and needs human attention" \
+            --force
+
+  start-agent:
+    name: Delegate ready issue to Copilot
+    if: >-
+      github.event_name == 'issues' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'agent:ready' &&
+      github.event.issue.state == 'open' &&
+      github.event.sender.login == github.repository_owner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate issue state
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          labels="$(gh issue view "$ISSUE_NUMBER" --repo "$REPOSITORY" --json labels --jq '.labels[].name')"
+
+          if grep -Fxq "$WORKING_LABEL" <<< "$labels"; then
+            echo "Issue is already marked as working."
+            echo "start=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if grep -Fxq "$REVIEW_LABEL" <<< "$labels"; then
+            echo "Issue is already in review."
+            echo "start=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if grep -Fxq "$BLOCKED_LABEL" <<< "$labels"; then
+            echo "Issue is blocked. Remove agent:blocked before retrying."
+            echo "start=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "start=true" >> "$GITHUB_OUTPUT"
+
+      - name: Move issue to working
+        if: steps.validate.outputs.start == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue edit "$ISSUE_NUMBER" \
+            --repo "$REPOSITORY" \
+            --remove-label "$READY_LABEL" \
+            --add-label "$WORKING_LABEL"
+
+      - name: Start Copilot cloud agent task
+        if: steps.validate.outputs.start == 'true'
+        id: start
+        env:
+          COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${COPILOT_AGENT_TOKEN:-}" ]; then
+            echo "Missing repository secret COPILOT_AGENT_TOKEN." >&2
+            exit 1
+          fi
+
+          prompt="$(jq -n \
+            --arg issue_number "$ISSUE_NUMBER" \
+            --arg issue_title "$ISSUE_TITLE" \
+            --arg issue_body "$ISSUE_BODY" \
+            '{
+              prompt: (
+                "Implement GitHub Issue #" + $issue_number + ": " + $issue_title + "\n\n" +
+                $issue_body + "\n\n" +
+                "Follow .github/copilot-instructions.md. Keep the change focused on this issue. " +
+                "Run restore, build, and tests. Create a pull request against master. " +
+                "The pull request body must contain exactly: Closes #" + $issue_number + ". " +
+                "Do not merge the pull request."
+              ),
+              base_ref: "master",
+              create_pull_request: true
+            }')"
+
+          response_file="$(mktemp)"
+          http_code="$(curl --silent --show-error \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --header "Authorization: Bearer $COPILOT_AGENT_TOKEN" \
+            "https://api.github.com/agents/repos/$REPOSITORY/tasks" \
+            --data "$prompt")"
+
+          cat "$response_file"
+
+          if [[ "$http_code" != 2* ]]; then
+            echo "Copilot agent API returned HTTP $http_code." >&2
+            exit 1
+          fi
+
+          task_id="$(jq -r '.id // .task_id // empty' "$response_file")"
+          echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
+
+      - name: Comment with orchestration status
+        if: steps.validate.outputs.start == 'true' && success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          TASK_ID: ${{ steps.start.outputs.task_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          message="Copilot cloud agent task started automatically. Status moved to \`agent:working\`."
+          if [ -n "${TASK_ID:-}" ]; then
+            message="$message Task ID: \`$TASK_ID\`."
+          fi
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPOSITORY" --body "$message"
+
+      - name: Mark issue as blocked when delegation fails
+        if: steps.validate.outputs.start == 'true' && failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue edit "$ISSUE_NUMBER" \
+            --repo "$REPOSITORY" \
+            --remove-label "$WORKING_LABEL" \
+            --add-label "$BLOCKED_LABEL"
+          gh issue comment "$ISSUE_NUMBER" \
+            --repo "$REPOSITORY" \
+            --body "Automatic delegation to Copilot failed. Status moved to \`agent:blocked\`. Open the Agent orchestrator workflow run for details."
+
+  update-from-pr:
+    name: Update linked issue from pull request state
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find issues closed by this pull request
+        id: linked
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          REPOSITORY_NAME: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          issue_numbers="$(gh api graphql \
+            -f query='query($owner:String!, $repo:String!, $number:Int!) {
+              repository(owner:$owner, name:$repo) {
+                pullRequest(number:$number) {
+                  closingIssuesReferences(first:20) {
+                    nodes { number }
+                  }
+                }
+              }
+            }' \
+            -F owner="$OWNER" \
+            -F repo="$REPOSITORY_NAME" \
+            -F number="$PR_NUMBER" \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number')"
+
+          {
+            echo 'numbers<<EOF'
+            echo "$issue_numbers"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Move linked issues to review
+        if: >-
+          github.event.action != 'closed' &&
+          github.event.pull_request.draft == false &&
+          steps.linked.outputs.numbers != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBERS: ${{ steps.linked.outputs.numbers }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r issue_number; do
+            [ -z "$issue_number" ] && continue
+            gh issue edit "$issue_number" \
+              --repo "$REPOSITORY" \
+              --remove-label "$READY_LABEL" \
+              --remove-label "$WORKING_LABEL" \
+              --remove-label "$BLOCKED_LABEL" \
+              --add-label "$REVIEW_LABEL"
+          done <<< "$ISSUE_NUMBERS"
+
+      - name: Clear agent labels after merge
+        if: >-
+          github.event.action == 'closed' &&
+          github.event.pull_request.merged == true &&
+          steps.linked.outputs.numbers != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBERS: ${{ steps.linked.outputs.numbers }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r issue_number; do
+            [ -z "$issue_number" ] && continue
+            gh issue edit "$issue_number" \
+              --repo "$REPOSITORY" \
+              --remove-label "$READY_LABEL" \
+              --remove-label "$WORKING_LABEL" \
+              --remove-label "$REVIEW_LABEL" \
+              --remove-label "$BLOCKED_LABEL"
+          done <<< "$ISSUE_NUMBERS"
+
+      - name: Mark linked issues blocked when PR closes without merge
+        if: >-
+          github.event.action == 'closed' &&
+          github.event.pull_request.merged == false &&
+          steps.linked.outputs.numbers != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBERS: ${{ steps.linked.outputs.numbers }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r issue_number; do
+            [ -z "$issue_number" ] && continue
+            gh issue edit "$issue_number" \
+              --repo "$REPOSITORY" \
+              --remove-label "$READY_LABEL" \
+              --remove-label "$WORKING_LABEL" \
+              --remove-label "$REVIEW_LABEL" \
+              --add-label "$BLOCKED_LABEL"
+          done <<< "$ISSUE_NUMBERS"
+
+  cleanup-closed-issue:
+    name: Clear workflow labels from closed issue
+    if: github.event_name == 'issues' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove agent workflow labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          labels="$(gh issue view "$ISSUE_NUMBER" --repo "$REPOSITORY" --json labels --jq '.labels[].name')"
+          for label in "$READY_LABEL" "$WORKING_LABEL" "$REVIEW_LABEL" "$BLOCKED_LABEL"; do
+            if grep -Fxq "$label" <<< "$labels"; then
+              gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY" --remove-label "$label"
+            fi
+          done
