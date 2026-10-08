@@ -185,8 +185,14 @@ jobs:
           }
 
           issues="$(gh issue list --repo "$REPOSITORY" --state all --limit 1000 \
-            --search 'label:agent:working,agent:review,agent:blocked' \
-            --json number,state,labels)"
+            --json number,state,labels \
+            | jq --arg working "$WORKING_LABEL" \
+                 --arg review "$REVIEW_LABEL" \
+                 --arg blocked "$BLOCKED_LABEL" \
+                 '[.[] | select((.labels | map(.name)) as $names | \
+                   ($names | index($working)) != null or \
+                   ($names | index($review)) != null or \
+                   ($names | index($blocked)) != null)]')"
 
           jq -c '.[]' <<< "$issues" | while read -r issue; do
             number="$(jq -r '.number' <<< "$issue")"
@@ -199,8 +205,9 @@ jobs:
             fi
 
             prs="$(gh pr list --repo "$REPOSITORY" --state all --limit 1000 \
-              --json number,state,isDraft,mergedAt,body,url \
-              --jq --arg n "$number" '[.[] | select((.body // "") | test("(?im)^(close[sd]?|fix(e[sd])?|resolve[sd]?)\\s+#" + ($n|tostring) + "\\b"))]')"
+              --json number,state,isDraft,mergedAt,url,closingIssuesReferences \
+              | jq --argjson issue_number "$number" \
+                  '[.[] | select(any(.closingIssuesReferences[]?; .number == $issue_number))]')"
 
             count="$(jq 'length' <<< "$prs")"
             if [ "$count" -eq 0 ]; then
