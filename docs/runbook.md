@@ -130,11 +130,13 @@ dotnet run --project IntelligentTradingSimulator.App -- \
 
 This captures human-readable console output, not a machine-readable export.
 
-## Build and test
+## Verify local setup
 
-The tests use in-memory databases and do not require a running SQL Server or Yahoo Finance access:
+From the repository root, restore, build, and test the solution using the SDK configured in `global.json`. The tests use in-memory databases and do not require a running SQL Server or Yahoo Finance access:
 
 ```bash
+dotnet restore IntelligentTradingSimulator.sln
+dotnet build IntelligentTradingSimulator.sln --configuration Release --no-restore
 dotnet test IntelligentTradingSimulator.sln --configuration Release --no-build --verbosity normal
 ```
 
