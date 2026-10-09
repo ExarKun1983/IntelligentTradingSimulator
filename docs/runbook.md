@@ -71,7 +71,7 @@ Each strategy supports these settings:
 | `Week52HighScoreWeight` | Non-negative maximum score contribution for the 52-week-high factor. |
 | `UseQualityFilter` | Enable the quality filter. |
 
-The loader validates strategy settings at startup. Missing settings use the defaults in `StrategyConfiguration`; invalid or missing active strategy sections stop startup with a configuration error.
+The loader validates strategy settings at startup. Strategy comparisons accept 1 through 100 configured strategies; larger sets stop startup with a configuration error. Missing settings use the defaults in `StrategyConfiguration`; invalid or missing active strategy sections stop startup with a configuration error.
 
 ## Run the application
 
