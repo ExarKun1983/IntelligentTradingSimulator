@@ -1,4 +1,4 @@
-name: Agent orchestrator v5.2.4
+name: Agent orchestrator v5.2.5
 
 on:
   workflow_dispatch:
@@ -23,6 +23,10 @@ permissions:
   issues: write
   pull-requests: write
 
+concurrency:
+  group: agent-orchestrator-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref || github.event.issue.number || github.ref }}
+  cancel-in-progress: false
+
 env:
   READY_LABEL: agent:ready
   WORKING_LABEL: agent:working
@@ -31,6 +35,9 @@ env:
   BLOCKED_LABEL: agent:blocked
   BASE_BRANCH: master
   COPILOT_REVIEWER: copilot-pull-request-reviewer[bot]
+  MAX_FIX_ROUNDS: 3
+  REVIEW_WAIT_SECONDS: 900
+  POLL_SECONDS: 30
 
 jobs:
   bootstrap:
@@ -102,7 +109,6 @@ jobs:
         run: |
           set -euo pipefail
           resolve_issue() {
-            # Usage: resolve_issue <pr-number> <head-branch>
             # Order: PR body marker -> branch name -> Issue comment -> single active Issue.
             local pr="$1" branch="$2" body issue open_json candidate comments active
             body="$(gh pr view "$pr" --repo "$REPO" --json body --jq '.body // ""')"
@@ -116,18 +122,14 @@ jobs:
                   '.[] | select(any(.labels[]?.name; . == $w or . == $a or . == $r or . == $b)) | .number' <<< "$open_json"); do
                 comments="$(gh issue view "$candidate" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
                 if printf '%s\n' "$comments" | grep -Eq "agent-orchestrator:pr=${pr}([^0-9]|$)|Mapped automatically to PR #${pr}([^0-9]|$)"; then
-                  issue="$candidate"
-                  break
+                  issue="$candidate"; break
                 fi
               done
             fi
             if [ -z "$issue" ]; then
               active="$(jq -r --arg w "$WORKING_LABEL" --arg a "$AI_REVIEW_LABEL" --arg r "$REVIEW_LABEL" \
                   '[.[] | select(any(.labels[]?.name; . == $w or . == $a or . == $r)) | .number] | if length == 1 then .[0] else empty end' <<< "$open_json")"
-              if [ -n "$active" ]; then
-                echo "Mapped PR #$pr to the only active Issue #$active" >&2
-                issue="$active"
-              fi
+              if [ -n "$active" ]; then echo "Mapped PR #$pr to the only active Issue #$active" >&2; issue="$active"; fi
             fi
             if [ -n "$issue" ]; then
               if ! printf '%s\n' "$body" | grep -Fq "agent-orchestrator:issue=$issue"; then
@@ -142,7 +144,6 @@ jobs:
           }
 
           set_state() {
-            # Usage: set_state <issue> <label-to-add or empty>
             local issue="$1" target="$2" labels label
             labels="$(gh issue view "$issue" --repo "$REPO" --json labels --jq '.labels[]?.name // empty')"
             for label in "$READY_LABEL" "$WORKING_LABEL" "$AI_REVIEW_LABEL" "$REVIEW_LABEL" "$BLOCKED_LABEL"; do
@@ -155,36 +156,83 @@ jobs:
             fi
           }
 
+          copilot_reviewed() {
+            local reviews
+            reviews="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$1/reviews")"
+            jq -e --arg sha "$2" 'any(.[]?; (.user.login | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha)' <<< "$reviews" >/dev/null
+          }
+
           request_copilot_review() {
-            # Usage: request_copilot_review <pr> <sha>. Returns 0 if requested or already done.
-            local pr="$1" sha="$2" reviews requested
-            reviews="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/reviews")"
-            jq -e 'type == "array"' <<< "$reviews" >/dev/null || { echo "Invalid reviews JSON" >&2; return 1; }
-            if jq -e --arg sha "$sha" 'any(.[]; (.user.login | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha)' <<< "$reviews" >/dev/null; then
-              echo "Copilot already reviewed $sha"
-              return 0
-            fi
+            local pr="$1" sha="$2" requested
+            if copilot_reviewed "$pr" "$sha"; then echo "Copilot already reviewed $sha"; return 0; fi
             requested="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/requested_reviewers")"
             if jq -e 'any(.users[]?; .login | startswith("copilot-pull-request-reviewer"))' <<< "$requested" >/dev/null; then
-              echo "Copilot review already pending"
-              return 0
+              echo "Copilot review already pending"; return 0
             fi
             gh api --silent --method POST -H 'Accept: application/vnd.github+json' \
               "repos/$REPO/pulls/$pr/requested_reviewers" -f "reviewers[]=$COPILOT_REVIEWER"
             echo "Copilot review requested for PR #$pr"
           }
+
+          wait_for_review() {
+            # 0 = review for sha exists, 1 = timeout, 2 = PR head moved on (newer commit will be handled by its own CI run)
+            local pr="$1" sha="$2" deadline head
+            deadline=$(( $(date +%s) + REVIEW_WAIT_SECONDS ))
+            while :; do
+              if copilot_reviewed "$pr" "$sha"; then echo "Copilot review for $sha is available"; return 0; fi
+              head="$(gh pr view "$pr" --repo "$REPO" --json headRefOid --jq '.headRefOid')"
+              if [ "$head" != "$sha" ]; then echo "PR head moved to $head; leaving it to the next CI run"; return 2; fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then echo "Copilot review did not arrive in time"; return 1; fi
+              sleep "$POLL_SECONDS"
+            done
+          }
+
+          process_review() {
+            # Decide after Copilot reviewed the current head: hand findings to the coding agent, or promote to human review.
+            local pr="$1" issue="$2" sha="$3" threads open_threads count findings marker existing rounds
+            threads="$(gh api graphql \
+              -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body path line author{login}}}}}}}}' \
+              -F owner="${REPO%%/*}" -F repo="${REPO#*/}" -F number="$pr")"
+            open_threads='[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved == false) | select(any(.comments.nodes[]?; .author.login | startswith("copilot-pull-request-reviewer")))]'
+            count="$(jq "$open_threads | length" <<< "$threads")"
+            if [ "$count" -eq 0 ]; then
+              echo "No unresolved Copilot findings; CI is green -> human review"
+              gh pr ready "$pr" --repo "$REPO" >/dev/null 2>&1 || true
+              set_state "$issue" "$REVIEW_LABEL"
+              return 0
+            fi
+            existing="$(gh pr view "$pr" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
+            marker="<!-- agent-orchestrator:handoff-sha=$sha -->"
+            if printf '%s\n' "$existing" | grep -Fq "$marker"; then
+              echo "Findings for $sha already handed off"; set_state "$issue" "$WORKING_LABEL"; return 0
+            fi
+            rounds="$(printf '%s\n' "$existing" | grep -c 'agent-orchestrator:handoff-sha=' || true)"
+            if [ "$rounds" -ge "$MAX_FIX_ROUNDS" ]; then
+              gh pr comment "$pr" --repo "$REPO" --body "Agent orchestrator stopped after $rounds automatic fix rounds. $count Copilot finding(s) remain unresolved and need a human decision." >/dev/null
+              set_state "$issue" "$BLOCKED_LABEL"
+              return 0
+            fi
+            findings="$(jq -r "$open_threads | map(.comments.nodes[0] | \"- \(.path // \"general\"):\(.line // \"\") \(.body)\") | join(\"\n\")" <<< "$threads")"
+            gh pr comment "$pr" --repo "$REPO" --body "$(printf '%s\n\n%s\n\n%s' \
+              '@copilot Please address all unresolved Copilot code review findings below on this PR branch. Update tests and documentation as needed, run all tests, push the fix, and resolve the addressed threads. Do not merge.' \
+              "$findings" "$marker")" >/dev/null
+            echo "Handed off $count finding(s) to Copilot (round $((rounds + 1)) of $MAX_FIX_ROUNDS)"
+            set_state "$issue" "$WORKING_LABEL"
+          }
           issue="$(resolve_issue "$PR" "$BRANCH")"
           if [ -z "$issue" ]; then echo "Could not map PR #$PR to an Issue" >&2; exit 1; fi
           echo "PR #$PR mapped to Issue #$issue"
 
-  request-ai-review:
+  review-after-ci:
+    # After green CI: request Copilot review, wait for it in this job, then hand off findings or promote.
     if: >-
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success' &&
       startsWith(github.event.workflow_run.head_branch, 'copilot/')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - name: Request Copilot review for current SHA
+      - name: Request review, wait, process
         env:
           GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
           REPO: ${{ github.repository }}
@@ -193,7 +241,6 @@ jobs:
         run: |
           set -euo pipefail
           resolve_issue() {
-            # Usage: resolve_issue <pr-number> <head-branch>
             # Order: PR body marker -> branch name -> Issue comment -> single active Issue.
             local pr="$1" branch="$2" body issue open_json candidate comments active
             body="$(gh pr view "$pr" --repo "$REPO" --json body --jq '.body // ""')"
@@ -207,18 +254,14 @@ jobs:
                   '.[] | select(any(.labels[]?.name; . == $w or . == $a or . == $r or . == $b)) | .number' <<< "$open_json"); do
                 comments="$(gh issue view "$candidate" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
                 if printf '%s\n' "$comments" | grep -Eq "agent-orchestrator:pr=${pr}([^0-9]|$)|Mapped automatically to PR #${pr}([^0-9]|$)"; then
-                  issue="$candidate"
-                  break
+                  issue="$candidate"; break
                 fi
               done
             fi
             if [ -z "$issue" ]; then
               active="$(jq -r --arg w "$WORKING_LABEL" --arg a "$AI_REVIEW_LABEL" --arg r "$REVIEW_LABEL" \
                   '[.[] | select(any(.labels[]?.name; . == $w or . == $a or . == $r)) | .number] | if length == 1 then .[0] else empty end' <<< "$open_json")"
-              if [ -n "$active" ]; then
-                echo "Mapped PR #$pr to the only active Issue #$active" >&2
-                issue="$active"
-              fi
+              if [ -n "$active" ]; then echo "Mapped PR #$pr to the only active Issue #$active" >&2; issue="$active"; fi
             fi
             if [ -n "$issue" ]; then
               if ! printf '%s\n' "$body" | grep -Fq "agent-orchestrator:issue=$issue"; then
@@ -233,7 +276,6 @@ jobs:
           }
 
           set_state() {
-            # Usage: set_state <issue> <label-to-add or empty>
             local issue="$1" target="$2" labels label
             labels="$(gh issue view "$issue" --repo "$REPO" --json labels --jq '.labels[]?.name // empty')"
             for label in "$READY_LABEL" "$WORKING_LABEL" "$AI_REVIEW_LABEL" "$REVIEW_LABEL" "$BLOCKED_LABEL"; do
@@ -246,23 +288,68 @@ jobs:
             fi
           }
 
+          copilot_reviewed() {
+            local reviews
+            reviews="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$1/reviews")"
+            jq -e --arg sha "$2" 'any(.[]?; (.user.login | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha)' <<< "$reviews" >/dev/null
+          }
+
           request_copilot_review() {
-            # Usage: request_copilot_review <pr> <sha>. Returns 0 if requested or already done.
-            local pr="$1" sha="$2" reviews requested
-            reviews="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/reviews")"
-            jq -e 'type == "array"' <<< "$reviews" >/dev/null || { echo "Invalid reviews JSON" >&2; return 1; }
-            if jq -e --arg sha "$sha" 'any(.[]; (.user.login | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha)' <<< "$reviews" >/dev/null; then
-              echo "Copilot already reviewed $sha"
-              return 0
-            fi
+            local pr="$1" sha="$2" requested
+            if copilot_reviewed "$pr" "$sha"; then echo "Copilot already reviewed $sha"; return 0; fi
             requested="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/requested_reviewers")"
             if jq -e 'any(.users[]?; .login | startswith("copilot-pull-request-reviewer"))' <<< "$requested" >/dev/null; then
-              echo "Copilot review already pending"
-              return 0
+              echo "Copilot review already pending"; return 0
             fi
             gh api --silent --method POST -H 'Accept: application/vnd.github+json' \
               "repos/$REPO/pulls/$pr/requested_reviewers" -f "reviewers[]=$COPILOT_REVIEWER"
             echo "Copilot review requested for PR #$pr"
+          }
+
+          wait_for_review() {
+            # 0 = review for sha exists, 1 = timeout, 2 = PR head moved on (newer commit will be handled by its own CI run)
+            local pr="$1" sha="$2" deadline head
+            deadline=$(( $(date +%s) + REVIEW_WAIT_SECONDS ))
+            while :; do
+              if copilot_reviewed "$pr" "$sha"; then echo "Copilot review for $sha is available"; return 0; fi
+              head="$(gh pr view "$pr" --repo "$REPO" --json headRefOid --jq '.headRefOid')"
+              if [ "$head" != "$sha" ]; then echo "PR head moved to $head; leaving it to the next CI run"; return 2; fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then echo "Copilot review did not arrive in time"; return 1; fi
+              sleep "$POLL_SECONDS"
+            done
+          }
+
+          process_review() {
+            # Decide after Copilot reviewed the current head: hand findings to the coding agent, or promote to human review.
+            local pr="$1" issue="$2" sha="$3" threads open_threads count findings marker existing rounds
+            threads="$(gh api graphql \
+              -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body path line author{login}}}}}}}}' \
+              -F owner="${REPO%%/*}" -F repo="${REPO#*/}" -F number="$pr")"
+            open_threads='[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved == false) | select(any(.comments.nodes[]?; .author.login | startswith("copilot-pull-request-reviewer")))]'
+            count="$(jq "$open_threads | length" <<< "$threads")"
+            if [ "$count" -eq 0 ]; then
+              echo "No unresolved Copilot findings; CI is green -> human review"
+              gh pr ready "$pr" --repo "$REPO" >/dev/null 2>&1 || true
+              set_state "$issue" "$REVIEW_LABEL"
+              return 0
+            fi
+            existing="$(gh pr view "$pr" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
+            marker="<!-- agent-orchestrator:handoff-sha=$sha -->"
+            if printf '%s\n' "$existing" | grep -Fq "$marker"; then
+              echo "Findings for $sha already handed off"; set_state "$issue" "$WORKING_LABEL"; return 0
+            fi
+            rounds="$(printf '%s\n' "$existing" | grep -c 'agent-orchestrator:handoff-sha=' || true)"
+            if [ "$rounds" -ge "$MAX_FIX_ROUNDS" ]; then
+              gh pr comment "$pr" --repo "$REPO" --body "Agent orchestrator stopped after $rounds automatic fix rounds. $count Copilot finding(s) remain unresolved and need a human decision." >/dev/null
+              set_state "$issue" "$BLOCKED_LABEL"
+              return 0
+            fi
+            findings="$(jq -r "$open_threads | map(.comments.nodes[0] | \"- \(.path // \"general\"):\(.line // \"\") \(.body)\") | join(\"\n\")" <<< "$threads")"
+            gh pr comment "$pr" --repo "$REPO" --body "$(printf '%s\n\n%s\n\n%s' \
+              '@copilot Please address all unresolved Copilot code review findings below on this PR branch. Update tests and documentation as needed, run all tests, push the fix, and resolve the addressed threads. Do not merge.' \
+              "$findings" "$marker")" >/dev/null
+            echo "Handed off $count finding(s) to Copilot (round $((rounds + 1)) of $MAX_FIX_ROUNDS)"
+            set_state "$issue" "$WORKING_LABEL"
           }
           pr="$(gh pr list --repo "$REPO" --state open --head "$BRANCH" --limit 1 --json number --jq '.[0].number // empty')"
           if [ -z "$pr" ]; then echo "No open PR for $BRANCH"; exit 0; fi
@@ -271,14 +358,17 @@ jobs:
           echo "PR #$pr -> Issue #$issue, SHA $SHA"
           request_copilot_review "$pr" "$SHA"
           set_state "$issue" "$AI_REVIEW_LABEL"
+          rc=0; wait_for_review "$pr" "$SHA" || rc=$?
+          if [ "$rc" -eq 0 ]; then process_review "$pr" "$issue" "$SHA"; fi
 
   process-ai-review:
+    # Backup path, in case GitHub delivers the Copilot review event to Actions.
     if: >-
       github.event_name == 'pull_request_review' &&
       startsWith(github.event.review.user.login, 'copilot-pull-request-reviewer')
     runs-on: ubuntu-latest
     steps:
-      - name: Hand off findings or promote to human review
+      - name: Process Copilot review
         env:
           GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
           REPO: ${{ github.repository }}
@@ -289,7 +379,6 @@ jobs:
         run: |
           set -euo pipefail
           resolve_issue() {
-            # Usage: resolve_issue <pr-number> <head-branch>
             # Order: PR body marker -> branch name -> Issue comment -> single active Issue.
             local pr="$1" branch="$2" body issue open_json candidate comments active
             body="$(gh pr view "$pr" --repo "$REPO" --json body --jq '.body // ""')"
@@ -303,18 +392,14 @@ jobs:
                   '.[] | select(any(.labels[]?.name; . == $w or . == $a or . == $r or . == $b)) | .number' <<< "$open_json"); do
                 comments="$(gh issue view "$candidate" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
                 if printf '%s\n' "$comments" | grep -Eq "agent-orchestrator:pr=${pr}([^0-9]|$)|Mapped automatically to PR #${pr}([^0-9]|$)"; then
-                  issue="$candidate"
-                  break
+                  issue="$candidate"; break
                 fi
               done
             fi
             if [ -z "$issue" ]; then
               active="$(jq -r --arg w "$WORKING_LABEL" --arg a "$AI_REVIEW_LABEL" --arg r "$REVIEW_LABEL" \
                   '[.[] | select(any(.labels[]?.name; . == $w or . == $a or . == $r)) | .number] | if length == 1 then .[0] else empty end' <<< "$open_json")"
-              if [ -n "$active" ]; then
-                echo "Mapped PR #$pr to the only active Issue #$active" >&2
-                issue="$active"
-              fi
+              if [ -n "$active" ]; then echo "Mapped PR #$pr to the only active Issue #$active" >&2; issue="$active"; fi
             fi
             if [ -n "$issue" ]; then
               if ! printf '%s\n' "$body" | grep -Fq "agent-orchestrator:issue=$issue"; then
@@ -329,7 +414,6 @@ jobs:
           }
 
           set_state() {
-            # Usage: set_state <issue> <label-to-add or empty>
             local issue="$1" target="$2" labels label
             labels="$(gh issue view "$issue" --repo "$REPO" --json labels --jq '.labels[]?.name // empty')"
             for label in "$READY_LABEL" "$WORKING_LABEL" "$AI_REVIEW_LABEL" "$REVIEW_LABEL" "$BLOCKED_LABEL"; do
@@ -342,46 +426,73 @@ jobs:
             fi
           }
 
+          copilot_reviewed() {
+            local reviews
+            reviews="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$1/reviews")"
+            jq -e --arg sha "$2" 'any(.[]?; (.user.login | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha)' <<< "$reviews" >/dev/null
+          }
+
           request_copilot_review() {
-            # Usage: request_copilot_review <pr> <sha>. Returns 0 if requested or already done.
-            local pr="$1" sha="$2" reviews requested
-            reviews="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/reviews")"
-            jq -e 'type == "array"' <<< "$reviews" >/dev/null || { echo "Invalid reviews JSON" >&2; return 1; }
-            if jq -e --arg sha "$sha" 'any(.[]; (.user.login | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha)' <<< "$reviews" >/dev/null; then
-              echo "Copilot already reviewed $sha"
-              return 0
-            fi
+            local pr="$1" sha="$2" requested
+            if copilot_reviewed "$pr" "$sha"; then echo "Copilot already reviewed $sha"; return 0; fi
             requested="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/requested_reviewers")"
             if jq -e 'any(.users[]?; .login | startswith("copilot-pull-request-reviewer"))' <<< "$requested" >/dev/null; then
-              echo "Copilot review already pending"
-              return 0
+              echo "Copilot review already pending"; return 0
             fi
             gh api --silent --method POST -H 'Accept: application/vnd.github+json' \
               "repos/$REPO/pulls/$pr/requested_reviewers" -f "reviewers[]=$COPILOT_REVIEWER"
             echo "Copilot review requested for PR #$pr"
           }
+
+          wait_for_review() {
+            # 0 = review for sha exists, 1 = timeout, 2 = PR head moved on (newer commit will be handled by its own CI run)
+            local pr="$1" sha="$2" deadline head
+            deadline=$(( $(date +%s) + REVIEW_WAIT_SECONDS ))
+            while :; do
+              if copilot_reviewed "$pr" "$sha"; then echo "Copilot review for $sha is available"; return 0; fi
+              head="$(gh pr view "$pr" --repo "$REPO" --json headRefOid --jq '.headRefOid')"
+              if [ "$head" != "$sha" ]; then echo "PR head moved to $head; leaving it to the next CI run"; return 2; fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then echo "Copilot review did not arrive in time"; return 1; fi
+              sleep "$POLL_SECONDS"
+            done
+          }
+
+          process_review() {
+            # Decide after Copilot reviewed the current head: hand findings to the coding agent, or promote to human review.
+            local pr="$1" issue="$2" sha="$3" threads open_threads count findings marker existing rounds
+            threads="$(gh api graphql \
+              -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body path line author{login}}}}}}}}' \
+              -F owner="${REPO%%/*}" -F repo="${REPO#*/}" -F number="$pr")"
+            open_threads='[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved == false) | select(any(.comments.nodes[]?; .author.login | startswith("copilot-pull-request-reviewer")))]'
+            count="$(jq "$open_threads | length" <<< "$threads")"
+            if [ "$count" -eq 0 ]; then
+              echo "No unresolved Copilot findings; CI is green -> human review"
+              gh pr ready "$pr" --repo "$REPO" >/dev/null 2>&1 || true
+              set_state "$issue" "$REVIEW_LABEL"
+              return 0
+            fi
+            existing="$(gh pr view "$pr" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
+            marker="<!-- agent-orchestrator:handoff-sha=$sha -->"
+            if printf '%s\n' "$existing" | grep -Fq "$marker"; then
+              echo "Findings for $sha already handed off"; set_state "$issue" "$WORKING_LABEL"; return 0
+            fi
+            rounds="$(printf '%s\n' "$existing" | grep -c 'agent-orchestrator:handoff-sha=' || true)"
+            if [ "$rounds" -ge "$MAX_FIX_ROUNDS" ]; then
+              gh pr comment "$pr" --repo "$REPO" --body "Agent orchestrator stopped after $rounds automatic fix rounds. $count Copilot finding(s) remain unresolved and need a human decision." >/dev/null
+              set_state "$issue" "$BLOCKED_LABEL"
+              return 0
+            fi
+            findings="$(jq -r "$open_threads | map(.comments.nodes[0] | \"- \(.path // \"general\"):\(.line // \"\") \(.body)\") | join(\"\n\")" <<< "$threads")"
+            gh pr comment "$pr" --repo "$REPO" --body "$(printf '%s\n\n%s\n\n%s' \
+              '@copilot Please address all unresolved Copilot code review findings below on this PR branch. Update tests and documentation as needed, run all tests, push the fix, and resolve the addressed threads. Do not merge.' \
+              "$findings" "$marker")" >/dev/null
+            echo "Handed off $count finding(s) to Copilot (round $((rounds + 1)) of $MAX_FIX_ROUNDS)"
+            set_state "$issue" "$WORKING_LABEL"
+          }
           if [ "$REVIEW_SHA" != "$HEAD_SHA" ]; then echo "Stale review; ignoring"; exit 0; fi
           issue="$(resolve_issue "$PR" "$BRANCH")"
           if [ -z "$issue" ]; then echo "No Issue mapping for PR #$PR" >&2; exit 1; fi
-          threads="$(gh api graphql \
-            -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body path line author{login}}}}}}}}' \
-            -F owner="${REPO%%/*}" -F repo="${REPO#*/}" -F number="$PR")"
-          open_threads='[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved == false) | select(any(.comments.nodes[]?; .author.login | startswith("copilot-pull-request-reviewer")))]'
-          count="$(jq "$open_threads | length" <<< "$threads")"
-          if [ "$count" -gt 0 ]; then
-            findings="$(jq -r "$open_threads | map(.comments.nodes[0] | \"- \(.path // \"general\"):\(.line // \"\") \(.body)\") | join(\"\n\")" <<< "$threads")"
-            marker="<!-- agent-orchestrator:handoff-sha=$HEAD_SHA -->"
-            existing="$(gh pr view "$PR" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
-            if ! printf '%s\n' "$existing" | grep -Fq "$marker"; then
-              gh pr comment "$PR" --repo "$REPO" --body "$(printf '%s\n\n%s\n\n%s' \
-                '@copilot Please address all unresolved Copilot code review findings below on this PR branch. Update tests and documentation as needed, run all tests, push the fix, and resolve the addressed threads. Do not merge.' \
-                "$findings" "$marker")"
-            fi
-            set_state "$issue" "$WORKING_LABEL"
-          else
-            gh pr ready "$PR" --repo "$REPO" >/dev/null 2>&1 || true
-            set_state "$issue" "$REVIEW_LABEL"
-          fi
+          process_review "$PR" "$issue" "$HEAD_SHA"
 
   human-feedback:
     if: >-
@@ -401,7 +512,6 @@ jobs:
         run: |
           set -euo pipefail
           resolve_issue() {
-            # Usage: resolve_issue <pr-number> <head-branch>
             # Order: PR body marker -> branch name -> Issue comment -> single active Issue.
             local pr="$1" branch="$2" body issue open_json candidate comments active
             body="$(gh pr view "$pr" --repo "$REPO" --json body --jq '.body // ""')"
@@ -415,18 +525,14 @@ jobs:
                   '.[] | select(any(.labels[]?.name; . == $w or . == $a or . == $r or . == $b)) | .number' <<< "$open_json"); do
                 comments="$(gh issue view "$candidate" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
                 if printf '%s\n' "$comments" | grep -Eq "agent-orchestrator:pr=${pr}([^0-9]|$)|Mapped automatically to PR #${pr}([^0-9]|$)"; then
-                  issue="$candidate"
-                  break
+                  issue="$candidate"; break
                 fi
               done
             fi
             if [ -z "$issue" ]; then
               active="$(jq -r --arg w "$WORKING_LABEL" --arg a "$AI_REVIEW_LABEL" --arg r "$REVIEW_LABEL" \
                   '[.[] | select(any(.labels[]?.name; . == $w or . == $a or . == $r)) | .number] | if length == 1 then .[0] else empty end' <<< "$open_json")"
-              if [ -n "$active" ]; then
-                echo "Mapped PR #$pr to the only active Issue #$active" >&2
-                issue="$active"
-              fi
+              if [ -n "$active" ]; then echo "Mapped PR #$pr to the only active Issue #$active" >&2; issue="$active"; fi
             fi
             if [ -n "$issue" ]; then
               if ! printf '%s\n' "$body" | grep -Fq "agent-orchestrator:issue=$issue"; then
@@ -441,7 +547,6 @@ jobs:
           }
 
           set_state() {
-            # Usage: set_state <issue> <label-to-add or empty>
             local issue="$1" target="$2" labels label
             labels="$(gh issue view "$issue" --repo "$REPO" --json labels --jq '.labels[]?.name // empty')"
             for label in "$READY_LABEL" "$WORKING_LABEL" "$AI_REVIEW_LABEL" "$REVIEW_LABEL" "$BLOCKED_LABEL"; do
@@ -454,23 +559,68 @@ jobs:
             fi
           }
 
+          copilot_reviewed() {
+            local reviews
+            reviews="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$1/reviews")"
+            jq -e --arg sha "$2" 'any(.[]?; (.user.login | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha)' <<< "$reviews" >/dev/null
+          }
+
           request_copilot_review() {
-            # Usage: request_copilot_review <pr> <sha>. Returns 0 if requested or already done.
-            local pr="$1" sha="$2" reviews requested
-            reviews="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/reviews")"
-            jq -e 'type == "array"' <<< "$reviews" >/dev/null || { echo "Invalid reviews JSON" >&2; return 1; }
-            if jq -e --arg sha "$sha" 'any(.[]; (.user.login | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha)' <<< "$reviews" >/dev/null; then
-              echo "Copilot already reviewed $sha"
-              return 0
-            fi
+            local pr="$1" sha="$2" requested
+            if copilot_reviewed "$pr" "$sha"; then echo "Copilot already reviewed $sha"; return 0; fi
             requested="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/requested_reviewers")"
             if jq -e 'any(.users[]?; .login | startswith("copilot-pull-request-reviewer"))' <<< "$requested" >/dev/null; then
-              echo "Copilot review already pending"
-              return 0
+              echo "Copilot review already pending"; return 0
             fi
             gh api --silent --method POST -H 'Accept: application/vnd.github+json' \
               "repos/$REPO/pulls/$pr/requested_reviewers" -f "reviewers[]=$COPILOT_REVIEWER"
             echo "Copilot review requested for PR #$pr"
+          }
+
+          wait_for_review() {
+            # 0 = review for sha exists, 1 = timeout, 2 = PR head moved on (newer commit will be handled by its own CI run)
+            local pr="$1" sha="$2" deadline head
+            deadline=$(( $(date +%s) + REVIEW_WAIT_SECONDS ))
+            while :; do
+              if copilot_reviewed "$pr" "$sha"; then echo "Copilot review for $sha is available"; return 0; fi
+              head="$(gh pr view "$pr" --repo "$REPO" --json headRefOid --jq '.headRefOid')"
+              if [ "$head" != "$sha" ]; then echo "PR head moved to $head; leaving it to the next CI run"; return 2; fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then echo "Copilot review did not arrive in time"; return 1; fi
+              sleep "$POLL_SECONDS"
+            done
+          }
+
+          process_review() {
+            # Decide after Copilot reviewed the current head: hand findings to the coding agent, or promote to human review.
+            local pr="$1" issue="$2" sha="$3" threads open_threads count findings marker existing rounds
+            threads="$(gh api graphql \
+              -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body path line author{login}}}}}}}}' \
+              -F owner="${REPO%%/*}" -F repo="${REPO#*/}" -F number="$pr")"
+            open_threads='[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved == false) | select(any(.comments.nodes[]?; .author.login | startswith("copilot-pull-request-reviewer")))]'
+            count="$(jq "$open_threads | length" <<< "$threads")"
+            if [ "$count" -eq 0 ]; then
+              echo "No unresolved Copilot findings; CI is green -> human review"
+              gh pr ready "$pr" --repo "$REPO" >/dev/null 2>&1 || true
+              set_state "$issue" "$REVIEW_LABEL"
+              return 0
+            fi
+            existing="$(gh pr view "$pr" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
+            marker="<!-- agent-orchestrator:handoff-sha=$sha -->"
+            if printf '%s\n' "$existing" | grep -Fq "$marker"; then
+              echo "Findings for $sha already handed off"; set_state "$issue" "$WORKING_LABEL"; return 0
+            fi
+            rounds="$(printf '%s\n' "$existing" | grep -c 'agent-orchestrator:handoff-sha=' || true)"
+            if [ "$rounds" -ge "$MAX_FIX_ROUNDS" ]; then
+              gh pr comment "$pr" --repo "$REPO" --body "Agent orchestrator stopped after $rounds automatic fix rounds. $count Copilot finding(s) remain unresolved and need a human decision." >/dev/null
+              set_state "$issue" "$BLOCKED_LABEL"
+              return 0
+            fi
+            findings="$(jq -r "$open_threads | map(.comments.nodes[0] | \"- \(.path // \"general\"):\(.line // \"\") \(.body)\") | join(\"\n\")" <<< "$threads")"
+            gh pr comment "$pr" --repo "$REPO" --body "$(printf '%s\n\n%s\n\n%s' \
+              '@copilot Please address all unresolved Copilot code review findings below on this PR branch. Update tests and documentation as needed, run all tests, push the fix, and resolve the addressed threads. Do not merge.' \
+              "$findings" "$marker")" >/dev/null
+            echo "Handed off $count finding(s) to Copilot (round $((rounds + 1)) of $MAX_FIX_ROUNDS)"
+            set_state "$issue" "$WORKING_LABEL"
           }
           issue="$(resolve_issue "$PR" "$BRANCH")"
           if [ -z "$issue" ]; then echo "No Issue mapping; nothing to do"; exit 0; fi
@@ -499,7 +649,6 @@ jobs:
         run: |
           set -euo pipefail
           resolve_issue() {
-            # Usage: resolve_issue <pr-number> <head-branch>
             # Order: PR body marker -> branch name -> Issue comment -> single active Issue.
             local pr="$1" branch="$2" body issue open_json candidate comments active
             body="$(gh pr view "$pr" --repo "$REPO" --json body --jq '.body // ""')"
@@ -513,18 +662,14 @@ jobs:
                   '.[] | select(any(.labels[]?.name; . == $w or . == $a or . == $r or . == $b)) | .number' <<< "$open_json"); do
                 comments="$(gh issue view "$candidate" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
                 if printf '%s\n' "$comments" | grep -Eq "agent-orchestrator:pr=${pr}([^0-9]|$)|Mapped automatically to PR #${pr}([^0-9]|$)"; then
-                  issue="$candidate"
-                  break
+                  issue="$candidate"; break
                 fi
               done
             fi
             if [ -z "$issue" ]; then
               active="$(jq -r --arg w "$WORKING_LABEL" --arg a "$AI_REVIEW_LABEL" --arg r "$REVIEW_LABEL" \
                   '[.[] | select(any(.labels[]?.name; . == $w or . == $a or . == $r)) | .number] | if length == 1 then .[0] else empty end' <<< "$open_json")"
-              if [ -n "$active" ]; then
-                echo "Mapped PR #$pr to the only active Issue #$active" >&2
-                issue="$active"
-              fi
+              if [ -n "$active" ]; then echo "Mapped PR #$pr to the only active Issue #$active" >&2; issue="$active"; fi
             fi
             if [ -n "$issue" ]; then
               if ! printf '%s\n' "$body" | grep -Fq "agent-orchestrator:issue=$issue"; then
@@ -539,7 +684,6 @@ jobs:
           }
 
           set_state() {
-            # Usage: set_state <issue> <label-to-add or empty>
             local issue="$1" target="$2" labels label
             labels="$(gh issue view "$issue" --repo "$REPO" --json labels --jq '.labels[]?.name // empty')"
             for label in "$READY_LABEL" "$WORKING_LABEL" "$AI_REVIEW_LABEL" "$REVIEW_LABEL" "$BLOCKED_LABEL"; do
@@ -552,23 +696,68 @@ jobs:
             fi
           }
 
+          copilot_reviewed() {
+            local reviews
+            reviews="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$1/reviews")"
+            jq -e --arg sha "$2" 'any(.[]?; (.user.login | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha)' <<< "$reviews" >/dev/null
+          }
+
           request_copilot_review() {
-            # Usage: request_copilot_review <pr> <sha>. Returns 0 if requested or already done.
-            local pr="$1" sha="$2" reviews requested
-            reviews="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/reviews")"
-            jq -e 'type == "array"' <<< "$reviews" >/dev/null || { echo "Invalid reviews JSON" >&2; return 1; }
-            if jq -e --arg sha "$sha" 'any(.[]; (.user.login | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha)' <<< "$reviews" >/dev/null; then
-              echo "Copilot already reviewed $sha"
-              return 0
-            fi
+            local pr="$1" sha="$2" requested
+            if copilot_reviewed "$pr" "$sha"; then echo "Copilot already reviewed $sha"; return 0; fi
             requested="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/requested_reviewers")"
             if jq -e 'any(.users[]?; .login | startswith("copilot-pull-request-reviewer"))' <<< "$requested" >/dev/null; then
-              echo "Copilot review already pending"
-              return 0
+              echo "Copilot review already pending"; return 0
             fi
             gh api --silent --method POST -H 'Accept: application/vnd.github+json' \
               "repos/$REPO/pulls/$pr/requested_reviewers" -f "reviewers[]=$COPILOT_REVIEWER"
             echo "Copilot review requested for PR #$pr"
+          }
+
+          wait_for_review() {
+            # 0 = review for sha exists, 1 = timeout, 2 = PR head moved on (newer commit will be handled by its own CI run)
+            local pr="$1" sha="$2" deadline head
+            deadline=$(( $(date +%s) + REVIEW_WAIT_SECONDS ))
+            while :; do
+              if copilot_reviewed "$pr" "$sha"; then echo "Copilot review for $sha is available"; return 0; fi
+              head="$(gh pr view "$pr" --repo "$REPO" --json headRefOid --jq '.headRefOid')"
+              if [ "$head" != "$sha" ]; then echo "PR head moved to $head; leaving it to the next CI run"; return 2; fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then echo "Copilot review did not arrive in time"; return 1; fi
+              sleep "$POLL_SECONDS"
+            done
+          }
+
+          process_review() {
+            # Decide after Copilot reviewed the current head: hand findings to the coding agent, or promote to human review.
+            local pr="$1" issue="$2" sha="$3" threads open_threads count findings marker existing rounds
+            threads="$(gh api graphql \
+              -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body path line author{login}}}}}}}}' \
+              -F owner="${REPO%%/*}" -F repo="${REPO#*/}" -F number="$pr")"
+            open_threads='[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved == false) | select(any(.comments.nodes[]?; .author.login | startswith("copilot-pull-request-reviewer")))]'
+            count="$(jq "$open_threads | length" <<< "$threads")"
+            if [ "$count" -eq 0 ]; then
+              echo "No unresolved Copilot findings; CI is green -> human review"
+              gh pr ready "$pr" --repo "$REPO" >/dev/null 2>&1 || true
+              set_state "$issue" "$REVIEW_LABEL"
+              return 0
+            fi
+            existing="$(gh pr view "$pr" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
+            marker="<!-- agent-orchestrator:handoff-sha=$sha -->"
+            if printf '%s\n' "$existing" | grep -Fq "$marker"; then
+              echo "Findings for $sha already handed off"; set_state "$issue" "$WORKING_LABEL"; return 0
+            fi
+            rounds="$(printf '%s\n' "$existing" | grep -c 'agent-orchestrator:handoff-sha=' || true)"
+            if [ "$rounds" -ge "$MAX_FIX_ROUNDS" ]; then
+              gh pr comment "$pr" --repo "$REPO" --body "Agent orchestrator stopped after $rounds automatic fix rounds. $count Copilot finding(s) remain unresolved and need a human decision." >/dev/null
+              set_state "$issue" "$BLOCKED_LABEL"
+              return 0
+            fi
+            findings="$(jq -r "$open_threads | map(.comments.nodes[0] | \"- \(.path // \"general\"):\(.line // \"\") \(.body)\") | join(\"\n\")" <<< "$threads")"
+            gh pr comment "$pr" --repo "$REPO" --body "$(printf '%s\n\n%s\n\n%s' \
+              '@copilot Please address all unresolved Copilot code review findings below on this PR branch. Update tests and documentation as needed, run all tests, push the fix, and resolve the addressed threads. Do not merge.' \
+              "$findings" "$marker")" >/dev/null
+            echo "Handed off $count finding(s) to Copilot (round $((rounds + 1)) of $MAX_FIX_ROUNDS)"
+            set_state "$issue" "$WORKING_LABEL"
           }
           issue="$(resolve_issue "$PR" "$BRANCH")"
           if [ -z "$issue" ]; then echo "No Issue mapping; nothing to do"; exit 0; fi
@@ -580,17 +769,18 @@ jobs:
           fi
 
   reconcile-existing-pr:
+    # Runs on push of this file or manual "Run workflow": repairs a PR stuck in agent:ai-review.
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - name: Request review for the single open Copilot PR
+      - name: Repair the single open Copilot PR
         env:
           GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           resolve_issue() {
-            # Usage: resolve_issue <pr-number> <head-branch>
             # Order: PR body marker -> branch name -> Issue comment -> single active Issue.
             local pr="$1" branch="$2" body issue open_json candidate comments active
             body="$(gh pr view "$pr" --repo "$REPO" --json body --jq '.body // ""')"
@@ -604,18 +794,14 @@ jobs:
                   '.[] | select(any(.labels[]?.name; . == $w or . == $a or . == $r or . == $b)) | .number' <<< "$open_json"); do
                 comments="$(gh issue view "$candidate" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
                 if printf '%s\n' "$comments" | grep -Eq "agent-orchestrator:pr=${pr}([^0-9]|$)|Mapped automatically to PR #${pr}([^0-9]|$)"; then
-                  issue="$candidate"
-                  break
+                  issue="$candidate"; break
                 fi
               done
             fi
             if [ -z "$issue" ]; then
               active="$(jq -r --arg w "$WORKING_LABEL" --arg a "$AI_REVIEW_LABEL" --arg r "$REVIEW_LABEL" \
                   '[.[] | select(any(.labels[]?.name; . == $w or . == $a or . == $r)) | .number] | if length == 1 then .[0] else empty end' <<< "$open_json")"
-              if [ -n "$active" ]; then
-                echo "Mapped PR #$pr to the only active Issue #$active" >&2
-                issue="$active"
-              fi
+              if [ -n "$active" ]; then echo "Mapped PR #$pr to the only active Issue #$active" >&2; issue="$active"; fi
             fi
             if [ -n "$issue" ]; then
               if ! printf '%s\n' "$body" | grep -Fq "agent-orchestrator:issue=$issue"; then
@@ -630,7 +816,6 @@ jobs:
           }
 
           set_state() {
-            # Usage: set_state <issue> <label-to-add or empty>
             local issue="$1" target="$2" labels label
             labels="$(gh issue view "$issue" --repo "$REPO" --json labels --jq '.labels[]?.name // empty')"
             for label in "$READY_LABEL" "$WORKING_LABEL" "$AI_REVIEW_LABEL" "$REVIEW_LABEL" "$BLOCKED_LABEL"; do
@@ -643,23 +828,68 @@ jobs:
             fi
           }
 
+          copilot_reviewed() {
+            local reviews
+            reviews="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$1/reviews")"
+            jq -e --arg sha "$2" 'any(.[]?; (.user.login | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha)' <<< "$reviews" >/dev/null
+          }
+
           request_copilot_review() {
-            # Usage: request_copilot_review <pr> <sha>. Returns 0 if requested or already done.
-            local pr="$1" sha="$2" reviews requested
-            reviews="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/reviews")"
-            jq -e 'type == "array"' <<< "$reviews" >/dev/null || { echo "Invalid reviews JSON" >&2; return 1; }
-            if jq -e --arg sha "$sha" 'any(.[]; (.user.login | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha)' <<< "$reviews" >/dev/null; then
-              echo "Copilot already reviewed $sha"
-              return 0
-            fi
+            local pr="$1" sha="$2" requested
+            if copilot_reviewed "$pr" "$sha"; then echo "Copilot already reviewed $sha"; return 0; fi
             requested="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/requested_reviewers")"
             if jq -e 'any(.users[]?; .login | startswith("copilot-pull-request-reviewer"))' <<< "$requested" >/dev/null; then
-              echo "Copilot review already pending"
-              return 0
+              echo "Copilot review already pending"; return 0
             fi
             gh api --silent --method POST -H 'Accept: application/vnd.github+json' \
               "repos/$REPO/pulls/$pr/requested_reviewers" -f "reviewers[]=$COPILOT_REVIEWER"
             echo "Copilot review requested for PR #$pr"
+          }
+
+          wait_for_review() {
+            # 0 = review for sha exists, 1 = timeout, 2 = PR head moved on (newer commit will be handled by its own CI run)
+            local pr="$1" sha="$2" deadline head
+            deadline=$(( $(date +%s) + REVIEW_WAIT_SECONDS ))
+            while :; do
+              if copilot_reviewed "$pr" "$sha"; then echo "Copilot review for $sha is available"; return 0; fi
+              head="$(gh pr view "$pr" --repo "$REPO" --json headRefOid --jq '.headRefOid')"
+              if [ "$head" != "$sha" ]; then echo "PR head moved to $head; leaving it to the next CI run"; return 2; fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then echo "Copilot review did not arrive in time"; return 1; fi
+              sleep "$POLL_SECONDS"
+            done
+          }
+
+          process_review() {
+            # Decide after Copilot reviewed the current head: hand findings to the coding agent, or promote to human review.
+            local pr="$1" issue="$2" sha="$3" threads open_threads count findings marker existing rounds
+            threads="$(gh api graphql \
+              -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body path line author{login}}}}}}}}' \
+              -F owner="${REPO%%/*}" -F repo="${REPO#*/}" -F number="$pr")"
+            open_threads='[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved == false) | select(any(.comments.nodes[]?; .author.login | startswith("copilot-pull-request-reviewer")))]'
+            count="$(jq "$open_threads | length" <<< "$threads")"
+            if [ "$count" -eq 0 ]; then
+              echo "No unresolved Copilot findings; CI is green -> human review"
+              gh pr ready "$pr" --repo "$REPO" >/dev/null 2>&1 || true
+              set_state "$issue" "$REVIEW_LABEL"
+              return 0
+            fi
+            existing="$(gh pr view "$pr" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
+            marker="<!-- agent-orchestrator:handoff-sha=$sha -->"
+            if printf '%s\n' "$existing" | grep -Fq "$marker"; then
+              echo "Findings for $sha already handed off"; set_state "$issue" "$WORKING_LABEL"; return 0
+            fi
+            rounds="$(printf '%s\n' "$existing" | grep -c 'agent-orchestrator:handoff-sha=' || true)"
+            if [ "$rounds" -ge "$MAX_FIX_ROUNDS" ]; then
+              gh pr comment "$pr" --repo "$REPO" --body "Agent orchestrator stopped after $rounds automatic fix rounds. $count Copilot finding(s) remain unresolved and need a human decision." >/dev/null
+              set_state "$issue" "$BLOCKED_LABEL"
+              return 0
+            fi
+            findings="$(jq -r "$open_threads | map(.comments.nodes[0] | \"- \(.path // \"general\"):\(.line // \"\") \(.body)\") | join(\"\n\")" <<< "$threads")"
+            gh pr comment "$pr" --repo "$REPO" --body "$(printf '%s\n\n%s\n\n%s' \
+              '@copilot Please address all unresolved Copilot code review findings below on this PR branch. Update tests and documentation as needed, run all tests, push the fix, and resolve the addressed threads. Do not merge.' \
+              "$findings" "$marker")" >/dev/null
+            echo "Handed off $count finding(s) to Copilot (round $((rounds + 1)) of $MAX_FIX_ROUNDS)"
+            set_state "$issue" "$WORKING_LABEL"
           }
           prs="$(gh pr list --repo "$REPO" --state open --limit 100 --json number,headRefName,headRefOid)"
           copilot_prs="$(jq -c '[.[] | select(.headRefName | startswith("copilot/"))]' <<< "$prs")"
@@ -669,8 +899,11 @@ jobs:
           sha="$(jq -r '.[0].headRefOid' <<< "$copilot_prs")"
           issue="$(resolve_issue "$pr" "$branch")"
           if [ -z "$issue" ]; then echo "No Issue mapping for PR #$pr; no-op"; exit 0; fi
+          echo "PR #$pr -> Issue #$issue, SHA $sha"
           request_copilot_review "$pr" "$sha"
           set_state "$issue" "$AI_REVIEW_LABEL"
+          rc=0; wait_for_review "$pr" "$sha" || rc=$?
+          if [ "$rc" -eq 0 ]; then process_review "$pr" "$issue" "$sha"; fi
 
   cleanup-closed-issue:
     if: github.event_name == 'issues' && github.event.action == 'closed'
