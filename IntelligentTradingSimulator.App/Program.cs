@@ -160,6 +160,34 @@ var runVariantsArg = Array.Find(
 
 if (runVariantsArg is not null)
 {
+    var comparisonSortArg = Array.Find(
+        args,
+        a => a.StartsWith("--comparison-sort-by=", StringComparison.OrdinalIgnoreCase));
+    StrategyComparisonSortMetric? comparisonSortBy = null;
+    if (comparisonSortArg is not null)
+    {
+        var metricName = comparisonSortArg["--comparison-sort-by=".Length..];
+        if (!Enum.TryParse<StrategyComparisonSortMetric>(metricName, true, out var metric) ||
+            !Enum.IsDefined(metric) || !Array.Exists(Enum.GetNames<StrategyComparisonSortMetric>(),
+                name => name.Equals(metricName, StringComparison.OrdinalIgnoreCase)))
+        {
+            Console.WriteLine("Error: --comparison-sort-by must be ReturnPercent, MaxDrawdownPercent, TradesCount, AlphaPercent, or RelativeReturnPercent.");
+            return;
+        }
+        comparisonSortBy = metric;
+    }
+
+    var comparisonBenchmarkArg = Array.Find(
+        args,
+        a => a.StartsWith("--comparison-benchmark=", StringComparison.OrdinalIgnoreCase));
+    var comparisonBenchmark = comparisonBenchmarkArg?["--comparison-benchmark=".Length..].Trim();
+    if (comparisonSortBy is StrategyComparisonSortMetric.AlphaPercent or StrategyComparisonSortMetric.RelativeReturnPercent &&
+        string.IsNullOrWhiteSpace(comparisonBenchmark))
+    {
+        Console.WriteLine("Error: benchmark sorting requires --comparison-benchmark=<symbol>.");
+        return;
+    }
+
     var variantsStartDateArg = Array.Find(
         args,
         a => a.StartsWith("--backtest-start=", StringComparison.OrdinalIgnoreCase));
@@ -240,7 +268,7 @@ if (runVariantsArg is not null)
         summaries.Add(variantSummary);
     }
 
-    var comparisonReport = comparisonService.Build(summaries);
+    var comparisonReport = comparisonService.Build(summaries, comparisonSortBy, comparisonBenchmark);
     variantsReporter.PrintVariantComparisonReport(comparisonReport);
 
     return;

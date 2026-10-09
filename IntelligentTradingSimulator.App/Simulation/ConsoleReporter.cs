@@ -216,6 +216,16 @@ public sealed class ConsoleReporter
         Console.WriteLine();
         Console.WriteLine("===== STRATEGY COMPARISON REPORT =====");
 
+        if (report.SortBy.HasValue)
+        {
+            var direction = report.SortBy == StrategyComparisonSortMetric.MaxDrawdownPercent
+                ? "lowest first" : "highest first";
+            Console.WriteLine($"Sorted by: {report.SortBy} ({direction})");
+            if (report.BenchmarkSymbol is not null)
+                Console.WriteLine($"Benchmark: {report.BenchmarkSymbol}");
+            Console.WriteLine($"Top-ranked strategy: {report.TopStrategy?.StrategyId ?? "N/A"}");
+        }
+
         if (report.Entries.Count == 0)
         {
             Console.WriteLine("No variant results to compare.");
@@ -226,6 +236,8 @@ public sealed class ConsoleReporter
         {
             Console.WriteLine();
             Console.WriteLine($"Strategy:       {entry.StrategyId}");
+            if (report.SortBy.HasValue)
+                Console.WriteLine($"  Rank:         {entry.Rank?.ToString() ?? "N/A"}");
 
             if (!entry.IsSuccess)
             {
