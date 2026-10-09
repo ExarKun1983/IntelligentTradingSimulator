@@ -1,4 +1,4 @@
-name: Agent orchestrator
+name: Agent orchestrator v5.2.2
 
 on:
   workflow_dispatch:
@@ -66,16 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           active="$(gh issue list --repo "$REPO" --state open --limit 100 --json number,labels)"
-          count="$(
-            jq --argjson issue "$ISSUE" --arg w "$WORKING_LABEL" --arg a "$AI_REVIEW_LABEL" --arg r "$REVIEW_LABEL" '
-              [.[] | select(.number != $issue) | select(
-                (.labels | map(.name)) as $labels |
-                (($labels | index($w)) != null) or
-                (($labels | index($a)) != null) or
-                (($labels | index($r)) != null)
-              )] | length
-            ' <<< "$active"
-          )"
+          count="$(jq --argjson issue "$ISSUE" --arg w "$WORKING_LABEL" --arg a "$AI_REVIEW_LABEL" --arg r "$REVIEW_LABEL" '[.[] | select(.number != $issue) | select((.labels | map(.name)) as $l | (($l|index($w)) != null) or (($l|index($a)) != null) or (($l|index($r)) != null)] | length' <<< "$active")"
           test "$count" -eq 0 || { echo "Another Issue is active" >&2; exit 1; }
           gh issue edit "$ISSUE" --repo "$REPO" --remove-label "$READY_LABEL" --add-label "$WORKING_LABEL"
           payload="$(jq -n --arg n "$ISSUE" --arg t "$TITLE" --arg b "$BODY" --arg base "$BASE_BRANCH" '{prompt:("Implement GitHub Issue #"+$n+": "+$t+"\n\n"+$b+"\n\nRun restore, build, and all tests. Create a pull request against "+$base+". Include `Closes #"+$n+"` in the PR description. Do not merge."),base_ref:$base,create_pull_request:true}')"
@@ -107,20 +98,16 @@ jobs:
           fi
           body="$(gh pr view "$PR" --repo "$REPO" --json body --jq '.body // ""')"
           marker="<!-- agent-orchestrator:issue=$issue -->"
-          if ! grep -Fq "$marker" <<< "$body"; then
-            gh pr edit "$PR" --repo "$REPO" --body "$(printf '%s\n\n%s\nCloses #%s\n' "$body" "$marker" "$issue")"
-          fi
+          if ! grep -Fq "$marker" <<< "$body"; then gh pr edit "$PR" --repo "$REPO" --body "$(printf '%s\n\n%s\nCloses #%s\n' "$body" "$marker" "$issue")"; fi
           comments="$(gh issue view "$issue" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
-          if ! grep -Eq "agent-orchestrator:pr=${PR}([^0-9]|$)" <<< "$comments"; then
-            gh issue comment "$issue" --repo "$REPO" --body "<!-- agent-orchestrator:pr=$PR -->
-          Mapped automatically to PR #$PR."
-          fi
+          if ! grep -Eq "agent-orchestrator:pr=${PR}([^0-9]|$)" <<< "$comments"; then gh issue comment "$issue" --repo "$REPO" --body "<!-- agent-orchestrator:pr=$PR -->
+          Mapped automatically to PR #$PR."; fi
 
   request-ai-review:
     if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
-      - name: Request or re-request review for current SHA
+      - name: Request Copilot review for current SHA
         env:
           GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
           REPO: ${{ github.repository }}
@@ -130,74 +117,56 @@ jobs:
           set -euo pipefail
 
           api_get_json() {
-            local endpoint="$1" output
-            output="$(mktemp)"
-            if ! gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2026-03-10" "$endpoint" > "$output"; then
-              echo "GET failed: $endpoint" >&2; cat "$output" >&2 || true; rm -f "$output"; return 1
+            local endpoint="$1" out
+            out="$(mktemp)"
+            if ! gh api -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "$endpoint" > "$out"; then
+              echo "GET failed: $endpoint" >&2; cat "$out" >&2 || true; rm -f "$out"; return 1
             fi
-            if [ ! -s "$output" ] || ! jq -e . "$output" >/dev/null 2>&1; then
-              echo "Empty or invalid JSON: $endpoint" >&2; cat "$output" >&2 || true; rm -f "$output"; return 1
+            if [ ! -s "$out" ] || ! jq -e . "$out" >/dev/null 2>&1; then
+              echo "Empty or invalid JSON: $endpoint" >&2; cat "$out" >&2 || true; rm -f "$out"; return 1
             fi
-            cat "$output"; rm -f "$output"
+            cat "$out"; rm -f "$out"
           }
 
-          request_reviewer() {
-            local endpoint="$1" action="$2" response
-            response="$(mktemp)"
-            if ! gh api --silent --method POST -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2026-03-10" "$endpoint" -f "reviewers[]=$COPILOT_REVIEWER" > "$response" 2>&1; then
-              echo "$action failed: $endpoint" >&2; cat "$response" >&2 || true; rm -f "$response"; return 1
+          request_copilot() {
+            local endpoint="$1" out
+            out="$(mktemp)"
+            if ! gh api --silent --method POST -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "$endpoint" -f "reviewers[]=$COPILOT_REVIEWER" > "$out" 2>&1; then
+              echo "Copilot review request failed: $endpoint" >&2; cat "$out" >&2 || true; rm -f "$out"; return 1
             fi
-            echo "$action completed"; rm -f "$response"
+            rm -f "$out"
+            echo "Copilot review requested"
           }
 
           [[ "$BRANCH" == copilot/* ]] || { echo "Not a Copilot branch: $BRANCH"; exit 0; }
           pr_json="$(gh pr list --repo "$REPO" --state open --head "$BRANCH" --limit 1 --json number,body)"
-          [ -n "$pr_json" ] && jq -e 'type == "array"' <<< "$pr_json" >/dev/null || { echo "Invalid PR JSON" >&2; exit 1; }
+          jq -e 'type == "array"' <<< "$pr_json" >/dev/null || { echo "Invalid PR JSON" >&2; exit 1; }
           pr="$(jq -c '.[0] // empty' <<< "$pr_json")"
           [ -n "$pr" ] || { echo "No open PR"; exit 0; }
           number="$(jq -er '.number' <<< "$pr")"
           body="$(jq -r '.body // ""' <<< "$pr")"
           issue="$(sed -nE 's/.*agent-orchestrator:issue=([0-9]+).*/\1/p' <<< "$body" | head -1)"
           [ -n "$issue" ] || issue="$(sed -nE 's#^copilot/issue-([0-9]+)-.*#\1#p' <<< "$BRANCH")"
-          if [ -z "$issue" ]; then
-            issue_list="$(gh issue list --repo "$REPO" --state open --limit 1000 --json number)"
-            jq -e 'type == "array"' <<< "$issue_list" >/dev/null || { echo "Invalid Issue list JSON" >&2; exit 1; }
-            while IFS= read -r candidate; do
-              comments_json="$(gh issue view "$candidate" --repo "$REPO" --json comments)"
-              jq -e '.comments | type == "array"' <<< "$comments_json" >/dev/null 2>&1 || continue
-              comments="$(jq -r '.comments[]?.body // empty' <<< "$comments_json")"
-              if grep -Eq "agent-orchestrator:pr=${number}([^0-9]|$)|Mapped automatically to PR #${number}([^0-9]|$)" <<< "$comments"; then issue="$candidate"; break; fi
-            done < <(jq -r '.[].number' <<< "$issue_list")
-          fi
           [ -n "$issue" ] || { echo "No Issue mapping for PR #$number" >&2; exit 1; }
           echo "Resolved PR #$number to Issue #$issue at SHA $SHA"
 
-          echo "::group::Existing Copilot reviews"
           reviews_json="$(api_get_json "repos/$REPO/pulls/$number/reviews")"
-          printf '%s\n' "$reviews_json"
-          reviews="$(jq -r '.[]? | select(.user.login == "copilot-pull-request-reviewer[bot]" or .user.login == "copilot-pull-request-reviewer") | [.id,.commit_id] | @tsv' <<< "$reviews_json")"
-          echo "::endgroup::"
+          reviews="$(jq -r '.[]? | select(.user.login=="copilot-pull-request-reviewer[bot]" or .user.login=="copilot-pull-request-reviewer") | [.id,.commit_id] | @tsv' <<< "$reviews_json")"
           if awk -v sha="$SHA" '$2 == sha {found=1} END {exit !found}' <<< "$reviews"; then echo "Current SHA already reviewed"; exit 0; fi
 
-          echo "::group::Requested reviewers"
           requested_json="$(api_get_json "repos/$REPO/pulls/$number/requested_reviewers")"
-          printf '%s\n' "$requested_json"
           pending="$(jq -r '.users[]?.login // empty' <<< "$requested_json")"
-          echo "::endgroup::"
           if grep -Eq '^copilot-pull-request-reviewer(\[bot\])?$' <<< "$pending"; then
-            echo "Review already pending"
-          elif [ -n "$reviews" ]; then
-            request_reviewer "repos/$REPO/pulls/$number/requested_reviewers/rerequest" "Copilot re-review request"
+            echo "Copilot review already pending"
           else
-            request_reviewer "repos/$REPO/pulls/$number/requested_reviewers" "Copilot review request"
+            # v5.2.2: always use the normal request endpoint.
+            request_copilot "repos/$REPO/pulls/$number/requested_reviewers"
           fi
 
           labels_json="$(gh issue view "$issue" --repo "$REPO" --json labels)"
           jq -e '.labels | type == "array"' <<< "$labels_json" >/dev/null || { echo "Invalid labels JSON" >&2; exit 1; }
           labels="$(jq -r '.labels[]?.name // empty' <<< "$labels_json")"
-          for label in "$READY_LABEL" "$WORKING_LABEL" "$REVIEW_LABEL" "$BLOCKED_LABEL"; do
-            if grep -Fxq "$label" <<< "$labels"; then gh issue edit "$issue" --repo "$REPO" --remove-label "$label"; fi
-          done
+          for label in "$READY_LABEL" "$WORKING_LABEL" "$REVIEW_LABEL" "$BLOCKED_LABEL"; do if grep -Fxq "$label" <<< "$labels"; then gh issue edit "$issue" --repo "$REPO" --remove-label "$label"; fi; done
           if ! grep -Fxq "$AI_REVIEW_LABEL" <<< "$labels"; then gh issue edit "$issue" --repo "$REPO" --add-label "$AI_REVIEW_LABEL"; fi
 
   process-ai-review:
@@ -310,10 +279,13 @@ jobs:
           jq -e . <<< "$reviews" >/dev/null || { echo "Invalid reviews JSON" >&2; exit 1; }
           current="$(jq -r --arg sha "$sha" '[.[]? | select((.user.login=="copilot-pull-request-reviewer[bot]" or .user.login=="copilot-pull-request-reviewer") and .commit_id==$sha)] | length' <<< "$reviews")"
           if [ "$current" -eq 0 ]; then
-            if jq -e '[.[]? | select(.user.login=="copilot-pull-request-reviewer[bot]" or .user.login=="copilot-pull-request-reviewer")] | length > 0' <<< "$reviews" >/dev/null; then
-              gh api --silent --method POST "repos/$REPO/pulls/$number/requested_reviewers/rerequest" -f "reviewers[]=$COPILOT_REVIEWER"
+            requested="$(gh api -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$REPO/pulls/$number/requested_reviewers")"
+            jq -e . <<< "$requested" >/dev/null || { echo "Invalid requested-reviewers JSON" >&2; exit 1; }
+            pending="$(jq -r '.users[]?.login // empty' <<< "$requested")"
+            if grep -Eq '^copilot-pull-request-reviewer(\[bot\])?$' <<< "$pending"; then
+              echo "Copilot review already pending"
             else
-              gh api --silent --method POST "repos/$REPO/pulls/$number/requested_reviewers" -f "reviewers[]=$COPILOT_REVIEWER"
+              gh api --silent --method POST -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$REPO/pulls/$number/requested_reviewers" -f "reviewers[]=$COPILOT_REVIEWER"
             fi
           fi
 
