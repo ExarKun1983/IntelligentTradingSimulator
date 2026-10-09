@@ -160,6 +160,51 @@ public sealed class StrategyConfigurationLoaderTests
     }
 
     [Theory]
+    [InlineData(1)]
+    [InlineData(100)]
+    public void Load_AcceptsMaxPositionsWithinAllowedRange(int maxPositions)
+    {
+        const string activeStrategyId = "momentum-v1";
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = activeStrategyId,
+                        [$"Strategies:{activeStrategyId}:MaxPositions"] = maxPositions.ToString()
+                    })
+                .Build();
+
+        var result = StrategyConfigurationLoader.Load(configuration);
+
+        Assert.Equal(maxPositions, result.MaxPositions);
+    }
+
+    [Fact]
+    public void Load_Throws_WhenMaxPositionsExceedsMaximum()
+    {
+        const string activeStrategyId = "momentum-v1";
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ActiveStrategy"] = activeStrategyId,
+                        [$"Strategies:{activeStrategyId}:MaxPositions"] = "101"
+                    })
+                .Build();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => StrategyConfigurationLoader.Load(configuration));
+
+        Assert.Equal(
+            "Configuration value 'Strategies:momentum-v1:MaxPositions' must be less than or equal to 100.",
+            exception.Message);
+    }
+
+    [Theory]
     [InlineData("0")]
     [InlineData("-0.01")]
     [InlineData("100.01")]

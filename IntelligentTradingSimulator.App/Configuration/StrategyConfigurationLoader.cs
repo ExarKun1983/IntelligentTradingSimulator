@@ -7,6 +7,8 @@ namespace IntelligentTradingSimulator.App.Configuration;
 
 public static class StrategyConfigurationLoader
 {
+    private const int MaximumMaxPositions = 100;
+
     public static IReadOnlyList<StrategyConfiguration> LoadAll(IConfiguration configuration)
     {
         var strategiesSection = configuration.GetSection("Strategies");
@@ -96,6 +98,12 @@ public static class StrategyConfigurationLoader
         {
             throw new InvalidOperationException(
                 $"Configuration value 'Strategies:{id}:MaxPositions' must be greater than zero.");
+        }
+
+        if (config.MaxPositions > MaximumMaxPositions)
+        {
+            throw new InvalidOperationException(
+                $"Configuration value 'Strategies:{id}:MaxPositions' must be less than or equal to {MaximumMaxPositions}.");
         }
 
         if (config.MaxPositionWeight <= 0m || config.MaxPositionWeight > 100m)
