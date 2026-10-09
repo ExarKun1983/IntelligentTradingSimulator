@@ -109,10 +109,13 @@ The variants command loads every entry under `Strategies` and prints a compariso
 Add `--comparison-sort-by=ReturnPercent` to rank the comparison by total return.
 Supported metrics are `ReturnPercent`, `MaxDrawdownPercent`, `TradesCount`,
 `AlphaPercent`, and `RelativeReturnPercent` (case-insensitive).
+Use a metric name, not a numeric enum value; empty or unknown names are rejected.
 Max drawdown sorts lowest first; all other metrics sort highest first.
 Trade-count ranking measures activity, not profitability.
 For alpha or relative return, also specify `--comparison-benchmark=SPY` (or another
 configured benchmark symbol). Only that benchmark's existing metrics are used.
+The benchmark symbol is trimmed; omitting it or providing only whitespace is
+rejected when sorting by alpha or relative return.
 
 The report shows the selected metric, each eligible strategy's sequential rank,
 and the top-ranked strategy. Equal values are ordered by strategy ID using ordinal
