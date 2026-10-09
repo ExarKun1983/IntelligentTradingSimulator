@@ -1,4 +1,4 @@
-name: Agent orchestrator v5.2.2
+name: Agent orchestrator v5.2.3
 
 on:
   workflow_dispatch:
@@ -66,7 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           active="$(gh issue list --repo "$REPO" --state open --limit 100 --json number,labels)"
-          count="$(jq --argjson issue "$ISSUE" --arg w "$WORKING_LABEL" --arg a "$AI_REVIEW_LABEL" --arg r "$REVIEW_LABEL" '[.[] | select(.number != $issue) | select((.labels | map(.name)) as $l | (($l|index($w)) != null) or (($l|index($a)) != null) or (($l|index($r)) != null)] | length' <<< "$active")"
+          count="$(jq --argjson issue "$ISSUE" --arg w "$WORKING_LABEL" --arg a "$AI_REVIEW_LABEL" --arg r "$REVIEW_LABEL" '[.[] | select(.number != $issue) | select(any(.labels[]?.name; . == $w or . == $a or . == $r))] | length' <<< "$active")"
           test "$count" -eq 0 || { echo "Another Issue is active" >&2; exit 1; }
           gh issue edit "$ISSUE" --repo "$REPO" --remove-label "$READY_LABEL" --add-label "$WORKING_LABEL"
           payload="$(jq -n --arg n "$ISSUE" --arg t "$TITLE" --arg b "$BODY" --arg base "$BASE_BRANCH" '{prompt:("Implement GitHub Issue #"+$n+": "+$t+"\n\n"+$b+"\n\nRun restore, build, and all tests. Create a pull request against "+$base+". Include `Closes #"+$n+"` in the PR description. Do not merge."),base_ref:$base,create_pull_request:true}')"
