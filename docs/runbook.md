@@ -73,6 +73,143 @@ Each strategy supports these settings:
 
 The loader validates strategy settings at startup. Missing settings use the defaults in `StrategyConfiguration`; invalid or missing active strategy sections stop startup with a configuration error.
 
+## Strategy experimentation flow
+
+Complete the database/application setup above first. All commands below run from the repository root. Edit the source `IntelligentTradingSimulator.App/appsettings.json`, not its copy under `bin`; `dotnet run` builds and copies the updated configuration. The app reads this JSON file from its output directory, not command-line or environment-variable configuration overrides.
+
+### 1. Define and select a variant
+
+The keys under `Strategies` are the strategy IDs. Keep `ConnectionStrings` unchanged and replace only `ActiveStrategy` and `Strategies` with the following properties in your existing JSON file. This example retains `default` as a baseline and adds `rsi-preferred`, changing only RSI enablement so the comparison isolates that factor:
+
+```json
+"ActiveStrategy": "rsi-preferred",
+"Strategies": {
+  "default": {
+    "MaxPositions": 10,
+    "MaxPositionWeight": 100,
+    "LookbackDays": 90,
+    "UseRsi": false,
+    "RsiPreferredMinimum": 50,
+    "RsiPreferredMaximum": 70,
+    "RsiOverboughtThreshold": 80,
+    "RsiPreferredRangeBonus": 5,
+    "RsiOverboughtPenalty": 5,
+    "UseRelativeStrength": true,
+    "Use52WeekHigh": false,
+    "Week52HighScoreWeight": 5,
+    "UseQualityFilter": false
+  },
+  "rsi-preferred": {
+    "MaxPositions": 10,
+    "MaxPositionWeight": 100,
+    "LookbackDays": 90,
+    "UseRsi": true,
+    "RsiPreferredMinimum": 50,
+    "RsiPreferredMaximum": 70,
+    "RsiOverboughtThreshold": 80,
+    "RsiPreferredRangeBonus": 5,
+    "RsiOverboughtPenalty": 5,
+    "UseRelativeStrength": true,
+    "Use52WeekHigh": false,
+    "Week52HighScoreWeight": 5,
+    "UseQualityFilter": false
+  }
+}
+```
+
+This is a property fragment, not a replacement for the whole file: keep the enclosing braces and the comma after `ConnectionStrings`. To retain the checked-in `conservative` and `aggressive` variants instead, add `rsi-preferred` inside the existing `Strategies` object and change `ActiveStrategy`.
+
+The settings and validation ranges are listed in [Configure a strategy](#configure-a-strategy). Omitted settings use model defaults, not values inherited from `default`. A strategy's ID comes from its section name; no `Id` property is needed. Single backtests and the regular simulation select `ActiveStrategy`; there is no CLI strategy-selection flag.
+
+### 2. Run one backtest
+
+With `ActiveStrategy` set to `rsi-preferred`, run:
+
+```bash
+dotnet run --project IntelligentTradingSimulator.App -- \
+  --run-backtest \
+  --backtest-start=2025-01-01 \
+  --backtest-end=2025-03-31 \
+  --backtest-name=rsi-preferred-Q1-2025
+```
+
+The startup output should identify the selected variant and period:
+
+```text
+Starting backtest: rsi-preferred-Q1-2025
+Strategy:  rsi-preferred
+Period:    2025-01-01 to 2025-03-31
+```
+
+After a successful run, `===== BACKTEST SUMMARY =====` includes `Run: rsi-preferred-Q1-2025 (Id=...)`, `Strategy: rsi-preferred`, capital, profit, return, trades, rebalances, risk, and available benchmark comparisons. Save the actual numeric run ID to reload its summary using `--backtest-run-id` as shown below. An engine-reported failure prints `Backtest failed:` and its error instead; infrastructure errors such as an unavailable database can terminate the single run with an exception.
+
+### 3. Run and compare multiple variants
+
+Use the same explicit dates and a selected sort metric:
+
+```bash
+dotnet run --project IntelligentTradingSimulator.App -- \
+  --run-variants \
+  --backtest-start=2025-01-01 \
+  --backtest-end=2025-03-31 \
+  --comparison-sort-by=ReturnPercent
+```
+
+With the two-entry configuration above, expect `Running 2 strategy variant(s)...`, a summary for each variant, then `===== STRATEGY COMPARISON REPORT =====`. The checked-in configuration instead runs three variants: `default`, `conservative`, and `aggressive`.
+
+`--run-variants` runs every entry under `Strategies`, not just `ActiveStrategy`; there is no CLI subset filter. Keep only the desired entries in your local configuration to limit an experiment, and keep `ActiveStrategy` valid because it is loaded at startup even for a batch. At most 100 definitions are allowed for a batch. Do not combine `--run-backtest` with `--run-variants`: the single-backtest branch takes precedence. `--backtest-name` names a single run only; batch names are generated from the period and strategy ID.
+
+The runner executes variants sequentially and persists separate runs. They share the date range, stock universe, and 100,000 initial capital, while each uses its own strategy settings. Batch history starts far enough back for the longest configured `LookbackDays`. Individual failures remain visible in the comparison rather than becoming successful results.
+
+To rank against the same benchmark, run:
+
+```bash
+dotnet run --project IntelligentTradingSimulator.App -- \
+  --run-variants \
+  --backtest-start=2025-01-01 \
+  --backtest-end=2025-03-31 \
+  --comparison-sort-by=AlphaPercent \
+  --comparison-benchmark=SPY
+```
+
+This starts new backtests; it does not re-sort a saved batch. The benchmark flag selects existing comparison metrics for ranking, not additional benchmark downloads. The application currently reports `SPY`, `QQQ`, and `IWM`; choose one of these for benchmark-relative ranking.
+
+### 4. Interpret and record the comparison
+
+An illustrative excerpt from an alpha-sorted report follows. Values, run IDs, winner, and numeric formatting depend on the actual data and local culture; these are not expected investment returns. The other variant's entry is omitted here for brevity:
+
+```text
+===== STRATEGY COMPARISON REPORT =====
+Sorted by: AlphaPercent (highest first)
+Benchmark: SPY
+Top-ranked strategy: rsi-preferred
+
+Strategy:       rsi-preferred
+  Rank:         1
+  Status:       Completed
+  Start Capital:  100,000.00
+  Final Capital:  108,000.00
+  Return:         8.00%
+  Max Drawdown:   6.00%
+  DD Duration:    10 day(s)
+  Recovery Time:  15 day(s)
+  Trades:         12
+  --- Benchmark ---
+  SPY
+    Benchmark Return: 5.00%
+    Relative Return:  3.00%
+    Alpha:            3.00%
+    Outcome:          Outperform
+```
+
+- **Return** is the strategy's total percentage return, not an annualized return. Compare it alongside **Max Drawdown**, the largest peak-to-trough percentage loss; a higher return can come with worse risk.
+- **DD Duration** is the calendar-day interval from the peak to the trough of the maximum drawdown. **Recovery Time** is the interval from that trough back to the previous peak; `N/A` distinguishes no drawdown from an unrecovered drawdown in the comparison.
+- **Trades** counts activity, not profitability. Ranking by it does not identify the best risk-adjusted strategy.
+- **Benchmark Return** uses the same run period. **Relative Return** is strategy return minus benchmark return in percentage points. **Alpha** currently equals that same difference; it is not a beta-adjusted or risk-adjusted calculation. **Outcome** is `Outperform`, `Underperform`, or `Match`.
+- **Rank** and **Top-ranked strategy** refer only to the chosen metric. See the sorting rules below for direction, tie-breaking, and unranked failures or missing benchmark data. Without a sort flag, no ranks or winner are printed.
+
+For repeatable experiments, save the strategy JSON (without credentials), explicit dates, source revision, run IDs, and console output. Change one factor at a time and compare return, risk, and the same benchmark rather than selecting by return alone. Market data is retrieved from Yahoo Finance, so provider availability or revised history can affect reruns. Historical simulation performance does not guarantee real-world investment outcomes.
+
 ## Run the application
 
 From the repository root, run the standard simulation:
