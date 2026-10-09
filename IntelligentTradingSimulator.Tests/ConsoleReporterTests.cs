@@ -30,6 +30,70 @@ public sealed class ConsoleReporterTests
         return writer.ToString();
     }
 
+    [Theory]
+    [InlineData(StrategyComparisonSortMetric.ReturnPercent, "higher-return", "lowest-drawdown", "highest first")]
+    [InlineData(StrategyComparisonSortMetric.MaxDrawdownPercent, "lowest-drawdown", "higher-return", "lowest first")]
+    public void PrintVariantComparisonReport_ShowsSortedOrderRanksAndTopStrategy(
+        StrategyComparisonSortMetric metric, string first, string second, string direction)
+    {
+        var report = new StrategyComparisonReportService().Build(
+        [
+            new BacktestSummaryReportResult
+            {
+                StrategyId = "lowest-drawdown", IsSuccess = true, ReturnPercent = -5m, MaxDrawdownPercent = 1m
+            },
+            new BacktestSummaryReportResult
+            {
+                StrategyId = "failed", IsSuccess = false, ErrorMessage = "Run failed"
+            },
+            new BacktestSummaryReportResult
+            {
+                StrategyId = "higher-return", IsSuccess = true, ReturnPercent = 10m, MaxDrawdownPercent = 5m
+            }
+        ], metric);
+
+        var output = CaptureOutput(() => CreateReporter().PrintVariantComparisonReport(report));
+
+        Assert.Contains($"Sorted by: {metric} ({direction})", output);
+        Assert.Contains($"Top-ranked strategy: {first}", output);
+        Assert.Contains($"Strategy:       {first}\n  Rank:         1", output.Replace("\r\n", "\n"));
+        Assert.Contains($"Strategy:       {second}\n  Rank:         2", output.Replace("\r\n", "\n"));
+        Assert.Contains("Strategy:       failed\n  Rank:         N/A", output.Replace("\r\n", "\n"));
+        Assert.True(output.IndexOf($"Strategy:       {first}", StringComparison.Ordinal) <
+                    output.IndexOf($"Strategy:       {second}", StringComparison.Ordinal));
+        Assert.True(output.IndexOf($"Strategy:       {second}", StringComparison.Ordinal) <
+                    output.IndexOf("Strategy:       failed", StringComparison.Ordinal));
+        Assert.Contains("Run failed", output);
+    }
+
+    [Fact]
+    public void PrintVariantComparisonReport_BenchmarkSortShowsSymbolAndNoWinnerForMissingMetrics()
+    {
+        var report = new StrategyComparisonReportService().Build(
+            [new BacktestSummaryReportResult { StrategyId = "missing", IsSuccess = true }],
+            StrategyComparisonSortMetric.AlphaPercent, "SPY");
+
+        var output = CaptureOutput(() => CreateReporter().PrintVariantComparisonReport(report));
+
+        Assert.Contains("Benchmark: SPY", output);
+        Assert.Contains("Top-ranked strategy: N/A", output);
+        Assert.Contains("Rank:         N/A", output);
+    }
+
+    [Fact]
+    public void PrintVariantComparisonReport_UnsortedOutputHasNoRankingLabels()
+    {
+        var report = new StrategyComparisonReportService().Build(
+            [new BacktestSummaryReportResult { StrategyId = "original", IsSuccess = true }]);
+
+        var output = CaptureOutput(() => CreateReporter().PrintVariantComparisonReport(report));
+
+        Assert.Contains("Strategy:       original", output);
+        Assert.DoesNotContain("Sorted by:", output);
+        Assert.DoesNotContain("Rank:", output);
+        Assert.DoesNotContain("Top-ranked strategy:", output);
+    }
+
     [Fact]
     public void PrintMarketRanking_IncludesAnalysisDetailsOrMissingValue()
     {

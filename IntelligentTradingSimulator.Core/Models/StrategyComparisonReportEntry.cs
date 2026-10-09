@@ -4,6 +4,8 @@ public sealed class StrategyComparisonReportEntry
 {
     public string StrategyId { get; set; } = string.Empty;
 
+    public int? Rank { get; set; }
+
     public bool IsSuccess { get; set; }
 
     public string? ErrorMessage { get; set; }

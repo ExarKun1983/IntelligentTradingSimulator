@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
 using Xunit;
@@ -187,5 +189,139 @@ public sealed class StrategyComparisonReportServiceTests
         Assert.Equal("first", report.Entries[0].StrategyId);
         Assert.Equal("second", report.Entries[1].StrategyId);
         Assert.Equal("third", report.Entries[2].StrategyId);
+    }
+
+    [Theory]
+    [InlineData(StrategyComparisonSortMetric.ReturnPercent, "high", "middle", "low")]
+    [InlineData(StrategyComparisonSortMetric.MaxDrawdownPercent, "low", "middle", "high")]
+    [InlineData(StrategyComparisonSortMetric.TradesCount, "high", "middle", "low")]
+    public void Build_SortsAndRanksBySelectedMetric(
+        StrategyComparisonSortMetric metric, string first, string second, string third)
+    {
+        var summaries = new[]
+        {
+            BuildSuccess("middle", returnPercent: 0m, maxDrawdownPercent: 5m, tradesCount: 3),
+            BuildSuccess("low", returnPercent: -10m, maxDrawdownPercent: 0m, tradesCount: 0),
+            BuildSuccess("high", returnPercent: 20m, maxDrawdownPercent: 10m, tradesCount: 7)
+        };
+
+        var report = CreateService().Build(summaries, metric);
+
+        Assert.Equal(new[] { first, second, third }, report.Entries.Select(entry => entry.StrategyId));
+        Assert.Equal(new int?[] { 1, 2, 3 }, report.Entries.Select(entry => entry.Rank));
+        Assert.Equal(metric, report.SortBy);
+        Assert.Same(report.Entries[0], report.TopStrategy);
+        Assert.Equal(new[] { "middle", "low", "high" }, summaries.Select(summary => summary.StrategyId));
+        foreach (var entry in report.Entries)
+        {
+            var original = summaries.Single(summary => summary.StrategyId == entry.StrategyId);
+            Assert.Equal(original.ReturnPercent, entry.ReturnPercent);
+            Assert.Equal(original.MaxDrawdownPercent, entry.MaxDrawdownPercent);
+            Assert.Equal(original.TradesCount, entry.TradesCount);
+            Assert.Equal(original.FinalCapital, entry.FinalCapital);
+        }
+    }
+
+    [Theory]
+    [InlineData(StrategyComparisonSortMetric.ReturnPercent)]
+    [InlineData(StrategyComparisonSortMetric.MaxDrawdownPercent)]
+    [InlineData(StrategyComparisonSortMetric.TradesCount)]
+    public void Build_TiesUseOrdinalStrategyIdRegardlessOfInputOrder(StrategyComparisonSortMetric metric)
+    {
+        var summaries = new[] { BuildSuccess("beta"), BuildSuccess("alpha"), BuildSuccess("Alpha") };
+
+        var report = CreateService().Build(summaries, metric);
+        var reversed = CreateService().Build(summaries.Reverse().ToArray(), metric);
+
+        Assert.Equal(new[] { "Alpha", "alpha", "beta" }, report.Entries.Select(entry => entry.StrategyId));
+        Assert.Equal(report.Entries.Select(entry => entry.StrategyId), reversed.Entries.Select(entry => entry.StrategyId));
+        Assert.Equal(new int?[] { 1, 2, 3 }, report.Entries.Select(entry => entry.Rank));
+    }
+
+    [Theory]
+    [InlineData(StrategyComparisonSortMetric.ReturnPercent)]
+    [InlineData(StrategyComparisonSortMetric.MaxDrawdownPercent)]
+    [InlineData(StrategyComparisonSortMetric.TradesCount)]
+    public void Build_FailedRunsAreLastAndUnranked(StrategyComparisonSortMetric metric)
+    {
+        var report = CreateService().Build(
+            [BuildFailed("z-failed"), BuildSuccess("success", returnPercent: -20m), BuildFailed("a-failed")], metric);
+
+        Assert.Equal(new[] { "success", "a-failed", "z-failed" }, report.Entries.Select(entry => entry.StrategyId));
+        Assert.Equal(new int?[] { 1, null, null }, report.Entries.Select(entry => entry.Rank));
+        Assert.Equal("success", report.TopStrategy?.StrategyId);
+        Assert.Equal("Simulated failure", report.Entries[1].ErrorMessage);
+    }
+
+    [Theory]
+    [InlineData(StrategyComparisonSortMetric.AlphaPercent, "alpha-winner", "relative-winner")]
+    [InlineData(StrategyComparisonSortMetric.RelativeReturnPercent, "relative-winner", "alpha-winner")]
+    public void Build_BenchmarkSortingUsesSelectedSymbolAndLeavesMissingValuesUnranked(
+        StrategyComparisonSortMetric metric, string first, string second)
+    {
+        var alphaWinner = BuildSuccess("alpha-winner");
+        alphaWinner.BenchmarkComparisons =
+        [
+            new BacktestBenchmarkComparison { Symbol = "QQQ", AlphaPercent = -100m, RelativeReturnPercent = 100m },
+            new BacktestBenchmarkComparison { Symbol = "SPY", AlphaPercent = 5m, RelativeReturnPercent = -5m }
+        ];
+        var relativeWinner = BuildSuccess("relative-winner");
+        relativeWinner.BenchmarkComparisons =
+        [
+            new BacktestBenchmarkComparison { Symbol = "SPY", AlphaPercent = -5m, RelativeReturnPercent = 5m }
+        ];
+
+        var report = CreateService().Build(
+            [BuildSuccess("missing"), relativeWinner, BuildFailed("failed"), alphaWinner], metric, "spy");
+
+        Assert.Equal(new[] { first, second, "failed", "missing" }, report.Entries.Select(entry => entry.StrategyId));
+        Assert.Equal(new int?[] { 1, 2, null, null }, report.Entries.Select(entry => entry.Rank));
+        Assert.Equal("spy", report.BenchmarkSymbol);
+        Assert.Equal(first, report.TopStrategy?.StrategyId);
+        Assert.Same(alphaWinner.BenchmarkComparisons,
+            report.Entries.Single(entry => entry.StrategyId == "alpha-winner").BenchmarkComparisons);
+    }
+
+    [Theory]
+    [InlineData(StrategyComparisonSortMetric.AlphaPercent)]
+    [InlineData(StrategyComparisonSortMetric.RelativeReturnPercent)]
+    public void Build_BenchmarkSortingRequiresSymbol(StrategyComparisonSortMetric metric)
+    {
+        Assert.Throws<ArgumentException>(() => CreateService().Build([], metric));
+        Assert.Throws<ArgumentException>(() => CreateService().Build([], metric, " "));
+    }
+
+    [Fact]
+    public void Build_InvalidSortMetricIsRejected()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            CreateService().Build([], (StrategyComparisonSortMetric)999));
+    }
+
+    [Fact]
+    public void Build_NoSortLeavesRanksAndTopStrategyUnset()
+    {
+        var report = CreateService().Build([BuildSuccess("first"), BuildSuccess("second")]);
+
+        Assert.Null(report.SortBy);
+        Assert.Null(report.BenchmarkSymbol);
+        Assert.Null(report.TopStrategy);
+        Assert.All(report.Entries, entry => Assert.Null(entry.Rank));
+    }
+
+    [Fact]
+    public void Build_EmptyFailedOrMissingMetricReportsHaveNoTopStrategy()
+    {
+        var service = CreateService();
+        var empty = service.Build([], StrategyComparisonSortMetric.ReturnPercent);
+        var failed = service.Build([BuildFailed("failed")], StrategyComparisonSortMetric.ReturnPercent);
+        var missing = service.Build([BuildSuccess("missing")], StrategyComparisonSortMetric.AlphaPercent, "SPY");
+
+        Assert.Empty(empty.Entries);
+        Assert.Null(empty.TopStrategy);
+        Assert.Null(failed.TopStrategy);
+        Assert.Null(missing.TopStrategy);
+        Assert.Null(Assert.Single(failed.Entries).Rank);
+        Assert.Null(Assert.Single(missing.Entries).Rank);
     }
 }

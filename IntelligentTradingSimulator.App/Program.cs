@@ -160,6 +160,13 @@ var runVariantsArg = Array.Find(
 
 if (runVariantsArg is not null)
 {
+    if (!StrategyComparisonCommandLineParser.TryParse(
+        args, out var comparisonSortBy, out var comparisonBenchmark, out var comparisonError))
+    {
+        Console.WriteLine(comparisonError);
+        return;
+    }
+
     var variantsStartDateArg = Array.Find(
         args,
         a => a.StartsWith("--backtest-start=", StringComparison.OrdinalIgnoreCase));
@@ -240,7 +247,7 @@ if (runVariantsArg is not null)
         summaries.Add(variantSummary);
     }
 
-    var comparisonReport = comparisonService.Build(summaries);
+    var comparisonReport = comparisonService.Build(summaries, comparisonSortBy, comparisonBenchmark);
     variantsReporter.PrintVariantComparisonReport(comparisonReport);
 
     return;
