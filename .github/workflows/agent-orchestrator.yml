@@ -36,6 +36,7 @@ jobs:
   bootstrap:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     runs-on: ubuntu-latest
+
     steps:
       - name: Create labels
         env:
@@ -43,17 +44,47 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh label create "$READY_LABEL" --repo "$REPO" --color 0E8A16 --description "Ready for Copilot" --force
-          gh label create "$WORKING_LABEL" --repo "$REPO" --color FBCA04 --description "Copilot is implementing or fixing review feedback" --force
-          gh label create "$AI_REVIEW_LABEL" --repo "$REPO" --color 5319E7 --description "Waiting for Copilot code review" --force
-          gh label create "$REVIEW_LABEL" --repo "$REPO" --color 1D76DB --description "Ready for human review" --force
-          gh label create "$BLOCKED_LABEL" --repo "$REPO" --color D93F0B --description "Needs human attention" --force
+
+          gh label create "$READY_LABEL" \
+            --repo "$REPO" \
+            --color 0E8A16 \
+            --description "Ready for Copilot" \
+            --force
+
+          gh label create "$WORKING_LABEL" \
+            --repo "$REPO" \
+            --color FBCA04 \
+            --description "Copilot is implementing or fixing review feedback" \
+            --force
+
+          gh label create "$AI_REVIEW_LABEL" \
+            --repo "$REPO" \
+            --color 5319E7 \
+            --description "Waiting for Copilot code review" \
+            --force
+
+          gh label create "$REVIEW_LABEL" \
+            --repo "$REPO" \
+            --color 1D76DB \
+            --description "Ready for human review" \
+            --force
+
+          gh label create "$BLOCKED_LABEL" \
+            --repo "$REPO" \
+            --color D93F0B \
+            --description "Needs human attention" \
+            --force
+
 
   start-agent:
     if: >-
-      github.event_name == 'issues' && github.event.action == 'labeled' &&
-      github.event.label.name == 'agent:ready' && github.event.issue.state == 'open'
+      github.event_name == 'issues' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'agent:ready' &&
+      github.event.issue.state == 'open'
+
     runs-on: ubuntu-latest
+
     steps:
       - name: Validate and start task
         env:
@@ -63,21 +94,103 @@ jobs:
           ISSUE: ${{ github.event.issue.number }}
           TITLE: ${{ github.event.issue.title }}
           BODY: ${{ github.event.issue.body }}
+
         run: |
           set -euo pipefail
-          active="$(gh issue list --repo "$REPO" --state open --limit 100 --json number,labels)"
-          count="$(jq --argjson issue "$ISSUE" --arg w "$WORKING_LABEL" --arg a "$AI_REVIEW_LABEL" --arg r "$REVIEW_LABEL" '[.[]|select(.number!=$issue)|select((.labels|map(.name)) as $l|(($l|index($w))!=null) or (($l|index($a))!=null) or (($l|index($r))!=null)]|length' <<< "$active")"
-          test "$count" -eq 0 || { echo "Another Issue is active" >&2; exit 1; }
-          gh issue edit "$ISSUE" --repo "$REPO" --remove-label "$READY_LABEL" --add-label "$WORKING_LABEL"
-          payload="$(jq -n --arg n "$ISSUE" --arg t "$TITLE" --arg b "$BODY" --arg base "$BASE_BRANCH" '{prompt:("Implement GitHub Issue #"+$n+": "+$t+"\n\n"+$b+"\n\nRun restore, build, and all tests. Create a pull request against "+$base+". Include `Closes #"+$n+"` in the PR description. Do not merge."),base_ref:$base,create_pull_request:true}')"
+
+          active="$(
+            gh issue list \
+              --repo "$REPO" \
+              --state open \
+              --limit 100 \
+              --json number,labels
+          )"
+
+          count="$(
+            jq \
+              --argjson issue "$ISSUE" \
+              --arg w "$WORKING_LABEL" \
+              --arg a "$AI_REVIEW_LABEL" \
+              --arg r "$REVIEW_LABEL" \
+              '
+              [
+                .[]
+                | select(.number != $issue)
+                | select(
+                    (.labels | map(.name)) as $labels
+                    | (($labels | index($w)) != null)
+                      or (($labels | index($a)) != null)
+                      or (($labels | index($r)) != null)
+                  )
+              ]
+              | length
+              ' <<< "$active"
+          )"
+
+          test "$count" -eq 0 || {
+            echo "Another Issue is active" >&2
+            exit 1
+          }
+
+          gh issue edit "$ISSUE" \
+            --repo "$REPO" \
+            --remove-label "$READY_LABEL" \
+            --add-label "$WORKING_LABEL"
+
+          payload="$(
+            jq -n \
+              --arg n "$ISSUE" \
+              --arg t "$TITLE" \
+              --arg b "$BODY" \
+              --arg base "$BASE_BRANCH" \
+              '{
+                prompt: (
+                  "Implement GitHub Issue #" + $n + ": " + $t + "\n\n"
+                  + $b
+                  + "\n\nRun restore, build, and all tests."
+                  + " Create a pull request against " + $base + "."
+                  + " Include `Closes #" + $n + "` in the PR description."
+                  + " Do not merge."
+                ),
+                base_ref: $base,
+                create_pull_request: true
+              }'
+          )"
+
           out="$(mktemp)"
-          code="$(curl -sS -o "$out" -w '%{http_code}' -X POST -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' -H "Authorization: Bearer $AGENT_TOKEN" "https://api.github.com/agents/repos/$REPO/tasks" -d "$payload")"
+
+          code="$(
+            curl -sS \
+              -o "$out" \
+              -w '%{http_code}' \
+              -X POST \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              -H "Authorization: Bearer $AGENT_TOKEN" \
+              "https://api.github.com/agents/repos/$REPO/tasks" \
+              -d "$payload"
+          )"
+
           cat "$out"
-          [[ "$code" == 2* ]] || { gh issue edit "$ISSUE" --repo "$REPO" --remove-label "$WORKING_LABEL" --add-label "$BLOCKED_LABEL"; exit 1; }
+
+          if [[ "$code" != 2* ]]; then
+            gh issue edit "$ISSUE" \
+              --repo "$REPO" \
+              --remove-label "$WORKING_LABEL" \
+              --add-label "$BLOCKED_LABEL"
+
+            exit 1
+          fi
+
 
   map-pr:
-    if: github.event_name == 'pull_request' && github.event.action == 'opened' && startsWith(github.event.pull_request.head.ref, 'copilot/')
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'opened' &&
+      startsWith(github.event.pull_request.head.ref, 'copilot/')
+
     runs-on: ubuntu-latest
+
     steps:
       - name: Persist mapping
         env:
@@ -85,24 +198,79 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
+
         run: |
           set -euo pipefail
-          issue="$(sed -nE 's#^copilot/issue-([0-9]+)-.*#\1#p' <<< "$BRANCH")"
+
+          issue="$(
+            sed -nE \
+              's#^copilot/issue-([0-9]+)-.*#\1#p' \
+              <<< "$BRANCH"
+          )"
+
           if [ -z "$issue" ]; then
-            list="$(gh issue list --repo "$REPO" --state open --label "$WORKING_LABEL" --limit 10 --json number)"
-            test "$(jq length <<< "$list")" -eq 1 || { echo "Ambiguous active Issue" >&2; exit 1; }
+            list="$(
+              gh issue list \
+                --repo "$REPO" \
+                --state open \
+                --label "$WORKING_LABEL" \
+                --limit 10 \
+                --json number
+            )"
+
+            test "$(jq length <<< "$list")" -eq 1 || {
+              echo "Ambiguous active Issue" >&2
+              exit 1
+            }
+
             issue="$(jq -r '.[0].number' <<< "$list")"
           fi
-          body="$(gh pr view "$PR" --repo "$REPO" --json body --jq '.body // ""')"
+
+          body="$(
+            gh pr view "$PR" \
+              --repo "$REPO" \
+              --json body \
+              --jq '.body // ""'
+          )"
+
           marker="<!-- agent-orchestrator:issue=$issue -->"
-          if ! grep -Fq "$marker" <<< "$body"; then gh pr edit "$PR" --repo "$REPO" --body "$(printf '%s\n\n%s\nCloses #%s\n' "$body" "$marker" "$issue")"; fi
-          comments="$(gh issue view "$issue" --repo "$REPO" --json comments --jq '.comments[].body')"
-          if ! grep -Eq "agent-orchestrator:pr=${PR}([^0-9]|$)" <<< "$comments"; then gh issue comment "$issue" --repo "$REPO" --body "<!-- agent-orchestrator:pr=$PR -->
-          Mapped automatically to PR #$PR."; fi
+
+          if ! grep -Fq "$marker" <<< "$body"; then
+            gh pr edit "$PR" \
+              --repo "$REPO" \
+              --body "$(
+                printf '%s\n\n%s\nCloses #%s\n' \
+                  "$body" \
+                  "$marker" \
+                  "$issue"
+              )"
+          fi
+
+          comments="$(
+            gh issue view "$issue" \
+              --repo "$REPO" \
+              --json comments \
+              --jq '.comments[].body'
+          )"
+
+          if ! grep -Eq \
+            "agent-orchestrator:pr=${PR}([^0-9]|$)" \
+            <<< "$comments"
+          then
+            gh issue comment "$issue" \
+              --repo "$REPO" \
+              --body "<!-- agent-orchestrator:pr=$PR -->
+          Mapped automatically to PR #$PR."
+          fi
+
 
   request-ai-review:
-    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success'
+
     runs-on: ubuntu-latest
+
     steps:
       - name: Request or re-request review for current SHA
         env:
@@ -110,41 +278,165 @@ jobs:
           REPO: ${{ github.repository }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           SHA: ${{ github.event.workflow_run.head_sha }}
+
         run: |
           set -euo pipefail
-          [[ "$BRANCH" == copilot/* ]] || { echo "Not a Copilot branch"; exit 0; }
-          pr="$(gh pr list --repo "$REPO" --state open --head "$BRANCH" --limit 1 --json number,body | jq -c '.[0] // empty')"
-          [ -n "$pr" ] || { echo "No open PR"; exit 0; }
+
+          [[ "$BRANCH" == copilot/* ]] || {
+            echo "Not a Copilot branch"
+            exit 0
+          }
+
+          pr="$(
+            gh pr list \
+              --repo "$REPO" \
+              --state open \
+              --head "$BRANCH" \
+              --limit 1 \
+              --json number,body |
+            jq -c '.[0] // empty'
+          )"
+
+          [ -n "$pr" ] || {
+            echo "No open PR"
+            exit 0
+          }
+
           number="$(jq -r .number <<< "$pr")"
           body="$(jq -r '.body // ""' <<< "$pr")"
-          issue="$(sed -nE 's/.*agent-orchestrator:issue=([0-9]+).*/\1/p' <<< "$body" | head -1)"
-          [ -n "$issue" ] || issue="$(sed -nE 's#^copilot/issue-([0-9]+)-.*#\1#p' <<< "$BRANCH")"
+
+          issue="$(
+            sed -nE \
+              's/.*agent-orchestrator:issue=([0-9]+).*/\1/p' \
+              <<< "$body" |
+            head -1
+          )"
+
+          [ -n "$issue" ] || issue="$(
+            sed -nE \
+              's#^copilot/issue-([0-9]+)-.*#\1#p' \
+              <<< "$BRANCH"
+          )"
+
           if [ -z "$issue" ]; then
             while IFS= read -r candidate; do
-              comments="$(gh issue view "$candidate" --repo "$REPO" --json comments --jq '.comments[].body')"
-              if grep -Eq "agent-orchestrator:pr=${number}([^0-9]|$)" <<< "$comments"; then issue="$candidate"; break; fi
-            done < <(gh issue list --repo "$REPO" --state open --limit 1000 --json number --jq '.[].number')
+              comments="$(
+                gh issue view "$candidate" \
+                  --repo "$REPO" \
+                  --json comments \
+                  --jq '.comments[].body'
+              )"
+
+              if grep -Eq \
+                "agent-orchestrator:pr=${number}([^0-9]|$)" \
+                <<< "$comments"
+              then
+                issue="$candidate"
+                break
+              fi
+
+            done < <(
+              gh issue list \
+                --repo "$REPO" \
+                --state open \
+                --limit 1000 \
+                --json number \
+                --jq '.[].number'
+            )
           fi
-          [ -n "$issue" ] || { echo "No Issue mapping" >&2; exit 1; }
-          reviews="$(gh api --paginate "repos/$REPO/pulls/$number/reviews" --jq '.[]|select(.user.login=="copilot-pull-request-reviewer[bot]" or .user.login=="copilot-pull-request-reviewer")|[.id,.commit_id]|@tsv')"
-          if awk -v sha="$SHA" '$2==sha{f=1} END{exit !f}' <<< "$reviews"; then echo "Current SHA already reviewed"; exit 0; fi
-          pending="$(gh api "repos/$REPO/pulls/$number/requested_reviewers" --jq '.users[].login')"
-          if grep -Eq '^copilot-pull-request-reviewer(\[bot\])?$' <<< "$pending"; then
+
+          [ -n "$issue" ] || {
+            echo "No Issue mapping" >&2
+            exit 1
+          }
+
+          reviews="$(
+            gh api \
+              --paginate \
+              "repos/$REPO/pulls/$number/reviews" \
+              --jq '
+                .[]
+                | select(
+                    .user.login == "copilot-pull-request-reviewer[bot]"
+                    or .user.login == "copilot-pull-request-reviewer"
+                  )
+                | [.id, .commit_id]
+                | @tsv
+              '
+          )"
+
+          if awk \
+            -v sha="$SHA" \
+            '$2 == sha { f=1 } END { exit !f }' \
+            <<< "$reviews"
+          then
+            echo "Current SHA already reviewed"
+            exit 0
+          fi
+
+          pending="$(
+            gh api \
+              "repos/$REPO/pulls/$number/requested_reviewers" \
+              --jq '.users[].login'
+          )"
+
+          if grep -Eq \
+            '^copilot-pull-request-reviewer(\[bot\])?$' \
+            <<< "$pending"
+          then
             echo "Review already pending"
+
           elif [ -n "$reviews" ]; then
-            gh api --method POST "repos/$REPO/pulls/$number/requested_reviewers/rerequest" -f "reviewers[]=$COPILOT_REVIEWER"
+            gh api \
+              --method POST \
+              "repos/$REPO/pulls/$number/requested_reviewers/rerequest" \
+              -f "reviewers[]=$COPILOT_REVIEWER"
+
           else
-            gh api --method POST "repos/$REPO/pulls/$number/requested_reviewers" -f "reviewers[]=$COPILOT_REVIEWER"
+            gh api \
+              --method POST \
+              "repos/$REPO/pulls/$number/requested_reviewers" \
+              -f "reviewers[]=$COPILOT_REVIEWER"
           fi
-          labels="$(gh issue view "$issue" --repo "$REPO" --json labels --jq '.labels[].name')"
-          for l in "$READY_LABEL" "$WORKING_LABEL" "$REVIEW_LABEL" "$BLOCKED_LABEL"; do if grep -Fxq "$l" <<< "$labels"; then gh issue edit "$issue" --repo "$REPO" --remove-label "$l"; fi; done
-          if ! grep -Fxq "$AI_REVIEW_LABEL" <<< "$labels"; then gh issue edit "$issue" --repo "$REPO" --add-label "$AI_REVIEW_LABEL"; fi
+
+          labels="$(
+            gh issue view "$issue" \
+              --repo "$REPO" \
+              --json labels \
+              --jq '.labels[].name'
+          )"
+
+          for l in \
+            "$READY_LABEL" \
+            "$WORKING_LABEL" \
+            "$REVIEW_LABEL" \
+            "$BLOCKED_LABEL"
+          do
+            if grep -Fxq "$l" <<< "$labels"; then
+              gh issue edit "$issue" \
+                --repo "$REPO" \
+                --remove-label "$l"
+            fi
+          done
+
+          if ! grep -Fxq "$AI_REVIEW_LABEL" <<< "$labels"; then
+            gh issue edit "$issue" \
+              --repo "$REPO" \
+              --add-label "$AI_REVIEW_LABEL"
+          fi
+
 
   process-ai-review:
     if: >-
-      github.event_name == 'pull_request_review' && github.event.action == 'submitted' &&
-      (github.event.review.user.login == 'copilot-pull-request-reviewer[bot]' || github.event.review.user.login == 'copilot-pull-request-reviewer')
+      github.event_name == 'pull_request_review' &&
+      github.event.action == 'submitted' &&
+      (
+        github.event.review.user.login == 'copilot-pull-request-reviewer[bot]' ||
+        github.event.review.user.login == 'copilot-pull-request-reviewer'
+      )
+
     runs-on: ubuntu-latest
+
     steps:
       - name: Handoff findings to coding agent or promote to human review
         env:
@@ -154,47 +446,230 @@ jobs:
           REVIEW_SHA: ${{ github.event.review.commit_id }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
+
         run: |
           set -euo pipefail
-          [ "$REVIEW_SHA" = "$HEAD_SHA" ] || { echo "Stale review"; exit 0; }
-          body="$(gh pr view "$PR" --repo "$REPO" --json body --jq '.body // ""')"
-          issue="$(sed -nE 's/.*agent-orchestrator:issue=([0-9]+).*/\1/p' <<< "$body" | head -1)"
-          [ -n "$issue" ] || issue="$(sed -nE 's#^copilot/issue-([0-9]+)-.*#\1#p' <<< "$BRANCH")"
+
+          [ "$REVIEW_SHA" = "$HEAD_SHA" ] || {
+            echo "Stale review"
+            exit 0
+          }
+
+          body="$(
+            gh pr view "$PR" \
+              --repo "$REPO" \
+              --json body \
+              --jq '.body // ""'
+          )"
+
+          issue="$(
+            sed -nE \
+              's/.*agent-orchestrator:issue=([0-9]+).*/\1/p' \
+              <<< "$body" |
+            head -1
+          )"
+
+          [ -n "$issue" ] || issue="$(
+            sed -nE \
+              's#^copilot/issue-([0-9]+)-.*#\1#p' \
+              <<< "$BRANCH"
+          )"
+
           if [ -z "$issue" ]; then
             while IFS= read -r candidate; do
-              comments="$(gh issue view "$candidate" --repo "$REPO" --json comments --jq '.comments[].body')"
-              if grep -Eq "agent-orchestrator:pr=${PR}([^0-9]|$)" <<< "$comments"; then issue="$candidate"; break; fi
-            done < <(gh issue list --repo "$REPO" --state open --limit 1000 --json number --jq '.[].number')
+              comments="$(
+                gh issue view "$candidate" \
+                  --repo "$REPO" \
+                  --json comments \
+                  --jq '.comments[].body'
+              )"
+
+              if grep -Eq \
+                "agent-orchestrator:pr=${PR}([^0-9]|$)" \
+                <<< "$comments"
+              then
+                issue="$candidate"
+                break
+              fi
+
+            done < <(
+              gh issue list \
+                --repo "$REPO" \
+                --state open \
+                --limit 1000 \
+                --json number \
+                --jq '.[].number'
+            )
           fi
-          [ -n "$issue" ] || { echo "No Issue mapping" >&2; exit 1; }
-          owner="${REPO%%/*}"; repo_name="${REPO#*/}"
-          threads="$(gh api graphql -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved comments(first:50){nodes{body path line author{login}}}}}}}}' -F owner="$owner" -F repo="$repo_name" -F number="$PR")"
-          findings="$(jq -r '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)|select(any(.comments.nodes[];.author.login=="copilot-pull-request-reviewer" or .author.login=="copilot-pull-request-reviewer[bot]"))|.comments.nodes[]|select(.author.login=="copilot-pull-request-reviewer" or .author.login=="copilot-pull-request-reviewer[bot]")|"- File: \(.path // "general")\n  Line: \(.line // "n/a")\n  Finding: \(.body)"]|join("\n")' <<< "$threads")"
-          count="$(jq '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)|select(any(.comments.nodes[];.author.login=="copilot-pull-request-reviewer" or .author.login=="copilot-pull-request-reviewer[bot]"))]|length' <<< "$threads")"
-          labels="$(gh issue view "$issue" --repo "$REPO" --json labels --jq '.labels[].name')"
-          if grep -Fxq "$AI_REVIEW_LABEL" <<< "$labels"; then gh issue edit "$issue" --repo "$REPO" --remove-label "$AI_REVIEW_LABEL"; fi
+
+          [ -n "$issue" ] || {
+            echo "No Issue mapping" >&2
+            exit 1
+          }
+
+          owner="${REPO%%/*}"
+          repo_name="${REPO#*/}"
+
+          threads="$(
+            gh api graphql \
+              -f query='
+                query(
+                  $owner: String!,
+                  $repo: String!,
+                  $number: Int!
+                ) {
+                  repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $number) {
+                      reviewThreads(first: 100) {
+                        nodes {
+                          id
+                          isResolved
+                          comments(first: 50) {
+                            nodes {
+                              body
+                              path
+                              line
+                              author {
+                                login
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ' \
+              -F owner="$owner" \
+              -F repo="$repo_name" \
+              -F number="$PR"
+          )"
+
+          findings="$(
+            jq -r '
+              [
+                .data.repository.pullRequest.reviewThreads.nodes[]
+                | select(.isResolved == false)
+                | select(
+                    any(
+                      .comments.nodes[];
+                      .author.login == "copilot-pull-request-reviewer"
+                      or .author.login == "copilot-pull-request-reviewer[bot]"
+                    )
+                  )
+                | .comments.nodes[]
+                | select(
+                    .author.login == "copilot-pull-request-reviewer"
+                    or .author.login == "copilot-pull-request-reviewer[bot]"
+                  )
+                | "- File: \(.path // "general")\n  Line: \(.line // "n/a")\n  Finding: \(.body)"
+              ]
+              | join("\n")
+            ' <<< "$threads"
+          )"
+
+          count="$(
+            jq '
+              [
+                .data.repository.pullRequest.reviewThreads.nodes[]
+                | select(.isResolved == false)
+                | select(
+                    any(
+                      .comments.nodes[];
+                      .author.login == "copilot-pull-request-reviewer"
+                      or .author.login == "copilot-pull-request-reviewer[bot]"
+                    )
+                  )
+              ]
+              | length
+            ' <<< "$threads"
+          )"
+
+          labels="$(
+            gh issue view "$issue" \
+              --repo "$REPO" \
+              --json labels \
+              --jq '.labels[].name'
+          )"
+
+          if grep -Fxq "$AI_REVIEW_LABEL" <<< "$labels"; then
+            gh issue edit "$issue" \
+              --repo "$REPO" \
+              --remove-label "$AI_REVIEW_LABEL"
+          fi
+
           if [ "$count" -gt 0 ]; then
-            if ! grep -Fxq "$WORKING_LABEL" <<< "$labels"; then gh issue edit "$issue" --repo "$REPO" --add-label "$WORKING_LABEL"; fi
+
+            if ! grep -Fxq "$WORKING_LABEL" <<< "$labels"; then
+              gh issue edit "$issue" \
+                --repo "$REPO" \
+                --add-label "$WORKING_LABEL"
+            fi
+
             marker="<!-- agent-orchestrator:handoff-sha=$HEAD_SHA -->"
-            comments="$(gh pr view "$PR" --repo "$REPO" --json comments --jq '.comments[].body')"
+
+            comments="$(
+              gh pr view "$PR" \
+                --repo "$REPO" \
+                --json comments \
+                --jq '.comments[].body'
+            )"
+
             if ! grep -Fq "$marker" <<< "$comments"; then
-              message="$(printf '%s\n\nReview findings:\n%s\n\n%s' "@$COPILOT_REVIEWER Please address all unresolved Copilot code review findings on this PR. Make the fixes on the current PR branch, update tests and documentation as needed, run the full validation suite, push the changes, and resolve the addressed review threads. Do not merge the PR." "$findings" "$marker")"
-              gh pr comment "$PR" --repo "$REPO" --body "$message"
+
+              message="$(
+                printf '%s\n\nReview findings:\n%s\n\n%s' \
+                  "@$COPILOT_REVIEWER Please address all unresolved Copilot code review findings on this PR. Make the fixes on the current PR branch, update tests and documentation as needed, run the full validation suite, push the changes, and resolve the addressed review threads. Do not merge the PR." \
+                  "$findings" \
+                  "$marker"
+              )"
+
+              gh pr comment "$PR" \
+                --repo "$REPO" \
+                --body "$message"
+
             else
               echo "Handoff for current SHA already exists"
             fi
+
           else
-            gh pr ready "$PR" --repo "$REPO" 2>/dev/null || true
-            if grep -Fxq "$WORKING_LABEL" <<< "$labels"; then gh issue edit "$issue" --repo "$REPO" --remove-label "$WORKING_LABEL"; fi
-            if ! grep -Fxq "$REVIEW_LABEL" <<< "$labels"; then gh issue edit "$issue" --repo "$REPO" --add-label "$REVIEW_LABEL"; fi
+
+            gh pr ready "$PR" \
+              --repo "$REPO" \
+              2>/dev/null || true
+
+            if grep -Fxq "$WORKING_LABEL" <<< "$labels"; then
+              gh issue edit "$issue" \
+                --repo "$REPO" \
+                --remove-label "$WORKING_LABEL"
+            fi
+
+            if ! grep -Fxq "$REVIEW_LABEL" <<< "$labels"; then
+              gh issue edit "$issue" \
+                --repo "$REPO" \
+                --add-label "$REVIEW_LABEL"
+            fi
           fi
+
 
   human-feedback:
     if: >-
-      ((github.event_name == 'pull_request_review' && github.event.action == 'submitted' && github.event.review.user.type != 'Bot') ||
-       (github.event_name == 'pull_request_review_comment' && github.event.action == 'created' && github.event.comment.user.type != 'Bot')) &&
+      (
+        (
+          github.event_name == 'pull_request_review' &&
+          github.event.action == 'submitted' &&
+          github.event.review.user.type != 'Bot'
+        ) ||
+        (
+          github.event_name == 'pull_request_review_comment' &&
+          github.event.action == 'created' &&
+          github.event.comment.user.type != 'Bot'
+        )
+      ) &&
       github.event.pull_request.state == 'open'
+
     runs-on: ubuntu-latest
+
     steps:
       - name: Handoff human review feedback to coding agent
         env:
@@ -202,26 +677,92 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
+
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = pull_request_review ] && [ "${{ github.event.review.state }}" = approved ]; then exit 0; fi
-          body="$(gh pr view "$PR" --repo "$REPO" --json body --jq '.body // ""')"
-          issue="$(sed -nE 's/.*agent-orchestrator:issue=([0-9]+).*/\1/p' <<< "$body" | head -1)"
-          [ -n "$issue" ] || issue="$(sed -nE 's#^copilot/issue-([0-9]+)-.*#\1#p' <<< "$BRANCH")"
-          [ -n "$issue" ] || exit 0
-          labels="$(gh issue view "$issue" --repo "$REPO" --json labels --jq '.labels[].name')"
-          for l in "$AI_REVIEW_LABEL" "$REVIEW_LABEL"; do if grep -Fxq "$l" <<< "$labels"; then gh issue edit "$issue" --repo "$REPO" --remove-label "$l"; fi; done
-          if ! grep -Fxq "$WORKING_LABEL" <<< "$labels"; then gh issue edit "$issue" --repo "$REPO" --add-label "$WORKING_LABEL"; fi
-          marker="<!-- agent-orchestrator:human-handoff-sha=${{ github.event.pull_request.head.sha }} -->"
-          comments="$(gh pr view "$PR" --repo "$REPO" --json comments --jq '.comments[].body')"
-          if ! grep -Fq "$marker" <<< "$comments"; then
-            message="$(printf '%s\n\n%s' "@$COPILOT_REVIEWER Please address all unresolved human review comments on this PR. Make the fixes on the current PR branch, run all tests, push the changes, and resolve the addressed review threads. Do not merge." "$marker")"
-            gh pr comment "$PR" --repo "$REPO" --body "$message"
+
+          if [ "${{ github.event_name }}" = "pull_request_review" ] &&
+             [ "${{ github.event.review.state }}" = "approved" ]
+          then
+            exit 0
           fi
 
+          body="$(
+            gh pr view "$PR" \
+              --repo "$REPO" \
+              --json body \
+              --jq '.body // ""'
+          )"
+
+          issue="$(
+            sed -nE \
+              's/.*agent-orchestrator:issue=([0-9]+).*/\1/p' \
+              <<< "$body" |
+            head -1
+          )"
+
+          [ -n "$issue" ] || issue="$(
+            sed -nE \
+              's#^copilot/issue-([0-9]+)-.*#\1#p' \
+              <<< "$BRANCH"
+          )"
+
+          [ -n "$issue" ] || exit 0
+
+          labels="$(
+            gh issue view "$issue" \
+              --repo "$REPO" \
+              --json labels \
+              --jq '.labels[].name'
+          )"
+
+          for l in \
+            "$AI_REVIEW_LABEL" \
+            "$REVIEW_LABEL"
+          do
+            if grep -Fxq "$l" <<< "$labels"; then
+              gh issue edit "$issue" \
+                --repo "$REPO" \
+                --remove-label "$l"
+            fi
+          done
+
+          if ! grep -Fxq "$WORKING_LABEL" <<< "$labels"; then
+            gh issue edit "$issue" \
+              --repo "$REPO" \
+              --add-label "$WORKING_LABEL"
+          fi
+
+          marker="<!-- agent-orchestrator:human-handoff-sha=${{ github.event.pull_request.head.sha }} -->"
+
+          comments="$(
+            gh pr view "$PR" \
+              --repo "$REPO" \
+              --json comments \
+              --jq '.comments[].body'
+          )"
+
+          if ! grep -Fq "$marker" <<< "$comments"; then
+
+            message="$(
+              printf '%s\n\n%s' \
+                "@$COPILOT_REVIEWER Please address all unresolved human review comments on this PR. Make the fixes on the current PR branch, run all tests, push the changes, and resolve the addressed review threads. Do not merge." \
+                "$marker"
+            )"
+
+            gh pr comment "$PR" \
+              --repo "$REPO" \
+              --body "$message"
+          fi
+
+
   terminal-state:
-    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed'
+
     runs-on: ubuntu-latest
+
     steps:
       - name: Close or block mapped Issue
         env:
@@ -230,62 +771,309 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           MERGED: ${{ github.event.pull_request.merged }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
+
         run: |
           set -euo pipefail
-          body="$(gh pr view "$PR" --repo "$REPO" --json body --jq '.body // ""')"
-          issue="$(sed -nE 's/.*agent-orchestrator:issue=([0-9]+).*/\1/p' <<< "$body" | head -1)"
-          [ -n "$issue" ] || issue="$(sed -nE 's#^copilot/issue-([0-9]+)-.*#\1#p' <<< "$BRANCH")"
+
+          body="$(
+            gh pr view "$PR" \
+              --repo "$REPO" \
+              --json body \
+              --jq '.body // ""'
+          )"
+
+          issue="$(
+            sed -nE \
+              's/.*agent-orchestrator:issue=([0-9]+).*/\1/p' \
+              <<< "$body" |
+            head -1
+          )"
+
+          [ -n "$issue" ] || issue="$(
+            sed -nE \
+              's#^copilot/issue-([0-9]+)-.*#\1#p' \
+              <<< "$BRANCH"
+          )"
+
           if [ -z "$issue" ]; then
             while IFS= read -r candidate; do
-              comments="$(gh issue view "$candidate" --repo "$REPO" --json comments --jq '.comments[].body')"
-              if grep -Eq "agent-orchestrator:pr=${PR}([^0-9]|$)" <<< "$comments"; then issue="$candidate"; break; fi
-            done < <(gh issue list --repo "$REPO" --state open --limit 1000 --json number --jq '.[].number')
+
+              comments="$(
+                gh issue view "$candidate" \
+                  --repo "$REPO" \
+                  --json comments \
+                  --jq '.comments[].body'
+              )"
+
+              if grep -Eq \
+                "agent-orchestrator:pr=${PR}([^0-9]|$)" \
+                <<< "$comments"
+              then
+                issue="$candidate"
+                break
+              fi
+
+            done < <(
+              gh issue list \
+                --repo "$REPO" \
+                --state open \
+                --limit 1000 \
+                --json number \
+                --jq '.[].number'
+            )
           fi
+
           [ -n "$issue" ] || exit 0
-          labels="$(gh issue view "$issue" --repo "$REPO" --json labels --jq '.labels[].name')"
-          for l in "$READY_LABEL" "$WORKING_LABEL" "$AI_REVIEW_LABEL" "$REVIEW_LABEL" "$BLOCKED_LABEL"; do if grep -Fxq "$l" <<< "$labels"; then gh issue edit "$issue" --repo "$REPO" --remove-label "$l"; fi; done
-          if [ "$MERGED" = true ]; then gh issue close "$issue" --repo "$REPO" --reason completed; else gh issue edit "$issue" --repo "$REPO" --add-label "$BLOCKED_LABEL"; fi
+
+          labels="$(
+            gh issue view "$issue" \
+              --repo "$REPO" \
+              --json labels \
+              --jq '.labels[].name'
+          )"
+
+          for l in \
+            "$READY_LABEL" \
+            "$WORKING_LABEL" \
+            "$AI_REVIEW_LABEL" \
+            "$REVIEW_LABEL" \
+            "$BLOCKED_LABEL"
+          do
+            if grep -Fxq "$l" <<< "$labels"; then
+              gh issue edit "$issue" \
+                --repo "$REPO" \
+                --remove-label "$l"
+            fi
+          done
+
+          if [ "$MERGED" = true ]; then
+
+            gh issue close "$issue" \
+              --repo "$REPO" \
+              --reason completed
+
+          else
+
+            gh issue edit "$issue" \
+              --repo "$REPO" \
+              --add-label "$BLOCKED_LABEL"
+          fi
+
 
   reconcile-existing-pr:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push'
+
     runs-on: ubuntu-latest
+
     steps:
       - name: Handoff existing unresolved review or request review
         env:
           GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
           REPO: ${{ github.repository }}
+
         run: |
           set -euo pipefail
-          prs="$(gh pr list --repo "$REPO" --state open --limit 100 --json number,headRefName,headRefOid,body | jq -c '[.[]|select(.headRefName|startswith("copilot/"))]')"
-          [ "$(jq length <<< "$prs")" -eq 1 ] || { echo "Need exactly one open Copilot PR; no-op"; exit 0; }
-          pr="$(jq -c '.[0]' <<< "$prs")"; number="$(jq -r .number <<< "$pr")"; sha="$(jq -r .headRefOid <<< "$pr")"; branch="$(jq -r .headRefName <<< "$pr")"
-          owner="${REPO%%/*}"; repo_name="${REPO#*/}"
-          threads="$(gh api graphql -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:50){nodes{body path line author{login}}}}}}}}' -F owner="$owner" -F repo="$repo_name" -F number="$number")"
-          count="$(jq '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)|select(any(.comments.nodes[];.author.login=="copilot-pull-request-reviewer" or .author.login=="copilot-pull-request-reviewer[bot]"))]|length' <<< "$threads")"
+
+          prs="$(
+            gh pr list \
+              --repo "$REPO" \
+              --state open \
+              --limit 100 \
+              --json number,headRefName,headRefOid,body |
+            jq -c '
+              [
+                .[]
+                | select(
+                    .headRefName
+                    | startswith("copilot/")
+                  )
+              ]
+            '
+          )"
+
+          [ "$(jq length <<< "$prs")" -eq 1 ] || {
+            echo "Need exactly one open Copilot PR; no-op"
+            exit 0
+          }
+
+          pr="$(jq -c '.[0]' <<< "$prs")"
+
+          number="$(jq -r .number <<< "$pr")"
+          sha="$(jq -r .headRefOid <<< "$pr")"
+          branch="$(jq -r .headRefName <<< "$pr")"
+
+          owner="${REPO%%/*}"
+          repo_name="${REPO#*/}"
+
+          threads="$(
+            gh api graphql \
+              -f query='
+                query(
+                  $owner: String!,
+                  $repo: String!,
+                  $number: Int!
+                ) {
+                  repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $number) {
+                      reviewThreads(first: 100) {
+                        nodes {
+                          isResolved
+                          comments(first: 50) {
+                            nodes {
+                              body
+                              path
+                              line
+                              author {
+                                login
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ' \
+              -F owner="$owner" \
+              -F repo="$repo_name" \
+              -F number="$number"
+          )"
+
+          count="$(
+            jq '
+              [
+                .data.repository.pullRequest.reviewThreads.nodes[]
+                | select(.isResolved == false)
+                | select(
+                    any(
+                      .comments.nodes[];
+                      .author.login == "copilot-pull-request-reviewer"
+                      or .author.login == "copilot-pull-request-reviewer[bot]"
+                    )
+                  )
+              ]
+              | length
+            ' <<< "$threads"
+          )"
+
           if [ "$count" -gt 0 ]; then
-            findings="$(jq -r '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)|.comments.nodes[]|select(.author.login=="copilot-pull-request-reviewer" or .author.login=="copilot-pull-request-reviewer[bot]")|"- \(.path // "general"): \(.body)"]|join("\n")' <<< "$threads")"
-            marker="<!-- agent-orchestrator:handoff-sha=$sha -->"; comments="$(gh pr view "$number" --repo "$REPO" --json comments --jq '.comments[].body')"
+
+            findings="$(
+              jq -r '
+                [
+                  .data.repository.pullRequest.reviewThreads.nodes[]
+                  | select(.isResolved == false)
+                  | .comments.nodes[]
+                  | select(
+                      .author.login == "copilot-pull-request-reviewer"
+                      or .author.login == "copilot-pull-request-reviewer[bot]"
+                    )
+                  | "- \(.path // "general"): \(.body)"
+                ]
+                | join("\n")
+              ' <<< "$threads"
+            )"
+
+            marker="<!-- agent-orchestrator:handoff-sha=$sha -->"
+
+            comments="$(
+              gh pr view "$number" \
+                --repo "$REPO" \
+                --json comments \
+                --jq '.comments[].body'
+            )"
+
             if ! grep -Fq "$marker" <<< "$comments"; then
-              message="$(printf '%s\n\n%s\n\n%s' "@$COPILOT_REVIEWER Please address all unresolved Copilot code review findings on this PR, update tests/documentation, run validation, push to this PR branch, and resolve addressed threads. Do not merge." "$findings" "$marker")"
-              gh pr comment "$number" --repo "$REPO" --body "$message"
+
+              message="$(
+                printf '%s\n\n%s\n\n%s' \
+                  "@$COPILOT_REVIEWER Please address all unresolved Copilot code review findings on this PR, update tests/documentation, run validation, push to this PR branch, and resolve addressed threads. Do not merge." \
+                  "$findings" \
+                  "$marker"
+              )"
+
+              gh pr comment "$number" \
+                --repo "$REPO" \
+                --body "$message"
             fi
+
           else
-            reviews="$(gh api --paginate "repos/$REPO/pulls/$number/reviews" --jq '.[]|select(.user.login=="copilot-pull-request-reviewer[bot]" or .user.login=="copilot-pull-request-reviewer")|[.id,.commit_id]|@tsv')"
-            if ! awk -v sha="$sha" '$2==sha{f=1} END{exit !f}' <<< "$reviews"; then
-              if [ -n "$reviews" ]; then gh api --method POST "repos/$REPO/pulls/$number/requested_reviewers/rerequest" -f "reviewers[]=$COPILOT_REVIEWER"; else gh api --method POST "repos/$REPO/pulls/$number/requested_reviewers" -f "reviewers[]=$COPILOT_REVIEWER"; fi
+
+            reviews="$(
+              gh api \
+                --paginate \
+                "repos/$REPO/pulls/$number/reviews" \
+                --jq '
+                  .[]
+                  | select(
+                      .user.login == "copilot-pull-request-reviewer[bot]"
+                      or .user.login == "copilot-pull-request-reviewer"
+                    )
+                  | [.id, .commit_id]
+                  | @tsv
+                '
+            )"
+
+            if ! awk \
+              -v sha="$sha" \
+              '$2 == sha { f=1 } END { exit !f }' \
+              <<< "$reviews"
+            then
+
+              if [ -n "$reviews" ]; then
+
+                gh api \
+                  --method POST \
+                  "repos/$REPO/pulls/$number/requested_reviewers/rerequest" \
+                  -f "reviewers[]=$COPILOT_REVIEWER"
+
+              else
+
+                gh api \
+                  --method POST \
+                  "repos/$REPO/pulls/$number/requested_reviewers" \
+                  -f "reviewers[]=$COPILOT_REVIEWER"
+              fi
             fi
           fi
 
+
   cleanup-closed-issue:
-    if: github.event_name == 'issues' && github.event.action == 'closed'
+    if: >-
+      github.event_name == 'issues' &&
+      github.event.action == 'closed'
+
     runs-on: ubuntu-latest
+
     steps:
       - name: Remove state labels
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           ISSUE: ${{ github.event.issue.number }}
+
         run: |
           set -euo pipefail
-          labels="$(gh issue view "$ISSUE" --repo "$REPO" --json labels --jq '.labels[].name')"
-          for l in "$READY_LABEL" "$WORKING_LABEL" "$AI_REVIEW_LABEL" "$REVIEW_LABEL" "$BLOCKED_LABEL"; do if grep -Fxq "$l" <<< "$labels"; then gh issue edit "$ISSUE" --repo "$REPO" --remove-label "$l"; fi; done
+
+          labels="$(
+            gh issue view "$ISSUE" \
+              --repo "$REPO" \
+              --json labels \
+              --jq '.labels[].name'
+          )"
+
+          for l in \
+            "$READY_LABEL" \
+            "$WORKING_LABEL" \
+            "$AI_REVIEW_LABEL" \
+            "$REVIEW_LABEL" \
+            "$BLOCKED_LABEL"
+          do
+            if grep -Fxq "$l" <<< "$labels"; then
+              gh issue edit "$ISSUE" \
+                --repo "$REPO" \
+                --remove-label "$l"
+            fi
+          done
