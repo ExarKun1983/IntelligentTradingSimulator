@@ -7,6 +7,8 @@ namespace IntelligentTradingSimulator.App.Configuration;
 
 public static class StrategyConfigurationLoader
 {
+    private const int MaximumStrategyComparisonLimit = 100;
+
     public static IReadOnlyList<StrategyConfiguration> LoadAll(IConfiguration configuration)
     {
         var strategiesSection = configuration.GetSection("Strategies");
@@ -17,9 +19,16 @@ public static class StrategyConfigurationLoader
                 "Configuration section 'Strategies' is missing or empty.");
         }
 
+        var strategySections = new List<IConfigurationSection>(strategiesSection.GetChildren());
+        if (strategySections.Count > MaximumStrategyComparisonLimit)
+        {
+            throw new InvalidOperationException(
+                $"Configuration section 'Strategies' contains {strategySections.Count} strategy definitions; the maximum strategy comparison limit is {MaximumStrategyComparisonLimit}.");
+        }
+
         var results = new List<StrategyConfiguration>();
 
-        foreach (var section in strategiesSection.GetChildren())
+        foreach (var section in strategySections)
         {
             results.Add(BindAndValidate(section.Key, section));
         }

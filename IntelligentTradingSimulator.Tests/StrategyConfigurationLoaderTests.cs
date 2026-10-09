@@ -393,6 +393,49 @@ public sealed class StrategyConfigurationLoaderTests
         Assert.Contains(results, r => r.Id == "beta" && r.MaxPositions == 8);
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(100)]
+    public void LoadAll_AcceptsStrategyComparisonLimitWithinRange(int strategyCount)
+    {
+        var configurationValues = new Dictionary<string, string?>();
+        for (var index = 0; index < strategyCount; index++)
+        {
+            configurationValues[$"Strategies:strategy-{index}:MaxPositions"] = "5";
+        }
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(configurationValues)
+                .Build();
+
+        var results = StrategyConfigurationLoader.LoadAll(configuration);
+
+        Assert.Equal(strategyCount, results.Count);
+    }
+
+    [Fact]
+    public void LoadAll_Throws_WhenStrategyComparisonLimitIsExceeded()
+    {
+        var configurationValues = new Dictionary<string, string?>();
+        for (var index = 0; index < 101; index++)
+        {
+            configurationValues[$"Strategies:strategy-{index}:MaxPositions"] = "5";
+        }
+
+        var configuration =
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(configurationValues)
+                .Build();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => StrategyConfigurationLoader.LoadAll(configuration));
+
+        Assert.Equal(
+            "Configuration section 'Strategies' contains 101 strategy definitions; the maximum strategy comparison limit is 100.",
+            exception.Message);
+    }
+
     [Fact]
     public void LoadAll_BindsAllFieldsForEachVariant()
     {
