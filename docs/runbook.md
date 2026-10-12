@@ -65,18 +65,43 @@ Each strategy supports these settings:
 | `MomentumScoreWeight` | Non-negative score points per percentage point of momentum (default `10`); `0` disables the contribution. |
 | `VolumeTrendScoreWeight` | Non-negative score points per percentage point of volume trend (default `0.05`); `0` disables the contribution. |
 | `VolatilityScoreWeight` | Non-negative penalty points per percentage point of volatility (default `1`); `0` disables the contribution, not the quality filter. |
+| `SmaScoreWeight` | Non-negative SMA5 eligibility bonus (default `5`); `0` disables the bonus, not the eligibility filter. |
 | `UseRsi` | Enable RSI scoring. |
+| `RsiScoreWeight` | Non-negative multiplier for both the RSI bonus and penalty (default `1`); `0` disables the score contribution. |
 | `RsiPreferredMinimum`, `RsiPreferredMaximum` | Preferred RSI range, each from 0 to 100; minimum cannot exceed maximum. |
 | `RsiOverboughtThreshold` | RSI penalty threshold, from 0 to 100 and not below the preferred maximum. |
 | `RsiPreferredRangeBonus`, `RsiOverboughtPenalty` | Non-negative score bonus and penalty. |
 | `UseRelativeStrength` | Enable relative-strength analysis and scoring (default `true`). |
-| `RelativeStrengthBenchmarkSymbol` | Benchmark ticker for Relative Strength (default `SPY`; for example `QQQ` or `IWM`). Must not be blank. |
+| `RelativeStrengthBenchmarkSymbol` | Supported benchmark ticker for Relative Strength: `SPY` (default), `QQQ`, or `IWM`. Surrounding whitespace and letter case are normalized; blank or unsupported tickers are rejected even when the factor is disabled. |
 | `RelativeStrengthScoreWeight` | Non-negative score points per percentage point of Relative Strength (default `1`). Set to `0` to retain analysis without affecting scores. |
 | `Use52WeekHigh` | Enable distance-from-52-week-high scoring. |
 | `Week52HighScoreWeight` | Non-negative maximum score contribution for the 52-week-high factor. |
 | `UseQualityFilter` | Enable the quality filter. |
 
-The loader validates strategy settings at startup. Missing settings use the defaults in `StrategyConfiguration`; invalid or missing active strategy sections stop startup with a configuration error.
+The loader validates strategy settings at startup. Missing settings use the defaults in `StrategyConfiguration`; invalid or missing active strategy sections stop startup with a configuration error. All weights must be non-negative decimals, including weights for disabled factors. At least one scoring factor must have a positive weight and be enabled (where a toggle exists); RSI also needs a positive bonus or penalty. Eligibility and quality filters alone are not an active scoring-factor set.
+
+Each entry under `Strategies` binds independently, so comparison variants can use different factor toggles, weights, and Relative Strength benchmarks. For example, add these entries to compare an RSI/Relative Strength setup against a 52-week-high setup:
+
+```json
+"Strategies": {
+  "rsi-relative": {
+    "UseRsi": true,
+    "RsiScoreWeight": 2,
+    "UseRelativeStrength": true,
+    "RelativeStrengthScoreWeight": 3,
+    "RelativeStrengthBenchmarkSymbol": "QQQ",
+    "Use52WeekHigh": false
+  },
+  "high-proximity": {
+    "UseRsi": false,
+    "UseRelativeStrength": false,
+    "Use52WeekHigh": true,
+    "Week52HighScoreWeight": 8
+  }
+}
+```
+
+Omitted base weights keep their defaults; set individual weights to `0` to disable their score contributions. `ActiveStrategy` selects one entry for normal analysis; comparison runs load and validate all entries.
 
 ### Composite scoring
 
@@ -85,8 +110,8 @@ Ranking and backtesting use the same Core `CompositeScoringEngine` via `IScoring
 1. Momentum percentage points × `MomentumScoreWeight`.
 2. Volume-trend percentage points × `VolumeTrendScoreWeight`.
 3. Negative volatility percentage points × `VolatilityScoreWeight` (lower volatility is better).
-4. The existing +5 SMA5 eligibility bonus.
-5. RSI: `RsiPreferredRangeBonus` inside the inclusive preferred range, or negative `RsiOverboughtPenalty` at/above the overbought threshold (penalty takes precedence).
+4. SMA5 eligibility bonus of `SmaScoreWeight` (default +5).
+5. RSI: `RsiPreferredRangeBonus × RsiScoreWeight` inside the inclusive preferred range, or negative `RsiOverboughtPenalty × RsiScoreWeight` at/above the overbought threshold (penalty takes precedence).
 6. 52-week-high distance: `(clamp(distance, -100, 0) + 50) / 50 × Week52HighScoreWeight`; nearer the high is better, -50% is neutral, and the normalized multiplier is bounded to [-1, 1].
 7. Relative Strength percentage points × `RelativeStrengthScoreWeight`.
 
@@ -94,7 +119,7 @@ Final stock rankings sort by composite `Score` descending, then by symbol ascend
 
 Weights scale contributions into score points; they need not sum to one. Percentage inputs are not divided by 100 or normalized across the stock universe, so adding another stock cannot change an existing stock's score. Default weights preserve the previous formula. Optional factors contribute zero when disabled or missing; base metrics are required decimal inputs (NaN/infinity are not representable). Arithmetic overflow is surfaced, not replaced by a silent fallback. Stocks not above SMA5, or rejected by the enabled quality filter, still receive `DisqualifiedScore` (-999).
 
-`CompositeScoringEngine.CalculateContributions` returns a `CompositeScoreResult` with each applied contribution, eligibility, and the final score. The scoring interface also supplies a typed `FactorScoreContribution` breakdown through `ObservationResult.FactorContributions`, available in normal analysis and backtest observations. Market ranking output prints all seven factors, including the fixed SMA5 bonus, in score points with full decimal precision. Contributions sum to the score used for ranking; disqualified stocks have zero applied factor points plus an explicit `Disqualification` contribution of -999 explaining the sentinel score.
+`CompositeScoringEngine.CalculateContributions` returns a `CompositeScoreResult` with each applied contribution, eligibility, and the final score. The scoring interface also supplies a typed `FactorScoreContribution` breakdown through `ObservationResult.FactorContributions`, available in normal analysis and backtest observations. Market ranking output prints all seven factors, including the configurable SMA5 bonus, in score points with full decimal precision. Contributions sum to the score used for ranking; disqualified stocks have zero applied factor points plus an explicit `Disqualification` contribution of -999 explaining the sentinel score.
 
 Each factor reports `Applied`, `Disabled`, `Unavailable`, or `Disqualified`. Missing input is reported as `Unavailable` with a null contribution (`N/A`), even if the factor is disabled; it does not add score points. Available disabled factors (including zero weights) report zero, while an available enabled factor with a neutral effect reports `Applied` with zero. Custom scoring engines without breakdown support report `N/A` rather than fabricated contributions. The existing Relative Strength diagnostic and persisted observation-history format remain unchanged. `RuleBasedScoringEngine` delegates to the composite engine for compatibility. ATR remains informational; no ATR scoring, stops, or allocation rules are introduced.
 

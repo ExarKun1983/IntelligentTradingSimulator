@@ -85,8 +85,12 @@ public static class StrategyConfigurationLoader
                 ?? StrategyConfiguration.DefaultVolumeTrendScoreWeight,
             VolatilityScoreWeight = section.GetValue<decimal?>("VolatilityScoreWeight")
                 ?? StrategyConfiguration.DefaultVolatilityScoreWeight,
+            SmaScoreWeight = section.GetValue<decimal?>("SmaScoreWeight")
+                ?? StrategyConfiguration.DefaultSmaScoreWeight,
             UseRsi = section.GetValue<bool?>("UseRsi")
                 ?? false,
+            RsiScoreWeight = section.GetValue<decimal?>("RsiScoreWeight")
+                ?? StrategyConfiguration.DefaultRsiScoreWeight,
             RsiPreferredMinimum = section.GetValue<decimal?>("RsiPreferredMinimum")
                 ?? StrategyConfiguration.DefaultRsiPreferredMinimum,
             RsiPreferredMaximum = section.GetValue<decimal?>("RsiPreferredMaximum")
@@ -116,6 +120,15 @@ public static class StrategyConfigurationLoader
             throw new InvalidOperationException(
                 $"Configuration value 'Strategies:{id}:RelativeStrengthBenchmarkSymbol' must not be empty.");
         }
+
+        var benchmarkSymbol = Array.Find(BenchmarkUniverse.DefaultSymbols,
+            symbol => string.Equals(symbol, config.RelativeStrengthBenchmarkSymbol, StringComparison.OrdinalIgnoreCase));
+        if (benchmarkSymbol is null)
+        {
+            throw new InvalidOperationException(
+                $"Configuration value 'Strategies:{id}:RelativeStrengthBenchmarkSymbol' must be a supported benchmark: {string.Join(", ", BenchmarkUniverse.DefaultSymbols)}.");
+        }
+        config.RelativeStrengthBenchmarkSymbol = benchmarkSymbol;
 
         if (config.MaxPositions <= 0)
         {
@@ -193,7 +206,9 @@ public static class StrategyConfigurationLoader
         {
             (nameof(StrategyConfiguration.MomentumScoreWeight), config.MomentumScoreWeight),
             (nameof(StrategyConfiguration.VolumeTrendScoreWeight), config.VolumeTrendScoreWeight),
-            (nameof(StrategyConfiguration.VolatilityScoreWeight), config.VolatilityScoreWeight)
+            (nameof(StrategyConfiguration.VolatilityScoreWeight), config.VolatilityScoreWeight),
+            (nameof(StrategyConfiguration.SmaScoreWeight), config.SmaScoreWeight),
+            (nameof(StrategyConfiguration.RsiScoreWeight), config.RsiScoreWeight)
         })
         {
             if (weight < 0m)
@@ -201,6 +216,19 @@ public static class StrategyConfigurationLoader
                 throw new InvalidOperationException(
                     $"Configuration value 'Strategies:{id}:{name}' must be greater than or equal to zero.");
             }
+        }
+
+        if (config.MomentumScoreWeight == 0m &&
+            config.VolumeTrendScoreWeight == 0m &&
+            config.VolatilityScoreWeight == 0m &&
+            config.SmaScoreWeight == 0m &&
+            !(config.UseRsi && config.RsiScoreWeight > 0m &&
+              (config.RsiPreferredRangeBonus > 0m || config.RsiOverboughtPenalty > 0m)) &&
+            !(config.UseRelativeStrength && config.RelativeStrengthScoreWeight > 0m) &&
+            !(config.Use52WeekHigh && config.Week52HighScoreWeight > 0m))
+        {
+            throw new InvalidOperationException(
+                $"Configuration section 'Strategies:{id}' must have at least one active scoring factor with a positive weight; eligibility and quality filters do not count as scoring factors.");
         }
 
         return config;

@@ -18,6 +18,8 @@ public sealed class StrategyConfiguration
     public const decimal DefaultMomentumScoreWeight = 10m;
     public const decimal DefaultVolumeTrendScoreWeight = 0.05m;
     public const decimal DefaultVolatilityScoreWeight = 1m;
+    public const decimal DefaultSmaScoreWeight = 5m;
+    public const decimal DefaultRsiScoreWeight = 1m;
 
     public string Id { get; set; } = DefaultId;
 
@@ -36,7 +38,13 @@ public sealed class StrategyConfiguration
     /// <summary>Penalty points per percentage point of volatility; zero disables the contribution, not the quality filter.</summary>
     public decimal VolatilityScoreWeight { get; set; } = DefaultVolatilityScoreWeight;
 
+    /// <summary>Score points for SMA5 eligibility; zero disables the bonus, not the eligibility filter.</summary>
+    public decimal SmaScoreWeight { get; set; } = DefaultSmaScoreWeight;
+
     public bool UseRsi { get; set; } = false;
+
+    /// <summary>Non-negative multiplier applied to both RSI threshold-based bonus and penalty points.</summary>
+    public decimal RsiScoreWeight { get; set; } = DefaultRsiScoreWeight;
 
     public decimal RsiPreferredMinimum { get; set; } = DefaultRsiPreferredMinimum;
 
