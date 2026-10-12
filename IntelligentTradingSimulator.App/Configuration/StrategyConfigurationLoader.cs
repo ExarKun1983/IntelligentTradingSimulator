@@ -79,6 +79,12 @@ public static class StrategyConfigurationLoader
                 ?? StrategyConfiguration.DefaultMaxPositionWeight,
             LookbackDays = section.GetValue<int?>("LookbackDays")
                 ?? StrategyConfiguration.DefaultLookbackDays,
+            MomentumScoreWeight = section.GetValue<decimal?>("MomentumScoreWeight")
+                ?? StrategyConfiguration.DefaultMomentumScoreWeight,
+            VolumeTrendScoreWeight = section.GetValue<decimal?>("VolumeTrendScoreWeight")
+                ?? StrategyConfiguration.DefaultVolumeTrendScoreWeight,
+            VolatilityScoreWeight = section.GetValue<decimal?>("VolatilityScoreWeight")
+                ?? StrategyConfiguration.DefaultVolatilityScoreWeight,
             UseRsi = section.GetValue<bool?>("UseRsi")
                 ?? false,
             RsiPreferredMinimum = section.GetValue<decimal?>("RsiPreferredMinimum")
@@ -181,6 +187,20 @@ public static class StrategyConfigurationLoader
         {
             throw new InvalidOperationException(
                 $"Configuration value 'Strategies:{id}:RelativeStrengthScoreWeight' must be greater than or equal to zero.");
+        }
+
+        foreach (var (name, weight) in new[]
+        {
+            (nameof(StrategyConfiguration.MomentumScoreWeight), config.MomentumScoreWeight),
+            (nameof(StrategyConfiguration.VolumeTrendScoreWeight), config.VolumeTrendScoreWeight),
+            (nameof(StrategyConfiguration.VolatilityScoreWeight), config.VolatilityScoreWeight)
+        })
+        {
+            if (weight < 0m)
+            {
+                throw new InvalidOperationException(
+                    $"Configuration value 'Strategies:{id}:{name}' must be greater than or equal to zero.");
+            }
         }
 
         return config;

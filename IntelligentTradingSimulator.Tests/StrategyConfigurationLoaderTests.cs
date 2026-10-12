@@ -10,6 +10,49 @@ namespace IntelligentTradingSimulator.Tests;
 public sealed class StrategyConfigurationLoaderTests
 {
     [Theory]
+    [InlineData(null, 10, 0.05, 1)]
+    [InlineData("0", 0, 0, 0)]
+    [InlineData("2.5", 2.5, 2.5, 2.5)]
+    public void LoadAndLoadAll_BindCompositeBaseWeights(
+        string? weight, double momentum, double volume, double volatility)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Strategies:default:UseRsi"] = "false",
+                ["Strategies:default:MomentumScoreWeight"] = weight,
+                ["Strategies:default:VolumeTrendScoreWeight"] = weight,
+                ["Strategies:default:VolatilityScoreWeight"] = weight
+            }).Build();
+
+        foreach (var strategy in new[]
+        {
+            StrategyConfigurationLoader.Load(configuration),
+            Assert.Single(StrategyConfigurationLoader.LoadAll(configuration))
+        })
+        {
+            Assert.Equal((decimal)momentum, strategy.MomentumScoreWeight);
+            Assert.Equal((decimal)volume, strategy.VolumeTrendScoreWeight);
+            Assert.Equal((decimal)volatility, strategy.VolatilityScoreWeight);
+        }
+    }
+
+    [Theory]
+    [InlineData("MomentumScoreWeight")]
+    [InlineData("VolumeTrendScoreWeight")]
+    [InlineData("VolatilityScoreWeight")]
+    public void LoadAndLoadAll_RejectNegativeCompositeBaseWeights(string name)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { [$"Strategies:default:{name}"] = "-0.1" }).Build();
+
+        Assert.Contains($"Strategies:default:{name}", Assert.Throws<InvalidOperationException>(() =>
+            StrategyConfigurationLoader.Load(configuration)).Message);
+        Assert.Contains($"Strategies:default:{name}", Assert.Throws<InvalidOperationException>(() =>
+            StrategyConfigurationLoader.LoadAll(configuration)).Message);
+    }
+
+    [Theory]
     [InlineData(null, 1)]
     [InlineData("0", 0)]
     [InlineData("2.5", 2.5)]

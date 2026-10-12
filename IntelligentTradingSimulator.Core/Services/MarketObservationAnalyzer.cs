@@ -18,7 +18,7 @@ public sealed class MarketObservationAnalyzer
     public MarketObservationAnalyzer(
         StrategyConfiguration? strategyConfiguration = null)
         : this(
-            new RuleBasedScoringEngine(strategyConfiguration),
+            new CompositeScoringEngine(strategyConfiguration),
             new RsiCalculator(),
             new Week52HighCalculator())
     {
