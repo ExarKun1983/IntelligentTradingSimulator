@@ -10,6 +10,47 @@ namespace IntelligentTradingSimulator.Tests;
 public sealed class StrategyConfigurationLoaderTests
 {
     [Theory]
+    [InlineData(null, 1)]
+    [InlineData("0", 0)]
+    [InlineData("2.5", 2.5)]
+    public void LoadAndLoadAll_BindRelativeStrengthWeight(string? weight, double expected)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Strategies:default:UseRelativeStrength"] = "true",
+                ["Strategies:default:RelativeStrengthScoreWeight"] = weight
+            }).Build();
+
+        Assert.Equal((decimal)expected,
+            StrategyConfigurationLoader.Load(configuration).RelativeStrengthScoreWeight);
+        Assert.Equal((decimal)expected,
+            Assert.Single(StrategyConfigurationLoader.LoadAll(configuration)).RelativeStrengthScoreWeight);
+        Assert.Equal(StrategyConfiguration.DefaultRelativeStrengthScoreWeight,
+            new StrategyConfiguration().RelativeStrengthScoreWeight);
+    }
+
+    [Theory]
+    [InlineData("true")]
+    [InlineData("false")]
+    public void LoadAndLoadAll_RejectNegativeRelativeStrengthWeight_EvenWhenDisabled(string enabled)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Strategies:default:UseRelativeStrength"] = enabled,
+                ["Strategies:default:RelativeStrengthScoreWeight"] = "-0.1"
+            }).Build();
+
+        Assert.Contains("Strategies:default:RelativeStrengthScoreWeight",
+            Assert.Throws<InvalidOperationException>(() =>
+                StrategyConfigurationLoader.Load(configuration)).Message);
+        Assert.Contains("Strategies:default:RelativeStrengthScoreWeight",
+            Assert.Throws<InvalidOperationException>(() =>
+                StrategyConfigurationLoader.LoadAll(configuration)).Message);
+    }
+
+    [Theory]
     [InlineData(null, "SPY")]
     [InlineData(" QQQ ", "QQQ")]
     [InlineData("IWM", "IWM")]

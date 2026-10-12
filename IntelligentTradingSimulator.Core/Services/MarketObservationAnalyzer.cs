@@ -94,6 +94,12 @@ public sealed class MarketObservationAnalyzer
         var week52High =
             _week52HighCalculator.Calculate(week52HighCandles);
 
+        var relativeStrength = _relativeStrengthCalculator.Calculate(
+            candles,
+            benchmarkCandles,
+            first.Date,
+            analysisDate ?? last.Date);
+
         var score =
             _scoringEngine.CalculateScore(
                 new ScoringContext
@@ -105,9 +111,11 @@ public sealed class MarketObservationAnalyzer
                     VolatilityPercent = volatility,
                     IsAboveSma5 = isAboveSma5,
                     Rsi = rsi,
+                    RelativeStrengthPercent = relativeStrength,
                     DistanceFromWeek52HighPercent =
                         week52High.DistanceFromWeek52HighPercent
-                });
+                },
+                out var relativeStrengthScoreContribution);
 
         return new ObservationResult
         {
@@ -122,11 +130,8 @@ public sealed class MarketObservationAnalyzer
             DistanceFromWeek52HighPercent =
                 week52High.DistanceFromWeek52HighPercent,
             RelativeStrengthBenchmarkSymbol = benchmarkSymbol,
-            RelativeStrengthPercent = _relativeStrengthCalculator.Calculate(
-                candles,
-                benchmarkCandles,
-                first.Date,
-                analysisDate ?? last.Date),
+            RelativeStrengthPercent = relativeStrength,
+            RelativeStrengthScoreContribution = relativeStrengthScoreContribution,
             Score = score
         };
     }

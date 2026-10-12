@@ -14,6 +14,7 @@ public sealed class StrategyConfiguration
     public const decimal DefaultRsiPreferredRangeBonus = 5m;
     public const decimal DefaultRsiOverboughtPenalty = 5m;
     public const decimal DefaultWeek52HighScoreWeight = 5m;
+    public const decimal DefaultRelativeStrengthScoreWeight = 1m;
 
     public string Id { get; set; } = DefaultId;
 
@@ -38,6 +39,13 @@ public sealed class StrategyConfiguration
     public bool UseRelativeStrength { get; set; } = true;
 
     public string RelativeStrengthBenchmarkSymbol { get; set; } = "SPY";
+
+    /// <summary>
+    /// Score points per percentage point of benchmark-relative outperformance.
+    /// Negative relative strength subtracts points when <see cref="UseRelativeStrength"/> is enabled.
+    /// </summary>
+    public decimal RelativeStrengthScoreWeight { get; set; } =
+        DefaultRelativeStrengthScoreWeight;
 
     public bool Use52WeekHigh { get; set; } = false;
 

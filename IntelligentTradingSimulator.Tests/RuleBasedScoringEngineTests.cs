@@ -12,7 +12,8 @@ public sealed class RuleBasedScoringEngineTests
         decimal volatility,
         bool isAboveSma5,
         decimal? rsi = null,
-        decimal? distanceFromWeek52HighPercent = null) =>
+        decimal? distanceFromWeek52HighPercent = null,
+        decimal? relativeStrengthPercent = null) =>
         new()
         {
             Symbol = "TEST",
@@ -22,8 +23,102 @@ public sealed class RuleBasedScoringEngineTests
             VolatilityPercent = volatility,
             IsAboveSma5 = isAboveSma5,
             Rsi = rsi,
-            DistanceFromWeek52HighPercent = distanceFromWeek52HighPercent
+            DistanceFromWeek52HighPercent = distanceFromWeek52HighPercent,
+            RelativeStrengthPercent = relativeStrengthPercent
         };
+
+    [Theory]
+    [InlineData(10d, 1, 10)]
+    [InlineData(-10d, 1, -10)]
+    [InlineData(0d, 1, 0)]
+    [InlineData(10d, 2.5, 25)]
+    [InlineData(-10d, 2.5, -25)]
+    [InlineData(10d, 0, 0)]
+    [InlineData(null, 2.5, 0)]
+    public void CalculateScore_AppliesWeightedRelativeStrengthAndReportsContribution(
+        double? relativeStrength, double weight, double expectedContribution)
+    {
+        var engine = new RuleBasedScoringEngine(new StrategyConfiguration
+        {
+            UseRelativeStrength = true,
+            RelativeStrengthScoreWeight = (decimal)weight
+        });
+        var context = Context(2m, 20m, 1m, true,
+            relativeStrengthPercent: (decimal?)relativeStrength);
+
+        var score = engine.CalculateScore(context, out var contribution);
+
+        Assert.Equal((decimal)expectedContribution, contribution);
+        Assert.Equal(25m + (decimal)expectedContribution, score);
+        Assert.Equal(score, engine.CalculateScore(context));
+    }
+
+    [Fact]
+    public void CalculateScore_IgnoresRelativeStrength_WhenDisabled()
+    {
+        var engine = new RuleBasedScoringEngine(new StrategyConfiguration
+        {
+            UseRelativeStrength = false,
+            RelativeStrengthScoreWeight = 3m
+        });
+
+        var score = engine.CalculateScore(
+            Context(2m, 20m, 1m, true, relativeStrengthPercent: 10m), out var contribution);
+
+        Assert.Equal(25m, score);
+        Assert.Equal(0m, contribution);
+    }
+
+    [Theory]
+    [InlineData(false, false, 1)]
+    [InlineData(true, true, 4)]
+    public void CalculateScore_DoesNotApplyRelativeStrength_ToDisqualifiedStocks(
+        bool aboveSma, bool qualityFilter, int volatility)
+    {
+        var engine = new RuleBasedScoringEngine(new StrategyConfiguration
+        {
+            UseRelativeStrength = true,
+            UseQualityFilter = qualityFilter
+        });
+
+        var score = engine.CalculateScore(
+            Context(2m, 20m, volatility, aboveSma, relativeStrengthPercent: 100m),
+            out var contribution);
+
+        Assert.Equal(StrategyConfiguration.DisqualifiedScore, score);
+        Assert.Equal(0m, contribution);
+    }
+
+    [Fact]
+    public void CalculateScore_CombinesRelativeStrengthWithExistingFactors()
+    {
+        var engine = new RuleBasedScoringEngine(new StrategyConfiguration
+        {
+            UseRsi = true,
+            Use52WeekHigh = true,
+            RelativeStrengthScoreWeight = 2m
+        });
+
+        var score = engine.CalculateScore(
+            Context(2m, 20m, 1m, true, rsi: 60m,
+                distanceFromWeek52HighPercent: 0m, relativeStrengthPercent: -3m),
+            out var contribution);
+
+        Assert.Equal(-6m, contribution);
+        Assert.Equal(25m + 5m + 5m - 6m, score);
+    }
+
+    [Fact]
+    public void CalculateScore_ThrowsOnRelativeStrengthContributionOverflow()
+    {
+        var engine = new RuleBasedScoringEngine(new StrategyConfiguration
+        {
+            RelativeStrengthScoreWeight = 2m
+        });
+
+        Assert.Throws<OverflowException>(() => engine.CalculateScore(
+            Context(0m, 0m, 0m, true, relativeStrengthPercent: decimal.MaxValue)));
+    }
 
     [Fact]
     public void CalculateScore_UsesExistingFormulaWithBonus_WhenAboveSma5()
