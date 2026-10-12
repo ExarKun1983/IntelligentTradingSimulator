@@ -89,7 +89,9 @@ launched_before() {
     ([.[] | select(.event == "labeled" and .label.name == $r) | .created_at | fromdateiso8601] | max) as $ready
     | ($created | fromdateiso8601) as $pr
     | $ready != null
-      and any(.[]; .event == "labeled" and .label.name == $w and (.created_at | fromdateiso8601) >= $ready)
+      and any(.[]; .event == "labeled" and .label.name == $w
+        and (.created_at | fromdateiso8601) >= $ready
+        and (.created_at | fromdateiso8601) < $pr)
       and $pr >= $ready and ($pr - $ready) <= $window' <<< "$events" >/dev/null 2>&1
 }
 

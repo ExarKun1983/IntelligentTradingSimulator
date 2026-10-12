@@ -237,6 +237,12 @@ check "resolution is stable once the marker exists" "39" "$(resolve_issue 145 co
 check "marker and mapping comment are written once" "1 1" "$(calls_matching 'pr edit 145') $(calls_matching 'issue comment 39')"
 
 setup_issue_39
+echo '[]' > "$STATE/issue-39.events"
+label_event 39 "agent:ready" "2026-10-12T12:46:06Z"
+label_event 39 "agent:working" "2026-10-12T12:46:23Z"
+check "working event after PR creation is not a replacement match" "" "$(resolve_issue 145 copilot/featuretrack-exit-reason 2>/dev/null)"
+
+setup_issue_39
 jq '.createdAt = "2026-10-12T14:00:00Z"' "$STATE/pr-145.json" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.json"
 check "PR opened long after the relaunch is not guessed" "" "$(resolve_issue 145 copilot/featuretrack-exit-reason 2>/dev/null)"
 
