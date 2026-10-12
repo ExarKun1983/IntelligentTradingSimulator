@@ -115,6 +115,20 @@ Ranking and backtesting use the same Core `CompositeScoringEngine` via `IScoring
 6. 52-week-high distance: `(clamp(distance, -100, 0) + 50) / 50 × Week52HighScoreWeight`; nearer the high is better, -50% is neutral, and the normalized multiplier is bounded to [-1, 1].
 7. Relative Strength percentage points × `RelativeStrengthScoreWeight`.
 
+These contributions use the following metrics from the strategy's analysis window:
+
+| Factor input | Calculation |
+| --- | --- |
+| Momentum | `(last close - first close) / first close × 100`, in percent. |
+| Volume trend | `(last volume - first volume) / first volume × 100`, in percent. Average volume does not affect this score. |
+| Volatility | Average of `(candle high - candle low) / candle close × 100` across the analysis candles. The score subtracts this value multiplied by `VolatilityScoreWeight`. |
+| SMA5 eligibility | The last close must be strictly greater than the average of the last five available closes. Eligible observations receive `SmaScoreWeight` points. |
+| RSI | 14-period RSI using Wilder smoothing over chronological closing prices; it is unavailable until at least 15 closes are present. A no-change series returns 50. The configured thresholds and points determine its contribution as described above. |
+| 52-week-high distance | Highest high among the most recent 252 trading sessions, compared with the latest close: `(latest close - high) / high × 100`. The resulting percentage is clamped only when scoring. |
+| Relative Strength | Stock close-to-close return minus the selected benchmark's return, in percentage points; both benchmark endpoint closes must match the stock's first and last analysis dates. |
+
+SMA5 is an eligibility gate even when `SmaScoreWeight` is zero. When `UseQualityFilter` is enabled, average volatility above 3% also disqualifies the observation; either disqualification produces the sentinel score `-999` instead of the sum of factor points.
+
 Final stock rankings sort by composite `Score` descending, then by symbol ascending using ordinal (case-sensitive, culture-independent) comparison for equal scores. Market analysis, persisted rank positions, recommendations, and backtests use this same ordering. Recommendation eligibility filters remain unchanged and the position limit is applied after sorting; raw factor values and contribution breakdowns remain available in ranked observations.
 
 Weights scale contributions into score points; they need not sum to one. Percentage inputs are not divided by 100 or normalized across the stock universe, so adding another stock cannot change an existing stock's score. Default weights preserve the previous formula. Optional factors contribute zero when disabled or missing; base metrics are required decimal inputs (NaN/infinity are not representable). Arithmetic overflow is surfaced, not replaced by a silent fallback. Stocks not above SMA5, or rejected by the enabled quality filter, still receive `DisqualifiedScore` (-999).
