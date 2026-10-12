@@ -9,6 +9,41 @@ namespace IntelligentTradingSimulator.Tests;
 
 public sealed class StrategyConfigurationLoaderTests
 {
+    [Theory]
+    [InlineData(null, "SPY")]
+    [InlineData(" QQQ ", "QQQ")]
+    [InlineData("IWM", "IWM")]
+    public void Load_BindsRelativeStrengthBenchmark(string? symbol, string expected)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Strategies:default:UseRelativeStrength"] = "true",
+                ["Strategies:default:RelativeStrengthBenchmarkSymbol"] = symbol
+            }).Build();
+
+        Assert.Equal(expected,
+            StrategyConfigurationLoader.Load(configuration).RelativeStrengthBenchmarkSymbol);
+        Assert.Equal(expected,
+            Assert.Single(StrategyConfigurationLoader.LoadAll(configuration)).RelativeStrengthBenchmarkSymbol);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void Load_RejectsBlankRelativeStrengthBenchmark(string symbol)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Strategies:default:RelativeStrengthBenchmarkSymbol"] = symbol
+            }).Build();
+
+        Assert.Contains("RelativeStrengthBenchmarkSymbol",
+            Assert.Throws<InvalidOperationException>(() =>
+                StrategyConfigurationLoader.Load(configuration)).Message);
+    }
+
     [Fact]
     public void Load_BindsSelectedNamedStrategyConfigurationFromAppSettingsValues()
     {

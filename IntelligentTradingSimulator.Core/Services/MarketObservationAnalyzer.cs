@@ -12,6 +12,7 @@ public sealed class MarketObservationAnalyzer
     private readonly IScoringEngine _scoringEngine;
     private readonly RsiCalculator _rsiCalculator;
     private readonly Week52HighCalculator _week52HighCalculator;
+    private readonly RelativeStrengthCalculator _relativeStrengthCalculator = new();
 
     public MarketObservationAnalyzer(
         StrategyConfiguration? strategyConfiguration = null)
@@ -45,7 +46,10 @@ public sealed class MarketObservationAnalyzer
     public ObservationResult Analyze(
         string symbol,
         IReadOnlyList<MarketCandle> candles,
-        IReadOnlyList<MarketCandle> week52HighCandles)
+        IReadOnlyList<MarketCandle> week52HighCandles,
+        IReadOnlyList<MarketCandle>? benchmarkCandles = null,
+        string? benchmarkSymbol = null,
+        DateTime? analysisDate = null)
     {
         var first =
             candles.First();
@@ -117,6 +121,12 @@ public sealed class MarketObservationAnalyzer
             Week52High = week52High.Week52High,
             DistanceFromWeek52HighPercent =
                 week52High.DistanceFromWeek52HighPercent,
+            RelativeStrengthBenchmarkSymbol = benchmarkSymbol,
+            RelativeStrengthPercent = _relativeStrengthCalculator.Calculate(
+                candles,
+                benchmarkCandles,
+                first.Date,
+                analysisDate ?? last.Date),
             Score = score
         };
     }

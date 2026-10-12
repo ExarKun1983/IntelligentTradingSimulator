@@ -93,6 +93,8 @@ public static class StrategyConfigurationLoader
                 ?? StrategyConfiguration.DefaultRsiOverboughtPenalty,
             UseRelativeStrength = section.GetValue<bool?>("UseRelativeStrength")
                 ?? true,
+            RelativeStrengthBenchmarkSymbol =
+                (section.GetValue<string>("RelativeStrengthBenchmarkSymbol") ?? "SPY").Trim(),
             Use52WeekHigh = section.GetValue<bool?>("Use52WeekHigh")
                 ?? false,
             Week52HighScoreWeight = section.GetValue<decimal?>("Week52HighScoreWeight")
@@ -100,6 +102,12 @@ public static class StrategyConfigurationLoader
             UseQualityFilter = section.GetValue<bool?>("UseQualityFilter")
                 ?? false
         };
+
+        if (string.IsNullOrWhiteSpace(config.RelativeStrengthBenchmarkSymbol))
+        {
+            throw new InvalidOperationException(
+                $"Configuration value 'Strategies:{id}:RelativeStrengthBenchmarkSymbol' must not be empty.");
+        }
 
         if (config.MaxPositions <= 0)
         {

@@ -531,6 +531,59 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.True(highestWeight > cappedThreshold);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ProcessAsync_ExposesRelativeStrength_UsingSelectedBenchmarkAndSimulatedDate(bool enabled)
+    {
+        var start = new DateTime(2024, 1, 1);
+        var provider = new FakeMarketDataProvider();
+        provider.SetData("AAPL", BuildCandles(start, 10, 100m));
+        provider.SetData("MSFT", BuildCandles(start, 10, 100m));
+        provider.SetData("QQQ", BuildCandles(start, 10, 200m));
+        var result = await BuildProcessor(provider).ProcessAsync(new BacktestDayRequest
+        {
+            CurrentDate = start.AddDays(4),
+            HistoricalStartDate = start,
+            StrategyConfiguration = new StrategyConfiguration
+            {
+                UseRelativeStrength = enabled, RelativeStrengthBenchmarkSymbol = "QQQ"
+            },
+            Portfolio = new Portfolio { StartingCash = 10_000m, Cash = 10_000m },
+            Symbols = ["AAPL", "MSFT", "MISSING"]
+        });
+
+        Assert.Equal(enabled ? 1 : 0, provider.Calls.Count(x => x == "QQQ"));
+        Assert.Equal(2, result.Observations.Count);
+        Assert.All(result.Observations, observation =>
+        {
+            Assert.Equal(enabled ? 2m : (decimal?)null, observation.RelativeStrengthPercent);
+            Assert.Equal(enabled ? "QQQ" : null, observation.RelativeStrengthBenchmarkSymbol);
+            Assert.Equal(4m, observation.MomentumPercent);
+        });
+        Assert.Equal(start.AddDays(4), provider.LastRangeTo);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProcessAsync_MissingOrFailedBenchmarkDoesNotPreventStockAnalysis(bool fail)
+    {
+        var start = new DateTime(2024, 1, 1);
+        var provider = new FakeMarketDataProvider { ThrowForSymbol = fail ? "SPY" : null };
+        provider.SetData("AAPL", BuildCandles(start, 5, 100m));
+
+        var result = await BuildProcessor(provider).ProcessAsync(new BacktestDayRequest
+        {
+            CurrentDate = start.AddDays(4), HistoricalStartDate = start,
+            Portfolio = new Portfolio { StartingCash = 10_000m, Cash = 10_000m },
+            Symbols = ["AAPL"]
+        });
+
+        Assert.Null(Assert.Single(result.Observations).RelativeStrengthPercent);
+        Assert.Single(result.Recommendations);
+    }
+
     private sealed class FakeMarketDataProvider : IMarketDataProvider
     {
         private readonly Dictionary<string, IReadOnlyList<MarketCandle>> _data
@@ -539,6 +592,10 @@ public sealed class BacktestDayProcessorTests : IDisposable
         public DateTime LastRangeTo { get; private set; }
 
         public DateTime LastRangeFrom { get; private set; }
+
+        public List<string> Calls { get; } = [];
+
+        public string? ThrowForSymbol { get; init; }
 
         public void SetData(string symbol, IReadOnlyList<MarketCandle> candles)
         {
@@ -559,6 +616,12 @@ public sealed class BacktestDayProcessorTests : IDisposable
         {
             LastRangeFrom = from.Date;
             LastRangeTo = to.Date;
+            Calls.Add(symbol);
+
+            if (symbol == ThrowForSymbol)
+            {
+                throw new InvalidOperationException("Benchmark unavailable.");
+            }
 
             if (!_data.TryGetValue(symbol, out var candles))
             {

@@ -9,6 +9,23 @@ namespace IntelligentTradingSimulator.Tests;
 
 public sealed class ConsoleReporterTests
 {
+    [Fact]
+    public void PrintMarketRanking_ShowsRelativeStrengthBenchmarkAndPercentagePointsOrNA()
+    {
+        var output = CaptureOutput(() => CreateReporter().PrintMarketRanking(
+        [
+            new ObservationResult
+            {
+                Symbol = "TEST", RelativeStrengthBenchmarkSymbol = "QQQ",
+                RelativeStrengthPercent = -10m
+            },
+            new ObservationResult { Symbol = "MISSING", RelativeStrengthBenchmarkSymbol = "SPY" }
+        ]));
+
+        Assert.Contains($"RS[QQQ]={(-10m).ToString("N2")}pp", output);
+        Assert.Contains("RS[SPY]=N/A", output);
+    }
+
     private static ConsoleReporter CreateReporter() =>
         new ConsoleReporter(
             new PortfolioAllocationService(),

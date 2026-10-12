@@ -45,6 +45,26 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             _analyzerFactory.Create(request.StrategyConfiguration);
         var observationResults = new List<ObservationResult>();
         var prices = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        IReadOnlyList<MarketCandle> benchmarkCandles = [];
+        var benchmarkSymbol = request.StrategyConfiguration.UseRelativeStrength
+            ? request.StrategyConfiguration.RelativeStrengthBenchmarkSymbol
+            : null;
+
+        if (benchmarkSymbol is not null)
+        {
+            try
+            {
+                benchmarkCandles = await _historicalDataService.GetHistoricalDailyUpToAsync(
+                    benchmarkSymbol,
+                    request.HistoricalStartDate,
+                    request.CurrentDate,
+                    request.CurrentDate);
+            }
+            catch (Exception)
+            {
+                Console.WriteLine($"Backtest: benchmark data unavailable for {benchmarkSymbol}.");
+            }
+        }
 
         foreach (var symbol in request.Symbols)
         {
@@ -79,7 +99,10 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                     analyzer.Analyze(
                         symbol,
                         usableCandles,
-                        historicalCandles));
+                        historicalCandles,
+                        benchmarkCandles,
+                        benchmarkSymbol,
+                        request.CurrentDate));
 
                 prices[symbol] = usableCandles.Last().Close;
             }
@@ -145,7 +168,8 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             CurrentDate = request.CurrentDate.Date,
             Portfolio = portfolio,
             Snapshot = snapshot,
-            Recommendations = recommendations
+            Recommendations = recommendations,
+            Observations = rankedResults
         };
     }
 }

@@ -37,6 +37,8 @@ public sealed class StrategyConfiguration
 
     public bool UseRelativeStrength { get; set; } = true;
 
+    public string RelativeStrengthBenchmarkSymbol { get; set; } = "SPY";
+
     public bool Use52WeekHigh { get; set; } = false;
 
     /// <summary>

@@ -350,6 +350,34 @@ public sealed class MarketObservationAnalyzerTests
         Assert.Equal(expected, result.Score);
     }
 
+    [Fact]
+    public void Analyze_ExposesRelativeStrength_WithoutChangingScore()
+    {
+        var start = new DateTime(2024, 1, 1);
+        var stock = Enumerable.Range(0, 5)
+            .Select(index =>
+            {
+                var candle = Candle(100m + index * 5m);
+                candle.Date = start.AddDays(index);
+                return candle;
+            }).ToList();
+        var benchmark = new List<MarketCandle>
+        {
+            new() { Date = start, Close = 200m },
+            new() { Date = start.AddDays(4), Close = 220m },
+            new() { Date = start.AddDays(5), Close = 1_000m }
+        };
+
+        var baseline = _analyzer.Analyze("TEST", stock);
+        var result = _analyzer.Analyze("TEST", stock, stock, benchmark, "QQQ", start.AddDays(4));
+
+        Assert.Equal(10m, result.RelativeStrengthPercent);
+        Assert.Equal("QQQ", result.RelativeStrengthBenchmarkSymbol);
+        Assert.Equal(baseline.Score, result.Score);
+        Assert.Equal(baseline.MomentumPercent, result.MomentumPercent);
+        Assert.Null(baseline.RelativeStrengthPercent);
+    }
+
     private sealed class CapturingScoringEngine : IScoringEngine
     {
         private readonly decimal _score;

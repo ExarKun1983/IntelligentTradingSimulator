@@ -15,17 +15,22 @@ public sealed class MarketDataWorkflow
     private readonly MarketObservationAnalyzer _analyzer;
     private readonly PortfolioRecommendationService _recommendationService;
     private readonly ObservationResultRepository _observationResultRepository;
+    private readonly StrategyConfiguration _strategyConfiguration;
+    private readonly BacktestHistoricalMarketDataService _historicalDataService;
 
     public MarketDataWorkflow(
         IMarketDataProvider provider,
         MarketObservationAnalyzer analyzer,
         PortfolioRecommendationService recommendationService,
-        ObservationResultRepository observationResultRepository)
+        ObservationResultRepository observationResultRepository,
+        StrategyConfiguration? strategyConfiguration = null)
     {
         _provider = provider;
         _analyzer = analyzer;
         _recommendationService = recommendationService;
         _observationResultRepository = observationResultRepository;
+        _strategyConfiguration = strategyConfiguration ?? new StrategyConfiguration();
+        _historicalDataService = new BacktestHistoricalMarketDataService(provider);
     }
 
     public async Task<MarketDataResult> CollectAndAnalyzeAsync(
@@ -34,6 +39,24 @@ public sealed class MarketDataWorkflow
     {
         var results = new List<ObservationResult>();
         var prices = new Dictionary<string, decimal>();
+        var analysisDate = DateTime.Today;
+        IReadOnlyList<MarketCandle> benchmarkCandles = [];
+        var benchmarkSymbol = _strategyConfiguration.UseRelativeStrength
+            ? _strategyConfiguration.RelativeStrengthBenchmarkSymbol
+            : null;
+
+        if (benchmarkSymbol is not null)
+        {
+            try
+            {
+                benchmarkCandles = await _historicalDataService.GetHistoricalDailyUpToAsync(
+                    benchmarkSymbol, from, analysisDate, analysisDate);
+            }
+            catch (Exception)
+            {
+                Console.WriteLine($"Benchmark data unavailable for {benchmarkSymbol}.");
+            }
+        }
 
         foreach (var symbol in symbols)
         {
@@ -44,10 +67,12 @@ public sealed class MarketDataWorkflow
                         symbol,
                         MarketHistoryRequirements.GetEffectiveStartDate(
                             from,
-                            DateTime.Today));
+                            analysisDate));
 
                 var historicalCandles =
-                    candles.OrderBy(x => x.Date).ToList();
+                    candles
+                        .Where(x => x.Date.Date <= analysisDate)
+                        .OrderBy(x => x.Date).ToList();
                 var usableCandles =
                     historicalCandles
                         .Where(x => x.Date.Date >= from.Date)
@@ -65,7 +90,10 @@ public sealed class MarketDataWorkflow
                     _analyzer.Analyze(
                         symbol,
                         usableCandles,
-                        historicalCandles));
+                        historicalCandles,
+                        benchmarkCandles,
+                        benchmarkSymbol,
+                        analysisDate));
 
                 prices[symbol] = usableCandles.Last().Close;
             }
