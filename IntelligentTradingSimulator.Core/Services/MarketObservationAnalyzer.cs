@@ -13,6 +13,7 @@ public sealed class MarketObservationAnalyzer
     private readonly RsiCalculator _rsiCalculator;
     private readonly Week52HighCalculator _week52HighCalculator;
     private readonly RelativeStrengthCalculator _relativeStrengthCalculator = new();
+    private readonly AtrCalculator _atrCalculator = new();
 
     public MarketObservationAnalyzer(
         StrategyConfiguration? strategyConfiguration = null)
@@ -126,6 +127,7 @@ public sealed class MarketObservationAnalyzer
             VolatilityPercent = volatility,
             IsAboveSma5 = isAboveSma5,
             Rsi = rsi,
+            Atr = _atrCalculator.Calculate(candles),
             Week52High = week52High.Week52High,
             DistanceFromWeek52HighPercent =
                 week52High.DistanceFromWeek52HighPercent,

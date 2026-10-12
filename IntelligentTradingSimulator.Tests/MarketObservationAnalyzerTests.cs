@@ -8,6 +8,46 @@ public sealed class MarketObservationAnalyzerTests
 {
     private readonly MarketObservationAnalyzer _analyzer = new();
 
+    [Fact]
+    public void Analyze_ExposesAtr_WithoutChangingScoring()
+    {
+        var analyzer = new MarketObservationAnalyzer(new CapturingScoringEngine(42m));
+        var candles = Enumerable.Range(0, 15)
+            .Select(_ => Candle(100m)).ToList();
+
+        var result = analyzer.Analyze("TEST", candles);
+
+        Assert.Equal(2m, result.Atr);
+        Assert.Equal(42m, result.Score);
+    }
+
+    [Fact]
+    public void Analyze_ReturnsNullAtr_WhenAnalysisHistoryIsInsufficient()
+    {
+        var candles = Enumerable.Range(0, 14)
+            .Select(_ => Candle(100m)).ToList();
+        var extendedHistory = Enumerable.Range(0, 252)
+            .Select(_ => Candle(100m)).ToList();
+
+        var result = _analyzer.Analyze("TEST", candles, extendedHistory);
+
+        Assert.Null(result.Atr);
+        Assert.Equal(0m, result.MomentumPercent);
+    }
+
+    [Fact]
+    public void Analyze_ReturnsNullAtr_ForInvalidPrices_WithoutFailingAnalysis()
+    {
+        var candles = Enumerable.Range(0, 15)
+            .Select(_ => Candle(100m)).ToList();
+        candles[0].High = 98m;
+
+        var result = _analyzer.Analyze("TEST", candles);
+
+        Assert.Null(result.Atr);
+        Assert.Equal("TEST", result.Symbol);
+    }
+
     private static MarketCandle Candle(
         decimal close,
         decimal volume = 1_000_000,
