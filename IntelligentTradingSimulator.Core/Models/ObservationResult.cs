@@ -26,5 +26,9 @@ public sealed class ObservationResult
 
     public decimal? DistanceFromWeek52HighPercent { get; set; }
 
+    public string? RelativeStrengthBenchmarkSymbol { get; set; }
+
+    public decimal? RelativeStrengthPercent { get; set; }
+
     public decimal Score { get; set; }
 }

@@ -13,4 +13,6 @@ public sealed class BacktestDayResult
     public BacktestSnapshot Snapshot { get; set; } = null!;
 
     public IReadOnlyList<StockRecommendation> Recommendations { get; set; } = [];
+
+    public IReadOnlyList<ObservationResult> Observations { get; set; } = [];
 }

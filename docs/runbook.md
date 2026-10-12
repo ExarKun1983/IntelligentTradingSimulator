@@ -67,11 +67,16 @@ Each strategy supports these settings:
 | `RsiOverboughtThreshold` | RSI penalty threshold, from 0 to 100 and not below the preferred maximum. |
 | `RsiPreferredRangeBonus`, `RsiOverboughtPenalty` | Non-negative score bonus and penalty. |
 | `UseRelativeStrength` | Enable relative-strength analysis. |
+| `RelativeStrengthBenchmarkSymbol` | Benchmark ticker for Relative Strength (default `SPY`; for example `QQQ` or `IWM`). Must not be blank. |
 | `Use52WeekHigh` | Enable distance-from-52-week-high scoring. |
 | `Week52HighScoreWeight` | Non-negative maximum score contribution for the 52-week-high factor. |
 | `UseQualityFilter` | Enable the quality filter. |
 
 The loader validates strategy settings at startup. Missing settings use the defaults in `StrategyConfiguration`; invalid or missing active strategy sections stop startup with a configuration error.
+
+Relative Strength is the stock's close-to-close return minus the selected benchmark's return, in percentage points (not a price ratio or RSI). Positive values indicate outperformance; negative values indicate underperformance. Analysis uses the stock's first and last available sessions in the requested lookback, with benchmark closes required on those exact dates. No candles after the analysis day are used, including during backtests. Missing or ambiguous endpoints, fewer than two distinct sessions, non-positive endpoint prices, or arithmetic overflow produce `null` (`N/A` in market ranking details); benchmark download failures do not prevent stock analysis. Interior missing sessions do not affect close-to-close returns. `UseRelativeStrength=false` skips benchmark fetching and leaves the value unavailable.
+
+The value is exposed as `ObservationResult.RelativeStrengthPercent` alongside `RelativeStrengthBenchmarkSymbol`, including in `BacktestDayResult.Observations`. It does not change scores or ranking weights (#30). Like RSI and 52-week-high details, these analysis-only fields are not saved in the existing observation-history table.
 
 ## Strategy experimentation flow
 

@@ -122,6 +122,56 @@ public sealed class MarketDataWorkflowTests : IDisposable
             result.RankedResults[1].Score);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CollectAndAnalyzeAsync_UsesSelectedBenchmarkOnce_WithoutChangingRanking(bool enabled)
+    {
+        var start = new DateTime(2024, 1, 1);
+        var stock = BuildCandles(start, 5);
+        var benchmark = BuildCandles(start, 5);
+        benchmark[^1].Close = 110m;
+        stock.Add(new MarketCandle { Date = DateTime.MaxValue, Close = 10_000m });
+        var provider = new FakeMarketDataProvider(
+            new Dictionary<string, IReadOnlyList<MarketCandle>>
+            {
+                ["A"] = stock, ["B"] = stock, ["QQQ"] = benchmark
+            });
+        var strategy = new StrategyConfiguration
+        {
+            UseRelativeStrength = enabled,
+            RelativeStrengthBenchmarkSymbol = "QQQ"
+        };
+        var workflow = BuildWorkflow(provider, strategy);
+
+        var result = await workflow.CollectAndAnalyzeAsync(["A", "B", "MISSING"], start);
+
+        Assert.Equal(2, result.RankedResults.Count);
+        Assert.Equal(enabled ? 1 : 0, provider.Calls.Count(x => x == "QQQ"));
+        Assert.All(result.RankedResults, observation =>
+        {
+            Assert.Equal(enabled ? -6m : (decimal?)null, observation.RelativeStrengthPercent);
+            Assert.Equal(enabled ? "QQQ" : null, observation.RelativeStrengthBenchmarkSymbol);
+            Assert.Equal(4m, observation.MomentumPercent);
+            var expected = new MarketObservationAnalyzer(strategy)
+                .Analyze(observation.Symbol, stock.Take(5).ToList());
+            Assert.Equal(expected.Score, observation.Score);
+        });
+    }
+
+    [Fact]
+    public async Task CollectAndAnalyzeAsync_BenchmarkFailureDoesNotPreventStockAnalysis()
+    {
+        var start = new DateTime(2024, 1, 1);
+        var provider = new FakeMarketDataProvider(BuildCandles(start, 5));
+
+        var result = await BuildWorkflow(provider).CollectAndAnalyzeAsync(["TEST"], start);
+
+        var observation = Assert.Single(result.RankedResults);
+        Assert.Null(observation.RelativeStrengthPercent);
+        Assert.Equal("SPY", observation.RelativeStrengthBenchmarkSymbol);
+    }
+
     private MarketDataWorkflow BuildWorkflow(
         IMarketDataProvider provider,
         StrategyConfiguration? strategy = null)
@@ -130,7 +180,8 @@ public sealed class MarketDataWorkflowTests : IDisposable
             provider,
             new MarketObservationAnalyzer(strategy),
             new PortfolioRecommendationService(),
-            new ObservationResultRepository(_dbContext));
+            new ObservationResultRepository(_dbContext),
+            strategy);
     }
 
     private static List<MarketCandle> BuildCandles(
@@ -171,11 +222,14 @@ public sealed class MarketDataWorkflowTests : IDisposable
 
         public DateTime LastFrom { get; private set; }
 
+        public List<string> Calls { get; } = [];
+
         public Task<IReadOnlyList<MarketCandle>> GetHistoricalDailyAsync(
             string symbol,
             DateTime from)
         {
             LastFrom = from.Date;
+            Calls.Add(symbol);
 
             return Task.FromResult<IReadOnlyList<MarketCandle>>(
                 _candlesBySymbol[symbol]
@@ -189,6 +243,7 @@ public sealed class MarketDataWorkflowTests : IDisposable
             DateTime from,
             DateTime to)
         {
+            Calls.Add(symbol);
             return Task.FromResult<IReadOnlyList<MarketCandle>>(
                 _candlesBySymbol[symbol]
                     .Where(x =>
