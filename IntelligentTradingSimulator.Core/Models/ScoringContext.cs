@@ -21,4 +21,6 @@ public sealed class ScoringContext
     public decimal? Rsi { get; init; }
 
     public decimal? DistanceFromWeek52HighPercent { get; init; }
+
+    public decimal? RelativeStrengthPercent { get; init; }
 }

@@ -350,8 +350,12 @@ public sealed class MarketObservationAnalyzerTests
         Assert.Equal(expected, result.Score);
     }
 
-    [Fact]
-    public void Analyze_ExposesRelativeStrength_WithoutChangingScore()
+    [Theory]
+    [InlineData(true, 2, 20)]
+    [InlineData(false, 2, 0)]
+    [InlineData(true, 0, 0)]
+    public void Analyze_ExposesRelativeStrengthAndAppliedScoreContribution(
+        bool enabled, int weight, int expectedContribution)
     {
         var start = new DateTime(2024, 1, 1);
         var stock = Enumerable.Range(0, 5)
@@ -368,14 +372,29 @@ public sealed class MarketObservationAnalyzerTests
             new() { Date = start.AddDays(5), Close = 1_000m }
         };
 
-        var baseline = _analyzer.Analyze("TEST", stock);
-        var result = _analyzer.Analyze("TEST", stock, stock, benchmark, "QQQ", start.AddDays(4));
+        var analyzer = new MarketObservationAnalyzer(new StrategyConfiguration
+        {
+            UseRelativeStrength = enabled,
+            RelativeStrengthScoreWeight = weight
+        });
+        var baseline = analyzer.Analyze("TEST", stock);
+        var result = analyzer.Analyze("TEST", stock, stock, benchmark, "QQQ", start.AddDays(4));
 
         Assert.Equal(10m, result.RelativeStrengthPercent);
         Assert.Equal("QQQ", result.RelativeStrengthBenchmarkSymbol);
-        Assert.Equal(baseline.Score, result.Score);
+        Assert.Equal(baseline.Score + expectedContribution, result.Score);
+        Assert.Equal((decimal)expectedContribution, result.RelativeStrengthScoreContribution);
         Assert.Equal(baseline.MomentumPercent, result.MomentumPercent);
         Assert.Null(baseline.RelativeStrengthPercent);
+        Assert.Equal(0m, baseline.RelativeStrengthScoreContribution);
+
+        var customEngine = new CapturingScoringEngine(42m);
+        var customResult = new MarketObservationAnalyzer(customEngine)
+            .Analyze("TEST", stock, stock, benchmark, "QQQ", start.AddDays(4));
+
+        Assert.Equal(10m, customEngine.LastContext!.RelativeStrengthPercent);
+        Assert.Equal(42m, customResult.Score);
+        Assert.Null(customResult.RelativeStrengthScoreContribution);
     }
 
     private sealed class CapturingScoringEngine : IScoringEngine

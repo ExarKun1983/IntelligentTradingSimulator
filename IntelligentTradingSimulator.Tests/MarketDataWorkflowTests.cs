@@ -125,7 +125,7 @@ public sealed class MarketDataWorkflowTests : IDisposable
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task CollectAndAnalyzeAsync_UsesSelectedBenchmarkOnce_WithoutChangingRanking(bool enabled)
+    public async Task CollectAndAnalyzeAsync_UsesSelectedBenchmarkOnce_AndAdjustsScore(bool enabled)
     {
         var start = new DateTime(2024, 1, 1);
         var stock = BuildCandles(start, 5);
@@ -155,8 +155,48 @@ public sealed class MarketDataWorkflowTests : IDisposable
             Assert.Equal(4m, observation.MomentumPercent);
             var expected = new MarketObservationAnalyzer(strategy)
                 .Analyze(observation.Symbol, stock.Take(5).ToList());
-            Assert.Equal(expected.Score, observation.Score);
+            Assert.Equal(expected.Score + (enabled ? -6m : 0m), observation.Score);
+            Assert.Equal(enabled ? -6m : 0m, observation.RelativeStrengthScoreContribution);
         });
+    }
+
+    [Theory]
+    [InlineData(false, 20, "WEAK")]
+    [InlineData(true, 0, "WEAK")]
+    [InlineData(true, 20, "STRONG")]
+    public async Task CollectAndAnalyzeAsync_RanksByRelativeStrengthAdjustedScore(
+        bool enabled, int weight, string expectedFirst)
+    {
+        var start = new DateTime(2024, 1, 1);
+        var strong = BuildCandles(start, 5);
+        var weak = BuildCandles(start, 5);
+        weak[^1].Close = 103m;
+        weak[^1].Volume = 5_000_000m;
+        var benchmark = BuildCandles(start, 5);
+        benchmark[^1].Close = 103.5m;
+        var provider = new FakeMarketDataProvider(
+            new Dictionary<string, IReadOnlyList<MarketCandle>>
+            {
+                ["WEAK"] = weak, ["STRONG"] = strong, ["SPY"] = benchmark
+            });
+        var strategy = new StrategyConfiguration
+        {
+            UseRelativeStrength = enabled,
+            RelativeStrengthScoreWeight = weight
+        };
+
+        var result = await BuildWorkflow(provider, strategy)
+            .CollectAndAnalyzeAsync(["WEAK", "STRONG"], start);
+
+        Assert.Equal(expectedFirst, result.RankedResults[0].Symbol);
+        Assert.True(result.RankedResults[0].Score > result.RankedResults[1].Score);
+        if (enabled)
+        {
+            Assert.Equal(0.5m * weight,
+                result.RankedResults.Single(x => x.Symbol == "STRONG").RelativeStrengthScoreContribution);
+            Assert.Equal(-0.5m * weight,
+                result.RankedResults.Single(x => x.Symbol == "WEAK").RelativeStrengthScoreContribution);
+        }
     }
 
     [Fact]
@@ -169,6 +209,7 @@ public sealed class MarketDataWorkflowTests : IDisposable
 
         var observation = Assert.Single(result.RankedResults);
         Assert.Null(observation.RelativeStrengthPercent);
+        Assert.Equal(0m, observation.RelativeStrengthScoreContribution);
         Assert.Equal("SPY", observation.RelativeStrengthBenchmarkSymbol);
     }
 

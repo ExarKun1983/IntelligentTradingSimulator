@@ -17,13 +17,18 @@ public sealed class ConsoleReporterTests
             new ObservationResult
             {
                 Symbol = "TEST", RelativeStrengthBenchmarkSymbol = "QQQ",
-                RelativeStrengthPercent = -10m
+                RelativeStrengthPercent = -10m,
+                RelativeStrengthScoreContribution = -25m
             },
+            new ObservationResult { Symbol = "DISABLED", RelativeStrengthScoreContribution = 0m },
             new ObservationResult { Symbol = "MISSING", RelativeStrengthBenchmarkSymbol = "SPY" }
         ]));
 
         Assert.Contains($"RS[QQQ]={(-10m).ToString("N2")}pp", output);
         Assert.Contains("RS[SPY]=N/A", output);
+        Assert.Contains($"RSScore={(-25m).ToString("N2")}", output);
+        Assert.Contains($"RSScore={0m.ToString("N2")}", output);
+        Assert.Contains("RSScore=N/A", output);
     }
 
     private static ConsoleReporter CreateReporter() =>

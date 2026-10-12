@@ -39,6 +39,7 @@ public sealed class ConsoleReporter
                 $" | 52WHigh={(result.Week52High.HasValue ? result.Week52High.Value.ToString("N2") : "N/A")}" +
                 $" | 52WDist={(result.DistanceFromWeek52HighPercent.HasValue ? result.DistanceFromWeek52HighPercent.Value.ToString("N2") + "%" : "N/A")}" +
                 $" | RS[{result.RelativeStrengthBenchmarkSymbol ?? "N/A"}]={(result.RelativeStrengthPercent.HasValue ? result.RelativeStrengthPercent.Value.ToString("N2") + "pp" : "N/A")}" +
+                $" | RSScore={(result.RelativeStrengthScoreContribution.HasValue ? result.RelativeStrengthScoreContribution.Value.ToString("N2") : "N/A")}" +
                 $" | Score={result.Score:N2}");
         }
     }

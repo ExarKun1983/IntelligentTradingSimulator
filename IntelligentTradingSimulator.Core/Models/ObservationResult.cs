@@ -30,5 +30,7 @@ public sealed class ObservationResult
 
     public decimal? RelativeStrengthPercent { get; set; }
 
+    public decimal? RelativeStrengthScoreContribution { get; set; }
+
     public decimal Score { get; set; }
 }

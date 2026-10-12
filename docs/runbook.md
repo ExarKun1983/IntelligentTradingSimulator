@@ -66,8 +66,9 @@ Each strategy supports these settings:
 | `RsiPreferredMinimum`, `RsiPreferredMaximum` | Preferred RSI range, each from 0 to 100; minimum cannot exceed maximum. |
 | `RsiOverboughtThreshold` | RSI penalty threshold, from 0 to 100 and not below the preferred maximum. |
 | `RsiPreferredRangeBonus`, `RsiOverboughtPenalty` | Non-negative score bonus and penalty. |
-| `UseRelativeStrength` | Enable relative-strength analysis. |
+| `UseRelativeStrength` | Enable relative-strength analysis and scoring (default `true`). |
 | `RelativeStrengthBenchmarkSymbol` | Benchmark ticker for Relative Strength (default `SPY`; for example `QQQ` or `IWM`). Must not be blank. |
+| `RelativeStrengthScoreWeight` | Non-negative score points per percentage point of Relative Strength (default `1`). Set to `0` to retain analysis without affecting scores. |
 | `Use52WeekHigh` | Enable distance-from-52-week-high scoring. |
 | `Week52HighScoreWeight` | Non-negative maximum score contribution for the 52-week-high factor. |
 | `UseQualityFilter` | Enable the quality filter. |
@@ -76,7 +77,9 @@ The loader validates strategy settings at startup. Missing settings use the defa
 
 Relative Strength is the stock's close-to-close return minus the selected benchmark's return, in percentage points (not a price ratio or RSI). Positive values indicate outperformance; negative values indicate underperformance. Analysis uses the stock's first and last available sessions in the requested lookback, with benchmark closes required on those exact dates. No candles after the analysis day are used, including during backtests. Missing or ambiguous endpoints, fewer than two distinct sessions, non-positive endpoint prices, or arithmetic overflow produce `null` (`N/A` in market ranking details); benchmark download failures do not prevent stock analysis. Interior missing sessions do not affect close-to-close returns. `UseRelativeStrength=false` skips benchmark fetching and leaves the value unavailable.
 
-The value is exposed as `ObservationResult.RelativeStrengthPercent` alongside `RelativeStrengthBenchmarkSymbol`, including in `BacktestDayResult.Observations`. It does not change scores or ranking weights (#30). Like RSI and 52-week-high details, these analysis-only fields are not saved in the existing observation-history table.
+The value is exposed as `ObservationResult.RelativeStrengthPercent` alongside `RelativeStrengthBenchmarkSymbol`, including in `BacktestDayResult.Observations`. Eligible stocks receive `RelativeStrengthPercent * RelativeStrengthScoreWeight` score points: for example, +10pp with weight 2 adds 20 points, while -10pp subtracts 20. Missing Relative Strength, a disabled factor, or a zero weight contributes zero; SMA5 and quality-filter disqualifications remain unchanged. This factor is enabled by default, so scores with available benchmark data now include it. Decimal scoring overflow is surfaced as an error rather than silently substituting a contribution.
+
+`ObservationResult.RelativeStrengthScoreContribution` and the market ranking's `RSScore` field report the contribution actually applied to the final score. Custom scoring engines that do not provide factor diagnostics report `N/A`. Like RSI and 52-week-high details, these diagnostic fields are not saved in the existing observation-history table; the final score is saved as before.
 
 ## Strategy experimentation flow
 

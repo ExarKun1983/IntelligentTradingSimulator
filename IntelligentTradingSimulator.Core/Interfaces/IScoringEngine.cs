@@ -16,4 +16,14 @@ public interface IScoringEngine
     /// symbol as not eligible for the ranking.
     /// </returns>
     decimal CalculateScore(ScoringContext context);
+
+    /// <summary>
+    /// Calculates the score and reports the applied Relative Strength contribution.
+    /// Engines without factor diagnostics leave the contribution unavailable.
+    /// </summary>
+    decimal CalculateScore(ScoringContext context, out decimal? relativeStrengthScoreContribution)
+    {
+        relativeStrengthScoreContribution = null;
+        return CalculateScore(context);
+    }
 }

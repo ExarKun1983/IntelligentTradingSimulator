@@ -95,6 +95,8 @@ public static class StrategyConfigurationLoader
                 ?? true,
             RelativeStrengthBenchmarkSymbol =
                 (section.GetValue<string>("RelativeStrengthBenchmarkSymbol") ?? "SPY").Trim(),
+            RelativeStrengthScoreWeight = section.GetValue<decimal?>("RelativeStrengthScoreWeight")
+                ?? StrategyConfiguration.DefaultRelativeStrengthScoreWeight,
             Use52WeekHigh = section.GetValue<bool?>("Use52WeekHigh")
                 ?? false,
             Week52HighScoreWeight = section.GetValue<decimal?>("Week52HighScoreWeight")
@@ -173,6 +175,12 @@ public static class StrategyConfigurationLoader
         {
             throw new InvalidOperationException(
                 $"Configuration value 'Strategies:{id}:Week52HighScoreWeight' must be greater than or equal to zero.");
+        }
+
+        if (config.RelativeStrengthScoreWeight < 0m)
+        {
+            throw new InvalidOperationException(
+                $"Configuration value 'Strategies:{id}:RelativeStrengthScoreWeight' must be greater than or equal to zero.");
         }
 
         return config;

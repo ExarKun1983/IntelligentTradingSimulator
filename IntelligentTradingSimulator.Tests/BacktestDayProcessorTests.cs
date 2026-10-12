@@ -547,7 +547,8 @@ public sealed class BacktestDayProcessorTests : IDisposable
             HistoricalStartDate = start,
             StrategyConfiguration = new StrategyConfiguration
             {
-                UseRelativeStrength = enabled, RelativeStrengthBenchmarkSymbol = "QQQ"
+                UseRelativeStrength = enabled, RelativeStrengthBenchmarkSymbol = "QQQ",
+                RelativeStrengthScoreWeight = 3m
             },
             Portfolio = new Portfolio { StartingCash = 10_000m, Cash = 10_000m },
             Symbols = ["AAPL", "MSFT", "MISSING"]
@@ -560,6 +561,10 @@ public sealed class BacktestDayProcessorTests : IDisposable
             Assert.Equal(enabled ? 2m : (decimal?)null, observation.RelativeStrengthPercent);
             Assert.Equal(enabled ? "QQQ" : null, observation.RelativeStrengthBenchmarkSymbol);
             Assert.Equal(4m, observation.MomentumPercent);
+            Assert.Equal(enabled ? 6m : 0m, observation.RelativeStrengthScoreContribution);
+            var baseline = new MarketObservationAnalyzer()
+                .Analyze(observation.Symbol, BuildCandles(start, 5, 100m));
+            Assert.Equal(baseline.Score + (enabled ? 6m : 0m), observation.Score);
         });
         Assert.Equal(start.AddDays(4), provider.LastRangeTo);
     }

@@ -26,7 +26,13 @@ public sealed class RuleBasedScoringEngine : IScoringEngine
 
     public decimal CalculateScore(ScoringContext context)
     {
+        return CalculateScore(context, out _);
+    }
+
+    public decimal CalculateScore(ScoringContext context, out decimal? relativeStrengthScoreContribution)
+    {
         ArgumentNullException.ThrowIfNull(context);
+        relativeStrengthScoreContribution = 0m;
 
         var score =
             context.MomentumPercent * 10m
@@ -65,6 +71,14 @@ public sealed class RuleBasedScoringEngine : IScoringEngine
         {
             score += CalculateWeek52HighContribution(
                 context.DistanceFromWeek52HighPercent.Value);
+        }
+
+        if (_strategyConfiguration.UseRelativeStrength &&
+            context.RelativeStrengthPercent.HasValue)
+        {
+            relativeStrengthScoreContribution =
+                context.RelativeStrengthPercent.Value * _strategyConfiguration.RelativeStrengthScoreWeight;
+            score += relativeStrengthScoreContribution.Value;
         }
 
         return score;
