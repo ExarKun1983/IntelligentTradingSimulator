@@ -47,6 +47,7 @@ public sealed class PortfolioRebalancingService
                 {
                     Symbol = instruction.Symbol,
                     Action = TradeActionType.Sell,
+                    ExitReason = ExitReason.Rebalance,
                     Amount = Math.Abs(
                         instruction.Difference)
                 },

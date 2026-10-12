@@ -314,6 +314,9 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     b.Property<int>("Action")
                         .HasColumnType("int");
 
+                    b.Property<int?>("ExitReason")
+                        .HasColumnType("int");
+
                     b.Property<int>("PortfolioId")
                         .HasColumnType("int");
 

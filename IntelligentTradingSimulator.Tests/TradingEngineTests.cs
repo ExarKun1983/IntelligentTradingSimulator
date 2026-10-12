@@ -74,6 +74,7 @@ public sealed class TradingEngineTests
 
         Assert.Equal(600m, portfolio.Cash);
         Assert.Equal(5m, portfolio.Positions[0].Quantity);
+        Assert.Equal(ExitReason.Manual, Assert.Single(portfolio.Trades).ExitReason);
     }
 
     [Fact]
@@ -99,6 +100,57 @@ public sealed class TradingEngineTests
 
         Assert.Empty(portfolio.Positions);
         Assert.Equal(500m, portfolio.Cash);
+        Assert.Equal(ExitReason.Manual, Assert.Single(portfolio.Trades).ExitReason);
+    }
+
+    [Theory]
+    [InlineData(ExitReason.Manual)]
+    [InlineData(ExitReason.Rebalance)]
+    [InlineData(ExitReason.StopLoss)]
+    [InlineData(ExitReason.TrailingStop)]
+    public void Execute_Sell_RecordsProvidedExitReason(ExitReason reason)
+    {
+        var portfolio = new Portfolio
+        {
+            Positions =
+            [
+                new Position { Symbol = "AAPL", Quantity = 10m, CurrentPrice = 100m }
+            ]
+        };
+        var decision = new TradingDecision
+        {
+            Symbol = "AAPL",
+            Action = TradeActionType.Sell,
+            Amount = 500m,
+            ExitReason = reason
+        };
+
+        _engine.Execute(portfolio, decision, currentPrice: 100m);
+
+        var trade = Assert.Single(portfolio.Trades);
+        Assert.Equal(TradeActionType.Sell, trade.Action);
+        Assert.Equal(reason, trade.ExitReason);
+        Assert.Equal(5m, trade.Quantity);
+        Assert.Equal(500m, portfolio.Cash);
+        Assert.Equal(5m, Assert.Single(portfolio.Positions).Quantity);
+    }
+
+    [Fact]
+    public void Execute_Sell_DoesNotRecordTrade_WhenPositionIsMissing()
+    {
+        var portfolio = new Portfolio { Cash = 500m };
+        var decision = new TradingDecision
+        {
+            Symbol = "AAPL",
+            Action = TradeActionType.Sell,
+            Amount = 500m,
+            ExitReason = ExitReason.StopLoss
+        };
+
+        _engine.Execute(portfolio, decision, currentPrice: 100m);
+
+        Assert.Empty(portfolio.Trades);
+        Assert.Equal(500m, portfolio.Cash);
     }
 
     [Fact]
@@ -109,7 +161,8 @@ public sealed class TradingEngineTests
         {
             Symbol = "MSFT",
             Action = TradeActionType.Buy,
-            Amount = 500m
+            Amount = 500m,
+            ExitReason = ExitReason.StopLoss
         };
 
         _engine.Execute(portfolio, decision, currentPrice: 50m);
@@ -117,5 +170,6 @@ public sealed class TradingEngineTests
         Assert.Single(portfolio.Trades);
         Assert.Equal(TradeActionType.Buy, portfolio.Trades[0].Action);
         Assert.Equal("MSFT", portfolio.Trades[0].Symbol);
+        Assert.Null(portfolio.Trades[0].ExitReason);
     }
 }
