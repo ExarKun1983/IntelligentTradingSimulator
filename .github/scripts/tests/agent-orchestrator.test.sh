@@ -245,7 +245,7 @@ jq '.state = "OPEN"' "$STATE/pr-144.json" > "$STATE/tmp" && mv "$STATE/tmp" "$ST
 check "Issue with another open PR is not a replacement target" "" "$(resolve_issue 145 copilot/featuretrack-exit-reason 2>/dev/null)"
 
 setup_issue_39
-: > "$STATE/issue-39.events"; echo '[]' > "$STATE/issue-39.events"
+echo '[]' > "$STATE/issue-39.events"
 label_event 39 "agent:ready" "2026-10-12T12:46:06Z"
 label_event 39 "agent:blocked" "2026-10-12T12:46:08Z"
 check "ready label without an agent launch is not a replacement target" "" "$(resolve_issue 145 copilot/featuretrack-exit-reason 2>/dev/null)"
@@ -296,10 +296,19 @@ handle_ci_failure 145 39 abc123 cancelled https://ci/run/2 >/dev/null
 check "no duplicate blocked comment" "1" "$(calls_matching 'pr comment 145')"
 
 setup_ci
-for sha in s1 s2 s3; do append_json "$STATE/pr-145.comments" "<!-- agent-orchestrator:ci-failure-sha=$sha -->"; done
+for sha in s1 s2 s3; do
+  append_json "$STATE/pr-145.comments" "$(printf '@copilot CI failed for commit %s: url\n\n<!-- agent-orchestrator:ci-failure-sha=%s -->' "$sha" "$sha")"
+done
 handle_ci_failure 145 39 abc123 failure https://ci/run/3 >/dev/null
 check "CI fix rounds are capped" "agent:blocked" "$(labels_of 39)"
 check_contains "cap is explained" "stopped after 3 automatic CI fix rounds" "$(jq -r '.[]' "$STATE/pr-145.comments")"
+
+setup_ci
+for sha in c1 c2 c3; do
+  append_json "$STATE/pr-145.comments" "$(printf 'Agent orchestrator: CI for %s concluded "cancelled".\n\n<!-- agent-orchestrator:ci-failure-sha=%s -->' "$sha" "$sha")"
+done
+handle_ci_failure 145 39 abc123 failure https://ci/run/3 >/dev/null
+check "cancelled-CI notices do not use up fix rounds" "agent:working" "$(labels_of 39)"
 
 setup_ci
 handle_ci_failure 145 39 old-sha failure https://ci/run/4 >/dev/null

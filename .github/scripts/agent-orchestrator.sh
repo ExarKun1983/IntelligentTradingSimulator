@@ -284,7 +284,8 @@ handle_ci_failure() {
     set_state "$issue" "$BLOCKED_LABEL"
     return 0
   fi
-  rounds="$(printf '%s\n' "$existing" | grep -c 'agent-orchestrator:ci-failure-sha=' || true)"
+  # Only Copilot handoffs count as fix rounds; cancelled/startup-failure notices do not.
+  rounds="$(printf '%s\n' "$existing" | grep -c '^@copilot CI failed for commit ' || true)"
   if [ "$rounds" -ge "$MAX_FIX_ROUNDS" ]; then
     gh pr comment "$pr" --repo "$REPO" --body "$(printf 'Agent orchestrator stopped after %s automatic CI fix rounds. CI still fails for %s (%s) and needs a human decision.\n\n%s' \
       "$rounds" "$sha" "$run_url" "$marker")" >/dev/null
