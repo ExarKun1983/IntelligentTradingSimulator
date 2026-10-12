@@ -15,6 +15,9 @@ public sealed class StrategyConfiguration
     public const decimal DefaultRsiOverboughtPenalty = 5m;
     public const decimal DefaultWeek52HighScoreWeight = 5m;
     public const decimal DefaultRelativeStrengthScoreWeight = 1m;
+    public const decimal DefaultMomentumScoreWeight = 10m;
+    public const decimal DefaultVolumeTrendScoreWeight = 0.05m;
+    public const decimal DefaultVolatilityScoreWeight = 1m;
 
     public string Id { get; set; } = DefaultId;
 
@@ -23,6 +26,15 @@ public sealed class StrategyConfiguration
     public decimal MaxPositionWeight { get; set; } = DefaultMaxPositionWeight;
 
     public int LookbackDays { get; set; } = DefaultLookbackDays;
+
+    /// <summary>Score points per percentage point of momentum; zero disables the contribution.</summary>
+    public decimal MomentumScoreWeight { get; set; } = DefaultMomentumScoreWeight;
+
+    /// <summary>Score points per percentage point of volume trend; zero disables the contribution.</summary>
+    public decimal VolumeTrendScoreWeight { get; set; } = DefaultVolumeTrendScoreWeight;
+
+    /// <summary>Penalty points per percentage point of volatility; zero disables the contribution, not the quality filter.</summary>
+    public decimal VolatilityScoreWeight { get; set; } = DefaultVolatilityScoreWeight;
 
     public bool UseRsi { get; set; } = false;
 

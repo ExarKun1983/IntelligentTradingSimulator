@@ -11,6 +11,6 @@ public sealed class MarketObservationAnalyzerFactory
         ArgumentNullException.ThrowIfNull(strategyConfiguration);
 
         return new MarketObservationAnalyzer(
-            new RuleBasedScoringEngine(strategyConfiguration));
+            new CompositeScoringEngine(strategyConfiguration));
     }
 }

@@ -75,6 +75,44 @@ public sealed class BacktestDayProcessorTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessAsync_CompositeWeightsCanChangeMultiStockRanking()
+    {
+        var startDate = new DateTime(2024, 1, 1);
+        var provider = new FakeMarketDataProvider();
+        var momentumCandles = BuildCandles(startDate, 10, 100m);
+        var volumeCandles = BuildCandles(startDate, 10, 200m);
+        volumeCandles[^1].Volume = 2_000_000m;
+        provider.SetData("MOMENTUM", momentumCandles);
+        provider.SetData("VOLUME", volumeCandles);
+        var processor = BuildProcessor(provider);
+
+        async Task<BacktestDayResult> Run(StrategyConfiguration configuration) =>
+            await processor.ProcessAsync(new BacktestDayRequest
+            {
+                BacktestRunId = 32,
+                CurrentDate = startDate.AddDays(9),
+                HistoricalStartDate = startDate,
+                Portfolio = new Portfolio { Name = "Composite", StartingCash = 10_000m, Cash = 10_000m },
+                Symbols = ["MOMENTUM", "VOLUME"],
+                StrategyConfiguration = configuration
+            });
+
+        var baseline = await Run(new StrategyConfiguration { UseRelativeStrength = false });
+        var volumeWeighted = await Run(new StrategyConfiguration
+        {
+            MomentumScoreWeight = 0m,
+            VolumeTrendScoreWeight = 1m,
+            VolatilityScoreWeight = 0m,
+            UseRelativeStrength = false
+        });
+
+        Assert.Equal("MOMENTUM", baseline.Observations[0].Symbol);
+        Assert.Equal("VOLUME", volumeWeighted.Observations[0].Symbol);
+        Assert.Equal(105m, volumeWeighted.Observations[0].Score);
+        Assert.Equal(5m, volumeWeighted.Observations[1].Score);
+    }
+
+    [Fact]
     public async Task ProcessAsync_CreatesAndPersistsSnapshot()
     {
         var provider = new FakeMarketDataProvider();

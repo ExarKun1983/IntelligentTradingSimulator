@@ -32,7 +32,7 @@ services.AddSingleton(selectedStrategyConfiguration);
 services.AddSingleton<BacktestEngineRequestFactory>();
 
 services.AddSingleton<IScoringEngine>(
-    _ => new RuleBasedScoringEngine(selectedStrategyConfiguration));
+    _ => new CompositeScoringEngine(selectedStrategyConfiguration));
 services.AddSingleton(
     sp => new MarketObservationAnalyzer(
         sp.GetRequiredService<IScoringEngine>()));

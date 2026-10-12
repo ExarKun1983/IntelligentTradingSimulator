@@ -1,5 +1,3 @@
-using System;
-
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 
@@ -11,92 +9,21 @@ namespace IntelligentTradingSimulator.Core.Services;
 /// </summary>
 public sealed class RuleBasedScoringEngine : IScoringEngine
 {
-    private const decimal MinimumWeek52HighDistancePercent = -100m;
-    private const decimal MaximumWeek52HighDistancePercent = 0m;
-    private const decimal NeutralWeek52HighDistancePercent = -50m;
-
-    private readonly StrategyConfiguration _strategyConfiguration;
+    private readonly CompositeScoringEngine _compositeScoringEngine;
 
     public RuleBasedScoringEngine(
         StrategyConfiguration? strategyConfiguration = null)
     {
-        _strategyConfiguration =
-            strategyConfiguration ?? new StrategyConfiguration();
+        _compositeScoringEngine = new CompositeScoringEngine(strategyConfiguration);
     }
 
     public decimal CalculateScore(ScoringContext context)
     {
-        return CalculateScore(context, out _);
+        return _compositeScoringEngine.CalculateScore(context);
     }
 
     public decimal CalculateScore(ScoringContext context, out decimal? relativeStrengthScoreContribution)
     {
-        ArgumentNullException.ThrowIfNull(context);
-        relativeStrengthScoreContribution = 0m;
-
-        var score =
-            context.MomentumPercent * 10m
-            + context.VolumeTrendPercent * 0.05m
-            - context.VolatilityPercent;
-
-        if (!context.IsAboveSma5)
-        {
-            return StrategyConfiguration.DisqualifiedScore;
-        }
-
-        score += 5m;
-
-        if (_strategyConfiguration.UseQualityFilter &&
-            context.VolatilityPercent > StrategyConfiguration.QualityVolatilityThresholdPercent)
-        {
-            return StrategyConfiguration.DisqualifiedScore;
-        }
-
-        if (_strategyConfiguration.UseRsi &&
-            context.Rsi.HasValue &&
-            context.Rsi.Value >= _strategyConfiguration.RsiOverboughtThreshold)
-        {
-            score -= _strategyConfiguration.RsiOverboughtPenalty;
-        }
-        else if (_strategyConfiguration.UseRsi &&
-                 context.Rsi.HasValue &&
-                 context.Rsi.Value >= _strategyConfiguration.RsiPreferredMinimum &&
-                 context.Rsi.Value <= _strategyConfiguration.RsiPreferredMaximum)
-        {
-            score += _strategyConfiguration.RsiPreferredRangeBonus;
-        }
-
-        if (_strategyConfiguration.Use52WeekHigh &&
-            context.DistanceFromWeek52HighPercent.HasValue)
-        {
-            score += CalculateWeek52HighContribution(
-                context.DistanceFromWeek52HighPercent.Value);
-        }
-
-        if (_strategyConfiguration.UseRelativeStrength &&
-            context.RelativeStrengthPercent.HasValue)
-        {
-            relativeStrengthScoreContribution =
-                context.RelativeStrengthPercent.Value * _strategyConfiguration.RelativeStrengthScoreWeight;
-            score += relativeStrengthScoreContribution.Value;
-        }
-
-        return score;
-    }
-
-    private decimal CalculateWeek52HighContribution(
-        decimal distanceFromWeek52HighPercent)
-    {
-        var boundedDistance =
-            Math.Clamp(
-                distanceFromWeek52HighPercent,
-                MinimumWeek52HighDistancePercent,
-                MaximumWeek52HighDistancePercent);
-
-        var scoreMultiplier =
-            (boundedDistance - NeutralWeek52HighDistancePercent)
-            / -NeutralWeek52HighDistancePercent;
-
-        return scoreMultiplier * _strategyConfiguration.Week52HighScoreWeight;
+        return _compositeScoringEngine.CalculateScore(context, out relativeStrengthScoreContribution);
     }
 }

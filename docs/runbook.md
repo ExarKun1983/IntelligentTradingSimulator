@@ -62,6 +62,9 @@ Each strategy supports these settings:
 | `MaxPositions` | Maximum number of recommended positions; must be greater than zero. |
 | `MaxPositionWeight` | Maximum position weight, from greater than zero through 100. |
 | `LookbackDays` | Historical lookback used by analysis; must be greater than zero. |
+| `MomentumScoreWeight` | Non-negative score points per percentage point of momentum (default `10`); `0` disables the contribution. |
+| `VolumeTrendScoreWeight` | Non-negative score points per percentage point of volume trend (default `0.05`); `0` disables the contribution. |
+| `VolatilityScoreWeight` | Non-negative penalty points per percentage point of volatility (default `1`); `0` disables the contribution, not the quality filter. |
 | `UseRsi` | Enable RSI scoring. |
 | `RsiPreferredMinimum`, `RsiPreferredMaximum` | Preferred RSI range, each from 0 to 100; minimum cannot exceed maximum. |
 | `RsiOverboughtThreshold` | RSI penalty threshold, from 0 to 100 and not below the preferred maximum. |
@@ -74,6 +77,22 @@ Each strategy supports these settings:
 | `UseQualityFilter` | Enable the quality filter. |
 
 The loader validates strategy settings at startup. Missing settings use the defaults in `StrategyConfiguration`; invalid or missing active strategy sections stop startup with a configuration error.
+
+### Composite scoring
+
+Ranking and backtesting use the same Core `CompositeScoringEngine` via `IScoringEngine`. It accepts the already-calculated metrics in `ScoringContext` and adds contributions in a fixed order using decimal arithmetic:
+
+1. Momentum percentage points × `MomentumScoreWeight`.
+2. Volume-trend percentage points × `VolumeTrendScoreWeight`.
+3. Negative volatility percentage points × `VolatilityScoreWeight` (lower volatility is better).
+4. The existing +5 SMA5 eligibility bonus.
+5. RSI: `RsiPreferredRangeBonus` inside the inclusive preferred range, or negative `RsiOverboughtPenalty` at/above the overbought threshold (penalty takes precedence).
+6. 52-week-high distance: `(clamp(distance, -100, 0) + 50) / 50 × Week52HighScoreWeight`; nearer the high is better, -50% is neutral, and the normalized multiplier is bounded to [-1, 1].
+7. Relative Strength percentage points × `RelativeStrengthScoreWeight`.
+
+Weights scale contributions into score points; they need not sum to one. Percentage inputs are not divided by 100 or normalized across the stock universe, so adding another stock cannot change an existing stock's score. Default weights preserve the previous formula. Optional factors contribute zero when disabled or missing; base metrics are required decimal inputs (NaN/infinity are not representable). Arithmetic overflow is surfaced, not replaced by a silent fallback. Stocks not above SMA5, or rejected by the enabled quality filter, still receive `DisqualifiedScore` (-999).
+
+`CompositeScoringEngine.CalculateContributions` returns a `CompositeScoreResult` with each applied contribution, eligibility, and the final score. Disqualified results report zero applied contributions. This breakdown is available to Core callers without changing persisted observation formats; the existing Relative Strength diagnostic remains available in application output. `RuleBasedScoringEngine` delegates to the composite engine for compatibility. ATR remains informational; no ATR scoring, stops, or allocation rules are introduced.
 
 Relative Strength is the stock's close-to-close return minus the selected benchmark's return, in percentage points (not a price ratio or RSI). Positive values indicate outperformance; negative values indicate underperformance. Analysis uses the stock's first and last available sessions in the requested lookback, with benchmark closes required on those exact dates. No candles after the analysis day are used, including during backtests. Missing or ambiguous endpoints, fewer than two distinct sessions, non-positive endpoint prices, or arithmetic overflow produce `null` (`N/A` in market ranking details); benchmark download failures do not prevent stock analysis. Interior missing sessions do not affect close-to-close returns. `UseRelativeStrength=false` skips benchmark fetching and leaves the value unavailable.
 
