@@ -116,7 +116,8 @@ public sealed class MarketObservationAnalyzer
                     DistanceFromWeek52HighPercent =
                         week52High.DistanceFromWeek52HighPercent
                 },
-                out var relativeStrengthScoreContribution);
+                out var relativeStrengthScoreContribution,
+                out var factorContributions);
 
         return new ObservationResult
         {
@@ -134,6 +135,7 @@ public sealed class MarketObservationAnalyzer
             RelativeStrengthBenchmarkSymbol = benchmarkSymbol,
             RelativeStrengthPercent = relativeStrength,
             RelativeStrengthScoreContribution = relativeStrengthScoreContribution,
+            FactorContributions = factorContributions,
             Score = score
         };
     }

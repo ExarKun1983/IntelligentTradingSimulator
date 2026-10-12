@@ -27,6 +27,48 @@ public sealed class CompositeScoringEngine : IScoringEngine
         return result.Score;
     }
 
+    public decimal CalculateScore(
+        ScoringContext context,
+        out decimal? relativeStrengthScoreContribution,
+        out IReadOnlyList<FactorScoreContribution>? factorContributions)
+    {
+        var result = CalculateContributions(context);
+        relativeStrengthScoreContribution = result.RelativeStrengthContribution;
+
+        FactorScoreContribution Factor(
+            string name, decimal contribution, bool enabled = true, bool available = true)
+        {
+            var status = !available ? FactorScoreStatus.Unavailable
+                : !enabled ? FactorScoreStatus.Disabled
+                : result.IsDisqualified ? FactorScoreStatus.Disqualified
+                : FactorScoreStatus.Applied;
+            return new FactorScoreContribution(name, available ? contribution : null, status);
+        }
+
+        var factors = new List<FactorScoreContribution>
+        {
+            Factor("Momentum", result.MomentumContribution, _configuration.MomentumScoreWeight != 0m),
+            Factor("VolumeTrend", result.VolumeTrendContribution, _configuration.VolumeTrendScoreWeight != 0m),
+            Factor("Volatility", result.VolatilityContribution, _configuration.VolatilityScoreWeight != 0m),
+            Factor("SMA5", result.SmaContribution),
+            Factor("RSI", result.RsiContribution, _configuration.UseRsi, context.Rsi.HasValue),
+            Factor("52WeekHigh", result.Week52HighContribution,
+                _configuration.Use52WeekHigh && _configuration.Week52HighScoreWeight != 0m,
+                context.DistanceFromWeek52HighPercent.HasValue),
+            Factor("RelativeStrength", result.RelativeStrengthContribution,
+                _configuration.UseRelativeStrength && _configuration.RelativeStrengthScoreWeight != 0m,
+                context.RelativeStrengthPercent.HasValue)
+        };
+        if (result.IsDisqualified)
+        {
+            factors.Add(new FactorScoreContribution(
+                "Disqualification", StrategyConfiguration.DisqualifiedScore, FactorScoreStatus.Applied));
+        }
+
+        factorContributions = factors.AsReadOnly();
+        return result.Score;
+    }
+
     public CompositeScoreResult CalculateContributions(ScoringContext context)
     {
         ArgumentNullException.ThrowIfNull(context);

@@ -42,6 +42,17 @@ public sealed class ConsoleReporter
                 $" | RS[{result.RelativeStrengthBenchmarkSymbol ?? "N/A"}]={(result.RelativeStrengthPercent.HasValue ? result.RelativeStrengthPercent.Value.ToString("N2") + "pp" : "N/A")}" +
                 $" | RSScore={(result.RelativeStrengthScoreContribution.HasValue ? result.RelativeStrengthScoreContribution.Value.ToString("N2") : "N/A")}" +
                 $" | Score={result.Score:N2}");
+
+            if (result.FactorContributions is null)
+            {
+                Console.WriteLine("  Score breakdown: N/A");
+            }
+            else
+            {
+                Console.WriteLine("  Score breakdown (points): " + string.Join(" | ",
+                    result.FactorContributions.Select(factor =>
+                        $"{factor.Factor}={(factor.Contribution.HasValue ? factor.Contribution.Value.ToString("G29") : "N/A")} [{factor.Status}]")));
+            }
         }
     }
 

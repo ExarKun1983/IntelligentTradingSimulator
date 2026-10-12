@@ -26,4 +26,17 @@ public interface IScoringEngine
         relativeStrengthScoreContribution = null;
         return CalculateScore(context);
     }
+
+    /// <summary>
+    /// Calculates the ranking score with its applied factor breakdown.
+    /// Engines without breakdown support leave it unavailable.
+    /// </summary>
+    decimal CalculateScore(
+        ScoringContext context,
+        out decimal? relativeStrengthScoreContribution,
+        out IReadOnlyList<FactorScoreContribution>? factorContributions)
+    {
+        factorContributions = null;
+        return CalculateScore(context, out relativeStrengthScoreContribution);
+    }
 }

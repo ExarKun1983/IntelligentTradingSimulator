@@ -34,5 +34,7 @@ public sealed class ObservationResult
 
     public decimal? RelativeStrengthScoreContribution { get; set; }
 
+    public IReadOnlyList<FactorScoreContribution>? FactorContributions { get; set; }
+
     public decimal Score { get; set; }
 }
