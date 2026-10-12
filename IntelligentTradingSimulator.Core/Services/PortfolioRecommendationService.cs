@@ -30,6 +30,7 @@ public sealed class PortfolioRecommendationService
                     x.MomentumPercent > 0 &&
                     x.IsAboveSma5)
                 .OrderByDescending(x => x.Score)
+                .ThenBy(x => x.Symbol, StringComparer.Ordinal)
                 .Where(x => x.Symbol != "NVDA")
                 .Take(_maxPositions)
                 .ToList();

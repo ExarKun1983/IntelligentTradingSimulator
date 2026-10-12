@@ -7,6 +7,31 @@ public sealed class PortfolioRecommendationServiceTests
 {
     private readonly PortfolioRecommendationService _service = new();
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Build_UsesScoreThenOrdinalSymbol_BeforeLimitingPositions(bool reverseInput)
+    {
+        var results = new List<ObservationResult>
+        {
+            new() { Symbol = "aaa", Score = 10m, MomentumPercent = 20m, IsAboveSma5 = true },
+            new() { Symbol = "ZZZ", Score = 10m, MomentumPercent = 10m, IsAboveSma5 = true },
+            new() { Symbol = "BBB", Score = 20m, MomentumPercent = 1m, IsAboveSma5 = true },
+            new() { Symbol = "NVDA", Score = 100m, MomentumPercent = 50m, IsAboveSma5 = true },
+            new() { Symbol = "INELIGIBLE", Score = 100m, MomentumPercent = -1m, IsAboveSma5 = true }
+        };
+        if (reverseInput)
+        {
+            results.Reverse();
+        }
+
+        var recommendations = new PortfolioRecommendationService(maxPositions: 2).Build(results);
+
+        Assert.Equal(["BBB", "ZZZ"], recommendations.Select(x => x.Symbol).ToArray());
+        Assert.Equal([20m, 10m], recommendations.Select(x => x.Score).ToArray());
+        Assert.Equal([66.67m, 33.33m], recommendations.Select(x => x.AllocationPercent).ToArray());
+    }
+
     [Fact]
     public void Build_ReturnsEmpty_WhenNoResultsQualify()
     {

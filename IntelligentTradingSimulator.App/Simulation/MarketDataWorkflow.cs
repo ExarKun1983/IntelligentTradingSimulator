@@ -105,7 +105,10 @@ public sealed class MarketDataWorkflow
         }
 
         var rankedResults =
-            results.OrderByDescending(x => x.Score).ToList();
+            results
+                .OrderByDescending(x => x.Score)
+                .ThenBy(x => x.Symbol, StringComparer.Ordinal)
+                .ToList();
 
         var recommendations =
             _recommendationService.Build(rankedResults);
