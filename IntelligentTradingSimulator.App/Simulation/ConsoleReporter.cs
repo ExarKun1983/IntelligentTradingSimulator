@@ -36,6 +36,7 @@ public sealed class ConsoleReporter
                 $" | Volatility={result.VolatilityPercent:N2}%" +
                 $" | AboveSMA5={result.IsAboveSma5}" +
                 $" | RSI={(result.Rsi.HasValue ? result.Rsi.Value.ToString("N2") : "N/A")}" +
+                $" | ATR={(result.Atr.HasValue ? result.Atr.Value.ToString("N2") : "N/A")}" +
                 $" | 52WHigh={(result.Week52High.HasValue ? result.Week52High.Value.ToString("N2") : "N/A")}" +
                 $" | 52WDist={(result.DistanceFromWeek52HighPercent.HasValue ? result.DistanceFromWeek52HighPercent.Value.ToString("N2") + "%" : "N/A")}" +
                 $" | RS[{result.RelativeStrengthBenchmarkSymbol ?? "N/A"}]={(result.RelativeStrengthPercent.HasValue ? result.RelativeStrengthPercent.Value.ToString("N2") + "pp" : "N/A")}" +

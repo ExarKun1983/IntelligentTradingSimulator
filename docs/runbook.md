@@ -81,6 +81,8 @@ The value is exposed as `ObservationResult.RelativeStrengthPercent` alongside `R
 
 `ObservationResult.RelativeStrengthScoreContribution` and the market ranking's `RSScore` field report the contribution actually applied to the final score. Custom scoring engines that do not provide factor diagnostics report `N/A`. Like RSI and 52-week-high details, these diagnostic fields are not saved in the existing observation-history table; the final score is saved as before.
 
+Market ranking details also show `ATR` (`ObservationResult.Atr`), in absolute price units rather than percent. ATR uses a fixed 14-session period in stock analysis and requires at least 15 chronological candles from the strategy's analysis lookback (`LookbackDays`), not the extended 52-week-high history. Each true range is the maximum of high minus low, absolute high minus previous close, and absolute low minus previous close. The first 14 true ranges are averaged, then subsequent ranges use Wilder smoothing. Insufficient history, invalid high/low/close prices, or arithmetic overflow yield `null` (`N/A` in the output); a flat price series yields zero. ATR is informational only: it does not affect scoring, stops, or allocation and is not persisted in observation history.
+
 ## Strategy experimentation flow
 
 Complete the database/application setup above first. All commands below run from the repository root. Edit the source `IntelligentTradingSimulator.App/appsettings.json`, not its copy under `bin`; `dotnet run` builds and copies the updated configuration. The app reads this JSON file from its output directory, not command-line or environment-variable configuration overrides.

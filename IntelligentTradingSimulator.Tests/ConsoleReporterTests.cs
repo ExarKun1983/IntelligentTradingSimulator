@@ -10,6 +10,21 @@ namespace IntelligentTradingSimulator.Tests;
 public sealed class ConsoleReporterTests
 {
     [Fact]
+    public void PrintMarketRanking_ShowsAtrOrNA()
+    {
+        var output = CaptureOutput(() => CreateReporter().PrintMarketRanking(
+        [
+            new ObservationResult { Symbol = "AVAILABLE", Atr = 2.345m },
+            new ObservationResult { Symbol = "FLAT", Atr = 0m },
+            new ObservationResult { Symbol = "MISSING" }
+        ]));
+
+        Assert.Contains($"ATR={2.345m.ToString("N2")}", output);
+        Assert.Contains($"ATR={0m.ToString("N2")}", output);
+        Assert.Contains("ATR=N/A", output);
+    }
+
+    [Fact]
     public void PrintMarketRanking_ShowsRelativeStrengthBenchmarkAndPercentagePointsOrNA()
     {
         var output = CaptureOutput(() => CreateReporter().PrintMarketRanking(
