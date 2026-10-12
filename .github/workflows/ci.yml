@@ -32,6 +32,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Test agent orchestrator scripts
+        run: bash .github/scripts/tests/agent-orchestrator.test.sh
+
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
         with:
