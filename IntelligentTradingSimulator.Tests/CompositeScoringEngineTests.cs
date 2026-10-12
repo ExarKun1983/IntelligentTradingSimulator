@@ -168,6 +168,62 @@ public sealed class CompositeScoringEngineTests
         Assert.Throws<OverflowException>(() => engine.CalculateScore(Context(momentum: decimal.MaxValue)));
     }
 
+    [Theory]
+    [InlineData(60, 2, true, 10)]
+    [InlineData(80, 2, true, -10)]
+    [InlineData(49, 2, true, 0)]
+    [InlineData(60, 0, true, 0)]
+    [InlineData(80, 0, true, 0)]
+    [InlineData(60, 2, false, 0)]
+    [InlineData(null, 2, true, 0)]
+    public void CalculateScore_AppliesRsiWeightAndReportsAppliedDiagnostics(
+        int? rsi, int weight, bool enabled, int expected)
+    {
+        var engine = new CompositeScoringEngine(new StrategyConfiguration
+        {
+            UseRsi = enabled, RsiScoreWeight = weight
+        });
+        var score = engine.CalculateScore(Context(rsi: rsi), out _, out var factors);
+        var factor = Assert.Single(factors!, factor => factor.Factor == "RSI");
+
+        Assert.Equal(expected, engine.CalculateContributions(Context(rsi: rsi)).RsiContribution);
+        Assert.Equal(28m + expected, score);
+        Assert.Equal(rsi.HasValue ? (decimal?)expected : null, factor.Contribution);
+        Assert.Equal(!rsi.HasValue ? FactorScoreStatus.Unavailable
+            : !enabled || weight == 0 ? FactorScoreStatus.Disabled : FactorScoreStatus.Applied, factor.Status);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public void CalculateScore_AppliesSmaWeightWithoutDisablingEligibility(int weight)
+    {
+        var engine = new CompositeScoringEngine(new StrategyConfiguration { SmaScoreWeight = weight });
+        var score = engine.CalculateScore(Context(), out _, out var factors);
+        var factor = Assert.Single(factors!, factor => factor.Factor == "SMA5");
+
+        Assert.Equal(23m + weight, score);
+        Assert.Equal(weight, factor.Contribution);
+        Assert.Equal(weight == 0 ? FactorScoreStatus.Disabled : FactorScoreStatus.Applied, factor.Status);
+        Assert.Equal(StrategyConfiguration.DisqualifiedScore, engine.CalculateScore(Context(aboveSma: false)));
+    }
+
+    [Theory]
+    [InlineData("SmaScoreWeight")]
+    [InlineData("RsiScoreWeight")]
+    [InlineData("RsiPreferredRangeBonus")]
+    [InlineData("RsiOverboughtPenalty")]
+    [InlineData("RelativeStrengthScoreWeight")]
+    [InlineData("Week52HighScoreWeight")]
+    public void CalculateScore_RejectsNegativeFactorWeightsEvenWhenDisabled(string name)
+    {
+        var configuration = new StrategyConfiguration { UseRelativeStrength = false };
+        typeof(StrategyConfiguration).GetProperty(name)!.SetValue(configuration, -1m);
+
+        Assert.Equal(name, Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new CompositeScoringEngine(configuration).CalculateScore(Context())).ParamName);
+    }
+
     [Fact]
     public void AnalyzerAndBacktestFactory_UseSameConfiguredCompositeScore()
     {

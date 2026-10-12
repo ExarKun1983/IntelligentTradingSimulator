@@ -50,8 +50,9 @@ public sealed class CompositeScoringEngine : IScoringEngine
             Factor("Momentum", result.MomentumContribution, _configuration.MomentumScoreWeight != 0m),
             Factor("VolumeTrend", result.VolumeTrendContribution, _configuration.VolumeTrendScoreWeight != 0m),
             Factor("Volatility", result.VolatilityContribution, _configuration.VolatilityScoreWeight != 0m),
-            Factor("SMA5", result.SmaContribution),
-            Factor("RSI", result.RsiContribution, _configuration.UseRsi, context.Rsi.HasValue),
+            Factor("SMA5", result.SmaContribution, _configuration.SmaScoreWeight != 0m),
+            Factor("RSI", result.RsiContribution,
+                _configuration.UseRsi && _configuration.RsiScoreWeight != 0m, context.Rsi.HasValue),
             Factor("52WeekHigh", result.Week52HighContribution,
                 _configuration.Use52WeekHigh && _configuration.Week52HighScoreWeight != 0m,
                 context.DistanceFromWeek52HighPercent.HasValue),
@@ -75,6 +76,12 @@ public sealed class CompositeScoringEngine : IScoringEngine
         ValidateWeight(_configuration.MomentumScoreWeight, nameof(StrategyConfiguration.MomentumScoreWeight));
         ValidateWeight(_configuration.VolumeTrendScoreWeight, nameof(StrategyConfiguration.VolumeTrendScoreWeight));
         ValidateWeight(_configuration.VolatilityScoreWeight, nameof(StrategyConfiguration.VolatilityScoreWeight));
+        ValidateWeight(_configuration.SmaScoreWeight, nameof(StrategyConfiguration.SmaScoreWeight));
+        ValidateWeight(_configuration.RsiScoreWeight, nameof(StrategyConfiguration.RsiScoreWeight));
+        ValidateWeight(_configuration.RsiPreferredRangeBonus, nameof(StrategyConfiguration.RsiPreferredRangeBonus));
+        ValidateWeight(_configuration.RsiOverboughtPenalty, nameof(StrategyConfiguration.RsiOverboughtPenalty));
+        ValidateWeight(_configuration.RelativeStrengthScoreWeight, nameof(StrategyConfiguration.RelativeStrengthScoreWeight));
+        ValidateWeight(_configuration.Week52HighScoreWeight, nameof(StrategyConfiguration.Week52HighScoreWeight));
 
         if (!context.IsAboveSma5 ||
             (_configuration.UseQualityFilter &&
@@ -84,16 +91,16 @@ public sealed class CompositeScoringEngine : IScoringEngine
         }
 
         var rsiContribution = 0m;
-        if (_configuration.UseRsi && context.Rsi.HasValue)
+        if (_configuration.UseRsi && _configuration.RsiScoreWeight != 0m && context.Rsi.HasValue)
         {
             if (context.Rsi.Value >= _configuration.RsiOverboughtThreshold)
             {
-                rsiContribution = -_configuration.RsiOverboughtPenalty;
+                rsiContribution = -_configuration.RsiOverboughtPenalty * _configuration.RsiScoreWeight;
             }
             else if (context.Rsi.Value >= _configuration.RsiPreferredMinimum &&
                      context.Rsi.Value <= _configuration.RsiPreferredMaximum)
             {
-                rsiContribution = _configuration.RsiPreferredRangeBonus;
+                rsiContribution = _configuration.RsiPreferredRangeBonus * _configuration.RsiScoreWeight;
             }
         }
 
@@ -109,7 +116,7 @@ public sealed class CompositeScoringEngine : IScoringEngine
             MomentumContribution = context.MomentumPercent * _configuration.MomentumScoreWeight,
             VolumeTrendContribution = context.VolumeTrendPercent * _configuration.VolumeTrendScoreWeight,
             VolatilityContribution = -context.VolatilityPercent * _configuration.VolatilityScoreWeight,
-            SmaContribution = 5m,
+            SmaContribution = _configuration.SmaScoreWeight,
             RsiContribution = rsiContribution,
             Week52HighContribution = week52HighContribution,
             RelativeStrengthContribution = _configuration.UseRelativeStrength && context.RelativeStrengthPercent.HasValue

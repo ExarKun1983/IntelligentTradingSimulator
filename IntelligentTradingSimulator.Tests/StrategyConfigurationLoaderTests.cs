@@ -3,12 +3,174 @@ using System.IO;
 using System.Text;
 using IntelligentTradingSimulator.App.Configuration;
 using IntelligentTradingSimulator.Core.Models;
+using IntelligentTradingSimulator.Core.Services;
 using Microsoft.Extensions.Configuration;
 
 namespace IntelligentTradingSimulator.Tests;
 
 public sealed class StrategyConfigurationLoaderTests
 {
+    [Theory]
+    [InlineData(null, 5, 1)]
+    [InlineData("0", 0, 0)]
+    [InlineData("2.5", 2.5, 2.5)]
+    public void LoadAndLoadAll_BindSmaAndRsiWeights(string? weight, double sma, double rsi)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Strategies:default:UseRsi"] = "true",
+                ["Strategies:default:SmaScoreWeight"] = weight,
+                ["Strategies:default:RsiScoreWeight"] = weight
+            }).Build();
+
+        foreach (var strategy in new[]
+        {
+            StrategyConfigurationLoader.Load(configuration),
+            Assert.Single(StrategyConfigurationLoader.LoadAll(configuration))
+        })
+        {
+            Assert.Equal((decimal)sma, strategy.SmaScoreWeight);
+            Assert.Equal((decimal)rsi, strategy.RsiScoreWeight);
+        }
+    }
+
+    [Theory]
+    [InlineData("SmaScoreWeight", "-0.1")]
+    [InlineData("RsiScoreWeight", "-0.1")]
+    [InlineData("RsiScoreWeight", "NaN")]
+    [InlineData("RelativeStrengthScoreWeight", "Infinity")]
+    [InlineData("Week52HighScoreWeight", "not-a-weight")]
+    public void LoadAndLoadAll_RejectInvalidWeights(string name, string value)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { [$"Strategies:default:{name}"] = value }).Build();
+
+        Assert.Contains($"Strategies:default:{name}", Assert.Throws<InvalidOperationException>(() =>
+            StrategyConfigurationLoader.Load(configuration)).Message);
+        Assert.Contains($"Strategies:default:{name}", Assert.Throws<InvalidOperationException>(() =>
+            StrategyConfigurationLoader.LoadAll(configuration)).Message);
+    }
+
+    [Theory]
+    [InlineData("true")]
+    [InlineData("false")]
+    public void LoadAndLoadAll_RejectUnsupportedBenchmarkEvenWhenDisabled(string enabled)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Strategies:default:UseRelativeStrength"] = enabled,
+                ["Strategies:default:RelativeStrengthBenchmarkSymbol"] = "UNKNOWN"
+            }).Build();
+
+        foreach (var exception in new[]
+        {
+            Assert.Throws<InvalidOperationException>(() => StrategyConfigurationLoader.Load(configuration)),
+            Assert.Throws<InvalidOperationException>(() => StrategyConfigurationLoader.LoadAll(configuration))
+        })
+        {
+            Assert.Contains("Strategies:default:RelativeStrengthBenchmarkSymbol", exception.Message);
+            Assert.Contains("SPY, QQQ, IWM", exception.Message);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false, false, "1", "5", "1", "1", "5", false)]
+    [InlineData(true, true, true, "0", "5", "0", "0", "0", false)]
+    [InlineData(true, false, false, "1", "0", "0", "0", "0", false)]
+    [InlineData(true, false, false, "1", "5", "0", "0", "0", true)]
+    [InlineData(true, false, false, "1", "0", "5", "0", "0", true)]
+    [InlineData(false, true, false, "0", "0", "0", "1", "0", true)]
+    [InlineData(false, false, true, "0", "0", "0", "0", "5", true)]
+    public void LoadAndLoadAll_RequireAnEffectiveActiveScoringFactor(
+        bool useRsi, bool useRelativeStrength, bool use52WeekHigh,
+        string rsiWeight, string bonus, string penalty, string relativeWeight, string week52Weight,
+        bool valid)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Strategies:default:MomentumScoreWeight"] = "0",
+                ["Strategies:default:VolumeTrendScoreWeight"] = "0",
+                ["Strategies:default:VolatilityScoreWeight"] = "0",
+                ["Strategies:default:SmaScoreWeight"] = "0",
+                ["Strategies:default:UseQualityFilter"] = "true",
+                ["Strategies:default:UseRsi"] = useRsi.ToString(),
+                ["Strategies:default:RsiScoreWeight"] = rsiWeight,
+                ["Strategies:default:RsiPreferredRangeBonus"] = bonus,
+                ["Strategies:default:RsiOverboughtPenalty"] = penalty,
+                ["Strategies:default:UseRelativeStrength"] = useRelativeStrength.ToString(),
+                ["Strategies:default:RelativeStrengthScoreWeight"] = relativeWeight,
+                ["Strategies:default:Use52WeekHigh"] = use52WeekHigh.ToString(),
+                ["Strategies:default:Week52HighScoreWeight"] = week52Weight
+            }).Build();
+
+        if (valid)
+        {
+            Assert.NotNull(StrategyConfigurationLoader.Load(configuration));
+            Assert.Single(StrategyConfigurationLoader.LoadAll(configuration));
+        }
+        else
+        {
+            Assert.Contains("Strategies:default", Assert.Throws<InvalidOperationException>(() =>
+                StrategyConfigurationLoader.Load(configuration)).Message);
+            Assert.Contains("at least one active scoring factor", Assert.Throws<InvalidOperationException>(() =>
+                StrategyConfigurationLoader.LoadAll(configuration)).Message);
+        }
+    }
+
+    [Fact]
+    public void LoadAll_JsonVariantsApplyIndependentFactorSetupsAndWeights()
+    {
+        const string json = """
+            {
+              "ActiveStrategy": "advanced",
+              "Strategies": {
+                "baseline": {
+                  "MomentumScoreWeight": 2, "VolumeTrendScoreWeight": 0.1,
+                  "VolatilityScoreWeight": 3, "SmaScoreWeight": 4,
+                  "UseRsi": false, "UseRelativeStrength": false, "Use52WeekHigh": false,
+                  "RelativeStrengthBenchmarkSymbol": "SPY"
+                },
+                "advanced": {
+                  "MomentumScoreWeight": 2, "VolumeTrendScoreWeight": 0.1,
+                  "VolatilityScoreWeight": 3, "SmaScoreWeight": 4,
+                  "UseRsi": true, "RsiScoreWeight": 2,
+                  "UseRelativeStrength": true, "RelativeStrengthScoreWeight": 3,
+                  "Use52WeekHigh": true, "Week52HighScoreWeight": 8,
+                  "RelativeStrengthBenchmarkSymbol": " qqq "
+                }
+              }
+            }
+            """;
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+        var configuration = new ConfigurationBuilder().AddJsonStream(stream).Build();
+        var strategies = StrategyConfigurationLoader.LoadAll(configuration);
+        var baseline = Assert.Single(strategies, strategy => strategy.Id == "baseline");
+        var advanced = Assert.Single(strategies, strategy => strategy.Id == "advanced");
+        var context = new ScoringContext
+        {
+            IsAboveSma5 = true, MomentumPercent = 2m, VolumeTrendPercent = 20m,
+            VolatilityPercent = 1m, Rsi = 60m, RelativeStrengthPercent = 3m,
+            DistanceFromWeek52HighPercent = -25m
+        };
+
+        Assert.Equal("SPY", baseline.RelativeStrengthBenchmarkSymbol);
+        Assert.Equal("QQQ", advanced.RelativeStrengthBenchmarkSymbol);
+        Assert.Equal("advanced", StrategyConfigurationLoader.Load(configuration).Id);
+        Assert.Equal(7m, new CompositeScoringEngine(baseline).CalculateScore(context));
+        var result = new CompositeScoringEngine(advanced).CalculateContributions(context);
+        Assert.Equal(10m, result.RsiContribution);
+        Assert.Equal(9m, result.RelativeStrengthContribution);
+        Assert.Equal(4m, result.Week52HighContribution);
+        Assert.Equal(30m, result.Score);
+        Assert.Equal(result.Score, new RuleBasedScoringEngine(advanced).CalculateScore(context));
+        advanced.RsiScoreWeight = 0m;
+        Assert.Equal(1m, baseline.RsiScoreWeight);
+        Assert.Equal(7m, new CompositeScoringEngine(baseline).CalculateScore(context));
+    }
+
     [Theory]
     [InlineData(null, 10, 0.05, 1)]
     [InlineData("0", 0, 0, 0)]
