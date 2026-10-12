@@ -35,6 +35,7 @@ public sealed class ObservationResultRepository
         var rankedResults =
             results
                 .OrderByDescending(x => x.Score)
+                .ThenBy(x => x.Symbol, StringComparer.Ordinal)
                 .Select((x, index) =>
                     new ObservationResultEntity
                     {

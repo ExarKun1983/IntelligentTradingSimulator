@@ -116,6 +116,7 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
         var rankedResults =
             observationResults
                 .OrderByDescending(x => x.Score)
+                .ThenBy(x => x.Symbol, StringComparer.Ordinal)
                 .ToList();
 
         var recommendations = _recommendationService.Build(rankedResults);

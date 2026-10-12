@@ -112,6 +112,92 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.Equal(5m, volumeWeighted.Observations[1].Score);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ProcessAsync_AndMarketWorkflow_UseSameCompositeRankingAndOrdinalTies(
+        bool volumeWeighted, bool reverseInput)
+    {
+        var startDate = new DateTime(2024, 1, 1);
+        var provider = new FakeMarketDataProvider();
+        var momentumCandles = BuildCandles(startDate, 10, 100m);
+        var volumeCandles = BuildCandles(startDate, 10, 200m);
+        volumeCandles[^1].Volume = 2_000_000m;
+        var disqualifiedCandles = BuildCandles(startDate, 10);
+        disqualifiedCandles[^1].Close = 90m;
+        provider.SetData("MOMENTUM", momentumCandles);
+        provider.SetData("Z_VOLUME", volumeCandles);
+        provider.SetData("A_VOLUME", volumeCandles);
+        provider.SetData("DISQUALIFIED", disqualifiedCandles);
+        var strategy = new StrategyConfiguration
+        {
+            UseRelativeStrength = false,
+            MomentumScoreWeight = volumeWeighted ? 1m : StrategyConfiguration.DefaultMomentumScoreWeight,
+            VolumeTrendScoreWeight = volumeWeighted ? 1m : StrategyConfiguration.DefaultVolumeTrendScoreWeight,
+            VolatilityScoreWeight = volumeWeighted ? 0m : StrategyConfiguration.DefaultVolatilityScoreWeight
+        };
+        string[] symbols = ["Z_VOLUME", "A_VOLUME", "MOMENTUM", "DISQUALIFIED"];
+        if (reverseInput)
+        {
+            Array.Reverse(symbols);
+        }
+        string[] expected = volumeWeighted
+            ? ["A_VOLUME", "Z_VOLUME", "MOMENTUM", "DISQUALIFIED"]
+            : ["MOMENTUM", "A_VOLUME", "Z_VOLUME", "DISQUALIFIED"];
+
+        var backtest = await BuildProcessor(provider, maxPositions: 2).ProcessAsync(new BacktestDayRequest
+        {
+            CurrentDate = startDate.AddDays(9),
+            HistoricalStartDate = startDate,
+            StrategyConfiguration = strategy,
+            Portfolio = new Portfolio { StartingCash = 10_000m, Cash = 10_000m },
+            Symbols = symbols
+        });
+        var repository = new ObservationResultRepository(_dbContext);
+
+        // Persist unsorted observations to verify saved rank positions use the same tie-breaker.
+        await repository.SaveAsync(backtest.Observations.Reverse().ToArray());
+        var saved = await repository.GetLatestRunAsync();
+        Assert.NotNull(saved);
+        Assert.Equal(expected, saved.Results.OrderBy(x => x.RankPosition).Select(x => x.Symbol).ToArray());
+
+        var workflow = new MarketDataWorkflow(
+            provider,
+            new MarketObservationAnalyzer(strategy),
+            new PortfolioRecommendationService(maxPositions: 2),
+            repository,
+            strategy);
+        var market = await workflow.CollectAndAnalyzeAsync(symbols, startDate);
+
+        Assert.Equal(expected, backtest.Observations.Select(x => x.Symbol).ToArray());
+        Assert.Equal(expected, market.RankedResults.Select(x => x.Symbol).ToArray());
+        Assert.Equal(expected.Take(2), backtest.Recommendations.Select(x => x.Symbol));
+        Assert.Equal(expected.Take(2), market.Recommendations.Select(x => x.Symbol));
+        Assert.Equal(
+            market.Recommendations.Select(x => (x.Score, x.AllocationPercent)),
+            backtest.Recommendations.Select(x => (x.Score, x.AllocationPercent)));
+        Assert.Equal(
+            expected.Take(2).OrderBy(x => x, StringComparer.Ordinal),
+            backtest.Portfolio.Positions.Select(x => x.Symbol).OrderBy(x => x, StringComparer.Ordinal));
+        Assert.All(new[] { backtest.Observations, market.RankedResults }, observations =>
+        {
+            var volume = observations.Single(x => x.Symbol == "A_VOLUME");
+            Assert.Equal(4.5m, volume.MomentumPercent);
+            Assert.Equal(100m, volume.VolumeTrendPercent);
+            Assert.Equal(1_100_000m, volume.AverageVolume);
+            Assert.True(volume.VolatilityPercent > 0m);
+            Assert.Equal(9m, observations.Single(x => x.Symbol == "MOMENTUM").MomentumPercent);
+            Assert.Equal(StrategyConfiguration.DisqualifiedScore, observations[^1].Score);
+            Assert.All(observations, observation =>
+            {
+                Assert.NotNull(observation.FactorContributions);
+                Assert.Equal(observation.Score, observation.FactorContributions.Sum(x => x.Contribution ?? 0m));
+            });
+        });
+    }
+
     [Fact]
     public async Task ProcessAsync_CreatesAndPersistsSnapshot()
     {
