@@ -26,4 +26,13 @@ public sealed class RuleBasedScoringEngine : IScoringEngine
     {
         return _compositeScoringEngine.CalculateScore(context, out relativeStrengthScoreContribution);
     }
+
+    public decimal CalculateScore(
+        ScoringContext context,
+        out decimal? relativeStrengthScoreContribution,
+        out IReadOnlyList<FactorScoreContribution>? factorContributions)
+    {
+        return _compositeScoringEngine.CalculateScore(
+            context, out relativeStrengthScoreContribution, out factorContributions);
+    }
 }

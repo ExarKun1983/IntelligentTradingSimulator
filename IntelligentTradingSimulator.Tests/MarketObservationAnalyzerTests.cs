@@ -435,6 +435,7 @@ public sealed class MarketObservationAnalyzerTests
         Assert.Equal(10m, customEngine.LastContext!.RelativeStrengthPercent);
         Assert.Equal(42m, customResult.Score);
         Assert.Null(customResult.RelativeStrengthScoreContribution);
+        Assert.Null(customResult.FactorContributions);
     }
 
     private sealed class CapturingScoringEngine : IScoringEngine

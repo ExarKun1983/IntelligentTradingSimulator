@@ -10,6 +10,55 @@ namespace IntelligentTradingSimulator.Tests;
 public sealed class ConsoleReporterTests
 {
     [Fact]
+    public void PrintMarketRanking_ShowsFullPrecisionBreakdownAndMissingDiagnostics()
+    {
+        var engine = new CompositeScoringEngine(new StrategyConfiguration
+        {
+            MomentumScoreWeight = 1m, UseRsi = true, Use52WeekHigh = true
+        });
+        var score = engine.CalculateScore(new ScoringContext
+        {
+            MomentumPercent = 1.234567890123456789m,
+            VolumeTrendPercent = 20m, VolatilityPercent = 1m, IsAboveSma5 = true,
+            Rsi = 60m, DistanceFromWeek52HighPercent = -25m
+        }, out _, out var factors);
+
+        var output = CaptureOutput(() => CreateReporter().PrintMarketRanking(
+        [
+            new ObservationResult { Symbol = "TEST", Score = score, FactorContributions = factors },
+            new ObservationResult { Symbol = "CUSTOM", Score = 42m }
+        ]));
+
+        Assert.NotNull(factors);
+        Assert.Contains("Score breakdown (points):", output);
+        Assert.All(factors, factor => Assert.Contains(
+            $"{factor.Factor}={(factor.Contribution.HasValue ? factor.Contribution.Value.ToString("G29") : "N/A")} [{factor.Status}]",
+            output));
+        Assert.Contains("RelativeStrength=N/A [Unavailable]", output);
+        Assert.Contains("Score breakdown: N/A", output);
+        Assert.Contains($"Score={score:N2}", output);
+    }
+
+    [Fact]
+    public void PrintMarketRanking_ShowsDisabledAndDisqualifiedFactorsWithOverride()
+    {
+        var engine = new CompositeScoringEngine(new StrategyConfiguration { MomentumScoreWeight = 0m });
+        var score = engine.CalculateScore(new ScoringContext
+        {
+            IsAboveSma5 = false, Rsi = 60m, RelativeStrengthPercent = 3m
+        }, out _, out var factors);
+
+        var output = CaptureOutput(() => CreateReporter().PrintMarketRanking(
+            [new ObservationResult { Symbol = "TEST", Score = score, FactorContributions = factors }]));
+
+        Assert.Contains("Momentum=0 [Disabled]", output);
+        Assert.Contains("RSI=0 [Disabled]", output);
+        Assert.Contains("RelativeStrength=0 [Disqualified]", output);
+        Assert.Contains("Disqualification=-999 [Applied]", output);
+        Assert.Contains($"Score={StrategyConfiguration.DisqualifiedScore:N2}", output);
+    }
+
+    [Fact]
     public void PrintMarketRanking_ShowsAtrOrNA()
     {
         var output = CaptureOutput(() => CreateReporter().PrintMarketRanking(
