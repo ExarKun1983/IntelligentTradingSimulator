@@ -115,7 +115,7 @@ Ranking and backtesting use the same Core `CompositeScoringEngine` via `IScoring
 6. 52-week-high distance: `(clamp(distance, -100, 0) + 50) / 50 × Week52HighScoreWeight`; nearer the high is better, -50% is neutral, and the normalized multiplier is bounded to [-1, 1].
 7. Relative Strength percentage points × `RelativeStrengthScoreWeight`.
 
-These contributions use the following metrics from the strategy's analysis window:
+These contributions use metrics calculated by the analyzer. Most use the strategy's analysis window; the 52-week-high factor uses a separate 252-session history:
 
 | Factor input | Calculation |
 | --- | --- |
