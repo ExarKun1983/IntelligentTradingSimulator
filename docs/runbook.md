@@ -47,6 +47,14 @@ In `IntelligentTradingSimulator.App/appsettings.json`, set `ConnectionStrings:Tr
 
 Use a SQL Server login with permission to create and update the application's database schema. The app project copies `appsettings.json` to its output directory. Keep real credentials local; do not commit them.
 
+### Trade exit reasons
+
+Apply the `AddTradeExitReason` migration before saving trades with this version. `Trade.ExitReason` is a nullable enum stored as an integer: `Manual = 1`, `Rebalance = 2`, `StopLoss = 3`, and `TrailingStop = 4`. Preserve these numeric values when adding reasons. Historical records remain `null` (unknown); BUY trades have no exit reason.
+
+`TradingEngine` defaults new SELLs without a reason to `Manual`. Rebalancing SELLs are tagged `Rebalance`. Risk-exit callers can set `TradingDecision.ExitReason` to `StopLoss` or `TrailingStop`; this change tracks reasons but does not introduce stop-loss or trailing-stop triggers.
+
+Reasons are available in portfolio trade history loaded by `PortfolioRepository.GetLatestAsync()` and can be filtered through `TradingSimulatorDbContext.Trades`, for example with `.Where(trade => trade.ExitReason == ExitReason.StopLoss)`.
+
 ## Configure a strategy
 
 `ActiveStrategy` selects a named entry under `Strategies`. The checked-in configuration provides `default`, `conservative`, and `aggressive` entries. Change `ActiveStrategy` to one of those IDs or add a validated strategy entry:

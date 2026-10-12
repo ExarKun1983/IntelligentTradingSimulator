@@ -12,4 +12,5 @@ public sealed class TradingDecision
     public string Symbol { get; set; } = string.Empty;
     public TradeActionType Action { get; set; }
     public decimal Amount { get; set; }
+    public ExitReason? ExitReason { get; set; }
 }

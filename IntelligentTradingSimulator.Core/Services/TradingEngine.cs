@@ -148,6 +148,7 @@ public sealed class TradingEngine
                 Timestamp = DateTime.UtcNow,
                 Symbol = decision.Symbol,
                 Action = TradeActionType.Sell,
+                ExitReason = decision.ExitReason ?? ExitReason.Manual,
                 Quantity = quantityToSell,
                 Price = currentPrice
             });
