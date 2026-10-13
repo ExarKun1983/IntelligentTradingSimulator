@@ -78,7 +78,7 @@ public sealed class MarketDataWorkflow
                         .Where(x => x.Date.Date >= from.Date)
                         .ToList();
 
-                if (_strategyConfiguration.StopLossPercent.HasValue && usableCandles.Count > 0)
+                if (usableCandles.Count > 0)
                 {
                     prices[symbol] = usableCandles.Last().Close;
                 }

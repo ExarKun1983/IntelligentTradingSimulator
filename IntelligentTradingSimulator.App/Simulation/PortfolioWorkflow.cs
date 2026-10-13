@@ -76,7 +76,8 @@ public sealed class PortfolioWorkflow
             prices,
             _allocationEngine,
             _tradingEngine,
-            _strategyConfiguration.StopLossPercent);
+            _strategyConfiguration.StopLossPercent,
+            _strategyConfiguration.TrailingStopPercent);
 
         await _portfolioRepository.SaveAsync(portfolio);
 

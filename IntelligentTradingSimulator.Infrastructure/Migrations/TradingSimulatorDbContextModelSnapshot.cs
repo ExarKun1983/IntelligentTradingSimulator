@@ -256,6 +256,9 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     b.Property<decimal>("CurrentPrice")
                         .HasColumnType("decimal(18,2)");
 
+                    b.Property<decimal>("HighestPriceSinceEntry")
+                        .HasColumnType("decimal(18,2)");
+
                     b.Property<int>("PortfolioId")
                         .HasColumnType("int");
 

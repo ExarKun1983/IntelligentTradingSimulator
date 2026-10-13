@@ -1,4 +1,5 @@
 using IntelligentTradingSimulator.App.Simulation;
+using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
@@ -9,19 +10,43 @@ namespace IntelligentTradingSimulator.Tests;
 
 public sealed class MarketDataWorkflowTests : IDisposable
 {
+    private readonly DbContextOptions<TradingSimulatorDbContext> _options;
     private readonly TradingSimulatorDbContext _dbContext;
 
     public MarketDataWorkflowTests()
     {
-        var options =
+        _options =
             new DbContextOptionsBuilder<TradingSimulatorDbContext>()
                 .UseInMemoryDatabase(Guid.NewGuid().ToString())
                 .Options;
 
-        _dbContext = new TradingSimulatorDbContext(options);
+        _dbContext = new TradingSimulatorDbContext(_options);
     }
 
     public void Dispose() => _dbContext.Dispose();
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CollectAndAnalyzeAsync_TrailingStopRetainsPriceWithoutScoringHistory(bool enabled)
+    {
+        var date = new DateTime(2024, 1, 10);
+        var provider = new FakeMarketDataProvider(
+        [
+            new MarketCandle { Date = date, Close = 108m },
+            new MarketCandle { Date = DateTime.MaxValue, Close = 1000m }
+        ]);
+        var workflow = BuildWorkflow(provider, new StrategyConfiguration
+        {
+            UseRelativeStrength = false, TrailingStopPercent = enabled ? 10m : null
+        });
+
+        var result = await workflow.CollectAndAnalyzeAsync(["TEST"], date.AddDays(-10));
+
+        Assert.Empty(result.RankedResults);
+        Assert.Empty(result.Recommendations);
+        Assert.Equal(108m, result.Prices["TEST"]);
+    }
 
     [Theory]
     [InlineData(true)]
@@ -43,14 +68,65 @@ public sealed class MarketDataWorkflowTests : IDisposable
 
         Assert.Empty(result.RankedResults);
         Assert.Empty(result.Recommendations);
-        if (enabled)
+        Assert.Equal(90m, result.Prices["TEST"]);
+    }
+
+    [Fact]
+    public async Task CollectAndAnalyzeAsync_TracksHighWhileDisabled_ThenExitsAfterEnablingTrailingStop()
+    {
+        var date = new DateTime(2024, 1, 10);
+        var portfolio = new Portfolio { Name = "Current", StartingCash = 1000m, Cash = 1000m };
+        new TradingEngine().Execute(portfolio,
+            new TradingDecision { Symbol = "TEST", Action = TradeActionType.Buy, Amount = 1000m }, 100m);
+        await new PortfolioRepository(_dbContext).SaveAsync(portfolio);
+
+        async Task Run(decimal price, decimal? trailingStopPercent)
         {
-            Assert.Equal(90m, result.Prices["TEST"]);
+            await using var context = new TradingSimulatorDbContext(_options);
+            var strategy = new StrategyConfiguration
+            {
+                UseRelativeStrength = false, TrailingStopPercent = trailingStopPercent
+            };
+            var marketWorkflow = new MarketDataWorkflow(
+                new FakeMarketDataProvider([new MarketCandle { Date = date, Close = price }]),
+                new MarketObservationAnalyzer(strategy),
+                new PortfolioRecommendationService(),
+                new ObservationResultRepository(context),
+                strategy);
+            var result = await marketWorkflow.CollectAndAnalyzeAsync(["TEST"], date.AddDays(-10));
+            Assert.Empty(result.RankedResults);
+            Assert.Empty(result.Recommendations);
+            var workflow = new PortfolioWorkflow(
+                new PortfolioRepository(context),
+                new PortfolioSnapshotRepository(context),
+                new PositionSnapshotRepository(context),
+                new PortfolioExecutionService(),
+                new TradingEngine(),
+                new PortfolioAllocationEngine(new PortfolioAllocationService()),
+                new PortfolioRebalancingService(),
+                new PortfolioPerformanceService(),
+                new ConsoleReporter(new PortfolioAllocationService(), new PortfolioContributionService()),
+                strategy);
+            await workflow.RunAsync(result.Recommendations, result.Prices);
         }
-        else
+
+        await Run(150m, null);
+        await using (var context = new TradingSimulatorDbContext(_options))
         {
-            Assert.Empty(result.Prices);
+            var saved = await new PortfolioRepository(context).GetLatestAsync();
+            var position = Assert.Single(saved!.Positions);
+            Assert.Equal(150m, position.CurrentPrice);
+            Assert.Equal(150m, position.HighestPriceSinceEntry);
+            Assert.DoesNotContain(saved.Trades, trade => trade.Action == TradeActionType.Sell);
         }
+
+        await Run(135m, 10m);
+        await using var readContext = new TradingSimulatorDbContext(_options);
+        var exited = await new PortfolioRepository(readContext).GetLatestAsync();
+        Assert.Empty(exited!.Positions);
+        var sell = Assert.Single(exited.Trades, trade => trade.Action == TradeActionType.Sell);
+        Assert.Equal(ExitReason.TrailingStop, sell.ExitReason);
+        Assert.Equal(135m, sell.Price);
     }
 
     [Fact]

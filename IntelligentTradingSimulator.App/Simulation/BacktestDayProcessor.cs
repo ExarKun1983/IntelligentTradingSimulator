@@ -66,7 +66,9 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             }
         }
 
-        var symbols = request.StrategyConfiguration.StopLossPercent.HasValue
+        var riskExitsEnabled = request.StrategyConfiguration.StopLossPercent.HasValue ||
+            request.StrategyConfiguration.TrailingStopPercent.HasValue;
+        var symbols = riskExitsEnabled
             ? request.Symbols.Concat(request.Portfolio.Positions.Select(x => x.Symbol))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
             : request.Symbols;
@@ -95,7 +97,7 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                             request.HistoricalStartDate.Date)
                         .ToList();
 
-                if (request.StrategyConfiguration.StopLossPercent.HasValue && usableCandles.Count > 0)
+                if (riskExitsEnabled && usableCandles.Count > 0)
                 {
                     prices[symbol] = usableCandles.Last().Close;
                 }
@@ -145,7 +147,7 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
         var tradesBeforeRebalance = portfolio.Trades.Count;
         var rebalanceExecuted = false;
 
-        if (recommendations.Count > 0 || request.StrategyConfiguration.StopLossPercent.HasValue)
+        if (recommendations.Count > 0 || riskExitsEnabled)
         {
             _rebalancingService.Execute(
                 portfolio,
@@ -153,7 +155,8 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 prices,
                 _allocationEngine,
                 _tradingEngine,
-                request.StrategyConfiguration.StopLossPercent);
+                request.StrategyConfiguration.StopLossPercent,
+                request.StrategyConfiguration.TrailingStopPercent);
 
             rebalanceExecuted = recommendations.Count > 0;
         }

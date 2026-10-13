@@ -17,43 +17,64 @@ public sealed class PortfolioRebalancingService
         IReadOnlyDictionary<string, decimal> prices,
         PortfolioAllocationEngine allocationEngine,
         TradingEngine tradingEngine,
-        decimal? stopLossPercent = null)
+        decimal? stopLossPercent = null,
+        decimal? trailingStopPercent = null)
     {
         if (stopLossPercent is <= 0m or > 100m)
         {
             throw new ArgumentOutOfRangeException(nameof(stopLossPercent));
         }
 
-        if (stopLossPercent is decimal lossPercent)
+        if (trailingStopPercent is <= 0m or > 100m)
         {
-            var stoppedSymbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var position in portfolio.Positions.ToList())
-            {
-                if (position.AveragePrice <= 0m || position.Quantity <= 0m ||
-                    !prices.TryGetValue(position.Symbol, out var currentPrice) ||
-                    currentPrice <= 0m ||
-                    currentPrice > position.AveragePrice * (1m - lossPercent / 100m))
-                {
-                    continue;
-                }
+            throw new ArgumentOutOfRangeException(nameof(trailingStopPercent));
+        }
 
-                tradingEngine.Execute(
-                    portfolio,
-                    new TradingDecision
-                    {
-                        Symbol = position.Symbol,
-                        Action = TradeActionType.Sell,
-                        ExitReason = ExitReason.StopLoss,
-                        Amount = position.Quantity * currentPrice
-                    },
-                    currentPrice);
-                stoppedSymbols.Add(position.Symbol);
+        var stoppedSymbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var position in portfolio.Positions.ToList())
+        {
+            if (position.Quantity <= 0m ||
+                !prices.TryGetValue(position.Symbol, out var currentPrice) ||
+                currentPrice <= 0m)
+            {
+                continue;
             }
 
-            recommendations = recommendations
-                .Where(x => !stoppedSymbols.Contains(x.Symbol))
-                .ToList();
+            position.HighestPriceSinceEntry = Math.Max(position.HighestPriceSinceEntry, currentPrice);
+            ExitReason? exitReason = null;
+            if (stopLossPercent is decimal lossPercent && position.AveragePrice > 0m &&
+                currentPrice <= position.AveragePrice * (1m - lossPercent / 100m))
+            {
+                exitReason = ExitReason.StopLoss;
+            }
+            else if (trailingStopPercent is decimal drawdownPercent &&
+                position.HighestPriceSinceEntry > 0m &&
+                currentPrice <= position.HighestPriceSinceEntry * (1m - drawdownPercent / 100m))
+            {
+                exitReason = ExitReason.TrailingStop;
+            }
+
+            if (exitReason is null)
+            {
+                continue;
+            }
+
+            tradingEngine.Execute(
+                portfolio,
+                new TradingDecision
+                {
+                    Symbol = position.Symbol,
+                    Action = TradeActionType.Sell,
+                    ExitReason = exitReason,
+                    Amount = position.Quantity * currentPrice
+                },
+                currentPrice);
+            stoppedSymbols.Add(position.Symbol);
         }
+
+        recommendations = recommendations
+            .Where(x => !stoppedSymbols.Contains(x.Symbol))
+            .ToList();
 
         var allocationInstructions =
             allocationEngine.Calculate(
