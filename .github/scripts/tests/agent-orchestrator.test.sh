@@ -103,7 +103,9 @@ gh_dispatch() {
             *) echo "HTTP 404" >&2; return 1 ;;
           esac ;;
         repos/*/actions/workflows/*) cat "$STATE/ci-runs.json" 2>/dev/null || echo '{"workflow_runs":[]}' ;;
-        repos/*/reviews) cat "$STATE/reviews.json" 2>/dev/null || echo '[]' ;;
+        repos/*/reviews|repos/*/reviews\?*)
+          if [ -f "$STATE/reviews-api-failure" ]; then echo "simulated reviews API failure" >&2; return 1; fi
+          if [ -f "$STATE/reviews-invalid" ]; then echo '{invalid json'; else cat "$STATE/reviews.json" 2>/dev/null || echo '[]'; fi ;;
         repos/*/requested_reviewers) if [[ "$*" == *POST* ]]; then echo "request review" >> "$STATE/calls.log"; else echo '{"users":[]}'; fi ;;
         *) echo "unexpected gh api $*" >&2; return 1 ;;
       esac ;;
@@ -338,6 +340,20 @@ process_review 145 39 abc123 >/dev/null
 check "clean review with failed CI is not promoted" "agent:ai-review 0" "$(labels_of 39) $(calls_matching 'pr ready')"
 
 setup_review
+touch "$STATE/reviews-api-failure"
+if process_review 145 39 abc123 >/dev/null 2>"$STATE/error.log"; then r=0; else r=$?; fi
+check "review API failure defers processing" "1" "$r"
+check "review API failure does not promote" "agent:ai-review 0" "$(labels_of 39) $(calls_matching 'pr ready')"
+check_contains "review API failure is logged" "Unable to fetch or parse Copilot review summary" "$(cat "$STATE/error.log")"
+
+setup_review
+touch "$STATE/reviews-invalid"
+if process_review 145 39 abc123 >/dev/null 2>"$STATE/error.log"; then r=0; else r=$?; fi
+check "invalid review JSON defers processing" "1" "$r"
+check "invalid review JSON does not promote" "agent:ai-review 0" "$(labels_of 39) $(calls_matching 'pr ready')"
+check_contains "invalid review JSON is logged" "Unable to fetch or parse Copilot review summary" "$(cat "$STATE/error.log")"
+
+setup_review
 echo '{"workflow_runs":[{"created_at":"2026-10-12T13:00:00Z","conclusion":"failure"},{"created_at":"2026-10-12T13:10:00Z","conclusion":"success"}]}' > "$STATE/ci-runs.json"
 process_review 145 39 abc123 >/dev/null
 check "clean review with green CI is promoted" "agent:review 1" "$(labels_of 39) $(calls_matching 'pr ready')"
@@ -351,6 +367,109 @@ echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolv
 process_review 145 39 abc123 >/dev/null
 check "review findings are still handed to Copilot" "agent:working" "$(labels_of 39)"
 check_contains "findings handoff lists the finding" "a.cs:3 Bug" "$(jq -r '.[]' "$STATE/pr-145.comments")"
+
+# --- summary-only review recommendations -------------------------------------------------------------------
+review_fixture() { # body [commit_id] [submitted_at] -- appends a Copilot review summary
+  local f="$STATE/reviews.json"
+  [ -f "$f" ] || echo '[]' > "$f"
+  jq --arg b "$1" --arg c "${2:-abc123}" --arg t "${3:-2026-10-12T13:20:00Z}" \
+    '. + [{user: {login: "copilot-pull-request-reviewer[bot]"}, commit_id: $c, submitted_at: $t, state: "COMMENTED", body: $b}]' \
+    "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+pr_comments() { jq -r '.[]' "$STATE/pr-145.comments"; }
+GREEN_RUNS='{"workflow_runs":[{"created_at":"2026-10-12T13:10:00Z","conclusion":"success"}]}'
+PR148_SUMMARY=$'## Pull request overview\n\n**Changes recommended** - 0 open findings.\n\nThe WIP checklist does not document a successful Release build or full test-suite run.'
+
+setup_review
+echo "$GREEN_RUNS" > "$STATE/ci-runs.json"
+review_fixture "$PR148_SUMMARY"
+process_review 145 39 abc123 >/dev/null
+check "summary-only Changes recommended hands off once" "agent:working 1 0" "$(labels_of 39) $(calls_matching 'pr comment 145') $(calls_matching 'pr ready')"
+check_contains "summary handoff mentions @copilot" "@copilot The Copilot review summary for commit abc123" "$(pr_comments)"
+check_contains "summary handoff quotes the review summary" "> The WIP checklist does not document a successful Release build" "$(pr_comments)"
+check_contains "summary handoff asks to validate against CI" "validate this recommendation against the actual CI and check results" "$(pr_comments)"
+check_contains "summary handoff reports the CI result" "The latest CI run for abc123 succeeded." "$(pr_comments)"
+check_contains "summary handoff limits code changes to real issues" "Change code only if you identify a real issue" "$(pr_comments)"
+check_contains "summary handoff forbids merging" "Do not merge." "$(pr_comments)"
+check_contains "summary handoff carries its own SHA marker" "<!-- agent-orchestrator:summary-handoff-sha=abc123 -->" "$(pr_comments)"
+if pr_comments | grep -Fq 'agent-orchestrator:handoff-sha='; then r=yes; else r=no; fi
+check "summary handoff does not use the inline finding marker" "no" "$r"
+process_review 145 39 abc123 >/dev/null
+check "same SHA is not handed off twice" "agent:working 1 0" "$(labels_of 39) $(calls_matching 'pr comment 145') $(calls_matching 'pr ready')"
+
+setup_review
+echo "$GREEN_RUNS" > "$STATE/ci-runs.json"
+review_fixture "$PR148_SUMMARY" "old-sha" "2026-10-12T13:30:00Z"
+review_fixture "Approval recommended. Looks good." "abc123" "2026-10-12T13:20:00Z"
+process_review 145 39 abc123 >/dev/null
+check "stale summary for another SHA is ignored" "agent:review 0 1" "$(labels_of 39) $(calls_matching 'pr comment') $(calls_matching 'pr ready')"
+
+setup_review
+echo "$GREEN_RUNS" > "$STATE/ci-runs.json"
+review_fixture "$PR148_SUMMARY" "abc123" "2026-10-12T13:00:00Z"
+review_fixture "Approval recommended. The checklist is now complete." "abc123" "2026-10-12T13:40:00Z"
+process_review 145 39 abc123 >/dev/null
+check "latest summary for the SHA decides" "agent:review 0" "$(labels_of 39) $(calls_matching 'pr comment')"
+
+setup_review
+echo "$GREEN_RUNS" > "$STATE/ci-runs.json"
+review_fixture $'**Needs a closer look** - the retry logic is complex.\n\n0 open findings.'
+process_review 145 39 abc123 >/dev/null
+check "Needs a closer look alone does not hand off" "agent:review 0 1" "$(labels_of 39) $(calls_matching 'pr comment') $(calls_matching 'pr ready')"
+
+setup_review
+echo "$GREEN_RUNS" > "$STATE/ci-runs.json"
+review_fixture "**Approval recommended** - 0 open findings."
+process_review 145 39 abc123 >/dev/null
+check "Approval recommended does not hand off" "agent:review 0" "$(labels_of 39) $(calls_matching 'pr comment')"
+
+setup_review
+echo "$GREEN_RUNS" > "$STATE/ci-runs.json"
+review_fixture $'Changes recommended\n\nCopilot wasn\'t able to review any files in this pull request.'
+process_review 145 39 abc123 >/dev/null
+check "cannot-review-files boilerplate does not loop" "agent:review 0" "$(labels_of 39) $(calls_matching 'pr comment')"
+
+setup_review
+echo "$GREEN_RUNS" > "$STATE/ci-runs.json"
+review_fixture $'Changes recommended\n\nCopilot wasn’t able to review any files in this pull request.'
+process_review 145 39 abc123 >/dev/null
+check "boilerplate with a typographic apostrophe does not loop" "agent:review 0" "$(labels_of 39) $(calls_matching 'pr comment')"
+
+setup_review
+review_fixture "$PR148_SUMMARY"
+for sha in r1 r2 r3; do
+  append_json "$STATE/pr-145.comments" "$(printf '@copilot summary\n\n<!-- agent-orchestrator:summary-handoff-sha=%s -->' "$sha")"
+done
+process_review 145 39 abc123 >/dev/null
+check "summary handoffs are capped" "agent:blocked 0" "$(labels_of 39) $(calls_matching 'pr ready')"
+check_contains "summary cap is explained" "stopped after 3 automatic review-summary fix rounds" "$(pr_comments)"
+check_contains "summary cap asks for a human" "needs a human decision" "$(pr_comments)"
+process_review 145 39 abc123 >/dev/null
+check "summary cap is not announced twice" "agent:blocked 1" "$(labels_of 39) $(calls_matching 'pr comment 145')"
+
+setup_review
+review_fixture "$PR148_SUMMARY"
+for sha in i1 i2 i3; do
+  append_json "$STATE/pr-145.comments" "$(printf '@copilot findings\n\n<!-- agent-orchestrator:handoff-sha=%s -->' "$sha")"
+done
+process_review 145 39 abc123 >/dev/null
+check "inline rounds do not exhaust summary rounds" "agent:working" "$(labels_of 39)"
+check_contains "summary handoff still posted" "agent-orchestrator:summary-handoff-sha=abc123" "$(pr_comments)"
+check_contains "summary handoff flags CI that is not green" "is not confirmed green" "$(pr_comments)"
+
+setup_review
+review_fixture "$PR148_SUMMARY"
+echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false,"comments":{"nodes":[{"body":"Bug","path":"a.cs","line":3,"author":{"login":"copilot-pull-request-reviewer"}}]}}]}}}}}' > "$STATE/threads.json"
+process_review 145 39 abc123 >/dev/null
+check "inline findings keep the existing path" "agent:working 1" "$(labels_of 39) $(calls_matching 'pr comment 145')"
+check_contains "inline path uses the inline marker" "<!-- agent-orchestrator:handoff-sha=abc123 -->" "$(pr_comments)"
+if pr_comments | grep -Fq 'summary-handoff-sha'; then r=yes; else r=no; fi
+check "inline path posts no summary handoff" "no" "$r"
+for sha in s1 s2 s3; do
+  append_json "$STATE/pr-145.comments" "$(printf '@copilot summary\n\n<!-- agent-orchestrator:summary-handoff-sha=%s -->' "$sha")"
+done
+process_review 145 39 newsha >/dev/null
+check "summary rounds do not exhaust inline rounds" "agent:working" "$(labels_of 39)"
 
 rm -rf "$STATE"
 echo "$passes passed, $failures failed"

@@ -133,6 +133,9 @@ jobs:
 
   review-after-ci:
     # After green CI: request Copilot review, wait for it in this job, then hand off findings or promote.
+    # Unresolved inline findings are handed off as before. With none, a current-SHA review summary that says
+    # "Changes recommended" (not "Needs a closer look", "Approval recommended", or the could-not-review-files
+    # notice) is handed off once per SHA, capped at MAX_FIX_ROUNDS, before promotion to human review.
     if: >-
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success' &&
