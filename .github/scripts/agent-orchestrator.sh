@@ -230,9 +230,9 @@ ci_green() {
 # Body of the latest Copilot review summary submitted for exactly this commit (empty when there is none).
 copilot_review_summary() {
   local pr="$1" sha="$2"
-  gh api --paginate -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/reviews?per_page=100" 2>/dev/null \
+  gh api --paginate -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/reviews?per_page=100" \
     | jq -s -r --arg sha "$sha" '[add // [] | .[] | select((.user.login // "" | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha)]
-        | sort_by(.submitted_at // "") | last | .body // ""' 2>/dev/null || true
+        | sort_by(.submitted_at // "") | last | .body // ""'
 }
 
 # Succeeds only when a review summary explicitly recommends changes. Generic status such as "Needs a closer look",
@@ -287,7 +287,10 @@ process_review() {
   open_threads='[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved == false) | select(any(.comments.nodes[]?; .author.login | startswith("copilot-pull-request-reviewer")))]'
   count="$(jq "$open_threads | length" <<< "$threads")"
   if [ "$count" -eq 0 ]; then
-    summary="$(copilot_review_summary "$pr" "$sha")"
+    if ! summary="$(copilot_review_summary "$pr" "$sha")"; then
+      echo "Unable to fetch or parse Copilot review summary for $sha; deferring review processing" >&2
+      return 1
+    fi
     if summary_requests_changes "$summary"; then
       handoff_review_summary "$pr" "$issue" "$sha" "$summary"
       return 0

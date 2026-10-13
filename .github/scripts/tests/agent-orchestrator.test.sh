@@ -103,7 +103,9 @@ gh_dispatch() {
             *) echo "HTTP 404" >&2; return 1 ;;
           esac ;;
         repos/*/actions/workflows/*) cat "$STATE/ci-runs.json" 2>/dev/null || echo '{"workflow_runs":[]}' ;;
-        repos/*/reviews|repos/*/reviews\?*) cat "$STATE/reviews.json" 2>/dev/null || echo '[]' ;;
+        repos/*/reviews|repos/*/reviews\?*)
+          if [ -f "$STATE/reviews-api-failure" ]; then echo "simulated reviews API failure" >&2; return 1; fi
+          if [ -f "$STATE/reviews-invalid" ]; then echo '{invalid json'; else cat "$STATE/reviews.json" 2>/dev/null || echo '[]'; fi ;;
         repos/*/requested_reviewers) if [[ "$*" == *POST* ]]; then echo "request review" >> "$STATE/calls.log"; else echo '{"users":[]}'; fi ;;
         *) echo "unexpected gh api $*" >&2; return 1 ;;
       esac ;;
@@ -336,6 +338,20 @@ setup_review
 echo '{"workflow_runs":[{"created_at":"2026-10-12T13:00:00Z","conclusion":"failure"}]}' > "$STATE/ci-runs.json"
 process_review 145 39 abc123 >/dev/null
 check "clean review with failed CI is not promoted" "agent:ai-review 0" "$(labels_of 39) $(calls_matching 'pr ready')"
+
+setup_review
+touch "$STATE/reviews-api-failure"
+if process_review 145 39 abc123 >/dev/null 2>"$STATE/error.log"; then r=0; else r=$?; fi
+check "review API failure defers processing" "1" "$r"
+check "review API failure does not promote" "agent:ai-review 0" "$(labels_of 39) $(calls_matching 'pr ready')"
+check_contains "review API failure is logged" "Unable to fetch or parse Copilot review summary" "$(cat "$STATE/error.log")"
+
+setup_review
+touch "$STATE/reviews-invalid"
+if process_review 145 39 abc123 >/dev/null 2>"$STATE/error.log"; then r=0; else r=$?; fi
+check "invalid review JSON defers processing" "1" "$r"
+check "invalid review JSON does not promote" "agent:ai-review 0" "$(labels_of 39) $(calls_matching 'pr ready')"
+check_contains "invalid review JSON is logged" "Unable to fetch or parse Copilot review summary" "$(cat "$STATE/error.log")"
 
 setup_review
 echo '{"workflow_runs":[{"created_at":"2026-10-12T13:00:00Z","conclusion":"failure"},{"created_at":"2026-10-12T13:10:00Z","conclusion":"success"}]}' > "$STATE/ci-runs.json"
