@@ -227,9 +227,59 @@ ci_green() {
   [ "$conclusion" = "success" ]
 }
 
+# Body of the latest Copilot review summary submitted for exactly this commit (empty when there is none).
+copilot_review_summary() {
+  local pr="$1" sha="$2"
+  gh api --paginate -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/reviews?per_page=100" 2>/dev/null \
+    | jq -s -r --arg sha "$sha" '[add // [] | .[] | select((.user.login // "" | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha)]
+        | sort_by(.submitted_at // "") | last | .body // ""' 2>/dev/null || true
+}
+
+# Succeeds only when a review summary explicitly recommends changes. Generic status such as "Needs a closer look",
+# "Approval recommended", and the "wasn't able to review any files" boilerplate are not change requests.
+summary_requests_changes() {
+  local body="$1"
+  grep -Fq 'Changes recommended' <<< "$body" || return 1
+  ! grep -Eqi "(wasn('|’)t|was not) able to review any files" <<< "$body"
+}
+
+# Summary-only recommendation (no unresolved inline findings): hand the summary to the coding agent once per SHA,
+# capped at MAX_FIX_ROUNDS summary handoffs per PR, after which the Issue is blocked for a human.
+handoff_review_summary() {
+  local pr="$1" issue="$2" sha="$3" summary="$4" existing marker blocked_marker rounds ci_status quoted
+  existing="$(gh pr view "$pr" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
+  marker="<!-- agent-orchestrator:summary-handoff-sha=$sha -->"
+  blocked_marker="<!-- agent-orchestrator:summary-blocked-sha=$sha -->"
+  if printf '%s\n' "$existing" | grep -Fq "$marker"; then
+    echo "Review summary for $sha already handed off"; set_state "$issue" "$WORKING_LABEL"; return 0
+  fi
+  if printf '%s\n' "$existing" | grep -Fq "$blocked_marker"; then
+    echo "Review summary for $sha already escalated to a human"; set_state "$issue" "$BLOCKED_LABEL"; return 0
+  fi
+  rounds="$(printf '%s\n' "$existing" | grep -c 'agent-orchestrator:summary-handoff-sha=' || true)"
+  if [ "$rounds" -ge "$MAX_FIX_ROUNDS" ]; then
+    gh pr comment "$pr" --repo "$REPO" --body "$(printf 'Agent orchestrator stopped after %s automatic review-summary fix rounds. The Copilot review summary for %s still says "Changes recommended" without inline findings and needs a human decision.\n\n%s' \
+      "$rounds" "$sha" "$blocked_marker")" >/dev/null
+    echo "Review-summary fix rounds exhausted for PR #$pr -> human attention"
+    set_state "$issue" "$BLOCKED_LABEL"
+    return 0
+  fi
+  if ci_green "$sha"; then ci_status="succeeded"; else ci_status="is not confirmed green"; fi
+  # Drop HTML comments so quoted text cannot carry orchestrator markers; keep the handoff concise.
+  quoted="$(sed -E 's/<!--.*-->//g; s/^/> /' <<< "${summary:0:6000}")"
+  gh pr comment "$pr" --repo "$REPO" --body "$(printf '%s\n\n%s\n\n%s\n\n%s' \
+    "@copilot The Copilot review summary for commit $sha says \"Changes recommended\" but has no inline findings. The latest CI run for $sha $ci_status." \
+    "$quoted" \
+    'Please validate this recommendation against the actual CI and check results for this commit. If it is stale (for example, an unchecked validation checklist although CI passed), update the PR description or checklist to match the real results. Change code only if you identify a real issue. Run the relevant validation and push any fix to this PR branch. Do not merge.' \
+    "$marker")" >/dev/null
+  echo "Handed off review summary for $sha to Copilot (round $((rounds + 1)) of $MAX_FIX_ROUNDS)"
+  set_state "$issue" "$WORKING_LABEL"
+}
+
 process_review() {
-  # Decide after Copilot reviewed the current head: hand findings to the coding agent, or promote to human review.
-  local pr="$1" issue="$2" sha="$3" threads open_threads count findings marker existing rounds
+  # Decide after Copilot reviewed the current head: hand inline findings or a summary-only "Changes recommended"
+  # review to the coding agent, or promote to human review.
+  local pr="$1" issue="$2" sha="$3" threads open_threads count findings marker existing rounds summary
   # shellcheck disable=SC2016 # GraphQL variables, not shell expansions.
   threads="$(gh api graphql \
     -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body path line author{login}}}}}}}}' \
@@ -237,6 +287,11 @@ process_review() {
   open_threads='[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved == false) | select(any(.comments.nodes[]?; .author.login | startswith("copilot-pull-request-reviewer")))]'
   count="$(jq "$open_threads | length" <<< "$threads")"
   if [ "$count" -eq 0 ]; then
+    summary="$(copilot_review_summary "$pr" "$sha")"
+    if summary_requests_changes "$summary"; then
+      handoff_review_summary "$pr" "$issue" "$sha" "$summary"
+      return 0
+    fi
     if ! ci_green "$sha"; then
       echo "No unresolved Copilot findings, but CI for $sha is not green; not promoting to human review"
       return 0
