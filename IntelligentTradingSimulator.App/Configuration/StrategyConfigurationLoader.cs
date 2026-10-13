@@ -114,8 +114,31 @@ public static class StrategyConfigurationLoader
             Week52HighScoreWeight = section.GetValue<decimal?>("Week52HighScoreWeight")
                 ?? StrategyConfiguration.DefaultWeek52HighScoreWeight,
             UseQualityFilter = section.GetValue<bool?>("UseQualityFilter")
-                ?? false
+                ?? false,
+            QualityMinimumRevenueGrowthPercent = section.GetValue<decimal?>("QualityMinimumRevenueGrowthPercent"),
+            QualityMinimumEpsGrowthPercent = section.GetValue<decimal?>("QualityMinimumEpsGrowthPercent"),
+            QualityMinimumMarginsPercent = section.GetValue<decimal?>("QualityMinimumMarginsPercent"),
+            QualityMaximumDebtToEquity = section.GetValue<decimal?>("QualityMaximumDebtToEquity"),
+            QualityFailureAction = section.GetValue<QualityFilterAction?>("QualityFailureAction")
+                ?? QualityFilterAction.Exclude,
+            QualityMissingDataAction = section.GetValue<QualityFilterAction?>("QualityMissingDataAction")
+                ?? QualityFilterAction.Neutral,
+            QualityPenalty = section.GetValue<decimal?>("QualityPenalty") ?? 5m
         };
+
+        foreach (var (name, action) in new[]
+        {
+            (nameof(StrategyConfiguration.QualityFailureAction), config.QualityFailureAction),
+            (nameof(StrategyConfiguration.QualityMissingDataAction), config.QualityMissingDataAction)
+        })
+        {
+            if (!Enum.IsDefined(action))
+                throw new InvalidOperationException(
+                    $"Configuration value 'Strategies:{id}:{name}' must be Neutral, Penalize or Exclude.");
+        }
+        if (config.QualityPenalty < 0m || config.QualityMaximumDebtToEquity is < 0m)
+            throw new InvalidOperationException(
+                $"Configuration values 'Strategies:{id}:QualityPenalty' and 'Strategies:{id}:QualityMaximumDebtToEquity' must be non-negative.");
 
         if (string.IsNullOrWhiteSpace(config.RelativeStrengthBenchmarkSymbol))
         {

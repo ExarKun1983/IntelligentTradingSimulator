@@ -83,7 +83,7 @@ path and depend only on `IFundamentalDataProvider`; future live adapters or
 storage implementations can replace it without changing ranking logic.
 This provider is not wired into application workflows and does not apply the
 Quality Filter or change existing scores. Historical/as-of snapshot selection,
-refresh policies, live integration, and the final filter remain follow-up work;
+refresh policies and historical integration remain follow-up work;
 these snapshots must not be used as point-in-time backtest data.
 
 ### External provider: FinancialModelingPrep
@@ -141,7 +141,12 @@ Each strategy supports these settings:
 | `RelativeStrengthScoreWeight` | Non-negative score points per percentage point of Relative Strength (default `1`). Set to `0` to retain analysis without affecting scores. |
 | `Use52WeekHigh` | Enable distance-from-52-week-high scoring. |
 | `Week52HighScoreWeight` | Non-negative maximum score contribution for the 52-week-high factor. |
-| `UseQualityFilter` | Enable the quality filter. |
+| `UseQualityFilter` | Enable quality screening, including the existing volatility gate (default `false`). |
+| `QualityMinimumRevenueGrowthPercent`, `QualityMinimumEpsGrowthPercent`, `QualityMinimumMarginsPercent` | Inclusive minimum percentages; omitted/null disables that metric's check. Negative minima are allowed. |
+| `QualityMaximumDebtToEquity` | Inclusive maximum debt/equity ratio, non-negative; omitted/null disables the check. |
+| `QualityFailureAction` | `Exclude` (default), `Penalize`, or `Neutral` for failed thresholds. |
+| `QualityMissingDataAction` | `Neutral` (default), `Penalize`, or `Exclude` for unavailable configured metrics. |
+| `QualityPenalty` | Non-negative score points deducted once for `Penalize` (default `5`; `0` is neutral). |
 
 The loader validates strategy settings at startup. Missing settings use the defaults in `StrategyConfiguration`; invalid or missing active strategy sections stop startup with a configuration error. All weights must be non-negative decimals, including weights for disabled factors. At least one scoring factor must have a positive weight and be enabled (where a toggle exists); RSI also needs a positive bonus or penalty. Eligibility and quality filters alone are not an active scoring-factor set.
 
@@ -183,6 +188,7 @@ Ranking and backtesting use the same Core `CompositeScoringEngine` via `IScoring
 5. RSI: `RsiPreferredRangeBonus × RsiScoreWeight` inside the inclusive preferred range, or negative `RsiOverboughtPenalty × RsiScoreWeight` at/above the overbought threshold (penalty takes precedence).
 6. 52-week-high distance: `(clamp(distance, -100, 0) + 50) / 50 × Week52HighScoreWeight`; nearer the high is better, -50% is neutral, and the normalized multiplier is bounded to [-1, 1].
 7. Relative Strength percentage points × `RelativeStrengthScoreWeight`.
+8. Quality Filter: zero or negative `QualityPenalty`, according to the configured fundamental policy.
 
 These contributions use metrics calculated by the analyzer. Most use the strategy's analysis window; the 52-week-high factor uses a separate 252-session history:
 
@@ -198,11 +204,53 @@ These contributions use metrics calculated by the analyzer. Most use the strateg
 
 SMA5 is an eligibility gate even when `SmaScoreWeight` is zero. When `UseQualityFilter` is enabled, average volatility above 3% also disqualifies the observation; either disqualification produces the sentinel score `-999` instead of the sum of factor points.
 
+### Fundamental quality screening
+
+Fundamental rules are opt-in: configure thresholds on a strategy and set `UseQualityFilter`
+to `true`. No implicit fundamental thresholds are imposed. For example:
+
+```json
+{
+  "UseQualityFilter": true,
+  "QualityMinimumRevenueGrowthPercent": 5,
+  "QualityMinimumEpsGrowthPercent": 0,
+  "QualityMinimumMarginsPercent": 10,
+  "QualityMaximumDebtToEquity": 2,
+  "QualityFailureAction": "Exclude",
+  "QualityMissingDataAction": "Penalize",
+  "QualityPenalty": 7
+}
+```
+
+Any failed configured threshold triggers the failure policy; equality passes.
+Only configured metrics require data. An absent snapshot or null configured field
+triggers the missing-data policy, not a zero substitution. Negative debt/equity is
+treated as unusable data (it must not pass a maximum-debt rule simply because it
+is negative); negative growth or margins are valid and compared normally.
+When failures and missing fields coexist, `Exclude` takes precedence over
+`Penalize`, then `Neutral`. Penalties apply once per stock, not once per metric.
+Excluded stocks receive `-999` and cannot be recommended, but remain in analysis
+output for inspection. Passing stocks get no quality bonus.
+
+The enabled filter adds a `QualityFilter` breakdown entry with applied points and
+an explanation listing failed values/thresholds and missing metrics with their
+selected actions. Disqualification clears applied points and retains the existing
+`Disqualification=-999` override. Disabled quality screening adds no entry and
+does not change scores. Existing SMA5 and volatility gates remain unchanged,
+regardless of the fundamental failure/missing policies.
+
+Normal ranking uses the existing fundamental provider integration; provider failures
+for a stock are handled as missing data without aborting the universe. Configure
+FMP as described above to supply live snapshots. Backtests use the same policy but
+have no historical fundamental snapshots, so configured checks use the missing-data
+action. Today's snapshots are deliberately not fetched for historical dates to avoid
+look-ahead bias. Point-in-time fundamentals remain follow-up work.
+
 Final stock rankings sort by composite `Score` descending, then by symbol ascending using ordinal (case-sensitive, culture-independent) comparison for equal scores. Market analysis, persisted rank positions, recommendations, and backtests use this same ordering. Recommendation eligibility filters remain unchanged and the position limit is applied after sorting; raw factor values and contribution breakdowns remain available in ranked observations.
 
 Weights scale contributions into score points; they need not sum to one. Percentage inputs are not divided by 100 or normalized across the stock universe, so adding another stock cannot change an existing stock's score. Default weights preserve the previous formula. Optional factors contribute zero when disabled or missing; base metrics are required decimal inputs (NaN/infinity are not representable). Arithmetic overflow is surfaced, not replaced by a silent fallback. Stocks not above SMA5, or rejected by the enabled quality filter, still receive `DisqualifiedScore` (-999).
 
-`CompositeScoringEngine.CalculateContributions` returns a `CompositeScoreResult` with each applied contribution, eligibility, and the final score. The scoring interface also supplies a typed `FactorScoreContribution` breakdown through `ObservationResult.FactorContributions`, available in normal analysis and backtest observations. Market ranking output prints all seven factors, including the configurable SMA5 bonus, in score points with full decimal precision. Contributions sum to the score used for ranking; disqualified stocks have zero applied factor points plus an explicit `Disqualification` contribution of -999 explaining the sentinel score.
+`CompositeScoringEngine.CalculateContributions` returns a `CompositeScoreResult` with each applied contribution, eligibility, and the final score. The scoring interface also supplies a typed `FactorScoreContribution` breakdown through `ObservationResult.FactorContributions`, available in normal analysis and backtest observations. Market ranking output prints all seven technical factors and the enabled Quality Filter, including the configurable SMA5 bonus, in score points with full decimal precision. Contributions sum to the score used for ranking; disqualified stocks have zero applied factor points plus an explicit `Disqualification` contribution of -999 explaining the sentinel score.
 
 Each factor reports `Applied`, `Disabled`, `Unavailable`, or `Disqualified`. Missing input is reported as `Unavailable` with a null contribution (`N/A`), even if the factor is disabled; it does not add score points. Available disabled factors (including zero weights) report zero, while an available enabled factor with a neutral effect reports `Applied` with zero. Custom scoring engines without breakdown support report `N/A` rather than fabricated contributions. The existing Relative Strength diagnostic and persisted observation-history format remain unchanged. `RuleBasedScoringEngine` delegates to the composite engine for compatibility. ATR remains informational; no ATR scoring, stops, or allocation rules are introduced.
 

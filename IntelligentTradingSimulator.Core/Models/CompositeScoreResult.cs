@@ -22,9 +22,13 @@ public sealed class CompositeScoreResult
 
     public decimal RelativeStrengthContribution { get; init; }
 
+    public QualityFilterResult? QualityFilter { get; init; }
+
+    public decimal QualityContribution { get; init; }
+
     public decimal Score => IsDisqualified
         ? StrategyConfiguration.DisqualifiedScore
         : MomentumContribution + VolumeTrendContribution + VolatilityContribution
           + SmaContribution + RsiContribution + Week52HighContribution
-          + RelativeStrengthContribution;
+          + RelativeStrengthContribution + QualityContribution;
 }
