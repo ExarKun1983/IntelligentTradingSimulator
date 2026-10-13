@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using IntelligentTradingSimulator.App.Configuration;
 using IntelligentTradingSimulator.App.Simulation;
 using IntelligentTradingSimulator.Core.Enums;
+using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -215,6 +216,24 @@ public sealed class BacktestEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_MarksRunFailedWhenFinalPortfolioSaveThrows()
+    {
+        var repository = new FinalSaveFailingRepository(_dbContext);
+        var engine = new BacktestEngine(repository, new StubDayProcessor());
+
+        var result = await engine.RunAsync(
+            BuildRequest(new DateTime(2024, 5, 1), new DateTime(2024, 5, 1)));
+
+        Assert.Equal(BacktestRunStatus.Failed, result.Status);
+
+        var saved = await _runRepository.GetByIdAsync(result.RunId);
+        Assert.NotNull(saved);
+        Assert.Equal(BacktestRunStatus.Failed, saved.Status);
+        Assert.Null(saved.Portfolio);
+        Assert.Empty(await _dbContext.Portfolios.ToListAsync());
+    }
+
+    [Fact]
     public async Task RunAsync_FinalizesMetricsFromLastDaySnapshot_NotPortfolioTotalValue()
     {
         var startDate = new DateTime(2024, 6, 1);
@@ -373,5 +392,32 @@ public sealed class BacktestEngineTests : IDisposable
                 Recommendations = []
             });
         }
+    }
+
+    private sealed class FinalSaveFailingRepository : IBacktestRunRepository
+    {
+        private readonly TradingSimulatorDbContext _dbContext;
+        private readonly BacktestRunRepository _innerRepository;
+
+        public FinalSaveFailingRepository(TradingSimulatorDbContext dbContext)
+        {
+            _dbContext = dbContext;
+            _innerRepository = new BacktestRunRepository(dbContext);
+        }
+
+        public Task AddAsync(BacktestRun run) =>
+            _innerRepository.AddAsync(run);
+
+        public Task<BacktestRun?> GetByIdAsync(int id) =>
+            _innerRepository.GetByIdAsync(id);
+
+        public Task UpdateAsync(BacktestRun run)
+        {
+            _dbContext.BacktestRuns.Update(run);
+            throw new InvalidOperationException("Simulated portfolio save failure.");
+        }
+
+        public Task MarkFailedAsync(int runId) =>
+            _innerRepository.MarkFailedAsync(runId);
     }
 }

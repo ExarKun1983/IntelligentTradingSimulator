@@ -78,6 +78,7 @@ public sealed class BacktestEngine : IBacktestEngine
                 ? Math.Round((finalValue - request.InitialCapital) / request.InitialCapital * 100m, FinancialPrecision)
                 : 0m;
             run.Status = BacktestRunStatus.Completed;
+            run.Portfolio = portfolio;
 
             await _runRepository.UpdateAsync(run);
 
@@ -92,8 +93,7 @@ public sealed class BacktestEngine : IBacktestEngine
         }
         catch (Exception ex)
         {
-            run.Status = BacktestRunStatus.Failed;
-            await _runRepository.UpdateAsync(run);
+            await _runRepository.MarkFailedAsync(run.Id);
 
             return new BacktestEngineResult
             {

@@ -11,4 +11,6 @@ public interface IBacktestRunRepository
     Task<BacktestRun?> GetByIdAsync(int id);
 
     Task UpdateAsync(BacktestRun run);
+
+    Task MarkFailedAsync(int runId);
 }

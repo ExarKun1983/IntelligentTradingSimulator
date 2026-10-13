@@ -27,6 +27,11 @@ public sealed class BacktestRunRepository : IBacktestRunRepository
     {
         return await _dbContext.BacktestRuns
             .Include(x => x.Snapshots)
+            .Include(x => x.Portfolio)
+                .ThenInclude(x => x!.Trades)
+            .Include(x => x.Portfolio)
+                .ThenInclude(x => x!.Positions)
+            .AsSplitQuery()
             .FirstOrDefaultAsync(x => x.Id == id);
     }
 
@@ -34,6 +39,20 @@ public sealed class BacktestRunRepository : IBacktestRunRepository
     {
         _dbContext.BacktestRuns.Update(run);
 
+        await _dbContext.SaveChangesAsync();
+    }
+
+    public async Task MarkFailedAsync(int runId)
+    {
+        _dbContext.ChangeTracker.Clear();
+
+        var run = await _dbContext.BacktestRuns
+            .FirstOrDefaultAsync(x => x.Id == runId);
+
+        if (run is null)
+            return;
+
+        run.Status = Core.Enums.BacktestRunStatus.Failed;
         await _dbContext.SaveChangesAsync();
     }
 }

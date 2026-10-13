@@ -49,6 +49,9 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
+                    b.Property<int?>("PortfolioId")
+                        .HasColumnType("int");
+
                     b.Property<DateTime>("StartDate")
                         .HasColumnType("datetime2");
 
@@ -69,6 +72,8 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                         .HasColumnType("decimal(18,4)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("PortfolioId");
 
                     b.ToTable("BacktestRuns", (string)null);
                 });
@@ -338,6 +343,15 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     b.HasIndex("PortfolioId");
 
                     b.ToTable("Trades");
+                });
+
+            modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.BacktestRun", b =>
+                {
+                    b.HasOne("IntelligentTradingSimulator.Core.Models.Portfolio", "Portfolio")
+                        .WithMany()
+                        .HasForeignKey("PortfolioId");
+
+                    b.Navigation("Portfolio");
                 });
 
             modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.BacktestSnapshot", b =>

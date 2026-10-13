@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using IntelligentTradingSimulator.App.Simulation;
+using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
@@ -13,16 +14,17 @@ namespace IntelligentTradingSimulator.Tests;
 
 public sealed class BacktestDayProcessorTests : IDisposable
 {
+    private readonly DbContextOptions<TradingSimulatorDbContext> _options;
     private readonly TradingSimulatorDbContext _dbContext;
     private readonly BacktestSnapshotRepository _snapshotRepository;
 
     public BacktestDayProcessorTests()
     {
-        var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
+        _options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
             .Options;
 
-        _dbContext = new TradingSimulatorDbContext(options);
+        _dbContext = new TradingSimulatorDbContext(_options);
         _snapshotRepository = new BacktestSnapshotRepository(_dbContext);
     }
 
@@ -72,6 +74,72 @@ public sealed class BacktestDayProcessorTests : IDisposable
                 Volume = 1_000_000m
             })
             .ToList();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_PersistsRebalanceExitReason_InFreshContext(bool hasNormalPortfolio)
+    {
+        var startDate = new DateTime(2024, 1, 1);
+        var provider = new FakeMarketDataProvider();
+        var candles = BuildCandles(startDate, 11);
+        candles[^1].Open = 120m;
+        candles[^1].High = 121m;
+        candles[^1].Low = 119m;
+        candles[^1].Close = 120m;
+        provider.SetData("AAPL", candles);
+        var normalPortfolio = new Portfolio { Name = "Normal", StartingCash = 1_000m, Cash = 1_000m };
+        if (hasNormalPortfolio)
+        {
+            await new PortfolioRepository(_dbContext).SaveAsync(normalPortfolio);
+        }
+        var engine = new BacktestEngine(
+            new BacktestRunRepository(_dbContext),
+            BuildProcessor(provider, maxPositions: 1, maxPositionWeight: 50m));
+
+        var result = await engine.RunAsync(new BacktestEngineRequest
+        {
+            Name = "Exit reason persistence",
+            StrategyId = "test",
+            StrategyConfiguration = new StrategyConfiguration { Id = "test", UseRelativeStrength = false },
+            StartDate = startDate.AddDays(9),
+            EndDate = startDate.AddDays(10),
+            HistoricalStartDate = startDate,
+            InitialCapital = 10_000m,
+            Symbols = ["AAPL"]
+        });
+
+        Assert.Equal(BacktestRunStatus.Completed, result.Status);
+        await _dbContext.DisposeAsync();
+        await using var readContext = new TradingSimulatorDbContext(_options);
+        var savedRun = await new BacktestRunRepository(readContext).GetByIdAsync(result.RunId);
+
+        Assert.NotNull(savedRun);
+        Assert.NotNull(savedRun.Portfolio);
+        var sell = Assert.Single(savedRun.Portfolio.Trades, x => x.Action == TradeActionType.Sell);
+        Assert.Equal(ExitReason.Rebalance, sell.ExitReason);
+        Assert.Equal(120m, sell.Price);
+        Assert.True(sell.Quantity > 0m);
+        Assert.All(savedRun.Portfolio.Trades.Where(x => x.Action == TradeActionType.Buy),
+            trade => Assert.Null(trade.ExitReason));
+        var persistedSell = Assert.Single(await readContext.Trades
+            .AsNoTracking()
+            .Where(x => x.PortfolioId == savedRun.PortfolioId && x.ExitReason == ExitReason.Rebalance)
+            .ToListAsync());
+        Assert.Equal(sell.Id, persistedSell.Id);
+
+        var portfolioRepository = new PortfolioRepository(readContext);
+        if (hasNormalPortfolio)
+        {
+            Assert.Equal(normalPortfolio.Id, (await portfolioRepository.GetLatestAsync())!.Id);
+            Assert.Equal(normalPortfolio.Id, Assert.Single(await portfolioRepository.GetAllAsync()).Id);
+        }
+        else
+        {
+            Assert.Null(await portfolioRepository.GetLatestAsync());
+            Assert.Empty(await portfolioRepository.GetAllAsync());
+        }
     }
 
     [Fact]

@@ -28,6 +28,10 @@ public sealed class BacktestRun
 
     public DateTime CreatedAt { get; set; }
 
+    public int? PortfolioId { get; set; }
+
+    public Portfolio? Portfolio { get; set; }
+
     public List<BacktestSnapshot> Snapshots { get; set; }
         = new();
 }
