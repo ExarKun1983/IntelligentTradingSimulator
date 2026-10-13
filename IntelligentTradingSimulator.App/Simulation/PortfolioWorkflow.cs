@@ -19,6 +19,7 @@ public sealed class PortfolioWorkflow
     private readonly PortfolioRebalancingService _rebalancingService;
     private readonly PortfolioPerformanceService _performanceService;
     private readonly ConsoleReporter _reporter;
+    private readonly StrategyConfiguration _strategyConfiguration;
 
     public PortfolioWorkflow(
         PortfolioRepository portfolioRepository,
@@ -29,7 +30,8 @@ public sealed class PortfolioWorkflow
         PortfolioAllocationEngine allocationEngine,
         PortfolioRebalancingService rebalancingService,
         PortfolioPerformanceService performanceService,
-        ConsoleReporter reporter)
+        ConsoleReporter reporter,
+        StrategyConfiguration? strategyConfiguration = null)
     {
         _portfolioRepository = portfolioRepository;
         _portfolioSnapshotRepository = portfolioSnapshotRepository;
@@ -40,6 +42,7 @@ public sealed class PortfolioWorkflow
         _rebalancingService = rebalancingService;
         _performanceService = performanceService;
         _reporter = reporter;
+        _strategyConfiguration = strategyConfiguration ?? new StrategyConfiguration();
     }
 
     public async Task<PortfolioState> RunAsync(
@@ -72,7 +75,8 @@ public sealed class PortfolioWorkflow
             recommendations,
             prices,
             _allocationEngine,
-            _tradingEngine);
+            _tradingEngine,
+            _strategyConfiguration.StopLossPercent);
 
         await _portfolioRepository.SaveAsync(portfolio);
 

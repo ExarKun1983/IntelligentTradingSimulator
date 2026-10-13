@@ -23,6 +23,36 @@ public sealed class MarketDataWorkflowTests : IDisposable
 
     public void Dispose() => _dbContext.Dispose();
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CollectAndAnalyzeAsync_StopLossRetainsAvailablePriceWithoutScoringHistory(bool enabled)
+    {
+        var today = DateTime.Today;
+        var provider = new FakeMarketDataProvider(
+        [
+            new MarketCandle { Date = today, Close = 90m },
+            new MarketCandle { Date = today.AddDays(1), Close = 1m }
+        ]);
+        var workflow = BuildWorkflow(provider, new StrategyConfiguration
+        {
+            UseRelativeStrength = false, StopLossPercent = enabled ? 10m : null
+        });
+
+        var result = await workflow.CollectAndAnalyzeAsync(["TEST"], today.AddDays(-10));
+
+        Assert.Empty(result.RankedResults);
+        Assert.Empty(result.Recommendations);
+        if (enabled)
+        {
+            Assert.Equal(90m, result.Prices["TEST"]);
+        }
+        else
+        {
+            Assert.Empty(result.Prices);
+        }
+    }
+
     [Fact]
     public async Task CollectAndAnalyzeAsync_ReturnsNullWeek52Values_WhenProviderHasFewerThan252Sessions()
     {

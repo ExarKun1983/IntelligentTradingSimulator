@@ -27,6 +27,9 @@ public sealed class StrategyConfiguration
 
     public decimal MaxPositionWeight { get; set; } = DefaultMaxPositionWeight;
 
+    /// <summary>Percentage loss from average entry price that exits a position; null disables Stop Loss.</summary>
+    public decimal? StopLossPercent { get; set; }
+
     public int LookbackDays { get; set; } = DefaultLookbackDays;
 
     /// <summary>Score points per percentage point of momentum; zero disables the contribution.</summary>

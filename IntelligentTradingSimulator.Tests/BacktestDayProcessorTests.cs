@@ -77,6 +77,136 @@ public sealed class BacktestDayProcessorTests : IDisposable
     }
 
     [Theory]
+    [InlineData(90, true)]
+    [InlineData(91, false)]
+    public async Task ProcessAsync_StopLossUsesAvailableCloseWithoutScoringHistoryOrLookahead(
+        int currentPrice, bool shouldSell)
+    {
+        var date = new DateTime(2024, 1, 10);
+        var provider = new FakeMarketDataProvider();
+        provider.SetData("HELD",
+        [
+            new MarketCandle { Date = date, Close = currentPrice },
+            new MarketCandle { Date = date.AddDays(1), Close = 1m }
+        ]);
+        var portfolio = new Portfolio
+        {
+            StartingCash = 1000m,
+            Positions = [new Position
+            {
+                Symbol = "HELD", Quantity = 10m, AveragePrice = 100m, CurrentPrice = 100m
+            }]
+        };
+
+        var result = await BuildProcessor(provider).ProcessAsync(new BacktestDayRequest
+        {
+            CurrentDate = date,
+            HistoricalStartDate = date.AddDays(-10),
+            Portfolio = portfolio,
+            Symbols = [],
+            StrategyConfiguration = new StrategyConfiguration
+            {
+                UseRelativeStrength = false, StopLossPercent = 10m
+            }
+        });
+
+        Assert.Empty(result.Recommendations);
+        Assert.Equal(shouldSell ? 1 : 0, result.Snapshot.TradesExecuted);
+        Assert.False(result.Snapshot.RebalanceExecuted);
+        Assert.Equal(currentPrice * 10m, result.Snapshot.PortfolioValue);
+        if (shouldSell)
+        {
+            Assert.Empty(portfolio.Positions);
+            var sell = Assert.Single(portfolio.Trades);
+            Assert.Equal(currentPrice, sell.Price);
+            Assert.Equal(10m, sell.Quantity);
+            Assert.Equal(ExitReason.StopLoss, sell.ExitReason);
+        }
+        else
+        {
+            Assert.Empty(portfolio.Trades);
+            Assert.Equal(currentPrice, Assert.Single(portfolio.Positions).CurrentPrice);
+        }
+    }
+
+    [Fact]
+    public async Task ProcessAsync_StopLossDoesNotAddHeldSymbolsToRecommendationUniverse()
+    {
+        var date = new DateTime(2024, 1, 1);
+        var provider = new FakeMarketDataProvider();
+        provider.SetData("HELD", BuildCandles(date, 10));
+        var portfolio = new Portfolio
+        {
+            StartingCash = 1000m,
+            Positions = [new Position
+            {
+                Symbol = "HELD", Quantity = 10m, AveragePrice = 100m, CurrentPrice = 100m
+            }]
+        };
+
+        var result = await BuildProcessor(provider).ProcessAsync(new BacktestDayRequest
+        {
+            CurrentDate = date.AddDays(9),
+            HistoricalStartDate = date,
+            Portfolio = portfolio,
+            Symbols = [],
+            StrategyConfiguration = new StrategyConfiguration
+            {
+                UseRelativeStrength = false, StopLossPercent = 10m
+            }
+        });
+
+        Assert.Empty(result.Observations);
+        Assert.Empty(result.Recommendations);
+        Assert.Empty(portfolio.Trades);
+        Assert.Equal(109m, Assert.Single(portfolio.Positions).CurrentPrice);
+    }
+
+    [Fact]
+    public async Task RunAsync_PersistsAutomaticStopLossExit_InFreshContext()
+    {
+        var startDate = new DateTime(2024, 1, 1);
+        var provider = new FakeMarketDataProvider();
+        var candles = BuildCandles(startDate, 11);
+        candles[^1].Close = 90m;
+        provider.SetData("AAPL", candles);
+        var engine = new BacktestEngine(
+            new BacktestRunRepository(_dbContext), BuildProcessor(provider));
+
+        var result = await engine.RunAsync(new BacktestEngineRequest
+        {
+            Name = "Stop Loss persistence",
+            StrategyId = "test",
+            StrategyConfiguration = new StrategyConfiguration
+            {
+                Id = "test", UseRelativeStrength = false, StopLossPercent = 10m
+            },
+            StartDate = startDate.AddDays(9),
+            EndDate = startDate.AddDays(10),
+            HistoricalStartDate = startDate,
+            InitialCapital = 10_000m,
+            Symbols = ["AAPL"]
+        });
+
+        Assert.Equal(BacktestRunStatus.Completed, result.Status);
+        await _dbContext.DisposeAsync();
+        await using var readContext = new TradingSimulatorDbContext(_options);
+        var savedRun = await new BacktestRunRepository(readContext).GetByIdAsync(result.RunId);
+        Assert.NotNull(savedRun?.Portfolio);
+        Assert.Empty(savedRun.Portfolio.Positions);
+        var buy = Assert.Single(savedRun.Portfolio.Trades, x => x.Action == TradeActionType.Buy);
+        var sell = Assert.Single(savedRun.Portfolio.Trades, x => x.Action == TradeActionType.Sell);
+        Assert.Equal(109m, buy.Price);
+        Assert.Equal(90m, sell.Price);
+        Assert.Equal(buy.Quantity, sell.Quantity);
+        Assert.Equal(ExitReason.StopLoss, sell.ExitReason);
+        Assert.Equal(savedRun.FinalCapital, Math.Round(savedRun.Portfolio.Cash, 4));
+        Assert.Single(await readContext.Trades.AsNoTracking()
+            .Where(x => x.PortfolioId == savedRun.PortfolioId && x.ExitReason == ExitReason.StopLoss)
+            .ToListAsync());
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task RunAsync_PersistsRebalanceExitReason_InFreshContext(bool hasNormalPortfolio)

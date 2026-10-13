@@ -6,6 +6,147 @@ namespace IntelligentTradingSimulator.Tests;
 
 public sealed class PortfolioRebalancingServiceTests
 {
+    [Theory]
+    [InlineData(90, 10, true)]
+    [InlineData(89, 10, true)]
+    [InlineData(90.01, 10, false)]
+    [InlineData(110, 10, false)]
+    [InlineData(94, 5, true)]
+    [InlineData(94, 10, false)]
+    [InlineData(97.5, 2.5, true)]
+    public void Execute_StopLossUsesConfiguredInclusiveThreshold(
+        double price, double percent, bool shouldSell)
+    {
+        var portfolio = new Portfolio
+        {
+            Cash = 100m,
+            Positions = [new Position
+            {
+                Symbol = "AAPL", Quantity = 3.1234m, AveragePrice = 100m, CurrentPrice = 120m
+            }]
+        };
+
+        new PortfolioRebalancingService().Execute(
+            portfolio, [], new Dictionary<string, decimal> { ["AAPL"] = (decimal)price },
+            new PortfolioAllocationEngine(new PortfolioAllocationService()),
+            new TradingEngine(), (decimal)percent);
+
+        if (shouldSell)
+        {
+            Assert.Empty(portfolio.Positions);
+            var trade = Assert.Single(portfolio.Trades);
+            Assert.Equal(TradeActionType.Sell, trade.Action);
+            Assert.Equal(ExitReason.StopLoss, trade.ExitReason);
+            Assert.Equal(3.1234m, trade.Quantity);
+            Assert.Equal((decimal)price, trade.Price);
+            Assert.Equal(100m + 3.1234m * (decimal)price, portfolio.Cash);
+        }
+        else
+        {
+            Assert.Single(portfolio.Positions);
+            Assert.Empty(portfolio.Trades);
+            Assert.Equal(100m, portfolio.Cash);
+        }
+    }
+
+    [Theory]
+    [InlineData(null, 100, 10)]
+    [InlineData(0, 100, 10)]
+    [InlineData(-1, 100, 10)]
+    [InlineData(80, 0, 10)]
+    [InlineData(80, -100, 10)]
+    [InlineData(80, 100, 0)]
+    [InlineData(80, 100, -1)]
+    public void Execute_StopLossSkipsMissingOrInvalidPositionData(
+        int? price, int entryPrice, int quantity)
+    {
+        var portfolio = new Portfolio
+        {
+            Positions = [new Position
+            {
+                Symbol = "AAPL", Quantity = (decimal)quantity,
+                AveragePrice = (decimal)entryPrice, CurrentPrice = 50m
+            }]
+        };
+        var prices = new Dictionary<string, decimal>();
+        if (price.HasValue)
+        {
+            prices["AAPL"] = (decimal)price.Value;
+        }
+
+        new PortfolioRebalancingService().Execute(
+            portfolio, [], prices, new PortfolioAllocationEngine(new PortfolioAllocationService()),
+            new TradingEngine(), 10m);
+
+        Assert.Empty(portfolio.Trades);
+        Assert.Single(portfolio.Positions);
+    }
+
+    [Fact]
+    public void Execute_StopLossIsDisabledByDefault()
+    {
+        var portfolio = new Portfolio
+        {
+            Positions = [new Position
+            {
+                Symbol = "AAPL", Quantity = 10m, AveragePrice = 100m, CurrentPrice = 80m
+            }]
+        };
+
+        new PortfolioRebalancingService().Execute(
+            portfolio, [], new Dictionary<string, decimal> { ["AAPL"] = 80m },
+            new PortfolioAllocationEngine(new PortfolioAllocationService()), new TradingEngine());
+
+        Assert.Empty(portfolio.Trades);
+        Assert.Single(portfolio.Positions);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(101)]
+    public void Execute_RejectsInvalidStopLossPercent(double percent)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new PortfolioRebalancingService().Execute(
+            new Portfolio(), [], new Dictionary<string, decimal>(),
+            new PortfolioAllocationEngine(new PortfolioAllocationService()),
+            new TradingEngine(), (decimal)percent));
+    }
+
+    [Fact]
+    public void Execute_StopLossExitsMultiplePositionsBeforeRebalance_WithoutRebuyingThem()
+    {
+        var portfolio = new Portfolio
+        {
+            Positions =
+            [
+                new Position { Symbol = "AAPL", Quantity = 10m, AveragePrice = 100m, CurrentPrice = 90m },
+                new Position { Symbol = "MSFT", Quantity = 10m, AveragePrice = 100m, CurrentPrice = 80m }
+            ]
+        };
+        var recommendations = new List<StockRecommendation>
+        {
+            new() { Symbol = "AAPL", AllocationPercent = 50m },
+            new() { Symbol = "MSFT", AllocationPercent = 25m },
+            new() { Symbol = "GOOG", AllocationPercent = 25m }
+        };
+
+        new PortfolioRebalancingService().Execute(
+            portfolio, recommendations,
+            new Dictionary<string, decimal> { ["AAPL"] = 90m, ["MSFT"] = 80m, ["GOOG"] = 100m },
+            new PortfolioAllocationEngine(new PortfolioAllocationService()), new TradingEngine(), 10m);
+
+        Assert.Equal(3, portfolio.Trades.Count);
+        Assert.All(portfolio.Trades.Take(2), trade =>
+        {
+            Assert.Equal(TradeActionType.Sell, trade.Action);
+            Assert.Equal(ExitReason.StopLoss, trade.ExitReason);
+        });
+        Assert.Equal("GOOG", Assert.Single(portfolio.Positions).Symbol);
+        Assert.Equal(1275m, portfolio.Cash);
+        Assert.Equal(3, recommendations.Count);
+    }
+
     [Fact]
     public void Execute_TagsSellsAsRebalance_AndLeavesBuysUntagged()
     {
