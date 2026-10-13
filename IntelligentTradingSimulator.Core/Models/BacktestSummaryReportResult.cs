@@ -12,6 +12,10 @@ public sealed class BacktestSummaryReportResult
 
     public string StrategyId { get; set; } = string.Empty;
 
+    public DateTime StartDate { get; set; }
+
+    public DateTime EndDate { get; set; }
+
     public decimal StartCapital { get; set; }
 
     public decimal FinalCapital { get; set; }

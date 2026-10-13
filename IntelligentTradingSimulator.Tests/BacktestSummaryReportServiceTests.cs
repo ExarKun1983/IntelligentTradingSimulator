@@ -6,6 +6,7 @@ using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
+using IntelligentTradingSimulator.Infrastructure.Reporting;
 using Microsoft.EntityFrameworkCore;
 
 namespace IntelligentTradingSimulator.Tests;
@@ -55,6 +56,32 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
 
         await _runRepository.AddAsync(run);
         return run;
+    }
+
+    [Fact]
+    public async Task GenerateAsync_ExportsPersistedRunSummaryWithRunDates()
+    {
+        var run = await CreateRunAsync();
+        await _snapshotRepository.AddRangeAsync(
+        [
+            new BacktestSnapshot
+            {
+                BacktestRunId = run.Id,
+                Date = new DateTime(2024, 1, 2),
+                PortfolioValue = run.InitialCapital
+            }
+        ]);
+
+        var summary = await _service.GenerateAsync(run.Id);
+        Assert.True(summary.IsSuccess);
+        Assert.Equal(run.StartDate, summary.StartDate);
+        Assert.Equal(run.EndDate, summary.EndDate);
+
+        using var writer = new System.IO.StringWriter();
+        await new BacktestSummaryCsvExporter().WriteAsync(writer, [summary]);
+        Assert.Contains(
+            $"{run.Id},Test Run,default,2024-01-01,2024-01-31,10000,11000,1000,10,0,0,,0,0,,,,,\r\n",
+            writer.ToString());
     }
 
     [Fact]

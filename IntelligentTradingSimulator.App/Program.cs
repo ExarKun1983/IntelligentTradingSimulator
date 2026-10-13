@@ -8,8 +8,15 @@ using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
 using IntelligentTradingSimulator.Infrastructure;
+using IntelligentTradingSimulator.Infrastructure.Reporting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+
+if (!BacktestSummaryCsvCommandLineParser.TryParse(args, out var csvFilePath, out var csvError))
+{
+    Console.WriteLine(csvError);
+    return;
+}
 
 var configuration =
     new ConfigurationBuilder()
@@ -54,6 +61,7 @@ services.AddSingleton<PortfolioContributionService>();
 services.AddSingleton<PortfolioRebalancingService>();
 
 services.AddSingleton<ConsoleReporter>();
+services.AddSingleton<BacktestSummaryCsvExporter>();
 services.AddScoped<MarketDataWorkflow>();
 services.AddScoped<PortfolioWorkflow>();
 services.AddScoped<SimulationRunner>();
@@ -87,6 +95,12 @@ if (backtestRunIdArg is not null &&
 
     var result = await reportService.GenerateAsync(backtestRunId);
     reporter.PrintBacktestSummary(result);
+    if (csvFilePath is not null && result.IsSuccess)
+    {
+        await scope.ServiceProvider.GetRequiredService<BacktestSummaryCsvExporter>()
+            .ExportAsync(csvFilePath, [result]);
+        Console.WriteLine($"Backtest summary exported to {csvFilePath}");
+    }
     return;
 }
 
@@ -151,6 +165,12 @@ if (runBacktestArg is not null)
 
     var summaryResult = await reportService.GenerateAsync(engineResult.RunId);
     reporter.PrintBacktestSummary(summaryResult);
+    if (csvFilePath is not null && summaryResult.IsSuccess)
+    {
+        await scope.ServiceProvider.GetRequiredService<BacktestSummaryCsvExporter>()
+            .ExportAsync(csvFilePath, [summaryResult]);
+        Console.WriteLine($"Backtest summary exported to {csvFilePath}");
+    }
     return;
 }
 
