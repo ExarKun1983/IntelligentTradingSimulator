@@ -37,8 +37,10 @@ public static class ServiceCollectionExtensions
 
         services.AddHttpClient();
 
-        var fmpSection = configuration?.GetSection(FinancialModelingPrepOptions.SectionName)
-            ?? configuration?.GetSection("FinancialModelingPrep");
+        var primaryFmpSection = configuration?.GetSection(FinancialModelingPrepOptions.SectionName);
+        var fmpSection = primaryFmpSection?.Exists() == true
+            ? primaryFmpSection
+            : configuration?.GetSection("FinancialModelingPrep");
         if (fmpSection is not null && fmpSection.Exists())
         {
             services.Configure<FinancialModelingPrepOptions>(fmpSection);

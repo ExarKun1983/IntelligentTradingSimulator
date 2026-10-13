@@ -25,19 +25,6 @@ public sealed class FinancialModelingPrepFundamentalDataProvider : IFundamentalD
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
     }
 
-    public FinancialModelingPrepFundamentalDataProvider(
-        string apiKey,
-        string? baseUrl = null)
-        : this(new HttpClient(), Microsoft.Extensions.Options.Options.Create(new FinancialModelingPrepOptions
-        {
-            ApiKey = apiKey,
-            BaseUrl = string.IsNullOrWhiteSpace(baseUrl)
-                ? FinancialModelingPrepOptions.DefaultBaseUrl
-                : baseUrl
-        }))
-    {
-    }
-
     public async Task<FundamentalData?> GetFundamentalDataAsync(
         string symbol,
         CancellationToken cancellationToken = default)

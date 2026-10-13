@@ -93,11 +93,13 @@ these snapshots must not be used as point-in-time backtest data.
 Configure the FMP credentials and settings in `appsettings.json`:
 
 ```json
-"FundamentalData": {
-  "FinancialModelingPrep": {
-    "ApiKey": "YOUR_API_KEY",
-    "BaseUrl": "https://financialmodelingprep.com/",
-    "RequestTimeoutSeconds": 10
+{
+  "FundamentalData": {
+    "FinancialModelingPrep": {
+      "ApiKey": "YOUR_API_KEY",
+      "BaseUrl": "https://financialmodelingprep.com/",
+      "RequestTimeoutSeconds": 10
+    }
   }
 }
 ```

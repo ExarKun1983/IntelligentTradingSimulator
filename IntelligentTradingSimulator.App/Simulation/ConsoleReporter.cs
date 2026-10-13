@@ -55,12 +55,17 @@ public sealed class ConsoleReporter
             }
 
             var fundamentals = result.Fundamentals;
+            var asOfDate = fundamentals?.AsOfDate?.ToString("yyyy-MM-dd") ?? "N/A";
+            var revenueGrowth = FormatPercent(fundamentals?.RevenueGrowthPercent);
+            var epsGrowth = FormatPercent(fundamentals?.EpsGrowthPercent);
+            var margins = FormatPercent(fundamentals?.Margins);
+            var debt = FormatValue(fundamentals?.Debt);
             Console.WriteLine(
-                $"  Fundamentals: AsOf={fundamentals?.AsOfDate?.ToString("yyyy-MM-dd") ?? "N/A"}" +
-                $" | RevGrowth={(fundamentals?.RevenueGrowthPercent.HasValue == true ? fundamentals.RevenueGrowthPercent.Value.ToString("N2") + "%" : "N/A")}" +
-                $" | EpsGrowth={(fundamentals?.EpsGrowthPercent.HasValue == true ? fundamentals.EpsGrowthPercent.Value.ToString("N2") + "%" : "N/A")}" +
-                $" | Margins={(fundamentals?.Margins.HasValue == true ? fundamentals.Margins.Value.ToString("N2") + "%" : "N/A")}" +
-                $" | Debt={(fundamentals?.Debt.HasValue == true ? fundamentals.Debt.Value.ToString("N2") : "N/A")}");
+                $"  Fundamentals: AsOf={asOfDate}" +
+                $" | RevGrowth={revenueGrowth}" +
+                $" | EpsGrowth={epsGrowth}" +
+                $" | Margins={margins}" +
+                $" | Debt={debt}");
         }
     }
 
@@ -79,6 +84,12 @@ public sealed class ConsoleReporter
                 $" | Score={recommendation.Score:N2}");
         }
     }
+
+    private static string FormatPercent(decimal? value) =>
+        value.HasValue ? $"{value.Value:N2}%" : "N/A";
+
+    private static string FormatValue(decimal? value) =>
+        value.HasValue ? value.Value.ToString("N2") : "N/A";
 
     public void PrintExistingPortfolio(Portfolio portfolio)
     {

@@ -407,6 +407,29 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
         Assert.Equal(TimeSpan.FromSeconds(4), httpClient.Timeout);
     }
 
+    [Fact]
+    public void AddInfrastructure_UsesLegacyFmpSectionWhenPrimarySectionIsMissing()
+    {
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        var inMemorySettings = new Dictionary<string, string?>
+        {
+            ["FinancialModelingPrep:ApiKey"] = "legacy-key"
+        };
+        var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+            .AddInMemoryCollection(inMemorySettings)
+            .Build();
+
+        IntelligentTradingSimulator.Infrastructure.ServiceCollectionExtensions.AddInfrastructure(
+            services,
+            "Server=localhost;Database=TradingDb;",
+            config);
+
+        using var serviceProvider = services.BuildServiceProvider();
+
+        Assert.IsType<FinancialModelingPrepFundamentalDataProvider>(
+            serviceProvider.GetRequiredService<IFundamentalDataProvider>());
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
