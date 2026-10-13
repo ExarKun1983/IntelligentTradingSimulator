@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
@@ -62,6 +63,8 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
     public async Task GenerateAsync_ExportsPersistedRunSummaryWithRunDates()
     {
         var run = await CreateRunAsync();
+        run.Status = BacktestRunStatus.Completed;
+        await _runRepository.UpdateAsync(run);
         await _snapshotRepository.AddRangeAsync(
         [
             new BacktestSnapshot
@@ -74,6 +77,7 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
 
         var summary = await _service.GenerateAsync(run.Id);
         Assert.True(summary.IsSuccess);
+        Assert.Equal(BacktestRunStatus.Completed, summary.Status);
         Assert.Equal(run.StartDate, summary.StartDate);
         Assert.Equal(run.EndDate, summary.EndDate);
 
@@ -82,6 +86,35 @@ public sealed class BacktestSummaryReportServiceTests : IDisposable
         Assert.Contains(
             $"{run.Id},Test Run,default,2024-01-01,2024-01-31,10000,11000,1000,10,0,0,,0,0,,,,,\r\n",
             writer.ToString());
+    }
+
+    [Fact]
+    public async Task GenerateAsync_PartialSnapshotsDoNotAllowExportOfIncompleteRun()
+    {
+        var run = await CreateRunAsync();
+        await _snapshotRepository.AddRangeAsync(
+        [
+            new BacktestSnapshot
+            {
+                BacktestRunId = run.Id,
+                Date = new DateTime(2024, 1, 2),
+                PortfolioValue = run.InitialCapital
+            }
+        ]);
+
+        foreach (var status in new[] { BacktestRunStatus.Running, BacktestRunStatus.Failed })
+        {
+            run.Status = status;
+            await _runRepository.UpdateAsync(run);
+            var summary = await _service.GenerateAsync(run.Id);
+            Assert.True(summary.IsSuccess);
+            Assert.Equal(status, summary.Status);
+
+            using var writer = new System.IO.StringWriter();
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                new BacktestSummaryCsvExporter().WriteAsync(writer, [summary]));
+            Assert.Empty(writer.ToString());
+        }
     }
 
     [Fact]

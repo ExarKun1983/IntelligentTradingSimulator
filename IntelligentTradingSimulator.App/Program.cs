@@ -97,6 +97,12 @@ if (backtestRunIdArg is not null &&
     reporter.PrintBacktestSummary(result);
     if (csvFilePath is not null && result.IsSuccess)
     {
+        if (result.Status != BacktestRunStatus.Completed)
+        {
+            Console.WriteLine("CSV export requires a completed backtest run.");
+            return;
+        }
+
         await scope.ServiceProvider.GetRequiredService<BacktestSummaryCsvExporter>()
             .ExportAsync(csvFilePath, [result]);
         Console.WriteLine($"Backtest summary exported to {csvFilePath}");

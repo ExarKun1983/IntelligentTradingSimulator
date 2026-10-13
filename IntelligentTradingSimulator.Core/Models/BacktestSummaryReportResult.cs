@@ -1,3 +1,5 @@
+using IntelligentTradingSimulator.Core.Enums;
+
 namespace IntelligentTradingSimulator.Core.Models;
 
 public sealed class BacktestSummaryReportResult
@@ -7,6 +9,8 @@ public sealed class BacktestSummaryReportResult
     public string? ErrorMessage { get; set; }
 
     public int BacktestRunId { get; set; }
+
+    public BacktestRunStatus Status { get; set; }
 
     public string RunName { get; set; } = string.Empty;
 

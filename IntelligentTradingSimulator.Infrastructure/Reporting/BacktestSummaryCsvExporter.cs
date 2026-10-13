@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Models;
 
 namespace IntelligentTradingSimulator.Infrastructure.Reporting;
@@ -52,9 +53,9 @@ public sealed class BacktestSummaryCsvExporter
     {
         ArgumentNullException.ThrowIfNull(summaries);
         var results = summaries.ToArray();
-        if (results.Any(s => s is null || !s.IsSuccess))
+        if (results.Any(s => s is null || !s.IsSuccess || s.Status != BacktestRunStatus.Completed))
         {
-            throw new ArgumentException("Only successful backtest summaries can be exported.", nameof(summaries));
+            throw new ArgumentException("Only successful summaries of completed backtest runs can be exported.", nameof(summaries));
         }
         return results;
     }

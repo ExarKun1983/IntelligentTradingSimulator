@@ -68,6 +68,7 @@ public sealed class BacktestSummaryReportService : IBacktestSummaryReportService
         {
             IsSuccess = true,
             BacktestRunId = run.Id,
+            Status = run.Status,
             RunName = run.Name,
             StrategyId = run.StrategyId,
             StartDate = run.StartDate,

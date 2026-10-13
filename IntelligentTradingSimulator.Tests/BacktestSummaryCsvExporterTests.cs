@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Infrastructure.Reporting;
 
@@ -179,6 +180,22 @@ public sealed class BacktestSummaryCsvExporterTests
     }
 
     [Fact]
+    public async Task ExportAsync_RejectsIncompleteRunsWithoutCreatingFile()
+    {
+        var exporter = new BacktestSummaryCsvExporter();
+        foreach (var status in new[] { BacktestRunStatus.Running, BacktestRunStatus.Failed })
+        {
+            var summary = CreateSummary();
+            summary.Status = status;
+            var path = Path.Combine(Path.GetTempPath(), $"backtest-{Guid.NewGuid():N}.csv");
+
+            await Assert.ThrowsAsync<ArgumentException>(() => exporter.ExportAsync(path, [summary]));
+
+            Assert.False(File.Exists(path));
+        }
+    }
+
+    [Fact]
     public async Task ExportAsync_CancellationDoesNotCreateFile()
     {
         var path = Path.Combine(Path.GetTempPath(), $"backtest-{Guid.NewGuid():N}.csv");
@@ -190,6 +207,7 @@ public sealed class BacktestSummaryCsvExporterTests
     private static BacktestSummaryReportResult CreateSummary() => new()
     {
         IsSuccess = true,
+        Status = BacktestRunStatus.Completed,
         BacktestRunId = 42,
         RunName = "Quarterly run",
         StrategyId = "default",

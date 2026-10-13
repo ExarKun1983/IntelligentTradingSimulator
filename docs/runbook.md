@@ -489,7 +489,8 @@ The parent directory must exist. The file is overwritten, using UTF-8 without a
 BOM, commas, CRLF record endings, invariant decimal numbers without rounding or
 percent signs, and ISO dates (`yyyy-MM-dd`). Percent values are percentage points
 (for example, `10.5` means 10.5%). Failed runs or unsuccessful summaries are not
-exported. File-system errors propagate; the console summary is printed first.
+exported, including failed or still-running persisted runs with partial snapshots.
+File-system errors propagate; the console summary is printed first.
 The flag currently supports single-run reporting, not `--run-variants`.
 
 Columns always appear in this order:
