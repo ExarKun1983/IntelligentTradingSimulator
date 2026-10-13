@@ -53,6 +53,17 @@ public sealed class ConsoleReporter
                     result.FactorContributions.Select(factor =>
                         $"{factor.Factor}={(factor.Contribution.HasValue ? factor.Contribution.Value.ToString("G29") : "N/A")} [{factor.Status}]")));
             }
+
+            if (result.Fundamentals is not null)
+            {
+                var f = result.Fundamentals;
+                Console.WriteLine(
+                    $"  Fundamentals: AsOf={f.AsOfDate?.ToString("yyyy-MM-dd") ?? "N/A"}" +
+                    $" | RevGrowth={(f.RevenueGrowthPercent.HasValue ? f.RevenueGrowthPercent.Value.ToString("N2") + "%" : "N/A")}" +
+                    $" | EpsGrowth={(f.EpsGrowthPercent.HasValue ? f.EpsGrowthPercent.Value.ToString("N2") + "%" : "N/A")}" +
+                    $" | Margins={(f.Margins.HasValue ? f.Margins.Value.ToString("N2") + "%" : "N/A")}" +
+                    $" | Debt={(f.Debt.HasValue ? f.Debt.Value.ToString("N2") : "N/A")}");
+            }
         }
     }
 

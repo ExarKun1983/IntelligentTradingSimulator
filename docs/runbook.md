@@ -86,6 +86,23 @@ Quality Filter or change existing scores. Historical/as-of snapshot selection,
 refresh policies, live integration, and the final filter remain follow-up work;
 these snapshots must not be used as point-in-time backtest data.
 
+### External provider: FinancialModelingPrep
+
+`FinancialModelingPrepFundamentalDataProvider` implements `IFundamentalDataProvider` to fetch fundamental metrics directly from FinancialModelingPrep (FMP) APIs (`financial-growth` and `ratios` endpoints).
+
+Configure the FMP credentials and settings in `appsettings.json`:
+
+```json
+"FundamentalData": {
+  "FinancialModelingPrep": {
+    "ApiKey": "YOUR_API_KEY",
+    "BaseUrl": "https://financialmodelingprep.com/"
+  }
+}
+```
+
+Never commit real API keys to source control. When configured with an API key, `FinancialModelingPrepFundamentalDataProvider` is registered in DI as the `IFundamentalDataProvider` implementation. If the API key is unconfigured or empty, fundamental data fetching is skipped during ranking workflows. In the market data ranking workflow, provider failures or missing data for individual stocks are handled safely without breaking the full ranking flow.
+
 ## Configure a strategy
 
 `ActiveStrategy` selects a named entry under `Strategies`. The checked-in configuration provides `default`, `conservative`, and `aggressive` entries. Change `ActiveStrategy` to one of those IDs or add a validated strategy entry:

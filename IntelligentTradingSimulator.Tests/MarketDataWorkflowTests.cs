@@ -319,16 +319,125 @@ public sealed class MarketDataWorkflowTests : IDisposable
         Assert.Equal("SPY", observation.RelativeStrengthBenchmarkSymbol);
     }
 
+    [Fact]
+    public async Task CollectAndAnalyzeAsync_PopulatesFundamentalData_WhenProviderPresent()
+    {
+        var date = new DateTime(2024, 1, 10);
+        var candles = BuildCandles(date, 5);
+        var marketProvider = new FakeMarketDataProvider(candles);
+        var expectedFundamentals = new FundamentalData
+        {
+            Symbol = "TEST",
+            RevenueGrowthPercent = 15m,
+            EpsGrowthPercent = 10m,
+            Margins = 20m,
+            Debt = 0.5m
+        };
+        var fundamentalProvider = new FakeFundamentalDataProvider(
+            new Dictionary<string, FundamentalData?>
+            {
+                ["TEST"] = expectedFundamentals
+            });
+
+        var workflow = BuildWorkflow(marketProvider, fundamentalDataProvider: fundamentalProvider);
+
+        var result = await workflow.CollectAndAnalyzeAsync(["TEST"], date);
+
+        var observation = Assert.Single(result.RankedResults);
+        Assert.NotNull(observation.Fundamentals);
+        Assert.Equal(15m, observation.Fundamentals.RevenueGrowthPercent);
+        Assert.Equal(10m, observation.Fundamentals.EpsGrowthPercent);
+        Assert.Equal(20m, observation.Fundamentals.Margins);
+        Assert.Equal(0.5m, observation.Fundamentals.Debt);
+    }
+
+    [Fact]
+    public async Task CollectAndAnalyzeAsync_ProviderFailureForOneStock_DoesNotBreakRankingFlow()
+    {
+        var date = new DateTime(2024, 1, 10);
+        var candlesFail = BuildCandles(date, 5);
+        var candlesPass = BuildCandles(date, 5);
+        candlesPass[^1].Close = 120m;
+
+        var marketProvider = new FakeMarketDataProvider(
+            new Dictionary<string, IReadOnlyList<MarketCandle>>
+            {
+                ["FAIL"] = candlesFail,
+                ["PASS"] = candlesPass
+            });
+
+        var passFundamentals = new FundamentalData
+        {
+            Symbol = "PASS",
+            RevenueGrowthPercent = 25m
+        };
+
+        var fundamentalProvider = new CallbackFundamentalDataProvider(symbol =>
+        {
+            if (symbol == "FAIL")
+            {
+                throw new HttpRequestException("Simulated API failure");
+            }
+
+            return Task.FromResult<FundamentalData?>(passFundamentals);
+        });
+
+        var workflow = BuildWorkflow(marketProvider, fundamentalDataProvider: fundamentalProvider);
+
+        var result = await workflow.CollectAndAnalyzeAsync(["FAIL", "PASS"], date);
+
+        Assert.Equal(2, result.RankedResults.Count);
+
+        var passObservation = result.RankedResults.Single(r => r.Symbol == "PASS");
+        Assert.NotNull(passObservation.Fundamentals);
+        Assert.Equal(25m, passObservation.Fundamentals.RevenueGrowthPercent);
+
+        var failObservation = result.RankedResults.Single(r => r.Symbol == "FAIL");
+        Assert.Null(failObservation.Fundamentals);
+    }
+
+    [Fact]
+    public async Task CollectAndAnalyzeAsync_MissingFundamentalDataForOneStock_DoesNotBreakRankingFlow()
+    {
+        var date = new DateTime(2024, 1, 10);
+        var candlesA = BuildCandles(date, 5);
+        var candlesB = BuildCandles(date, 5);
+
+        var marketProvider = new FakeMarketDataProvider(
+            new Dictionary<string, IReadOnlyList<MarketCandle>>
+            {
+                ["A"] = candlesA,
+                ["B"] = candlesB
+            });
+
+        var fundamentalProvider = new FakeFundamentalDataProvider(
+            new Dictionary<string, FundamentalData?>
+            {
+                ["A"] = new FundamentalData { Symbol = "A", Debt = 1.0m },
+                ["B"] = null
+            });
+
+        var workflow = BuildWorkflow(marketProvider, fundamentalDataProvider: fundamentalProvider);
+
+        var result = await workflow.CollectAndAnalyzeAsync(["A", "B"], date);
+
+        Assert.Equal(2, result.RankedResults.Count);
+        Assert.NotNull(result.RankedResults.Single(r => r.Symbol == "A").Fundamentals);
+        Assert.Null(result.RankedResults.Single(r => r.Symbol == "B").Fundamentals);
+    }
+
     private MarketDataWorkflow BuildWorkflow(
         IMarketDataProvider provider,
-        StrategyConfiguration? strategy = null)
+        StrategyConfiguration? strategy = null,
+        IFundamentalDataProvider? fundamentalDataProvider = null)
     {
         return new MarketDataWorkflow(
             provider,
             new MarketObservationAnalyzer(strategy),
             new PortfolioRecommendationService(),
             new ObservationResultRepository(_dbContext),
-            strategy);
+            strategy,
+            fundamentalDataProvider);
     }
 
     private static List<MarketCandle> BuildCandles(
@@ -398,6 +507,31 @@ public sealed class MarketDataWorkflowTests : IDisposable
                         && x.Date.Date <= to.Date)
                     .OrderBy(x => x.Date)
                     .ToList());
+        }
+    }
+
+    private sealed class FakeFundamentalDataProvider(
+        IReadOnlyDictionary<string, FundamentalData?> fundamentals)
+        : IFundamentalDataProvider
+    {
+        public Task<FundamentalData?> GetFundamentalDataAsync(
+            string symbol,
+            CancellationToken cancellationToken = default)
+        {
+            fundamentals.TryGetValue(symbol, out var data);
+            return Task.FromResult(data);
+        }
+    }
+
+    private sealed class CallbackFundamentalDataProvider(
+        Func<string, Task<FundamentalData?>> callback)
+        : IFundamentalDataProvider
+    {
+        public Task<FundamentalData?> GetFundamentalDataAsync(
+            string symbol,
+            CancellationToken cancellationToken = default)
+        {
+            return callback(symbol);
         }
     }
 }
