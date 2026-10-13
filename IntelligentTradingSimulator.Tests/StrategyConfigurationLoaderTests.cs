@@ -10,6 +10,77 @@ namespace IntelligentTradingSimulator.Tests;
 
 public sealed class StrategyConfigurationLoaderTests
 {
+    [Fact]
+    public void LoadAndLoadAll_BindQualityPolicyAndThresholds()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Strategies:default:UseQualityFilter"] = "true",
+                ["Strategies:default:QualityMinimumRevenueGrowthPercent"] = "-5",
+                ["Strategies:default:QualityMinimumEpsGrowthPercent"] = "3",
+                ["Strategies:default:QualityMinimumMarginsPercent"] = "10",
+                ["Strategies:default:QualityMaximumDebtToEquity"] = "1.5",
+                ["Strategies:default:QualityFailureAction"] = "Penalize",
+                ["Strategies:default:QualityMissingDataAction"] = "Exclude",
+                ["Strategies:default:QualityPenalty"] = "7"
+            }).Build();
+
+        foreach (var strategy in new[] { StrategyConfigurationLoader.Load(configuration),
+                     Assert.Single(StrategyConfigurationLoader.LoadAll(configuration)) })
+        {
+            Assert.True(strategy.UseQualityFilter);
+            Assert.Equal(-5m, strategy.QualityMinimumRevenueGrowthPercent);
+            Assert.Equal(3m, strategy.QualityMinimumEpsGrowthPercent);
+            Assert.Equal(10m, strategy.QualityMinimumMarginsPercent);
+            Assert.Equal(1.5m, strategy.QualityMaximumDebtToEquity);
+            Assert.Equal(QualityFilterAction.Penalize, strategy.QualityFailureAction);
+            Assert.Equal(QualityFilterAction.Exclude, strategy.QualityMissingDataAction);
+            Assert.Equal(7m, strategy.QualityPenalty);
+        }
+    }
+
+    [Fact]
+    public void Load_QualityDefaultsPreserveExistingBehavior()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["Strategies:default:MaxPositions"] = "10" }).Build();
+        var strategy = StrategyConfigurationLoader.Load(configuration);
+        Assert.False(strategy.UseQualityFilter);
+        Assert.Null(strategy.QualityMinimumRevenueGrowthPercent);
+        Assert.Null(strategy.QualityMinimumEpsGrowthPercent);
+        Assert.Null(strategy.QualityMinimumMarginsPercent);
+        Assert.Null(strategy.QualityMaximumDebtToEquity);
+        Assert.Equal(QualityFilterAction.Exclude, strategy.QualityFailureAction);
+        Assert.Equal(QualityFilterAction.Neutral, strategy.QualityMissingDataAction);
+        Assert.Equal(5m, strategy.QualityPenalty);
+    }
+
+    [Theory]
+    [InlineData("QualityPenalty", "-1", "QualityMaximumDebtToEquity")]
+    [InlineData("QualityMaximumDebtToEquity", "-1", "QualityPenalty")]
+    [InlineData("QualityFailureAction", "99", null)]
+    [InlineData("QualityMissingDataAction", "99", null)]
+    [InlineData("QualityFailureAction", "invalid", null)]
+    [InlineData("QualityMinimumRevenueGrowthPercent", "NaN", null)]
+    [InlineData("QualityMinimumEpsGrowthPercent", "Infinity", null)]
+    [InlineData("QualityMinimumMarginsPercent", "invalid", null)]
+    public void LoadAndLoadAll_RejectInvalidQualityConfiguration(string name, string value, string? unrelatedName)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { [$"Strategies:default:{name}"] = value }).Build();
+        var loadError = Assert.Throws<InvalidOperationException>(
+            () => StrategyConfigurationLoader.Load(configuration)).Message;
+        var loadAllError = Assert.Throws<InvalidOperationException>(
+            () => StrategyConfigurationLoader.LoadAll(configuration)).Message;
+        Assert.Contains($"Strategies:default:{name}", loadError);
+        if (unrelatedName is not null)
+            Assert.DoesNotContain($"Strategies:default:{unrelatedName}", loadError);
+        Assert.Contains($"Strategies:default:{name}", loadAllError);
+        if (unrelatedName is not null)
+            Assert.DoesNotContain($"Strategies:default:{unrelatedName}", loadAllError);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("10")]

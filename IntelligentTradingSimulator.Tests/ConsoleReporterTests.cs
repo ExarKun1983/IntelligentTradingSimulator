@@ -11,6 +11,27 @@ namespace IntelligentTradingSimulator.Tests;
 public sealed class ConsoleReporterTests
 {
     [Fact]
+    public void PrintMarketRanking_ShowsQualityPenaltyAndThresholdExplanation()
+    {
+        var engine = new CompositeScoringEngine(new StrategyConfiguration
+        {
+            UseQualityFilter = true, QualityMinimumRevenueGrowthPercent = 10m,
+            QualityFailureAction = QualityFilterAction.Penalize, QualityPenalty = 7m
+        });
+        var score = engine.CalculateScore(new ScoringContext
+        {
+            IsAboveSma5 = true, MomentumPercent = 2m,
+            Fundamentals = new FundamentalData { Symbol = "TEST", RevenueGrowthPercent = 9m }
+        }, out _, out var factors);
+
+        var output = CaptureOutput(() => CreateReporter().PrintMarketRanking(
+            [new ObservationResult { Symbol = "TEST", Score = score, FactorContributions = factors }]));
+
+        Assert.Contains("QualityFilter=-7 [Applied]", output);
+        Assert.Contains("Failed: RevenueGrowthPercent=9 < 10 (Penalize)", output);
+    }
+
+    [Fact]
     public void PrintMarketRanking_ShowsFullPrecisionBreakdownAndMissingDiagnostics()
     {
         var engine = new CompositeScoringEngine(new StrategyConfiguration

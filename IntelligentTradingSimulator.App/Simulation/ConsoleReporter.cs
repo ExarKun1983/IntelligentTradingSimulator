@@ -51,7 +51,8 @@ public sealed class ConsoleReporter
             {
                 Console.WriteLine("  Score breakdown (points): " + string.Join(" | ",
                     result.FactorContributions.Select(factor =>
-                        $"{factor.Factor}={(factor.Contribution.HasValue ? factor.Contribution.Value.ToString("G29") : "N/A")} [{factor.Status}]")));
+                        $"{factor.Factor}={(factor.Contribution.HasValue ? factor.Contribution.Value.ToString("G29") : "N/A")} [{factor.Status}]" +
+                        (factor.Explanation is null ? "" : $" ({factor.Explanation})"))));
             }
 
             var fundamentals = result.Fundamentals;

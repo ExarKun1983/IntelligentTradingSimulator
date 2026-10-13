@@ -137,7 +137,7 @@ public sealed class FactorScoreBreakdownTests
             out var strength, out var factors);
 
         Assert.NotNull(factors);
-        Assert.Equal(8, factors.Count);
+        Assert.Equal(qualityFilter ? 9 : 8, factors.Count);
         Assert.All(factors.Take(7).Where(factor => factor.Factor != "RSI"), factor =>
         {
             Assert.Equal(FactorScoreStatus.Disqualified, factor.Status);

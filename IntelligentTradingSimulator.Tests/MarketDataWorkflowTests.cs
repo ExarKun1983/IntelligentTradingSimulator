@@ -443,6 +443,60 @@ public sealed class MarketDataWorkflowTests : IDisposable
         Assert.Null(result.RankedResults.Single(r => r.Symbol == "B").Fundamentals);
     }
 
+    [Theory]
+    [InlineData(QualityFilterAction.Exclude, QualityFilterAction.Neutral, false)]
+    [InlineData(QualityFilterAction.Penalize, QualityFilterAction.Penalize, false)]
+    [InlineData(QualityFilterAction.Exclude, QualityFilterAction.Exclude, true)]
+    public async Task CollectAndAnalyzeAsync_QualityPolicyChangesRankingAndRecommendationsWithoutDroppingDiagnostics(
+        QualityFilterAction failureAction, QualityFilterAction missingAction, bool providerThrows)
+    {
+        var date = new DateTime(2024, 1, 10);
+        var candles = BuildCandles(date, 5);
+        var marketProvider = new FakeMarketDataProvider(
+            new Dictionary<string, IReadOnlyList<MarketCandle>>
+            {
+                ["PASS"] = candles, ["FAIL"] = candles, ["MISSING"] = candles
+            });
+        var strategy = new StrategyConfiguration
+        {
+            UseRelativeStrength = false, UseQualityFilter = true,
+            QualityMinimumRevenueGrowthPercent = 10m,
+            QualityFailureAction = failureAction, QualityMissingDataAction = missingAction,
+            QualityPenalty = 7m
+        };
+        var provider = new CallbackFundamentalDataProvider(symbol =>
+        {
+            if (symbol == "MISSING")
+            {
+                if (providerThrows)
+                    throw new HttpRequestException("Simulated failure");
+                return Task.FromResult<FundamentalData?>(null);
+            }
+            return Task.FromResult<FundamentalData?>(new FundamentalData
+            {
+                Symbol = symbol, RevenueGrowthPercent = symbol == "PASS" ? 10m : 9m
+            });
+        });
+
+        var result = await BuildWorkflow(marketProvider, strategy, provider)
+            .CollectAndAnalyzeAsync(["FAIL", "MISSING", "PASS"], date);
+
+        Assert.Equal(3, result.RankedResults.Count);
+        Assert.Equal(missingAction == QualityFilterAction.Neutral ? "MISSING" : "PASS",
+            result.RankedResults[0].Symbol);
+        var passingScore = result.RankedResults.Single(r => r.Symbol == "PASS").Score;
+        foreach (var (symbol, action) in new[] { ("FAIL", failureAction), ("MISSING", missingAction) })
+        {
+            var observation = result.RankedResults.Single(r => r.Symbol == symbol);
+            Assert.Equal(action == QualityFilterAction.Exclude ? StrategyConfiguration.DisqualifiedScore
+                : passingScore - (action == QualityFilterAction.Penalize ? 7m : 0m), observation.Score);
+            Assert.Equal(action != QualityFilterAction.Exclude, result.Recommendations.Any(r => r.Symbol == symbol));
+            var factor = Assert.Single(observation.FactorContributions!, f => f.Factor == "QualityFilter");
+            Assert.Contains(symbol == "FAIL" ? "Failed:" : "Missing:", factor.Explanation);
+            Assert.Equal(observation.Score, observation.FactorContributions!.Sum(f => f.Contribution ?? 0m));
+        }
+    }
+
     private MarketDataWorkflow BuildWorkflow(
         IMarketDataProvider provider,
         StrategyConfiguration? strategy = null,

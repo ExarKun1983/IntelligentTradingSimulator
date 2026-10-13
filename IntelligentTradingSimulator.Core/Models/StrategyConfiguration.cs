@@ -84,4 +84,16 @@ public sealed class StrategyConfiguration
         DefaultWeek52HighScoreWeight;
 
     public bool UseQualityFilter { get; set; } = false;
+
+    /// <summary>Null thresholds disable the corresponding fundamental checks; percentages use percentage points.</summary>
+    public decimal? QualityMinimumRevenueGrowthPercent { get; set; }
+    public decimal? QualityMinimumEpsGrowthPercent { get; set; }
+    public decimal? QualityMinimumMarginsPercent { get; set; }
+    public decimal? QualityMaximumDebtToEquity { get; set; }
+
+    public QualityFilterAction QualityFailureAction { get; set; } = QualityFilterAction.Exclude;
+    public QualityFilterAction QualityMissingDataAction { get; set; } = QualityFilterAction.Neutral;
+
+    /// <summary>Non-negative score points subtracted once when the selected quality action is Penalize.</summary>
+    public decimal QualityPenalty { get; set; } = 5m;
 }

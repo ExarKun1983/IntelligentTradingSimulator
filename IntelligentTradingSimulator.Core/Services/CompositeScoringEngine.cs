@@ -60,6 +60,15 @@ public sealed class CompositeScoringEngine : IScoringEngine
                 _configuration.UseRelativeStrength && _configuration.RelativeStrengthScoreWeight != 0m,
                 context.RelativeStrengthPercent.HasValue)
         };
+        if (_configuration.UseQualityFilter)
+        {
+            factors.Add(new FactorScoreContribution(
+                "QualityFilter", result.QualityContribution,
+                result.IsDisqualified ? FactorScoreStatus.Disqualified : FactorScoreStatus.Applied)
+            {
+                Explanation = result.QualityFilter?.Explanation
+            });
+        }
         if (result.IsDisqualified)
         {
             factors.Add(new FactorScoreContribution(
@@ -83,11 +92,24 @@ public sealed class CompositeScoringEngine : IScoringEngine
         ValidateWeight(_configuration.RelativeStrengthScoreWeight, nameof(StrategyConfiguration.RelativeStrengthScoreWeight));
         ValidateWeight(_configuration.Week52HighScoreWeight, nameof(StrategyConfiguration.Week52HighScoreWeight));
 
+        var quality = new QualityFilter(_configuration).Evaluate(context.Fundamentals);
         if (!context.IsAboveSma5 ||
             (_configuration.UseQualityFilter &&
-             context.VolatilityPercent > StrategyConfiguration.QualityVolatilityThresholdPercent))
+             context.VolatilityPercent > StrategyConfiguration.QualityVolatilityThresholdPercent) ||
+            quality.IsExcluded)
         {
-            return new CompositeScoreResult { IsDisqualified = true };
+            return new CompositeScoreResult
+            {
+                IsDisqualified = true,
+                QualityFilter = quality with
+                {
+                    Explanation = quality.Explanation +
+                        (!context.IsAboveSma5 ? "; Not above SMA5" : "") +
+                        (_configuration.UseQualityFilter &&
+                         context.VolatilityPercent > StrategyConfiguration.QualityVolatilityThresholdPercent
+                            ? "; Volatility exceeds 3%" : "")
+                }
+            };
         }
 
         var rsiContribution = 0m;
@@ -119,6 +141,8 @@ public sealed class CompositeScoringEngine : IScoringEngine
             SmaContribution = _configuration.SmaScoreWeight,
             RsiContribution = rsiContribution,
             Week52HighContribution = week52HighContribution,
+            QualityFilter = quality,
+            QualityContribution = quality.Contribution,
             RelativeStrengthContribution = _configuration.UseRelativeStrength && context.RelativeStrengthPercent.HasValue
                 ? context.RelativeStrengthPercent.Value * _configuration.RelativeStrengthScoreWeight
                 : 0m

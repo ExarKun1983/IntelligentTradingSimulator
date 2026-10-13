@@ -15,4 +15,7 @@ public enum FactorScoreStatus
 public sealed record FactorScoreContribution(
     string Factor,
     decimal? Contribution,
-    FactorScoreStatus Status);
+    FactorScoreStatus Status)
+{
+    public string? Explanation { get; init; }
+}
