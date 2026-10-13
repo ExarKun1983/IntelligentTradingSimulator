@@ -16,8 +16,45 @@ public sealed class PortfolioRebalancingService
         IReadOnlyList<StockRecommendation> recommendations,
         IReadOnlyDictionary<string, decimal> prices,
         PortfolioAllocationEngine allocationEngine,
-        TradingEngine tradingEngine)
+        TradingEngine tradingEngine,
+        decimal? stopLossPercent = null)
     {
+        if (stopLossPercent is <= 0m or > 100m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(stopLossPercent));
+        }
+
+        if (stopLossPercent is decimal lossPercent)
+        {
+            var stoppedSymbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var position in portfolio.Positions.ToList())
+            {
+                if (position.AveragePrice <= 0m || position.Quantity <= 0m ||
+                    !prices.TryGetValue(position.Symbol, out var currentPrice) ||
+                    currentPrice <= 0m ||
+                    currentPrice > position.AveragePrice * (1m - lossPercent / 100m))
+                {
+                    continue;
+                }
+
+                tradingEngine.Execute(
+                    portfolio,
+                    new TradingDecision
+                    {
+                        Symbol = position.Symbol,
+                        Action = TradeActionType.Sell,
+                        ExitReason = ExitReason.StopLoss,
+                        Amount = position.Quantity * currentPrice
+                    },
+                    currentPrice);
+                stoppedSymbols.Add(position.Symbol);
+            }
+
+            recommendations = recommendations
+                .Where(x => !stoppedSymbols.Contains(x.Symbol))
+                .ToList();
+        }
+
         var allocationInstructions =
             allocationEngine.Calculate(
                 portfolio,

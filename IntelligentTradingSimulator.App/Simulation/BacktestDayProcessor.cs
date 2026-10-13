@@ -66,7 +66,12 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             }
         }
 
-        foreach (var symbol in request.Symbols)
+        var symbols = request.StrategyConfiguration.StopLossPercent.HasValue
+            ? request.Symbols.Concat(request.Portfolio.Positions.Select(x => x.Symbol))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+            : request.Symbols;
+
+        foreach (var symbol in symbols)
         {
             try
             {
@@ -90,7 +95,13 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                             request.HistoricalStartDate.Date)
                         .ToList();
 
-                if (usableCandles.Count < 5)
+                if (request.StrategyConfiguration.StopLossPercent.HasValue && usableCandles.Count > 0)
+                {
+                    prices[symbol] = usableCandles.Last().Close;
+                }
+
+                if (usableCandles.Count < 5 ||
+                    !request.Symbols.Contains(symbol, StringComparer.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -134,16 +145,17 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
         var tradesBeforeRebalance = portfolio.Trades.Count;
         var rebalanceExecuted = false;
 
-        if (recommendations.Count > 0)
+        if (recommendations.Count > 0 || request.StrategyConfiguration.StopLossPercent.HasValue)
         {
             _rebalancingService.Execute(
                 portfolio,
                 recommendations,
                 prices,
                 _allocationEngine,
-                _tradingEngine);
+                _tradingEngine,
+                request.StrategyConfiguration.StopLossPercent);
 
-            rebalanceExecuted = true;
+            rebalanceExecuted = recommendations.Count > 0;
         }
 
         var tradesExecutedToday = portfolio.Trades.Count - tradesBeforeRebalance;

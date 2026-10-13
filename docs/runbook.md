@@ -61,6 +61,7 @@ Each strategy supports these settings:
 | --- | --- |
 | `MaxPositions` | Maximum number of recommended positions; must be greater than zero. |
 | `MaxPositionWeight` | Maximum position weight, from greater than zero through 100. |
+| `StopLossPercent` | Optional percentage loss from average entry price; greater than zero through 100. Omitted or `null` disables Stop Loss. |
 | `LookbackDays` | Historical lookback used by analysis; must be greater than zero. |
 | `MomentumScoreWeight` | Non-negative score points per percentage point of momentum (default `10`); `0` disables the contribution. |
 | `VolumeTrendScoreWeight` | Non-negative score points per percentage point of volume trend (default `0.05`); `0` disables the contribution. |
@@ -79,6 +80,8 @@ Each strategy supports these settings:
 | `UseQualityFilter` | Enable the quality filter. |
 
 The loader validates strategy settings at startup. Missing settings use the defaults in `StrategyConfiguration`; invalid or missing active strategy sections stop startup with a configuration error. All weights must be non-negative decimals, including weights for disabled factors. At least one scoring factor must have a positive weight and be enabled (where a toggle exists); RSI also needs a positive bonus or penalty. Eligibility and quality filters alone are not an active scoring-factor set.
+
+Set `"StopLossPercent": 10` on a strategy to exit an entire position when its available end-of-day close is at or below 90% of its average entry price. Both backtests and current portfolio simulations execute these sells before rebalancing and persist `ExitReason.StopLoss` in trade history. A stopped symbol is not repurchased in the same step, but may be recommended again on later steps. Missing or non-positive prices, non-positive entry prices, and non-positive quantities do not trigger a stop. Backtests use only prices available on or before the simulated date, including held symbols outside the requested universe, and do not require enough candles for scoring to evaluate a stop. No intraday fills or execution at the threshold price are modeled.
 
 Each entry under `Strategies` binds independently, so comparison variants can use different factor toggles, weights, and Relative Strength benchmarks. For example, add these entries to compare an RSI/Relative Strength setup against a 52-week-high setup:
 

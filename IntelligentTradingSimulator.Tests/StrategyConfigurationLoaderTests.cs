@@ -11,6 +11,45 @@ namespace IntelligentTradingSimulator.Tests;
 public sealed class StrategyConfigurationLoaderTests
 {
     [Theory]
+    [InlineData(null)]
+    [InlineData("10")]
+    [InlineData("2.5")]
+    [InlineData("100")]
+    public void LoadAndLoadAll_BindOptionalStopLossPercent(string? value)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Strategies:default:MaxPositions"] = "10",
+                ["Strategies:default:StopLossPercent"] = value
+            }).Build();
+
+        var expected = value is null ? (decimal?)null :
+            decimal.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal(expected, StrategyConfigurationLoader.Load(configuration).StopLossPercent);
+        Assert.Equal(expected, Assert.Single(StrategyConfigurationLoader.LoadAll(configuration)).StopLossPercent);
+        Assert.Null(new StrategyConfiguration().StopLossPercent);
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("0")]
+    [InlineData("100.01")]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    [InlineData("invalid")]
+    public void LoadAndLoadAll_RejectInvalidStopLossPercent(string value)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["Strategies:default:StopLossPercent"] = value }).Build();
+
+        Assert.Contains("Strategies:default:StopLossPercent", Assert.Throws<InvalidOperationException>(() =>
+            StrategyConfigurationLoader.Load(configuration)).Message);
+        Assert.Contains("Strategies:default:StopLossPercent", Assert.Throws<InvalidOperationException>(() =>
+            StrategyConfigurationLoader.LoadAll(configuration)).Message);
+    }
+
+    [Theory]
     [InlineData(null, 5, 1)]
     [InlineData("0", 0, 0)]
     [InlineData("2.5", 2.5, 2.5)]

@@ -77,6 +77,7 @@ public static class StrategyConfigurationLoader
                 ?? StrategyConfiguration.DefaultMaxPositions,
             MaxPositionWeight = section.GetValue<decimal?>("MaxPositionWeight")
                 ?? StrategyConfiguration.DefaultMaxPositionWeight,
+            StopLossPercent = section.GetValue<decimal?>("StopLossPercent"),
             LookbackDays = section.GetValue<int?>("LookbackDays")
                 ?? StrategyConfiguration.DefaultLookbackDays,
             MomentumScoreWeight = section.GetValue<decimal?>("MomentumScoreWeight")
@@ -146,6 +147,12 @@ public static class StrategyConfigurationLoader
         {
             throw new InvalidOperationException(
                 $"Configuration value 'Strategies:{id}:LookbackDays' must be greater than zero.");
+        }
+
+        if (config.StopLossPercent is <= 0m or > 100m)
+        {
+            throw new InvalidOperationException(
+                $"Configuration value 'Strategies:{id}:StopLossPercent' must be greater than zero and less than or equal to 100.");
         }
 
         if (config.RsiPreferredMinimum < 0m || config.RsiPreferredMinimum > 100m)
