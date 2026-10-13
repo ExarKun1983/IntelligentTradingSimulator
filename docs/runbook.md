@@ -47,6 +47,45 @@ In `IntelligentTradingSimulator.App/appsettings.json`, set `ConnectionStrings:Tr
 
 Use a SQL Server login with permission to create and update the application's database schema. The app project copies `appsettings.json` to its output directory. Keep real credentials local; do not commit them.
 
+## Fundamental data foundation
+
+`IFundamentalDataProvider` in Core returns a provider-neutral `FundamentalData` snapshot.
+The Infrastructure `JsonFundamentalDataProvider` loads a locally persisted JSON array
+from a caller-supplied file path; it does not call a live service. For example:
+
+```json
+[
+  {
+    "Symbol": "AAPL",
+    "AsOfDate": "2025-12-31",
+    "RevenueGrowthPercent": 12.5,
+    "EpsGrowthPercent": null,
+    "Margins": 21.75,
+    "Debt": 1.5
+  }
+]
+```
+
+Revenue and EPS growth are year-over-year percentages (`12.5` means 12.5%).
+`Margins` is net profit margin in percent; `Debt` is total debt divided by
+total equity (`1.5` means 1.5:1). Future provider adapters must convert their
+units to these conventions before returning the Core model.
+Omitted or explicit `null` metrics and reporting dates stay unknown, never zero.
+Zero and negative metrics are preserved without interpreting quality.
+An unknown symbol returns `null`; invalid JSON, missing/blank symbols, duplicate
+symbols (case-insensitive, ignoring surrounding whitespace), and file-access
+errors propagate rather than masquerading as missing fundamentals.
+
+The JSON file is the initial persistence boundary, maintained by the caller,
+with one snapshot per symbol. Each lookup reloads it; there is no in-memory
+cache or database migration. Consumers can construct the provider with a local
+path and depend only on `IFundamentalDataProvider`; future live adapters or
+storage implementations can replace it without changing ranking logic.
+This provider is not wired into application workflows and does not apply the
+Quality Filter or change existing scores. Historical/as-of snapshot selection,
+refresh policies, live integration, and the final filter remain follow-up work;
+these snapshots must not be used as point-in-time backtest data.
+
 ## Configure a strategy
 
 `ActiveStrategy` selects a named entry under `Strategies`. The checked-in configuration provides `default`, `conservative`, and `aggressive` entries. Change `ActiveStrategy` to one of those IDs or add a validated strategy entry:
