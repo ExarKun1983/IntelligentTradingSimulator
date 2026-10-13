@@ -48,9 +48,12 @@ public sealed class BacktestPersistenceTests : IDisposable
 
         await _runRepository.AddAsync(run);
 
+        _dbContext.ChangeTracker.Clear();
         var loaded = await _runRepository.GetByIdAsync(run.Id);
 
         Assert.NotNull(loaded);
+        Assert.Null(loaded.PortfolioId);
+        Assert.Null(loaded.Portfolio);
         Assert.Equal("Test Run", loaded.Name);
         Assert.Equal("default", loaded.StrategyId);
         Assert.Equal(new DateTime(2024, 1, 1), loaded.StartDate);

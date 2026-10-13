@@ -370,6 +370,12 @@ Historical trades retain a null reason because their original cause is unknown.
 Reasons are available through loaded portfolio trades and can be filtered via
 `TradingSimulatorDbContext.Trades` for reporting and analytics.
 
+New completed backtests persist their portfolio and trade history. Apply the
+`AddBacktestPortfolio` migration, then load a run with
+`BacktestRunRepository.GetByIdAsync` and query its `Portfolio.Trades`.
+Normal portfolio queries exclude backtest portfolios. Older runs have no saved
+portfolio; their trade history cannot be reconstructed.
+
 This records reasons supplied by callers; the current application does not yet
 implement stop-loss or trailing-stop triggers. No new exit rules are introduced.
 

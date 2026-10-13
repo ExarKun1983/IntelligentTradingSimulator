@@ -16,6 +16,7 @@ public sealed class PortfolioRepository
     public async Task<List<Portfolio>> GetAllAsync()
     {
         return await _dbContext.Portfolios
+            .Where(x => !_dbContext.BacktestRuns.Any(run => run.PortfolioId == x.Id))
             .OrderBy(x => x.Id)
             .ToListAsync();
     }
@@ -23,6 +24,7 @@ public sealed class PortfolioRepository
     public async Task<Portfolio?> GetLatestAsync()
     {
         return await _dbContext.Portfolios
+            .Where(x => !_dbContext.BacktestRuns.Any(run => run.PortfolioId == x.Id))
             .Include(x => x.Positions)
             .Include(x => x.Trades)
             .OrderByDescending(x => x.Id)

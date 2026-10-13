@@ -78,6 +78,7 @@ public sealed class BacktestEngine : IBacktestEngine
                 ? Math.Round((finalValue - request.InitialCapital) / request.InitialCapital * 100m, FinancialPrecision)
                 : 0m;
             run.Status = BacktestRunStatus.Completed;
+            run.Portfolio = portfolio;
 
             await _runRepository.UpdateAsync(run);
 

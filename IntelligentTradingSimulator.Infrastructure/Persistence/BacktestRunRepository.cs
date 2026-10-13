@@ -27,6 +27,11 @@ public sealed class BacktestRunRepository : IBacktestRunRepository
     {
         return await _dbContext.BacktestRuns
             .Include(x => x.Snapshots)
+            .Include(x => x.Portfolio)
+                .ThenInclude(x => x!.Trades)
+            .Include(x => x.Portfolio)
+                .ThenInclude(x => x!.Positions)
+            .AsSplitQuery()
             .FirstOrDefaultAsync(x => x.Id == id);
     }
 

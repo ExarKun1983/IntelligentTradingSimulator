@@ -85,6 +85,33 @@ public sealed class TradePersistenceTests
     }
 
     [Fact]
+    public void BacktestPortfolioMigration_AddsNullableLink_AndCanBeReversed()
+    {
+        var migration = new AddBacktestPortfolio();
+
+        var added = Assert.IsType<AddColumnOperation>(migration.UpOperations[0]);
+        Assert.Equal("BacktestRuns", added.Table);
+        Assert.Equal("PortfolioId", added.Name);
+        Assert.True(added.IsNullable);
+        Assert.Null(added.DefaultValue);
+        var index = Assert.IsType<CreateIndexOperation>(migration.UpOperations[1]);
+        Assert.Equal("PortfolioId", Assert.Single(index.Columns));
+        var foreignKey = Assert.IsType<AddForeignKeyOperation>(migration.UpOperations[2]);
+        Assert.Equal("BacktestRuns", foreignKey.Table);
+        Assert.Equal("Portfolios", foreignKey.PrincipalTable);
+        Assert.Equal("PortfolioId", Assert.Single(foreignKey.Columns));
+        Assert.Equal("Id", Assert.Single(foreignKey.PrincipalColumns!));
+        Assert.Equal(3, migration.UpOperations.Count);
+
+        Assert.IsType<DropForeignKeyOperation>(migration.DownOperations[0]);
+        Assert.IsType<DropIndexOperation>(migration.DownOperations[1]);
+        var removed = Assert.IsType<DropColumnOperation>(migration.DownOperations[2]);
+        Assert.Equal("BacktestRuns", removed.Table);
+        Assert.Equal("PortfolioId", removed.Name);
+        Assert.Equal(3, migration.DownOperations.Count);
+    }
+
+    [Fact]
     public void ExitReasonFilter_TranslatesToSqlServerQuery()
     {
         var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
