@@ -74,6 +74,63 @@ public sealed class ConsoleReporterTests
     }
 
     [Fact]
+    public void PrintMarketRanking_ShowsCompleteFundamentalsWithUnits()
+    {
+        var output = CaptureOutput(() => CreateReporter().PrintMarketRanking(
+        [
+            new ObservationResult
+            {
+                Symbol = "COMPLETE",
+                Fundamentals = new FundamentalData
+                {
+                    Symbol = "COMPLETE",
+                    AsOfDate = new DateOnly(2025, 12, 31),
+                    RevenueGrowthPercent = 12.5m,
+                    EpsGrowthPercent = 8.25m,
+                    Margins = 23.5m,
+                    Debt = 1.45m
+                }
+            }
+        ]));
+
+        Assert.Contains(
+            $"Fundamentals: AsOf=2025-12-31 | RevGrowth={12.5m:N2}% | EpsGrowth={8.25m:N2}% | Margins={23.5m:N2}% | Debt={1.45m:N2}",
+            output);
+    }
+
+    [Fact]
+    public void PrintMarketRanking_ShowsUnavailablePartialFundamentalsAsNA()
+    {
+        var output = CaptureOutput(() => CreateReporter().PrintMarketRanking(
+        [
+            new ObservationResult
+            {
+                Symbol = "PARTIAL",
+                Fundamentals = new FundamentalData
+                {
+                    Symbol = "PARTIAL",
+                    RevenueGrowthPercent = -5m
+                }
+            }
+        ]));
+
+        Assert.Contains(
+            $"Fundamentals: AsOf=N/A | RevGrowth={(-5m):N2}% | EpsGrowth=N/A | Margins=N/A | Debt=N/A",
+            output);
+    }
+
+    [Fact]
+    public void PrintMarketRanking_ShowsAbsentFundamentalsAsNA()
+    {
+        var output = CaptureOutput(() => CreateReporter().PrintMarketRanking(
+            [new ObservationResult { Symbol = "ABSENT" }]));
+
+        Assert.Contains(
+            "Fundamentals: AsOf=N/A | RevGrowth=N/A | EpsGrowth=N/A | Margins=N/A | Debt=N/A",
+            output);
+    }
+
+    [Fact]
     public void PrintMarketRanking_ShowsRelativeStrengthBenchmarkAndPercentagePointsOrNA()
     {
         var output = CaptureOutput(() => CreateReporter().PrintMarketRanking(

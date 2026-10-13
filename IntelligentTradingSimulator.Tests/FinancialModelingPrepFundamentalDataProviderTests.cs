@@ -77,6 +77,74 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
     }
 
     [Fact]
+    public async Task GetFundamentalDataAsync_UsesOnlyMetricsFromTheNewerReportingPeriod()
+    {
+        var growthJson = """
+            [
+              {
+                "date": "2024-12-31",
+                "symbol": "AAPL",
+                "revenueGrowth": 0.125,
+                "epsgrowth": 0.082
+              }
+            ]
+            """;
+
+        var ratiosJson = """
+            [
+              {
+                "date": "2025-12-31",
+                "symbol": "AAPL",
+                "netProfitMargin": 0.235,
+                "debtEquityRatio": 1.45
+              }
+            ]
+            """;
+
+        var handler = new MockHttpMessageHandler(request =>
+        {
+            var url = request.RequestUri!.ToString();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    url.Contains("/financial-growth/AAPL") ? growthJson : ratiosJson)
+            };
+        });
+
+        var provider = CreateProvider(handler);
+
+        var result = await provider.GetFundamentalDataAsync("AAPL");
+
+        Assert.NotNull(result);
+        Assert.Equal(new DateOnly(2025, 12, 31), result.AsOfDate);
+        Assert.Null(result.RevenueGrowthPercent);
+        Assert.Null(result.EpsGrowthPercent);
+        Assert.Equal(23.5m, result.Margins);
+        Assert.Equal(1.45m, result.Debt);
+    }
+
+    [Fact]
+    public async Task GetFundamentalDataAsync_ReturnsNullWhenBothPeriodsAreUnknown()
+    {
+        var handler = new MockHttpMessageHandler(request =>
+        {
+            var content = request.RequestUri!.AbsolutePath.Contains("financial-growth")
+                ? """[{"symbol":"AAPL","revenueGrowth":0.125}]"""
+                : """[{"symbol":"AAPL","netProfitMargin":0.235}]""";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(content)
+            };
+        });
+
+        var provider = CreateProvider(handler);
+
+        var result = await provider.GetFundamentalDataAsync("AAPL");
+
+        Assert.Null(result);
+    }
+
+    [Fact]
     public async Task GetFundamentalDataAsync_HandlesFallbackFieldNames()
     {
         var growthJson = """
@@ -295,13 +363,30 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
     }
 
     [Fact]
+    public async Task GetFundamentalDataAsync_PropagatesHttpClientTimeout()
+    {
+        using var httpClient = new HttpClient(new DelayingHttpMessageHandler())
+        {
+            BaseAddress = new Uri("https://financialmodelingprep.com/"),
+            Timeout = TimeSpan.FromMilliseconds(20)
+        };
+        var provider = new FinancialModelingPrepFundamentalDataProvider(
+            httpClient,
+            Options.Create(new FinancialModelingPrepOptions { ApiKey = ValidApiKey }));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => provider.GetFundamentalDataAsync("AAPL"));
+    }
+
+    [Fact]
     public void AddInfrastructure_RegistersFmpProvider_WhenApiKeyConfigured()
     {
         var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
         var inMemorySettings = new Dictionary<string, string?>
         {
             ["FundamentalData:FinancialModelingPrep:ApiKey"] = "valid-key",
-            ["FundamentalData:FinancialModelingPrep:BaseUrl"] = "https://financialmodelingprep.com/"
+            ["FundamentalData:FinancialModelingPrep:BaseUrl"] = "https://financialmodelingprep.com/",
+            ["FundamentalData:FinancialModelingPrep:RequestTimeoutSeconds"] = "4"
         };
         var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
             .AddInMemoryCollection(inMemorySettings)
@@ -317,6 +402,9 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
 
         Assert.NotNull(provider);
         Assert.IsType<FinancialModelingPrepFundamentalDataProvider>(provider);
+        var httpClient = serviceProvider.GetRequiredService<IHttpClientFactory>()
+            .CreateClient(nameof(FinancialModelingPrepFundamentalDataProvider));
+        Assert.Equal(TimeSpan.FromSeconds(4), httpClient.Timeout);
     }
 
     [Theory]
@@ -372,6 +460,17 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(handler(request));
+        }
+    }
+
+    private sealed class DelayingHttpMessageHandler : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK);
         }
     }
 }

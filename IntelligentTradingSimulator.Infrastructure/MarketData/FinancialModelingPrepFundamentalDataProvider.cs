@@ -82,9 +82,47 @@ public sealed class FinancialModelingPrepFundamentalDataProvider : IFundamentalD
             return null;
         }
 
+        var growthDate = GetDate(growthElement);
+        var ratiosDate = GetDate(ratiosElement);
+        var includeGrowth = growthElement.HasValue;
+        var includeRatios = ratiosElement.HasValue;
+        DateOnly? asOfDate;
+
+        if (growthElement.HasValue && ratiosElement.HasValue)
+        {
+            if (growthDate.HasValue && ratiosDate.HasValue)
+            {
+                if (growthDate != ratiosDate)
+                {
+                    includeGrowth = growthDate > ratiosDate;
+                    includeRatios = ratiosDate > growthDate;
+                }
+
+                asOfDate = growthDate > ratiosDate ? growthDate : ratiosDate;
+            }
+            else if (growthDate.HasValue)
+            {
+                includeRatios = false;
+                asOfDate = growthDate;
+            }
+            else if (ratiosDate.HasValue)
+            {
+                includeGrowth = false;
+                asOfDate = ratiosDate;
+            }
+            else
+            {
+                return null;
+            }
+        }
+        else
+        {
+            asOfDate = growthDate ?? ratiosDate;
+        }
+
         decimal? revenueGrowthPercent = null;
         decimal? epsGrowthPercent = null;
-        if (growthElement.HasValue)
+        if (includeGrowth && growthElement.HasValue)
         {
             var rawRevGrowth = GetDecimalProperty(
                 growthElement.Value, "revenueGrowth", "revenueGrowthTTM");
@@ -103,7 +141,7 @@ public sealed class FinancialModelingPrepFundamentalDataProvider : IFundamentalD
 
         decimal? margins = null;
         decimal? debt = null;
-        if (ratiosElement.HasValue)
+        if (includeRatios && ratiosElement.HasValue)
         {
             var rawMargin = GetDecimalProperty(
                 ratiosElement.Value, "netProfitMargin", "netProfitMarginTTM");
@@ -117,28 +155,6 @@ public sealed class FinancialModelingPrepFundamentalDataProvider : IFundamentalD
             if (rawDebt.HasValue)
             {
                 debt = rawDebt.Value;
-            }
-        }
-
-        DateOnly? asOfDate = null;
-        if (growthElement.HasValue)
-        {
-            var dateStr = GetStringProperty(growthElement.Value, "date", "fillingDate");
-            if (DateOnly.TryParse(dateStr, CultureInfo.InvariantCulture, out var gDate))
-            {
-                asOfDate = gDate;
-            }
-        }
-
-        if (ratiosElement.HasValue)
-        {
-            var dateStr = GetStringProperty(ratiosElement.Value, "date", "fillingDate");
-            if (DateOnly.TryParse(dateStr, CultureInfo.InvariantCulture, out var rDate))
-            {
-                if (asOfDate is null || rDate > asOfDate)
-                {
-                    asOfDate = rDate;
-                }
             }
         }
 
@@ -242,5 +258,18 @@ public sealed class FinancialModelingPrepFundamentalDataProvider : IFundamentalD
         }
 
         return null;
+    }
+
+    private static DateOnly? GetDate(JsonElement? element)
+    {
+        if (!element.HasValue)
+        {
+            return null;
+        }
+
+        var dateStr = GetStringProperty(element.Value, "date", "fillingDate");
+        return DateOnly.TryParse(dateStr, CultureInfo.InvariantCulture, out var date)
+            ? date
+            : null;
     }
 }

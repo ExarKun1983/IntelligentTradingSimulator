@@ -58,7 +58,14 @@ public static class ServiceCollectionExtensions
                     ? FinancialModelingPrepOptions.DefaultBaseUrl
                     : options.BaseUrl;
 
+                if (options.RequestTimeoutSeconds is < 1 or > FinancialModelingPrepOptions.MaximumRequestTimeoutSeconds)
+                {
+                    throw new InvalidOperationException(
+                        $"FinancialModelingPrep request timeout must be between 1 and {FinancialModelingPrepOptions.MaximumRequestTimeoutSeconds} seconds.");
+                }
+
                 client.BaseAddress = new Uri(baseUrl, UriKind.Absolute);
+                client.Timeout = TimeSpan.FromSeconds(options.RequestTimeoutSeconds);
             });
 
             services.AddTransient<IFundamentalDataProvider>(sp =>
