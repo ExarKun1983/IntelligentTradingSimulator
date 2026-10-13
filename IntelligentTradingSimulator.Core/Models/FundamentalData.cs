@@ -11,10 +11,10 @@ public sealed class FundamentalData
     public DateOnly? AsOfDate { get; init; }
 
     /// <summary>Year-over-year revenue growth in percentage points (10 means 10%).</summary>
-    public decimal? RevenueGrowth { get; init; }
+    public decimal? RevenueGrowthPercent { get; init; }
 
     /// <summary>Year-over-year earnings-per-share growth in percentage points.</summary>
-    public decimal? EpsGrowth { get; init; }
+    public decimal? EpsGrowthPercent { get; init; }
 
     /// <summary>Net profit margin in percentage points.</summary>
     public decimal? Margins { get; init; }

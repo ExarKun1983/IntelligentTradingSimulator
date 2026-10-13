@@ -58,8 +58,8 @@ from a caller-supplied file path; it does not call a live service. For example:
   {
     "Symbol": "AAPL",
     "AsOfDate": "2025-12-31",
-    "RevenueGrowth": 12.5,
-    "EpsGrowth": null,
+    "RevenueGrowthPercent": 12.5,
+    "EpsGrowthPercent": null,
     "Margins": 21.75,
     "Debt": 1.5
   }

@@ -25,8 +25,8 @@ public sealed class JsonFundamentalDataProviderTests : IDisposable
             [{
                 "Symbol": "AAPL",
                 "AsOfDate": "2025-12-31",
-                "RevenueGrowth": 12.5,
-                "EpsGrowth": -3.25,
+                "RevenueGrowthPercent": 12.5,
+                "EpsGrowthPercent": -3.25,
                 "Margins": 21.75,
                 "Debt": 1.5
             }]
@@ -37,15 +37,15 @@ public sealed class JsonFundamentalDataProviderTests : IDisposable
         Assert.NotNull(result);
         Assert.Equal("AAPL", result.Symbol);
         Assert.Equal(new DateOnly(2025, 12, 31), result.AsOfDate);
-        Assert.Equal(12.5m, result.RevenueGrowth);
-        Assert.Equal(-3.25m, result.EpsGrowth);
+        Assert.Equal(12.5m, result.RevenueGrowthPercent);
+        Assert.Equal(-3.25m, result.EpsGrowthPercent);
         Assert.Equal(21.75m, result.Margins);
         Assert.Equal(1.5m, result.Debt);
     }
 
     [Theory]
     [InlineData("""[{"Symbol":"AAPL"}]""")]
-    [InlineData("""[{"Symbol":"AAPL","AsOfDate":null,"RevenueGrowth":null,"EpsGrowth":null,"Margins":null,"Debt":null}]""")]
+    [InlineData("""[{"Symbol":"AAPL","AsOfDate":null,"RevenueGrowthPercent":null,"EpsGrowthPercent":null,"Margins":null,"Debt":null}]""")]
     public async Task GetFundamentalDataAsync_PreservesMissingFields(string json)
     {
         var provider = await CreateProviderAsync(json);
@@ -54,8 +54,8 @@ public sealed class JsonFundamentalDataProviderTests : IDisposable
 
         Assert.NotNull(result);
         Assert.Null(result.AsOfDate);
-        Assert.Null(result.RevenueGrowth);
-        Assert.Null(result.EpsGrowth);
+        Assert.Null(result.RevenueGrowthPercent);
+        Assert.Null(result.EpsGrowthPercent);
         Assert.Null(result.Margins);
         Assert.Null(result.Debt);
     }
@@ -66,7 +66,7 @@ public sealed class JsonFundamentalDataProviderTests : IDisposable
         var snapshot = new FundamentalData
         {
             Symbol = "AAPL",
-            RevenueGrowth = 0m,
+            RevenueGrowthPercent = 0m,
             Margins = -1.25m,
             Debt = 0m
         };
@@ -75,8 +75,8 @@ public sealed class JsonFundamentalDataProviderTests : IDisposable
         var result = await provider.GetFundamentalDataAsync("AAPL");
 
         Assert.NotNull(result);
-        Assert.Equal(0m, result.RevenueGrowth);
-        Assert.Null(result.EpsGrowth);
+        Assert.Equal(0m, result.RevenueGrowthPercent);
+        Assert.Null(result.EpsGrowthPercent);
         Assert.Equal(-1.25m, result.Margins);
         Assert.Equal(0m, result.Debt);
     }
