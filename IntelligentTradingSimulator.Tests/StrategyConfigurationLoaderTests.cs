@@ -57,22 +57,28 @@ public sealed class StrategyConfigurationLoaderTests
     }
 
     [Theory]
-    [InlineData("QualityPenalty", "-1")]
-    [InlineData("QualityMaximumDebtToEquity", "-1")]
-    [InlineData("QualityFailureAction", "99")]
-    [InlineData("QualityMissingDataAction", "99")]
-    [InlineData("QualityFailureAction", "invalid")]
-    [InlineData("QualityMinimumRevenueGrowthPercent", "NaN")]
-    [InlineData("QualityMinimumEpsGrowthPercent", "Infinity")]
-    [InlineData("QualityMinimumMarginsPercent", "invalid")]
-    public void LoadAndLoadAll_RejectInvalidQualityConfiguration(string name, string value)
+    [InlineData("QualityPenalty", "-1", "QualityMaximumDebtToEquity")]
+    [InlineData("QualityMaximumDebtToEquity", "-1", "QualityPenalty")]
+    [InlineData("QualityFailureAction", "99", null)]
+    [InlineData("QualityMissingDataAction", "99", null)]
+    [InlineData("QualityFailureAction", "invalid", null)]
+    [InlineData("QualityMinimumRevenueGrowthPercent", "NaN", null)]
+    [InlineData("QualityMinimumEpsGrowthPercent", "Infinity", null)]
+    [InlineData("QualityMinimumMarginsPercent", "invalid", null)]
+    public void LoadAndLoadAll_RejectInvalidQualityConfiguration(string name, string value, string? unrelatedName)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(
             new Dictionary<string, string?> { [$"Strategies:default:{name}"] = value }).Build();
-        Assert.Contains($"Strategies:default:{name}", Assert.Throws<InvalidOperationException>(
-            () => StrategyConfigurationLoader.Load(configuration)).Message);
-        Assert.Contains($"Strategies:default:{name}", Assert.Throws<InvalidOperationException>(
-            () => StrategyConfigurationLoader.LoadAll(configuration)).Message);
+        var loadError = Assert.Throws<InvalidOperationException>(
+            () => StrategyConfigurationLoader.Load(configuration)).Message;
+        var loadAllError = Assert.Throws<InvalidOperationException>(
+            () => StrategyConfigurationLoader.LoadAll(configuration)).Message;
+        Assert.Contains($"Strategies:default:{name}", loadError);
+        if (unrelatedName is not null)
+            Assert.DoesNotContain($"Strategies:default:{unrelatedName}", loadError);
+        Assert.Contains($"Strategies:default:{name}", loadAllError);
+        if (unrelatedName is not null)
+            Assert.DoesNotContain($"Strategies:default:{unrelatedName}", loadAllError);
     }
 
     [Theory]

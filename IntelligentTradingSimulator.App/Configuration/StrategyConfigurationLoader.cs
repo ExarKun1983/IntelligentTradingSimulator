@@ -136,9 +136,12 @@ public static class StrategyConfigurationLoader
                 throw new InvalidOperationException(
                     $"Configuration value 'Strategies:{id}:{name}' must be Neutral, Penalize or Exclude.");
         }
-        if (config.QualityPenalty < 0m || config.QualityMaximumDebtToEquity is < 0m)
+        if (config.QualityPenalty < 0m)
             throw new InvalidOperationException(
-                $"Configuration values 'Strategies:{id}:QualityPenalty' and 'Strategies:{id}:QualityMaximumDebtToEquity' must be non-negative.");
+                $"Configuration value 'Strategies:{id}:QualityPenalty' must be non-negative.");
+        if (config.QualityMaximumDebtToEquity is < 0m)
+            throw new InvalidOperationException(
+                $"Configuration value 'Strategies:{id}:QualityMaximumDebtToEquity' must be non-negative.");
 
         if (string.IsNullOrWhiteSpace(config.RelativeStrengthBenchmarkSymbol))
         {
