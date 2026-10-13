@@ -129,6 +129,101 @@ public sealed class BacktestDayProcessorTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(108, true)]
+    [InlineData(109, false)]
+    public async Task ProcessAsync_TrailingStopUsesHeldPositionHighWithoutScoringHistoryOrLookahead(
+        int price, bool shouldSell)
+    {
+        var date = new DateTime(2024, 1, 10);
+        var provider = new FakeMarketDataProvider();
+        provider.SetData("HELD",
+        [
+            new MarketCandle { Date = date.AddDays(-1), Close = 1000m },
+            new MarketCandle { Date = date, Close = price },
+            new MarketCandle { Date = date.AddDays(1), Close = 2000m }
+        ]);
+        var position = new Position
+        {
+            Symbol = "HELD", Quantity = 10m, AveragePrice = 100m, CurrentPrice = 120m
+        };
+        var portfolio = new Portfolio { StartingCash = 1000m, Positions = [position] };
+        var result = await BuildProcessor(provider).ProcessAsync(new BacktestDayRequest
+        {
+            CurrentDate = date,
+            HistoricalStartDate = date.AddDays(-10),
+            Portfolio = portfolio,
+            Symbols = [],
+            StrategyConfiguration = new StrategyConfiguration
+            {
+                UseRelativeStrength = false, TrailingStopPercent = 10m
+            }
+        });
+
+        Assert.Empty(result.Observations);
+        Assert.Empty(result.Recommendations);
+        Assert.Equal(120m, position.HighestPriceSinceEntry);
+        Assert.Equal(shouldSell ? 1 : 0, result.Snapshot.TradesExecuted);
+        Assert.False(result.Snapshot.RebalanceExecuted);
+        Assert.Equal(price * 10m, result.Snapshot.PortfolioValue);
+        if (shouldSell)
+        {
+            Assert.Empty(portfolio.Positions);
+            var sell = Assert.Single(portfolio.Trades);
+            Assert.Equal(ExitReason.TrailingStop, sell.ExitReason);
+            Assert.Equal(price, sell.Price);
+            Assert.Equal(10m, sell.Quantity);
+        }
+        else
+        {
+            Assert.Empty(portfolio.Trades);
+            Assert.Equal(price, Assert.Single(portfolio.Positions).CurrentPrice);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_PersistsTrailingStopExitAfterNewHigh_InFreshContext()
+    {
+        var startDate = new DateTime(2024, 1, 1);
+        var provider = new FakeMarketDataProvider();
+        var candles = BuildCandles(startDate, 12);
+        candles[^2].Close = 150m;
+        candles[^1].Close = 135m;
+        provider.SetData("AAPL", candles);
+        var engine = new BacktestEngine(
+            new BacktestRunRepository(_dbContext), BuildProcessor(provider));
+
+        var result = await engine.RunAsync(new BacktestEngineRequest
+        {
+            Name = "Trailing Stop persistence",
+            StrategyId = "test",
+            StrategyConfiguration = new StrategyConfiguration
+            {
+                Id = "test", UseRelativeStrength = false, TrailingStopPercent = 10m
+            },
+            StartDate = startDate.AddDays(9),
+            EndDate = startDate.AddDays(11),
+            HistoricalStartDate = startDate,
+            InitialCapital = 10_000m,
+            Symbols = ["AAPL"]
+        });
+
+        Assert.Equal(BacktestRunStatus.Completed, result.Status);
+        await _dbContext.DisposeAsync();
+        await using var readContext = new TradingSimulatorDbContext(_options);
+        var savedRun = await new BacktestRunRepository(readContext).GetByIdAsync(result.RunId);
+        Assert.NotNull(savedRun?.Portfolio);
+        Assert.Empty(savedRun.Portfolio.Positions);
+        var sell = Assert.Single(savedRun.Portfolio.Trades,
+            x => x.ExitReason == ExitReason.TrailingStop);
+        Assert.Equal(135m, sell.Price);
+        Assert.True(sell.Price > savedRun.Portfolio.Trades.First(x => x.Action == TradeActionType.Buy).Price);
+        Assert.Single(await readContext.Trades.AsNoTracking()
+            .Where(x => x.PortfolioId == savedRun.PortfolioId && x.ExitReason == ExitReason.TrailingStop)
+            .ToListAsync());
+        Assert.Equal(savedRun.FinalCapital, Math.Round(savedRun.Portfolio.Cash, 4));
+    }
+
     [Fact]
     public async Task ProcessAsync_StopLossDoesNotAddHeldSymbolsToRecommendationUniverse()
     {

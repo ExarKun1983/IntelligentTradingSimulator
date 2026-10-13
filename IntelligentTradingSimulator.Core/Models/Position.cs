@@ -17,7 +17,19 @@ public sealed class Position
     public decimal Quantity { get; set; }
 
     public decimal AveragePrice { get; set; }
-    public decimal CurrentPrice { get; set; }
+    private decimal _currentPrice;
+
+    public decimal CurrentPrice
+    {
+        get => _currentPrice;
+        set
+        {
+            _currentPrice = value;
+            HighestPriceSinceEntry = Math.Max(HighestPriceSinceEntry, value);
+        }
+    }
+
+    public decimal HighestPriceSinceEntry { get; set; }
 
     public decimal MarketValue =>
     Quantity * CurrentPrice;

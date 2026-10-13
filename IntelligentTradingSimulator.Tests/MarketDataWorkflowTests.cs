@@ -26,6 +26,36 @@ public sealed class MarketDataWorkflowTests : IDisposable
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
+    public async Task CollectAndAnalyzeAsync_TrailingStopRetainsPriceWithoutScoringHistory(bool enabled)
+    {
+        var date = new DateTime(2024, 1, 10);
+        var provider = new FakeMarketDataProvider(
+        [
+            new MarketCandle { Date = date, Close = 108m },
+            new MarketCandle { Date = DateTime.MaxValue, Close = 1000m }
+        ]);
+        var workflow = BuildWorkflow(provider, new StrategyConfiguration
+        {
+            UseRelativeStrength = false, TrailingStopPercent = enabled ? 10m : null
+        });
+
+        var result = await workflow.CollectAndAnalyzeAsync(["TEST"], date.AddDays(-10));
+
+        Assert.Empty(result.RankedResults);
+        Assert.Empty(result.Recommendations);
+        if (enabled)
+        {
+            Assert.Equal(108m, result.Prices["TEST"]);
+        }
+        else
+        {
+            Assert.Empty(result.Prices);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
     public async Task CollectAndAnalyzeAsync_StopLossRetainsAvailablePriceWithoutScoringHistory(bool enabled)
     {
         var today = DateTime.Today;
