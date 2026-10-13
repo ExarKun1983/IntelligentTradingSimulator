@@ -104,11 +104,16 @@ public sealed class TradePersistenceTests
         Assert.Equal(3, migration.UpOperations.Count);
 
         Assert.IsType<DropForeignKeyOperation>(migration.DownOperations[0]);
-        Assert.IsType<DropIndexOperation>(migration.DownOperations[1]);
-        var removed = Assert.IsType<DropColumnOperation>(migration.DownOperations[2]);
+        var deleteBacktestPortfolios =
+            Assert.IsType<SqlOperation>(migration.DownOperations[1]);
+        Assert.Contains("[Portfolios]", deleteBacktestPortfolios.Sql);
+        Assert.Contains("[BacktestRuns]", deleteBacktestPortfolios.Sql);
+        Assert.Contains("[PortfolioId]", deleteBacktestPortfolios.Sql);
+        Assert.IsType<DropIndexOperation>(migration.DownOperations[2]);
+        var removed = Assert.IsType<DropColumnOperation>(migration.DownOperations[3]);
         Assert.Equal("BacktestRuns", removed.Table);
         Assert.Equal("PortfolioId", removed.Name);
-        Assert.Equal(3, migration.DownOperations.Count);
+        Assert.Equal(4, migration.DownOperations.Count);
     }
 
     [Fact]

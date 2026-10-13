@@ -36,6 +36,9 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                 name: "FK_BacktestRuns_Portfolios_PortfolioId",
                 table: "BacktestRuns");
 
+            migrationBuilder.Sql(
+                "DELETE FROM [Portfolios] WHERE [Id] IN (SELECT [PortfolioId] FROM [BacktestRuns] WHERE [PortfolioId] IS NOT NULL);");
+
             migrationBuilder.DropIndex(
                 name: "IX_BacktestRuns_PortfolioId",
                 table: "BacktestRuns");
