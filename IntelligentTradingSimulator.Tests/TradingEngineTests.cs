@@ -74,6 +74,7 @@ public sealed class TradingEngineTests
 
         Assert.Equal(600m, portfolio.Cash);
         Assert.Equal(5m, portfolio.Positions[0].Quantity);
+        Assert.Equal(ExitReason.Manual, Assert.Single(portfolio.Trades).ExitReason);
     }
 
     [Fact]
@@ -117,5 +118,73 @@ public sealed class TradingEngineTests
         Assert.Single(portfolio.Trades);
         Assert.Equal(TradeActionType.Buy, portfolio.Trades[0].Action);
         Assert.Equal("MSFT", portfolio.Trades[0].Symbol);
+        Assert.Null(portfolio.Trades[0].ExitReason);
+    }
+
+    [Theory]
+    [InlineData(ExitReason.Manual)]
+    [InlineData(ExitReason.Rebalance)]
+    [InlineData(ExitReason.StopLoss)]
+    [InlineData(ExitReason.TrailingStop)]
+    public void Execute_Sell_RecordsExitReason(ExitReason reason)
+    {
+        var portfolio = new Portfolio
+        {
+            Positions =
+            [
+                new Position { Symbol = "AAPL", Quantity = 5m, CurrentPrice = 100m }
+            ]
+        };
+        var decision = new TradingDecision
+        {
+            Symbol = "AAPL",
+            Action = TradeActionType.Sell,
+            Amount = 1_000m,
+            ExitReason = reason
+        };
+
+        _engine.Execute(portfolio, decision, currentPrice: 100m);
+
+        var trade = Assert.Single(portfolio.Trades);
+        Assert.Equal(reason, trade.ExitReason);
+        Assert.Equal(5m, trade.Quantity);
+        Assert.Equal(100m, trade.Price);
+        Assert.Equal(500m, portfolio.Cash);
+        Assert.Empty(portfolio.Positions);
+    }
+
+    [Fact]
+    public void Execute_Buy_DoesNotRecordExitReason()
+    {
+        var portfolio = new Portfolio { Cash = 1_000m };
+        var decision = new TradingDecision
+        {
+            Symbol = "AAPL",
+            Action = TradeActionType.Buy,
+            Amount = 500m,
+            ExitReason = ExitReason.StopLoss
+        };
+
+        _engine.Execute(portfolio, decision, currentPrice: 100m);
+
+        Assert.Null(Assert.Single(portfolio.Trades).ExitReason);
+    }
+
+    [Fact]
+    public void Execute_Sell_WithNoPosition_DoesNotRecordTrade()
+    {
+        var portfolio = new Portfolio { Cash = 1_000m };
+        var decision = new TradingDecision
+        {
+            Symbol = "AAPL",
+            Action = TradeActionType.Sell,
+            Amount = 500m,
+            ExitReason = ExitReason.TrailingStop
+        };
+
+        _engine.Execute(portfolio, decision, currentPrice: 100m);
+
+        Assert.Empty(portfolio.Trades);
+        Assert.Equal(1_000m, portfolio.Cash);
     }
 }

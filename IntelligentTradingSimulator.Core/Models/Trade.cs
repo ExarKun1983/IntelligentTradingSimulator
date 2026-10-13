@@ -19,6 +19,8 @@ public sealed class Trade
 
     public TradeActionType Action { get; set; }
 
+    public ExitReason? ExitReason { get; set; }
+
     public decimal Quantity { get; set; }
 
     public decimal Price { get; set; }
