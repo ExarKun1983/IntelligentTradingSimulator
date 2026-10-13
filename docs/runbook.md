@@ -358,6 +358,21 @@ dotnet run --project IntelligentTradingSimulator.App -- \
 
 This captures human-readable console output, not a machine-readable export.
 
+## Trade exit reasons
+
+Sell decisions can carry an `ExitReason`: `Manual`, `Rebalance`, `StopLoss`, or
+`TrailingStop`. The trading engine records the supplied reason on the trade;
+unlabelled new sells default to `Manual`, and portfolio rebalancing sells are
+tagged `Rebalance`. Buy trades have no exit reason.
+
+Apply the `AddTradeExitReason` migration before using the updated application.
+Historical trades retain a null reason because their original cause is unknown.
+Reasons are available through loaded portfolio trades and can be filtered via
+`TradingSimulatorDbContext.Trades` for reporting and analytics.
+
+This records reasons supplied by callers; the current application does not yet
+implement stop-loss or trailing-stop triggers. No new exit rules are introduced.
+
 ## Verify local setup
 
 From the repository root, restore, build, and test the solution using the SDK configured in `global.json`. The tests use in-memory databases and do not require a running SQL Server or Yahoo Finance access:
