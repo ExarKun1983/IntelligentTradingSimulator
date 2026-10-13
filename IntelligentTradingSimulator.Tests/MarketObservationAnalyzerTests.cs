@@ -438,6 +438,32 @@ public sealed class MarketObservationAnalyzerTests
         Assert.Null(customResult.FactorContributions);
     }
 
+    [Fact]
+    public void Analyze_PassesFundamentalDataToScoringContextAndObservationResult()
+    {
+        var engine = new CapturingScoringEngine(42m);
+        var analyzer = new MarketObservationAnalyzer(engine);
+        var candles = Enumerable.Range(0, 5)
+            .Select(index => Candle(100m + index))
+            .ToList();
+        var fundamentals = new FundamentalData
+        {
+            Symbol = "TEST",
+            RevenueGrowthPercent = 12.5m,
+            EpsGrowthPercent = 5m,
+            Margins = 20m,
+            Debt = 1.2m
+        };
+
+        var result = analyzer.Analyze(
+            "TEST",
+            candles,
+            fundamentalData: fundamentals);
+
+        Assert.Same(fundamentals, result.Fundamentals);
+        Assert.Same(fundamentals, engine.LastContext!.Fundamentals);
+    }
+
     private sealed class CapturingScoringEngine : IScoringEngine
     {
         private readonly decimal _score;

@@ -23,4 +23,6 @@ public sealed class ScoringContext
     public decimal? DistanceFromWeek52HighPercent { get; init; }
 
     public decimal? RelativeStrengthPercent { get; init; }
+
+    public FundamentalData? Fundamentals { get; init; }
 }

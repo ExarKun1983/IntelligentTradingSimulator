@@ -17,13 +17,15 @@ public sealed class MarketDataWorkflow
     private readonly ObservationResultRepository _observationResultRepository;
     private readonly StrategyConfiguration _strategyConfiguration;
     private readonly BacktestHistoricalMarketDataService _historicalDataService;
+    private readonly IFundamentalDataProvider? _fundamentalDataProvider;
 
     public MarketDataWorkflow(
         IMarketDataProvider provider,
         MarketObservationAnalyzer analyzer,
         PortfolioRecommendationService recommendationService,
         ObservationResultRepository observationResultRepository,
-        StrategyConfiguration? strategyConfiguration = null)
+        StrategyConfiguration? strategyConfiguration = null,
+        IFundamentalDataProvider? fundamentalDataProvider = null)
     {
         _provider = provider;
         _analyzer = analyzer;
@@ -31,6 +33,7 @@ public sealed class MarketDataWorkflow
         _observationResultRepository = observationResultRepository;
         _strategyConfiguration = strategyConfiguration ?? new StrategyConfiguration();
         _historicalDataService = new BacktestHistoricalMarketDataService(provider);
+        _fundamentalDataProvider = fundamentalDataProvider;
     }
 
     public async Task<MarketDataResult> CollectAndAnalyzeAsync(
@@ -91,6 +94,21 @@ public sealed class MarketDataWorkflow
                     continue;
                 }
 
+                FundamentalData? fundamentalData = null;
+                if (_fundamentalDataProvider is not null)
+                {
+                    try
+                    {
+                        fundamentalData =
+                            await _fundamentalDataProvider.GetFundamentalDataAsync(symbol);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"Failed to fetch fundamental data for {symbol} ({ex.GetType().Name}). Continuing without fundamentals.");
+                    }
+                }
+
                 results.Add(
                     _analyzer.Analyze(
                         symbol,
@@ -98,7 +116,8 @@ public sealed class MarketDataWorkflow
                         historicalCandles,
                         benchmarkCandles,
                         benchmarkSymbol,
-                        analysisDate));
+                        analysisDate,
+                        fundamentalData));
 
                 prices[symbol] = usableCandles.Last().Close;
             }

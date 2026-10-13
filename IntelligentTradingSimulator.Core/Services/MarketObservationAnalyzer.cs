@@ -39,9 +39,17 @@ public sealed class MarketObservationAnalyzer
 
     public ObservationResult Analyze(
         string symbol,
-        IReadOnlyList<MarketCandle> candles)
+        IReadOnlyList<MarketCandle> candles,
+        FundamentalData? fundamentalData = null)
     {
-        return Analyze(symbol, candles, candles);
+        return Analyze(
+            symbol,
+            candles,
+            candles,
+            benchmarkCandles: null,
+            benchmarkSymbol: null,
+            analysisDate: null,
+            fundamentalData: fundamentalData);
     }
 
     public ObservationResult Analyze(
@@ -50,7 +58,8 @@ public sealed class MarketObservationAnalyzer
         IReadOnlyList<MarketCandle> week52HighCandles,
         IReadOnlyList<MarketCandle>? benchmarkCandles = null,
         string? benchmarkSymbol = null,
-        DateTime? analysisDate = null)
+        DateTime? analysisDate = null,
+        FundamentalData? fundamentalData = null)
     {
         var first =
             candles.First();
@@ -114,7 +123,8 @@ public sealed class MarketObservationAnalyzer
                     Rsi = rsi,
                     RelativeStrengthPercent = relativeStrength,
                     DistanceFromWeek52HighPercent =
-                        week52High.DistanceFromWeek52HighPercent
+                        week52High.DistanceFromWeek52HighPercent,
+                    Fundamentals = fundamentalData
                 },
                 out var relativeStrengthScoreContribution,
                 out var factorContributions);
@@ -136,6 +146,7 @@ public sealed class MarketObservationAnalyzer
             RelativeStrengthPercent = relativeStrength,
             RelativeStrengthScoreContribution = relativeStrengthScoreContribution,
             FactorContributions = factorContributions,
+            Fundamentals = fundamentalData,
             Score = score
         };
     }

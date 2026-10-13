@@ -27,7 +27,7 @@ var selectedStrategyConfiguration =
 
 var services = new ServiceCollection();
 
-services.AddInfrastructure(connectionString);
+services.AddInfrastructure(connectionString, configuration);
 services.AddSingleton(selectedStrategyConfiguration);
 services.AddSingleton<BacktestEngineRequestFactory>();
 

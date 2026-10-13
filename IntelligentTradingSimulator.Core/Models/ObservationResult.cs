@@ -36,5 +36,7 @@ public sealed class ObservationResult
 
     public IReadOnlyList<FactorScoreContribution>? FactorContributions { get; set; }
 
+    public FundamentalData? Fundamentals { get; set; }
+
     public decimal Score { get; set; }
 }

@@ -53,6 +53,19 @@ public sealed class ConsoleReporter
                     result.FactorContributions.Select(factor =>
                         $"{factor.Factor}={(factor.Contribution.HasValue ? factor.Contribution.Value.ToString("G29") : "N/A")} [{factor.Status}]")));
             }
+
+            var fundamentals = result.Fundamentals;
+            var asOfDate = fundamentals?.AsOfDate?.ToString("yyyy-MM-dd") ?? "N/A";
+            var revenueGrowth = FormatPercent(fundamentals?.RevenueGrowthPercent);
+            var epsGrowth = FormatPercent(fundamentals?.EpsGrowthPercent);
+            var margins = FormatPercent(fundamentals?.Margins);
+            var debt = FormatValue(fundamentals?.Debt);
+            Console.WriteLine(
+                $"  Fundamentals: AsOf={asOfDate}" +
+                $" | RevGrowth={revenueGrowth}" +
+                $" | EpsGrowth={epsGrowth}" +
+                $" | Margins={margins}" +
+                $" | Debt={debt}");
         }
     }
 
@@ -71,6 +84,12 @@ public sealed class ConsoleReporter
                 $" | Score={recommendation.Score:N2}");
         }
     }
+
+    private static string FormatPercent(decimal? value) =>
+        value.HasValue ? $"{value.Value:N2}%" : "N/A";
+
+    private static string FormatValue(decimal? value) =>
+        value.HasValue ? value.Value.ToString("N2") : "N/A";
 
     public void PrintExistingPortfolio(Portfolio portfolio)
     {
