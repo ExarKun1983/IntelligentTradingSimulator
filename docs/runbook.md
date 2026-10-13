@@ -108,6 +108,8 @@ Configure the FMP credentials and settings in `appsettings.json`:
 
 Never commit real API keys to source control. When configured with an API key, `FinancialModelingPrepFundamentalDataProvider` is registered in DI as the `IFundamentalDataProvider` implementation. If the API key is unconfigured or empty, fundamental data fetching is skipped during ranking workflows. In the market data ranking workflow, provider failures or missing data for individual stocks are handled safely without breaking the full ranking flow.
 
+Provider failures print an English console warning with the affected symbol and exception type, then ranking continues without fundamentals for that stock. Exception messages are omitted because they may contain credential-bearing request URLs.
+
 ## Configure a strategy
 
 `ActiveStrategy` selects a named entry under `Strategies`. The checked-in configuration provides `default`, `conservative`, and `aggressive` entries. Change `ActiveStrategy` to one of those IDs or add a validated strategy entry:

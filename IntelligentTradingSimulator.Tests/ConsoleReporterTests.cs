@@ -7,6 +7,7 @@ using IntelligentTradingSimulator.Core.Services;
 
 namespace IntelligentTradingSimulator.Tests;
 
+[Collection("Console output")]
 public sealed class ConsoleReporterTests
 {
     [Fact]

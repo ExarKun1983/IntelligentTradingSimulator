@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IntelligentTradingSimulator.Tests;
 
+[Collection("Console output")]
 public sealed class MarketDataWorkflowTests : IDisposable
 {
     private readonly DbContextOptions<TradingSimulatorDbContext> _options;
@@ -384,7 +385,23 @@ public sealed class MarketDataWorkflowTests : IDisposable
 
         var workflow = BuildWorkflow(marketProvider, fundamentalDataProvider: fundamentalProvider);
 
-        var result = await workflow.CollectAndAnalyzeAsync(["FAIL", "PASS"], date);
+        using var writer = new StringWriter();
+        var originalOut = Console.Out;
+        MarketDataResult result;
+        try
+        {
+            Console.SetOut(writer);
+            result = await workflow.CollectAndAnalyzeAsync(["FAIL", "PASS"], date);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        Assert.Contains(
+            "Failed to fetch fundamental data for FAIL (HttpRequestException). Continuing without fundamentals.",
+            writer.ToString());
+        Assert.DoesNotContain("Simulated API failure", writer.ToString());
 
         Assert.Equal(2, result.RankedResults.Count);
 

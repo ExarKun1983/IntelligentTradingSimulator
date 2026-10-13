@@ -6,7 +6,6 @@ using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
-using Microsoft.Extensions.Logging;
 
 namespace IntelligentTradingSimulator.App.Simulation;
 
@@ -19,7 +18,6 @@ public sealed class MarketDataWorkflow
     private readonly StrategyConfiguration _strategyConfiguration;
     private readonly BacktestHistoricalMarketDataService _historicalDataService;
     private readonly IFundamentalDataProvider? _fundamentalDataProvider;
-    private readonly ILogger<MarketDataWorkflow>? _logger;
 
     public MarketDataWorkflow(
         IMarketDataProvider provider,
@@ -27,8 +25,7 @@ public sealed class MarketDataWorkflow
         PortfolioRecommendationService recommendationService,
         ObservationResultRepository observationResultRepository,
         StrategyConfiguration? strategyConfiguration = null,
-        IFundamentalDataProvider? fundamentalDataProvider = null,
-        ILogger<MarketDataWorkflow>? logger = null)
+        IFundamentalDataProvider? fundamentalDataProvider = null)
     {
         _provider = provider;
         _analyzer = analyzer;
@@ -37,7 +34,6 @@ public sealed class MarketDataWorkflow
         _strategyConfiguration = strategyConfiguration ?? new StrategyConfiguration();
         _historicalDataService = new BacktestHistoricalMarketDataService(provider);
         _fundamentalDataProvider = fundamentalDataProvider;
-        _logger = logger;
     }
 
     public async Task<MarketDataResult> CollectAndAnalyzeAsync(
@@ -108,10 +104,8 @@ public sealed class MarketDataWorkflow
                     }
                     catch (Exception ex)
                     {
-                        _logger?.LogWarning(
-                            ex,
-                            "Failed to fetch fundamental data for {Symbol}. Continuing without fundamentals.",
-                            symbol);
+                        Console.WriteLine(
+                            $"Failed to fetch fundamental data for {symbol} ({ex.GetType().Name}). Continuing without fundamentals.");
                     }
                 }
 
