@@ -182,6 +182,47 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     b.ToTable("FeatureSnapshots", (string)null);
                 });
 
+            modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.FutureOutcomeLabel", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<decimal?>("BenchmarkReturnPercent")
+                        .HasPrecision(28, 12)
+                        .HasColumnType("decimal(28,12)");
+
+                    b.Property<string>("BenchmarkSymbol")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<int>("FeatureSnapshotId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("HorizonTradingDays")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly>("OutcomeDate")
+                        .HasColumnType("date");
+
+                    b.Property<bool?>("OutperformedBenchmark")
+                        .HasColumnType("bit");
+
+                    b.Property<decimal>("ReturnPercent")
+                        .HasPrecision(28, 12)
+                        .HasColumnType("decimal(28,12)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FeatureSnapshotId", "HorizonTradingDays", "BenchmarkSymbol")
+                        .IsUnique();
+
+                    b.ToTable("FutureOutcomeLabels", (string)null);
+                });
+
             modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.ObservationResultEntity", b =>
                 {
                     b.Property<int>("Id")
@@ -433,6 +474,15 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("BacktestRunId")
                         .OnDelete(DeleteBehavior.Cascade);
+                });
+
+            modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.FutureOutcomeLabel", b =>
+                {
+                    b.HasOne("IntelligentTradingSimulator.Core.Models.FeatureSnapshot", null)
+                        .WithMany()
+                        .HasForeignKey("FeatureSnapshotId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.ObservationResultEntity", b =>

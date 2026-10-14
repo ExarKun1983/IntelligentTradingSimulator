@@ -96,8 +96,58 @@ and optional filters. Omitted filters include all contexts. The version-1 JSON
 feature payload reuses `StockRankingFeatures` and preserves optional nulls and
 decimal factor values. Rows also retain the strategy configuration JSON, optional
 factor-contribution JSON, and nullable deterministic score (`decimal(28,12)`).
-The schema version allows future payload evolution; no future-outcome labels are
-generated. Deleting a backtest run cascades to its feature snapshots.
+The schema version allows future payload evolution. Snapshot creation does not
+generate future outcomes. Deleting a backtest run cascades to its feature snapshots.
+
+### Offline supervised-training labels
+
+Apply the `AddFutureOutcomeLabels` migration before generating labels.
+`FutureOutcomeLabelWorkflow` (Infrastructure, `Training` namespace) is an explicit
+offline API, registered by `AddInfrastructure`; no live analysis, scoring, or
+backtest path invokes it. In a separate training job, resolve it from a service
+scope and call:
+
+```csharp
+await workflow.GenerateAsync(
+    from: new DateOnly(2024, 1, 1),
+    to: new DateOnly(2024, 6, 30),
+    availableThrough: new DateOnly(2024, 10, 1),
+    benchmarkSymbol: "SPY",
+    horizons: [5, 20, 60],
+    backtestRunId: runId);
+```
+
+The inclusive snapshot range can also be filtered by symbol and strategy ID.
+`availableThrough` is the caller's explicit last available historical date; it
+must not precede `to`. The workflow requests bounded daily price history through
+that date and independently excludes candles beyond it. For reproducible offline
+jobs, supply a historical `IMarketDataProvider` with a fixed data vintage.
+
+Labels use close-to-close percentage returns from an exact snapshot-date close
+to the Nth subsequent observed stock trading session (not calendar days).
+Defaults are 5, 20, and 60; custom positive horizons are supported and deduplicated.
+History must contain complete daily sessions: gaps in supplied history cannot be
+distinguished from market closures. No stale baseline is substituted. Missing
+baselines, immature horizons, non-positive endpoint prices, or decimal-overflow
+returns produce no stock label. Duplicate daily candles are rejected.
+Benchmark returns require valid closes on the same exact start and outcome dates.
+Unavailable benchmark endpoints leave the stock label's benchmark return and flag
+null. `OutperformedBenchmark` is true only for a strictly greater return; false
+includes ties. These are price returns, with no additional dividend/fee adjustment;
+split/dividend adjustment depends on the supplied history.
+
+Labels are separate rows keyed uniquely by snapshot ID, horizon, and normalized
+benchmark symbol. Repeated generation retains the first row for each key; later
+cutoffs add newly mature horizons without changing stored features, scores, or
+existing labels (including missing benchmark comparisons). Concurrent duplicate
+inserts can fail the unique constraint. Labels cascade-delete with their snapshot.
+Use `IFeatureSnapshotRepository.QueryAsync` to select training inputs, then
+`IFutureOutcomeLabelRepository.QueryAsync(snapshotId, horizonTradingDays, benchmarkSymbol)`
+to load detached, ordered targets; omitted label filters include all horizons and
+benchmarks. Bulk dataset jobs can join `TradingSimulatorDbContext.FeatureSnapshots`
+and `FutureOutcomeLabels` on snapshot ID. Keep that join exclusively in offline
+training code: labels are not part of `StockRankingFeatures`, snapshot payloads,
+or scoring interfaces.
 
 ## Fundamental data foundation
 

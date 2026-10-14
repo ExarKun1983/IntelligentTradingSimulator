@@ -41,6 +41,7 @@ public sealed class TradingSimulatorDbContext : DbContext
         Set<BacktestSnapshot>();
 
     public DbSet<FeatureSnapshot> FeatureSnapshots => Set<FeatureSnapshot>();
+    public DbSet<FutureOutcomeLabel> FutureOutcomeLabels => Set<FutureOutcomeLabel>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -49,6 +50,20 @@ public sealed class TradingSimulatorDbContext : DbContext
         ConfigureBacktestRun(modelBuilder);
         ConfigureBacktestSnapshot(modelBuilder);
         ConfigureFeatureSnapshot(modelBuilder);
+        ConfigureFutureOutcomeLabel(modelBuilder);
+    }
+
+    private static void ConfigureFutureOutcomeLabel(ModelBuilder modelBuilder)
+    {
+        var entity = modelBuilder.Entity<FutureOutcomeLabel>();
+        entity.ToTable("FutureOutcomeLabels");
+        entity.HasKey(x => x.Id);
+        entity.Property(x => x.BenchmarkSymbol).HasMaxLength(20).IsRequired();
+        entity.Property(x => x.ReturnPercent).HasPrecision(28, 12);
+        entity.Property(x => x.BenchmarkReturnPercent).HasPrecision(28, 12);
+        entity.HasIndex(x => new { x.FeatureSnapshotId, x.HorizonTradingDays, x.BenchmarkSymbol }).IsUnique();
+        entity.HasOne<FeatureSnapshot>().WithMany().HasForeignKey(x => x.FeatureSnapshotId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 
     private static void ConfigureFeatureSnapshot(ModelBuilder modelBuilder)
