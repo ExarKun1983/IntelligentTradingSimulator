@@ -18,7 +18,7 @@ public sealed class BacktestReportWorkflow(
     {
         if (snapshotCsvFilePath is not null)
         {
-            if (await runRepository.GetByIdAsync(runId) is null)
+            if (!await runRepository.ExistsAsync(runId))
             {
                 Console.WriteLine($"Backtest run {runId} was not found.");
             }

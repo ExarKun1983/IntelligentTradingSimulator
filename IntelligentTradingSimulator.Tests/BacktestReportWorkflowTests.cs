@@ -25,6 +25,26 @@ public sealed class BacktestReportWorkflowTests
         var csv = await File.ReadAllTextAsync(fixture.SnapshotPath);
         Assert.Contains($"2024-01-02,{runId},", csv);
         Assert.DoesNotContain($"2024-01-02,{85 - runId},", csv);
+        Assert.Equal(1, fixture.Runs.ExistsCalls);
+        Assert.Equal(0, fixture.Runs.GetByIdCalls);
+        Assert.Equal(0, fixture.Summary.Calls);
+        Assert.Equal(0, fixture.Benchmark.Calls);
+    }
+
+    [Theory]
+    [InlineData(44, BacktestRunStatus.Running)]
+    [InlineData(45, BacktestRunStatus.Failed)]
+    public async Task RunAsync_ExportsPartialSnapshotsForNonCompletedRuns(
+        int runId, BacktestRunStatus status)
+    {
+        await using var fixture = new Fixture();
+        await fixture.SeedAsync();
+
+        await fixture.Workflow.RunAsync(runId, null, fixture.SnapshotPath);
+
+        var csv = await File.ReadAllTextAsync(fixture.SnapshotPath);
+        Assert.Contains($"2024-01-02,{runId},", csv);
+        Assert.Equal(status, (await fixture.Runs.GetByIdAsync(runId))!.Status);
         Assert.Equal(0, fixture.Summary.Calls);
         Assert.Equal(0, fixture.Benchmark.Calls);
     }
@@ -39,6 +59,8 @@ public sealed class BacktestReportWorkflowTests
         await fixture.Workflow.RunAsync(99, null, fixture.SnapshotPath);
 
         Assert.Equal("existing output", await File.ReadAllTextAsync(fixture.SnapshotPath));
+        Assert.Equal(1, fixture.Runs.ExistsCalls);
+        Assert.Equal(0, fixture.Runs.GetByIdCalls);
         Assert.Equal(0, fixture.Summary.Calls);
         Assert.Equal(0, fixture.Benchmark.Calls);
     }
@@ -100,6 +122,7 @@ public sealed class BacktestReportWorkflowTests
 
         public string SnapshotPath => Path.Combine(_directory, "snapshots.csv");
         public string SummaryPath => Path.Combine(_directory, "summary.csv");
+        public CountingRunRepository Runs { get; }
         public CountingBenchmarkService Benchmark { get; } = new();
         public CountingSummaryService Summary { get; }
         public BacktestReportWorkflow Workflow { get; }
@@ -107,22 +130,28 @@ public sealed class BacktestReportWorkflowTests
         public Fixture()
         {
             Directory.CreateDirectory(_directory);
-            var runs = new BacktestRunRepository(_db);
+            Runs = new CountingRunRepository(new BacktestRunRepository(_db));
             var snapshots = new BacktestSnapshotRepository(_db);
-            Summary = new CountingSummaryService(new BacktestSummaryReportService(runs, snapshots, Benchmark));
-            Workflow = new BacktestReportWorkflow(runs, snapshots, new BacktestSnapshotCsvExporter(),
+            Summary = new CountingSummaryService(new BacktestSummaryReportService(Runs, snapshots, Benchmark));
+            Workflow = new BacktestReportWorkflow(Runs, snapshots, new BacktestSnapshotCsvExporter(),
                 Summary, new ConsoleReporter(new PortfolioAllocationService(), new PortfolioContributionService()),
                 new BacktestSummaryCsvExporter());
         }
 
         public async Task SeedAsync()
         {
-            foreach (var id in new[] { 42, 43 })
+            foreach (var (id, status) in new[]
+                     {
+                         (42, BacktestRunStatus.Completed),
+                         (43, BacktestRunStatus.Completed),
+                         (44, BacktestRunStatus.Running),
+                         (45, BacktestRunStatus.Failed)
+                     })
             {
                 _db.BacktestRuns.Add(new BacktestRun
                 {
                     Id = id,
-                    Status = BacktestRunStatus.Completed,
+                    Status = status,
                     Snapshots =
                     [
                         new() { Date = new DateTime(2024, 1, 2), PortfolioValue = id }
@@ -130,6 +159,30 @@ public sealed class BacktestReportWorkflowTests
                 });
             }
             await _db.SaveChangesAsync();
+        }
+
+        public sealed class CountingRunRepository(IBacktestRunRepository inner) : IBacktestRunRepository
+        {
+            public int ExistsCalls { get; private set; }
+            public int GetByIdCalls { get; private set; }
+
+            public Task AddAsync(BacktestRun run) => inner.AddAsync(run);
+
+            public Task<bool> ExistsAsync(int id)
+            {
+                ExistsCalls++;
+                return inner.ExistsAsync(id);
+            }
+
+            public Task<BacktestRun?> GetByIdAsync(int id)
+            {
+                GetByIdCalls++;
+                return inner.GetByIdAsync(id);
+            }
+
+            public Task UpdateAsync(BacktestRun run) => inner.UpdateAsync(run);
+
+            public Task MarkFailedAsync(int runId) => inner.MarkFailedAsync(runId);
         }
 
         public async ValueTask DisposeAsync()

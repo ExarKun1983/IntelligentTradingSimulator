@@ -23,6 +23,11 @@ public sealed class BacktestRunRepository : IBacktestRunRepository
         await _dbContext.SaveChangesAsync();
     }
 
+    public Task<bool> ExistsAsync(int id)
+    {
+        return _dbContext.BacktestRuns.AnyAsync(x => x.Id == id);
+    }
+
     public async Task<BacktestRun?> GetByIdAsync(int id)
     {
         return await _dbContext.BacktestRuns

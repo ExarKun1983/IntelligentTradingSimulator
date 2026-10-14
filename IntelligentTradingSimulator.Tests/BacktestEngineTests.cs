@@ -408,6 +408,9 @@ public sealed class BacktestEngineTests : IDisposable
         public Task AddAsync(BacktestRun run) =>
             _innerRepository.AddAsync(run);
 
+        public Task<bool> ExistsAsync(int id) =>
+            _innerRepository.ExistsAsync(id);
+
         public Task<BacktestRun?> GetByIdAsync(int id) =>
             _innerRepository.GetByIdAsync(id);
 
