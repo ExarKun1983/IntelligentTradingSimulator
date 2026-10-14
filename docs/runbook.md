@@ -463,7 +463,55 @@ Replace `123` with the database ID reported for a completed run.
 
 Successful backtest summaries include benchmark comparisons for `SPY`, `QQQ`, and `IWM`, using the same start and end dates as the run. Benchmark data is fetched from Yahoo Finance when the summary is generated; unavailable benchmark data may result in no benchmark section.
 
-There is no dedicated structured export command or CSV/JSON exporter in the current application. Console output can be captured as text from a Bash-compatible shell:
+### CSV summary export
+
+Add `--export-backtest-csv=<path>` to a single backtest command to export its
+successful summary while retaining console output:
+
+```bash
+dotnet run --project IntelligentTradingSimulator.App -- \
+  --run-backtest \
+  --backtest-start=2025-01-01 \
+  --backtest-end=2025-03-31 \
+  --backtest-name=Example \
+  --export-backtest-csv=backtest-summary.csv
+```
+
+A persisted run can also be exported:
+
+```bash
+dotnet run --project IntelligentTradingSimulator.App -- \
+  --backtest-run-id=123 \
+  --export-backtest-csv=backtest-summary.csv
+```
+
+The parent directory must exist. The file is overwritten, using UTF-8 without a
+BOM, commas, CRLF record endings, invariant decimal numbers without rounding or
+percent signs, and ISO dates (`yyyy-MM-dd`). Percent values are percentage points
+(for example, `10.5` means 10.5%). Failed runs or unsuccessful summaries are not
+exported, including failed or still-running persisted runs with partial snapshots.
+File-system errors propagate; the console summary is printed first.
+The flag currently supports single-run reporting, not `--run-variants`.
+
+Columns always appear in this order:
+
+```text
+BacktestRunId,BacktestName,StrategyId,StartDate,EndDate,InitialCapital,FinalCapital,Profit,ReturnPercent,MaxDrawdownPercent,DrawdownDurationDays,RecoveryTimeDays,TradesCount,RebalancesCount,BenchmarkSymbol,BenchmarkReturnPercent,RelativeReturnPercent,AlphaPercent,BenchmarkOutcome
+```
+
+There is one row per benchmark comparison, ordered by symbol (ordinal), repeating
+the run's summary fields.
+A run without benchmarks has one row with empty benchmark columns. Empty
+`RecoveryTimeDays` means no drawdown or no recovery, as in the existing summary.
+Alpha and relative return retain the existing strategy-minus-benchmark definition.
+The writer accepts multiple summaries in input order for future batch export;
+use `BacktestRunId` to distinguish runs, and do not sum repeated summary values.
+
+Text containing commas, quotes, or line breaks is CSV-escaped. Potential
+spreadsheet formulas in text fields are prefixed with an apostrophe for safety;
+negative numeric metrics are unchanged.
+
+Console output can still be captured as text from a Bash-compatible shell:
 
 ```bash
 dotnet run --project IntelligentTradingSimulator.App -- \
