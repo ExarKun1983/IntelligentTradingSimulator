@@ -496,11 +496,11 @@ The flag currently supports single-run reporting, not `--run-variants`.
 Columns always appear in this order:
 
 ```text
-BacktestRunId,BacktestName,StrategyName,StartDate,EndDate,InitialCapital,FinalCapital,Profit,ReturnPercent,MaxDrawdownPercent,DrawdownDurationDays,RecoveryTimeDays,TradesCount,RebalancesCount,BenchmarkSymbol,BenchmarkReturnPercent,RelativeReturnPercent,AlphaPercent,BenchmarkOutcome
+BacktestRunId,BacktestName,StrategyId,StartDate,EndDate,InitialCapital,FinalCapital,Profit,ReturnPercent,MaxDrawdownPercent,DrawdownDurationDays,RecoveryTimeDays,TradesCount,RebalancesCount,BenchmarkSymbol,BenchmarkReturnPercent,RelativeReturnPercent,AlphaPercent,BenchmarkOutcome
 ```
 
-`StrategyName` contains the existing strategy ID. There is one row per benchmark
-comparison, ordered by symbol (ordinal), repeating the run's summary fields.
+There is one row per benchmark comparison, ordered by symbol (ordinal), repeating
+the run's summary fields.
 A run without benchmarks has one row with empty benchmark columns. Empty
 `RecoveryTimeDays` means no drawdown or no recovery, as in the existing summary.
 Alpha and relative return retain the existing strategy-minus-benchmark definition.

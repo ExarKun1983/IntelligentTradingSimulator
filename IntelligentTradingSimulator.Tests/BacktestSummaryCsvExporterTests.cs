@@ -9,7 +9,7 @@ namespace IntelligentTradingSimulator.Tests;
 public sealed class BacktestSummaryCsvExporterTests
 {
     private const string Header =
-        "BacktestRunId,BacktestName,StrategyName,StartDate,EndDate,InitialCapital,FinalCapital,Profit,ReturnPercent," +
+        "BacktestRunId,BacktestName,StrategyId,StartDate,EndDate,InitialCapital,FinalCapital,Profit,ReturnPercent," +
         "MaxDrawdownPercent,DrawdownDurationDays,RecoveryTimeDays,TradesCount,RebalancesCount," +
         "BenchmarkSymbol,BenchmarkReturnPercent,RelativeReturnPercent,AlphaPercent,BenchmarkOutcome\r\n";
 
