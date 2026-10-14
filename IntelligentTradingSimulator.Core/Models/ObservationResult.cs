@@ -8,6 +8,8 @@ namespace IntelligentTradingSimulator.Core.Models;
 
 public sealed class ObservationResult
 {
+    public StockRankingFeatures? Features { get; set; }
+
     public string Symbol { get; set; } = string.Empty;
 
     public decimal MomentumPercent { get; set; }
