@@ -463,6 +463,50 @@ Replace `123` with the database ID reported for a completed run.
 
 Successful backtest summaries include benchmark comparisons for `SPY`, `QQQ`, and `IWM`, using the same start and end dates as the run. Benchmark data is fetched from Yahoo Finance when the summary is generated; unavailable benchmark data may result in no benchmark section.
 
+### Strategy comparison CSV export
+
+Add `--export-comparison-csv=<path>` to `--run-variants` to export the same
+comparison report printed to the console:
+
+```bash
+dotnet run --project IntelligentTradingSimulator.App -- \
+  --run-variants \
+  --backtest-start=2025-01-01 \
+  --backtest-end=2025-03-31 \
+  --comparison-sort-by=ReturnPercent \
+  --export-comparison-csv=comparison.csv
+```
+
+The export preserves report order and ranks, with one CSV record per strategy
+variant, including failures. Strategy names are the report's `StrategyId` values.
+Base columns match the comparison entry fields:
+
+```text
+StrategyId,Rank,IsSuccess,ErrorMessage,StartCapital,FinalCapital,ReturnPercent,MaxDrawdownPercent,DrawdownDurationDays,RecoveryTimeDays,TradesCount
+```
+
+For each benchmark present anywhere in the report, columns are appended in
+ordinal symbol order as `<symbol>.StrategyReturnPercent`,
+`<symbol>.BenchmarkReturnPercent`, `<symbol>.RelativeReturnPercent`,
+`<symbol>.AlphaPercent`, and `<symbol>.Outcome`. For example, a report with
+`QQQ` and `SPY` has both column groups on every row; benchmarks do not create
+extra rows. Unavailable benchmark metrics, ranks, and recovery times are empty.
+Failed variants retain their status and error but have empty performance metrics.
+No calculations or rankings are changed by export.
+
+Files use UTF-8 without a BOM, CRLF record separators, and invariant decimal
+numbers (percentage points, without `%` signs). Commas, quotes, and line breaks
+in text are CSV-escaped; formula-like text is prefixed with an apostrophe for
+spreadsheet safety. Negative numeric metrics remain numbers. Empty reports
+produce only the base header. Existing files are overwritten; the parent
+directory must already exist. File-system errors propagate as with other CSV
+exports.
+
+The option requires `--run-variants` and cannot be combined with
+`--run-backtest` or `--backtest-run-id`, which select other flows. Missing or
+duplicate export paths are rejected before executing backtests. Single-run
+summary and snapshot exports remain separate options.
+
 ### CSV summary export
 
 Add `--export-backtest-csv=<path>` to a single backtest command to export its

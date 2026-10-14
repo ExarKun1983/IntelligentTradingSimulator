@@ -25,6 +25,12 @@ if (!BacktestSnapshotCsvCommandLineParser.TryParse(args, out var snapshotCsvFile
     return;
 }
 
+if (!StrategyComparisonCsvCommandLineParser.TryParse(args, out var comparisonCsvFilePath, out var comparisonCsvError))
+{
+    Console.WriteLine(comparisonCsvError);
+    return;
+}
+
 var configuration =
     new ConfigurationBuilder()
         .SetBasePath(AppContext.BaseDirectory)
@@ -70,6 +76,8 @@ services.AddSingleton<PortfolioRebalancingService>();
 services.AddSingleton<ConsoleReporter>();
 services.AddSingleton<BacktestSummaryCsvExporter>();
 services.AddSingleton<BacktestSnapshotCsvExporter>();
+services.AddSingleton<StrategyComparisonCsvExporter>();
+services.AddScoped<StrategyComparisonReportWorkflow>();
 services.AddScoped<MarketDataWorkflow>();
 services.AddScoped<PortfolioWorkflow>();
 services.AddScoped<SimulationRunner>();
@@ -225,7 +233,6 @@ if (runVariantsArg is not null)
     var variantRunner = scope.ServiceProvider.GetRequiredService<IStrategyVariantRunner>();
     var variantsReportService = scope.ServiceProvider.GetRequiredService<IBacktestSummaryReportService>();
     var variantsReporter = scope.ServiceProvider.GetRequiredService<ConsoleReporter>();
-    var comparisonService = scope.ServiceProvider.GetRequiredService<IStrategyComparisonReportService>();
 
     Console.WriteLine($"Running {allVariants.Count} strategy variant(s)...");
     Console.WriteLine($"Period: {variantsStartDate:yyyy-MM-dd} to {variantsEndDate:yyyy-MM-dd}");
@@ -256,8 +263,8 @@ if (runVariantsArg is not null)
         summaries.Add(variantSummary);
     }
 
-    var comparisonReport = comparisonService.Build(summaries, comparisonSortBy, comparisonBenchmark);
-    variantsReporter.PrintVariantComparisonReport(comparisonReport);
+    await scope.ServiceProvider.GetRequiredService<StrategyComparisonReportWorkflow>()
+        .RunAsync(summaries, comparisonSortBy, comparisonBenchmark, comparisonCsvFilePath);
 
     return;
 }
