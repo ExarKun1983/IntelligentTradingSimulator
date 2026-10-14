@@ -535,7 +535,10 @@ dotnet run --project IntelligentTradingSimulator.App -- \
 ```
 
 Alternatively, add `--export-backtest-snapshots-csv=<path>` to `--run-backtest`
-to export after the backtest succeeds. The option does not support batch variant
+to export after the backtest succeeds. In both modes, a snapshot-only request
+skips summary generation and summary benchmark fetching; request
+`--export-backtest-csv=<path>` as well to generate the summary. This does not skip
+market data needed to execute a new backtest. The option does not support batch variant
 export. A selected run takes precedence over `--run-backtest`, as with summary
 reporting. Summary and snapshot exports can be requested together using separate
 output paths. Paths are compared as absolute paths with `.` and `..` resolved

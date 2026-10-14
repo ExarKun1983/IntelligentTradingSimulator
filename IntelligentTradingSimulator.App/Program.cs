@@ -74,6 +74,7 @@ services.AddScoped<MarketDataWorkflow>();
 services.AddScoped<PortfolioWorkflow>();
 services.AddScoped<SimulationRunner>();
 services.AddScoped<IBacktestSummaryReportService, BacktestSummaryReportService>();
+services.AddScoped<BacktestReportWorkflow>();
 services.AddScoped<BacktestHistoricalMarketDataService>();
 services.AddScoped<IBenchmarkDataService, BenchmarkDataService>();
 services.AddScoped<IBacktestBenchmarkService, BacktestBenchmarkService>();
@@ -95,33 +96,8 @@ if (backtestRunIdArg is not null &&
         backtestRunIdArg["--backtest-run-id=".Length..],
         out var backtestRunId))
 {
-    if (snapshotCsvFilePath is not null)
-    {
-        await ExportSnapshotsAsync(backtestRunId, snapshotCsvFilePath);
-        if (csvFilePath is null)
-            return;
-    }
-
-    var reportService =
-        scope.ServiceProvider.GetRequiredService<IBacktestSummaryReportService>();
-
-    var reporter =
-        scope.ServiceProvider.GetRequiredService<ConsoleReporter>();
-
-    var result = await reportService.GenerateAsync(backtestRunId);
-    reporter.PrintBacktestSummary(result);
-    if (csvFilePath is not null && result.IsSuccess)
-    {
-        if (result.Status != BacktestRunStatus.Completed)
-        {
-            Console.WriteLine("CSV export requires a completed backtest run.");
-            return;
-        }
-
-        await scope.ServiceProvider.GetRequiredService<BacktestSummaryCsvExporter>()
-            .ExportAsync(csvFilePath, [result]);
-        Console.WriteLine($"Backtest summary exported to {csvFilePath}");
-    }
+    await scope.ServiceProvider.GetRequiredService<BacktestReportWorkflow>()
+        .RunAsync(backtestRunId, csvFilePath, snapshotCsvFilePath);
     return;
 }
 
@@ -161,8 +137,6 @@ if (runBacktestArg is not null)
 
     var requestFactory = scope.ServiceProvider.GetRequiredService<BacktestEngineRequestFactory>();
     var engine = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
-    var reportService = scope.ServiceProvider.GetRequiredService<IBacktestSummaryReportService>();
-    var reporter = scope.ServiceProvider.GetRequiredService<ConsoleReporter>();
 
     var request = requestFactory.Create(
         name: name,
@@ -184,17 +158,8 @@ if (runBacktestArg is not null)
         return;
     }
 
-    if (snapshotCsvFilePath is not null)
-        await ExportSnapshotsAsync(engineResult.RunId, snapshotCsvFilePath);
-
-    var summaryResult = await reportService.GenerateAsync(engineResult.RunId);
-    reporter.PrintBacktestSummary(summaryResult);
-    if (csvFilePath is not null && summaryResult.IsSuccess)
-    {
-        await scope.ServiceProvider.GetRequiredService<BacktestSummaryCsvExporter>()
-            .ExportAsync(csvFilePath, [summaryResult]);
-        Console.WriteLine($"Backtest summary exported to {csvFilePath}");
-    }
+    await scope.ServiceProvider.GetRequiredService<BacktestReportWorkflow>()
+        .RunAsync(engineResult.RunId, csvFilePath, snapshotCsvFilePath);
     return;
 }
 
@@ -300,19 +265,3 @@ if (runVariantsArg is not null)
 var runner = scope.ServiceProvider.GetRequiredService<SimulationRunner>();
 
 await runner.RunAsync();
-
-async Task ExportSnapshotsAsync(int runId, string filePath)
-{
-    var runRepository = scope.ServiceProvider.GetRequiredService<IBacktestRunRepository>();
-    if (await runRepository.GetByIdAsync(runId) is null)
-    {
-        Console.WriteLine($"Backtest run {runId} was not found.");
-        return;
-    }
-
-    var snapshots = await scope.ServiceProvider.GetRequiredService<IBacktestSnapshotRepository>()
-        .GetByRunIdAsync(runId);
-    await scope.ServiceProvider.GetRequiredService<BacktestSnapshotCsvExporter>()
-        .ExportAsync(filePath, snapshots);
-    Console.WriteLine($"Backtest snapshots exported to {filePath}");
-}
