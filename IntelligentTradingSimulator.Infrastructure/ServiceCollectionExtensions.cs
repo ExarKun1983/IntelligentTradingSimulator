@@ -2,6 +2,7 @@ using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Services;
 using IntelligentTradingSimulator.Infrastructure.MarketData;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
+using IntelligentTradingSimulator.Infrastructure.Training;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,6 +33,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IBacktestRunRepository, BacktestRunRepository>();
         services.AddScoped<IBacktestSnapshotRepository, BacktestSnapshotRepository>();
         services.AddScoped<IFeatureSnapshotRepository, FeatureSnapshotRepository>();
+        services.AddScoped<IFutureOutcomeLabelRepository, FutureOutcomeLabelRepository>();
+        services.AddScoped<FutureOutcomeLabelWorkflow>();
         services.AddScoped<IBacktestSummaryReportService, BacktestSummaryReportService>();
 
         services.AddSingleton<IMarketDataProvider, YahooMarketDataProvider>();
