@@ -93,4 +93,56 @@ public sealed class BacktestSnapshotCsvCommandLineParserTests
         Assert.Equal("snapshots.csv", path);
         Assert.Equal("summary.csv", summaryPath);
     }
+
+    [Theory]
+    [InlineData("--run-backtest")]
+    [InlineData("--backtest-run-id=42")]
+    public void TryParse_RejectsCollidingExportPaths(string mode)
+    {
+        string[] aliases = ["results.csv", "./results.csv", "exports/../results.csv",
+            Path.GetFullPath("results.csv")];
+
+        foreach (var alias in aliases)
+        {
+            Assert.False(BacktestSnapshotCsvCommandLineParser.TryParse(
+                [mode, "--export-backtest-csv=results.csv",
+                    $"--export-backtest-snapshots-csv={alias}"], out var path, out var error));
+            Assert.Null(path);
+            Assert.Contains("different output paths", error);
+        }
+    }
+
+    [Theory]
+    [InlineData("--run-backtest")]
+    [InlineData("--backtest-run-id=42")]
+    public void TryParse_UsesPlatformPathCaseSensitivity(string mode)
+    {
+        var success = BacktestSnapshotCsvCommandLineParser.TryParse(
+            [mode, "--export-backtest-csv=results.csv",
+                "--export-backtest-snapshots-csv=RESULTS.csv"], out var path, out var error);
+
+        Assert.Equal(!OperatingSystem.IsWindows(), success);
+        if (success)
+        {
+            Assert.Equal("RESULTS.csv", path);
+            Assert.Null(error);
+        }
+        else
+        {
+            Assert.Null(path);
+            Assert.Contains("different output paths", error);
+        }
+    }
+
+    [Theory]
+    [InlineData("--run-backtest")]
+    [InlineData("--backtest-run-id=42")]
+    public void TryParse_RejectsInvalidCombinedExportPaths(string mode)
+    {
+        Assert.False(BacktestSnapshotCsvCommandLineParser.TryParse(
+            [mode, "--export-backtest-csv=summary.csv",
+                "--export-backtest-snapshots-csv=invalid\0.csv"], out var path, out var error));
+        Assert.Null(path);
+        Assert.Contains("valid output paths", error);
+    }
 }

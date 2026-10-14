@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 
 namespace IntelligentTradingSimulator.App.Configuration;
 
@@ -42,7 +43,29 @@ public static class BacktestSnapshotCsvCommandLineParser
             return false;
         }
 
-        filePath = exportArgs[0][(option.Length + 1)..];
+        var snapshotPath = exportArgs[0][(option.Length + 1)..];
+        if (BacktestSummaryCsvCommandLineParser.TryParse(args, out var summaryPath, out _) &&
+            summaryPath is not null)
+        {
+            try
+            {
+                var comparison = OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal;
+                if (string.Equals(Path.GetFullPath(snapshotPath), Path.GetFullPath(summaryPath), comparison))
+                {
+                    errorMessage = "Error: summary and snapshot CSV exports require different output paths.";
+                    return false;
+                }
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                errorMessage = "Error: summary and snapshot CSV exports require valid output paths.";
+                return false;
+            }
+        }
+
+        filePath = snapshotPath;
         return true;
     }
 }

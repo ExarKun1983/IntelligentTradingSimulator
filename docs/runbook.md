@@ -538,7 +538,9 @@ Alternatively, add `--export-backtest-snapshots-csv=<path>` to `--run-backtest`
 to export after the backtest succeeds. The option does not support batch variant
 export. A selected run takes precedence over `--run-backtest`, as with summary
 reporting. Summary and snapshot exports can be requested together using separate
-output paths.
+output paths. Paths are compared as absolute paths with `.` and `..` resolved
+(case-insensitively on Windows). Colliding paths are rejected before running a
+backtest or writing either export, leaving any existing output untouched.
 
 The schema is:
 
