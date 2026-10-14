@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using IntelligentTradingSimulator.App;
 using IntelligentTradingSimulator.App.Configuration;
 using IntelligentTradingSimulator.App.Simulation;
@@ -15,6 +16,12 @@ using Microsoft.Extensions.DependencyInjection;
 if (!BacktestSummaryCsvCommandLineParser.TryParse(args, out var csvFilePath, out var csvError))
 {
     Console.WriteLine(csvError);
+    return;
+}
+
+if (!BacktestSnapshotCsvCommandLineParser.TryParse(args, out var snapshotCsvFilePath, out var snapshotCsvError))
+{
+    Console.WriteLine(snapshotCsvError);
     return;
 }
 
@@ -62,6 +69,7 @@ services.AddSingleton<PortfolioRebalancingService>();
 
 services.AddSingleton<ConsoleReporter>();
 services.AddSingleton<BacktestSummaryCsvExporter>();
+services.AddSingleton<BacktestSnapshotCsvExporter>();
 services.AddScoped<MarketDataWorkflow>();
 services.AddScoped<PortfolioWorkflow>();
 services.AddScoped<SimulationRunner>();
@@ -87,6 +95,13 @@ if (backtestRunIdArg is not null &&
         backtestRunIdArg["--backtest-run-id=".Length..],
         out var backtestRunId))
 {
+    if (snapshotCsvFilePath is not null)
+    {
+        await ExportSnapshotsAsync(backtestRunId, snapshotCsvFilePath);
+        if (csvFilePath is null)
+            return;
+    }
+
     var reportService =
         scope.ServiceProvider.GetRequiredService<IBacktestSummaryReportService>();
 
@@ -168,6 +183,9 @@ if (runBacktestArg is not null)
         Console.WriteLine($"Backtest failed: {engineResult.ErrorMessage}");
         return;
     }
+
+    if (snapshotCsvFilePath is not null)
+        await ExportSnapshotsAsync(engineResult.RunId, snapshotCsvFilePath);
 
     var summaryResult = await reportService.GenerateAsync(engineResult.RunId);
     reporter.PrintBacktestSummary(summaryResult);
@@ -282,3 +300,19 @@ if (runVariantsArg is not null)
 var runner = scope.ServiceProvider.GetRequiredService<SimulationRunner>();
 
 await runner.RunAsync();
+
+async Task ExportSnapshotsAsync(int runId, string filePath)
+{
+    var runRepository = scope.ServiceProvider.GetRequiredService<IBacktestRunRepository>();
+    if (await runRepository.GetByIdAsync(runId) is null)
+    {
+        Console.WriteLine($"Backtest run {runId} was not found.");
+        return;
+    }
+
+    var snapshots = await scope.ServiceProvider.GetRequiredService<IBacktestSnapshotRepository>()
+        .GetByRunIdAsync(runId);
+    await scope.ServiceProvider.GetRequiredService<BacktestSnapshotCsvExporter>()
+        .ExportAsync(filePath, snapshots);
+    Console.WriteLine($"Backtest snapshots exported to {filePath}");
+}
