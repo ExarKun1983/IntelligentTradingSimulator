@@ -15,25 +15,31 @@ public sealed class MarketDataWorkflow
     private readonly MarketObservationAnalyzer _analyzer;
     private readonly PortfolioRecommendationService _recommendationService;
     private readonly ObservationResultRepository _observationResultRepository;
+    private readonly IFeatureSnapshotRepository _featureSnapshotRepository;
     private readonly StrategyConfiguration _strategyConfiguration;
     private readonly BacktestHistoricalMarketDataService _historicalDataService;
     private readonly IFundamentalDataProvider? _fundamentalDataProvider;
+    private readonly TimeProvider _timeProvider;
 
     public MarketDataWorkflow(
         IMarketDataProvider provider,
         MarketObservationAnalyzer analyzer,
         PortfolioRecommendationService recommendationService,
         ObservationResultRepository observationResultRepository,
+        IFeatureSnapshotRepository featureSnapshotRepository,
         StrategyConfiguration? strategyConfiguration = null,
-        IFundamentalDataProvider? fundamentalDataProvider = null)
+        IFundamentalDataProvider? fundamentalDataProvider = null,
+        TimeProvider? timeProvider = null)
     {
         _provider = provider;
         _analyzer = analyzer;
         _recommendationService = recommendationService;
         _observationResultRepository = observationResultRepository;
+        _featureSnapshotRepository = featureSnapshotRepository;
         _strategyConfiguration = strategyConfiguration ?? new StrategyConfiguration();
         _historicalDataService = new BacktestHistoricalMarketDataService(provider);
         _fundamentalDataProvider = fundamentalDataProvider;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<MarketDataResult> CollectAndAnalyzeAsync(
@@ -42,7 +48,7 @@ public sealed class MarketDataWorkflow
     {
         var results = new List<ObservationResult>();
         var prices = new Dictionary<string, decimal>();
-        var analysisDate = DateTime.Today;
+        var analysisDate = _timeProvider.GetLocalNow().Date;
         IReadOnlyList<MarketCandle> benchmarkCandles = [];
         var benchmarkSymbol = _strategyConfiguration.UseRelativeStrength
             ? _strategyConfiguration.RelativeStrengthBenchmarkSymbol
@@ -101,6 +107,8 @@ public sealed class MarketDataWorkflow
                     {
                         fundamentalData =
                             await _fundamentalDataProvider.GetFundamentalDataAsync(symbol);
+                        if (fundamentalData?.AsOfDate > DateOnly.FromDateTime(analysisDate))
+                            fundamentalData = null;
                     }
                     catch (Exception ex)
                     {
@@ -138,6 +146,7 @@ public sealed class MarketDataWorkflow
             _recommendationService.Build(rankedResults);
 
         await _observationResultRepository.SaveAsync(rankedResults);
+        await _featureSnapshotRepository.SaveAsync(rankedResults, _strategyConfiguration);
 
         var previousRun =
             await _observationResultRepository.GetPreviousRunAsync();

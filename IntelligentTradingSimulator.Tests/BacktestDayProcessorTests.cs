@@ -55,7 +55,8 @@ public sealed class BacktestDayProcessorTests : IDisposable
             allocationEngine,
             tradingEngine,
             performanceService,
-            _snapshotRepository);
+            _snapshotRepository,
+            new FeatureSnapshotRepository(_dbContext));
     }
 
     private static List<MarketCandle> BuildCandles(
@@ -74,6 +75,40 @@ public sealed class BacktestDayProcessorTests : IDisposable
                 Volume = 1_000_000m
             })
             .ToList();
+    }
+
+    [Fact]
+    public async Task ProcessAsync_PersistsAllAnalyzedStocks_WithRunContextAndNoFutureData()
+    {
+        var date = new DateTime(2024, 1, 10);
+        var provider = new FakeMarketDataProvider();
+        var candles = BuildCandles(date.AddDays(-4), 6);
+        candles[^1].Close = 1000m;
+        provider.SetData("AAPL", candles);
+        provider.SetData("MSFT", candles);
+        provider.SetData("SHORT", BuildCandles(date, 1));
+        var strategy = new StrategyConfiguration { Id = "historical", UseRelativeStrength = false };
+
+        var result = await BuildProcessor(provider, maxPositions: 1).ProcessAsync(new BacktestDayRequest
+        {
+            BacktestRunId = 10, CurrentDate = date, HistoricalStartDate = date.AddDays(-4),
+            Symbols = ["AAPL", "MSFT", "SHORT"], StrategyConfiguration = strategy,
+            Portfolio = new Portfolio { Cash = 1000m, StartingCash = 1000m }
+        });
+
+        await using var readContext = new TradingSimulatorDbContext(_options);
+        var snapshots = await new FeatureSnapshotRepository(readContext).QueryAsync(
+            new DateOnly(2024, 1, 10), new DateOnly(2024, 1, 10), strategyId: "historical", backtestRunId: 10);
+        Assert.Equal(2, snapshots.Count);
+        Assert.Single(result.Recommendations);
+        Assert.All(snapshots, snapshot =>
+        {
+            Assert.Equal(4m, snapshot.Features.MomentumPercent);
+            Assert.Null(snapshot.Features.Fundamentals);
+            Assert.Equal(result.Observations.Single(x => x.Symbol == snapshot.Symbol).Score, snapshot.Score);
+            Assert.Equal(new DateOnly(2024, 1, 10), snapshot.Features.AnalysisDate);
+        });
+        Assert.DoesNotContain(snapshots, x => x.Symbol == "SHORT");
     }
 
     [Theory]
@@ -461,6 +496,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
             new MarketObservationAnalyzer(strategy),
             new PortfolioRecommendationService(maxPositions: 2),
             repository,
+            new FeatureSnapshotRepository(_dbContext),
             strategy);
         var market = await workflow.CollectAndAnalyzeAsync(symbols, startDate);
 

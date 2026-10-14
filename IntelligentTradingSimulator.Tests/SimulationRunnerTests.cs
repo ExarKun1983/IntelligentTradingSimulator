@@ -87,7 +87,8 @@ public sealed class SimulationRunnerTests : IDisposable
                 provider,
                 new MarketObservationAnalyzer(strategy),
                 new PortfolioRecommendationService(),
-                new ObservationResultRepository(_dbContext));
+                new ObservationResultRepository(_dbContext),
+                new FeatureSnapshotRepository(_dbContext));
 
         var portfolioWorkflow =
             new PortfolioWorkflow(

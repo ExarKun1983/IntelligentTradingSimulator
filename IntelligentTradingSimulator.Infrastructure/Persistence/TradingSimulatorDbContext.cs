@@ -1,4 +1,5 @@
 ﻿using IntelligentTradingSimulator.Core.Models;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 
 namespace IntelligentTradingSimulator.Infrastructure.Persistence;
@@ -39,12 +40,38 @@ public sealed class TradingSimulatorDbContext : DbContext
     BacktestSnapshots =>
         Set<BacktestSnapshot>();
 
+    public DbSet<FeatureSnapshot> FeatureSnapshots => Set<FeatureSnapshot>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         ConfigureObservationRun(modelBuilder);
         ConfigureObservationResult(modelBuilder);
         ConfigureBacktestRun(modelBuilder);
         ConfigureBacktestSnapshot(modelBuilder);
+        ConfigureFeatureSnapshot(modelBuilder);
+    }
+
+    private static void ConfigureFeatureSnapshot(ModelBuilder modelBuilder)
+    {
+        var entity = modelBuilder.Entity<FeatureSnapshot>();
+        entity.ToTable("FeatureSnapshots");
+        entity.HasKey(x => x.Id);
+        entity.Property(x => x.Symbol).HasMaxLength(20).IsRequired();
+        entity.Property(x => x.StrategyId).HasMaxLength(100).IsRequired();
+        entity.Property(x => x.Score).HasPrecision(28, 12);
+        entity.Property(x => x.Features)
+            .HasConversion(
+                value => JsonSerializer.Serialize(value, (JsonSerializerOptions?)null),
+                value => JsonSerializer.Deserialize<StockRankingFeatures>(value, (JsonSerializerOptions?)null)!)
+            .IsRequired();
+        entity.Property(x => x.StrategyConfigurationJson).IsRequired();
+        entity.HasIndex(x => new { x.Symbol, x.AnalysisDate, x.StrategyId })
+            .IsUnique().HasFilter("[BacktestRunId] IS NULL");
+        entity.HasIndex(x => new { x.Symbol, x.AnalysisDate, x.StrategyId, x.BacktestRunId })
+            .IsUnique().HasFilter("[BacktestRunId] IS NOT NULL");
+        entity.HasIndex(x => x.AnalysisDate);
+        entity.HasOne<BacktestRun>().WithMany().HasForeignKey(x => x.BacktestRunId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 
     private static void ConfigureObservationRun(

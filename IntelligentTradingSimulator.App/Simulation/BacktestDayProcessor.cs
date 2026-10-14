@@ -18,6 +18,7 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
     private readonly TradingEngine _tradingEngine;
     private readonly PortfolioPerformanceService _performanceService;
     private readonly IBacktestSnapshotRepository _snapshotRepository;
+    private readonly IFeatureSnapshotRepository _featureSnapshotRepository;
 
     public BacktestDayProcessor(
         BacktestHistoricalMarketDataService historicalDataService,
@@ -27,7 +28,8 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
         PortfolioAllocationEngine allocationEngine,
         TradingEngine tradingEngine,
         PortfolioPerformanceService performanceService,
-        IBacktestSnapshotRepository snapshotRepository)
+        IBacktestSnapshotRepository snapshotRepository,
+        IFeatureSnapshotRepository featureSnapshotRepository)
     {
         _historicalDataService = historicalDataService;
         _analyzerFactory = analyzerFactory;
@@ -37,6 +39,7 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
         _tradingEngine = tradingEngine;
         _performanceService = performanceService;
         _snapshotRepository = snapshotRepository;
+        _featureSnapshotRepository = featureSnapshotRepository;
     }
 
     public async Task<BacktestDayResult> ProcessAsync(BacktestDayRequest request)
@@ -133,6 +136,9 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 .ToList();
 
         var recommendations = _recommendationService.Build(rankedResults);
+
+        await _featureSnapshotRepository.SaveAsync(
+            rankedResults, request.StrategyConfiguration, request.BacktestRunId);
 
         var portfolio = request.Portfolio;
 

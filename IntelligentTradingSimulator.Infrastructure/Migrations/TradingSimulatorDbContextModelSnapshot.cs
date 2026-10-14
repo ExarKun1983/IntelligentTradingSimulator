@@ -123,6 +123,65 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     b.ToTable("BacktestSnapshots", (string)null);
                 });
 
+            modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.FeatureSnapshot", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateOnly>("AnalysisDate")
+                        .HasColumnType("date");
+
+                    b.Property<int?>("BacktestRunId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("FactorContributionsJson")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("Features")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("SchemaVersion")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("Score")
+                        .HasPrecision(28, 12)
+                        .HasColumnType("decimal(28,12)");
+
+                    b.Property<string>("StrategyConfigurationJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("StrategyId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("Symbol")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AnalysisDate");
+
+                    b.HasIndex("BacktestRunId");
+
+                    b.HasIndex("Symbol", "AnalysisDate", "StrategyId")
+                        .IsUnique()
+                        .HasFilter("[BacktestRunId] IS NULL");
+
+                    b.HasIndex("Symbol", "AnalysisDate", "StrategyId", "BacktestRunId")
+                        .IsUnique()
+                        .HasFilter("[BacktestRunId] IS NOT NULL");
+
+                    b.ToTable("FeatureSnapshots", (string)null);
+                });
+
             modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.ObservationResultEntity", b =>
                 {
                     b.Property<int>("Id")
@@ -366,6 +425,14 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("BacktestRun");
+                });
+
+            modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.FeatureSnapshot", b =>
+                {
+                    b.HasOne("IntelligentTradingSimulator.Core.Models.BacktestRun", null)
+                        .WithMany()
+                        .HasForeignKey("BacktestRunId")
+                        .OnDelete(DeleteBehavior.Cascade);
                 });
 
             modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.ObservationResultEntity", b =>
