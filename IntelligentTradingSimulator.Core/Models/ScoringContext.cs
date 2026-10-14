@@ -6,6 +6,11 @@ namespace IntelligentTradingSimulator.Core.Models;
 /// </summary>
 public sealed class ScoringContext
 {
+    /// <summary>
+    /// Complete dated inputs when supplied by the analyzer; null for legacy callers.
+    /// </summary>
+    public StockRankingFeatures? Features { get; init; }
+
     public string Symbol { get; init; } = string.Empty;
 
     public decimal MomentumPercent { get; init; }

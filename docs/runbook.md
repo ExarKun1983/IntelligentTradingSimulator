@@ -47,6 +47,32 @@ In `IntelligentTradingSimulator.App/appsettings.json`, set `ConnectionStrings:Tr
 
 Use a SQL Server login with permission to create and update the application's database schema. The app project copies `appsettings.json` to its output directory. Keep real credentials local; do not commit them.
 
+## Ranking feature inputs
+
+`StockRankingFeatures` in Core represents one stock on one effective analysis
+date, with unweighted values rather than score contributions. The symbol,
+`AnalysisDate` (`DateOnly`), momentum, average volume, volume trend, volatility,
+and SMA5 comparison are required at construction. RSI, ATR, 52-week high and
+distance, benchmark symbol and Relative Strength, and fundamentals are optional.
+Missing optional values are `null`, never substituted with zero; individual
+fundamental metrics can also be missing. Percent values retain the existing
+percentage-point units; ATR and 52-week high retain price units.
+
+The analyzer creates one row, exposes it as `ObservationResult.Features`, and
+passes it through `ToScoringContext()` to the existing `IScoringEngine` boundary.
+Deterministic scorers retain their existing inputs and behavior; future scorers
+can read the complete row from `ScoringContext.Features`. Contexts and results
+constructed by legacy callers may have no feature row.
+
+The effective date is the supplied `analysisDate`, or the last strategy-window
+candle date when omitted. Callers must continue to supply appropriately bounded,
+chronological candle windows. Feature availability is independent of whether a
+scoring factor is enabled; scorer configuration still controls contributions.
+Fundamentals retain their own reporting date and missing-metric semantics; the
+row does not perform historical snapshot selection or guarantee point-in-time
+fundamental availability. Feature persistence, training, and model invocation
+are not introduced.
+
 ## Fundamental data foundation
 
 `IFundamentalDataProvider` in Core returns a provider-neutral `FundamentalData` snapshot.

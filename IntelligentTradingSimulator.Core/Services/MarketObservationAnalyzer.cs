@@ -110,28 +110,10 @@ public sealed class MarketObservationAnalyzer
             first.Date,
             analysisDate ?? last.Date);
 
-        var score =
-            _scoringEngine.CalculateScore(
-                new ScoringContext
-                {
-                    Symbol = symbol,
-                    MomentumPercent = momentum,
-                    AverageVolume = averageVolume,
-                    VolumeTrendPercent = volumeTrend,
-                    VolatilityPercent = volatility,
-                    IsAboveSma5 = isAboveSma5,
-                    Rsi = rsi,
-                    RelativeStrengthPercent = relativeStrength,
-                    DistanceFromWeek52HighPercent =
-                        week52High.DistanceFromWeek52HighPercent,
-                    Fundamentals = fundamentalData
-                },
-                out var relativeStrengthScoreContribution,
-                out var factorContributions);
-
-        return new ObservationResult
+        var features = new StockRankingFeatures
         {
             Symbol = symbol,
+            AnalysisDate = DateOnly.FromDateTime(analysisDate ?? last.Date),
             MomentumPercent = momentum,
             AverageVolume = averageVolume,
             VolumeTrendPercent = volumeTrend,
@@ -139,6 +121,30 @@ public sealed class MarketObservationAnalyzer
             IsAboveSma5 = isAboveSma5,
             Rsi = rsi,
             Atr = _atrCalculator.Calculate(candles),
+            Week52High = week52High.Week52High,
+            DistanceFromWeek52HighPercent = week52High.DistanceFromWeek52HighPercent,
+            RelativeStrengthBenchmarkSymbol = benchmarkSymbol,
+            RelativeStrengthPercent = relativeStrength,
+            Fundamentals = fundamentalData
+        };
+
+        var score =
+            _scoringEngine.CalculateScore(
+                features.ToScoringContext(),
+                out var relativeStrengthScoreContribution,
+                out var factorContributions);
+
+        return new ObservationResult
+        {
+            Features = features,
+            Symbol = symbol,
+            MomentumPercent = momentum,
+            AverageVolume = averageVolume,
+            VolumeTrendPercent = volumeTrend,
+            VolatilityPercent = volatility,
+            IsAboveSma5 = isAboveSma5,
+            Rsi = rsi,
+            Atr = features.Atr,
             Week52High = week52High.Week52High,
             DistanceFromWeek52HighPercent =
                 week52High.DistanceFromWeek52HighPercent,
