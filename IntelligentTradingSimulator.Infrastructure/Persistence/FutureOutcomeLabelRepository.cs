@@ -7,19 +7,50 @@ namespace IntelligentTradingSimulator.Infrastructure.Persistence;
 public sealed class FutureOutcomeLabelRepository(
     TradingSimulatorDbContext dbContext) : IFutureOutcomeLabelRepository
 {
+    private const int BatchSize = 500;
+
     public async Task SaveAsync(IReadOnlyList<FutureOutcomeLabel> labels)
     {
-        foreach (var label in labels.DistinctBy(x =>
-                     (x.FeatureSnapshotId, x.HorizonTradingDays, x.BenchmarkSymbol)))
+        foreach (var batch in labels
+                     .DistinctBy(x => (x.FeatureSnapshotId, x.HorizonTradingDays, x.BenchmarkSymbol.ToUpperInvariant()))
+                     .Chunk(BatchSize))
         {
-            var exists = await dbContext.FutureOutcomeLabels.AnyAsync(x =>
-                x.FeatureSnapshotId == label.FeatureSnapshotId &&
-                x.HorizonTradingDays == label.HorizonTradingDays &&
-                x.BenchmarkSymbol == label.BenchmarkSymbol);
-            if (!exists)
-                dbContext.FutureOutcomeLabels.Add(label);
+            await SaveBatchAsync(batch);
         }
-        await dbContext.SaveChangesAsync();
+    }
+
+    private async Task SaveBatchAsync(FutureOutcomeLabel[] batch)
+    {
+        if (batch.Length == 0)
+            return;
+
+        var snapshotIds = batch.Select(x => x.FeatureSnapshotId).Distinct().ToArray();
+        var horizons = batch.Select(x => x.HorizonTradingDays).Distinct().ToArray();
+        var benchmarkSymbols = batch.Select(x => x.BenchmarkSymbol).Distinct().ToArray();
+        var existingKeys = await dbContext.FutureOutcomeLabels.AsNoTracking()
+            .Where(x => snapshotIds.Contains(x.FeatureSnapshotId) &&
+                        horizons.Contains(x.HorizonTradingDays) &&
+                        benchmarkSymbols.Contains(x.BenchmarkSymbol))
+            .Select(x => new { x.FeatureSnapshotId, x.HorizonTradingDays, x.BenchmarkSymbol })
+            .ToListAsync();
+        var knownKeys = existingKeys
+            .Select(x => (x.FeatureSnapshotId, x.HorizonTradingDays, x.BenchmarkSymbol.ToUpperInvariant()))
+            .ToHashSet();
+        var newLabels = batch.Where(x => knownKeys.Add(
+            (x.FeatureSnapshotId, x.HorizonTradingDays, x.BenchmarkSymbol.ToUpperInvariant()))).ToArray();
+        if (newLabels.Length == 0)
+            return;
+
+        dbContext.FutureOutcomeLabels.AddRange(newLabels);
+        try
+        {
+            await dbContext.SaveChangesAsync();
+        }
+        finally
+        {
+            foreach (var label in newLabels)
+                dbContext.Entry(label).State = EntityState.Detached;
+        }
     }
 
     public async Task<List<FutureOutcomeLabel>> QueryAsync(

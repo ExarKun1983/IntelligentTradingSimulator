@@ -4,6 +4,8 @@ namespace IntelligentTradingSimulator.Core.Training;
 
 public static class FutureOutcomeLabelCalculator
 {
+    private const decimal MaxPersistedReturnPercent = 9999999999999999.999999999999m;
+
     public static IReadOnlyList<FutureOutcomeLabel> Calculate(
         FeatureSnapshot snapshot,
         IReadOnlyList<MarketCandle> prices,
@@ -64,7 +66,10 @@ public static class FutureOutcomeLabelCalculator
             return null;
         try
         {
-            return (end / start - 1m) * 100m;
+            var returnPercent = (end / start - 1m) * 100m;
+            return returnPercent is >= -MaxPersistedReturnPercent and <= MaxPersistedReturnPercent
+                ? returnPercent
+                : null;
         }
         catch (OverflowException)
         {

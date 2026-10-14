@@ -1,4 +1,5 @@
 using IntelligentTradingSimulator.Core.Interfaces;
+using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Training;
 
 namespace IntelligentTradingSimulator.Infrastructure.Training;
@@ -8,6 +9,8 @@ public sealed class FutureOutcomeLabelWorkflow(
     IFutureOutcomeLabelRepository labels,
     IMarketDataProvider marketData)
 {
+    private const int LabelBatchSize = 500;
+
     public async Task GenerateAsync(
         DateOnly from,
         DateOnly to,
@@ -30,6 +33,7 @@ public sealed class FutureOutcomeLabelWorkflow(
             return;
         var benchmark = await marketData.GetHistoricalDailyAsync(
             benchmarkSymbol, from.ToDateTime(TimeOnly.MinValue), availableThrough.ToDateTime(TimeOnly.MinValue));
+        var batch = new List<FutureOutcomeLabel>(LabelBatchSize);
 
         foreach (var group in stored.GroupBy(x => x.Symbol))
         {
@@ -39,8 +43,19 @@ public sealed class FutureOutcomeLabelWorkflow(
             {
                 var generated = FutureOutcomeLabelCalculator.Calculate(
                     snapshot, prices, benchmark, availableThrough, benchmarkSymbol, horizons);
-                await labels.SaveAsync(generated);
+                foreach (var label in generated)
+                {
+                    batch.Add(label);
+                    if (batch.Count == LabelBatchSize)
+                    {
+                        await labels.SaveAsync(batch);
+                        batch.Clear();
+                    }
+                }
             }
         }
+
+        if (batch.Count > 0)
+            await labels.SaveAsync(batch);
     }
 }

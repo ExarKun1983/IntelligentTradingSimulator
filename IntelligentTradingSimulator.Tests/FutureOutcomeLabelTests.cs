@@ -125,6 +125,24 @@ public sealed class FutureOutcomeLabelTests
         Assert.Empty(FutureOutcomeLabelCalculator.Calculate(Snapshot(), prices, [], LastDate(prices)));
     }
 
+    [Fact]
+    public void Calculate_ReturnOutsidePersistedDecimalRange_IsNotLabeledOrCompared()
+    {
+        var stockPrices = Prices(5);
+        stockPrices[0].Close = 0.000000000001m;
+        stockPrices[5].Close = 1000m;
+        Assert.Empty(FutureOutcomeLabelCalculator.Calculate(
+            Snapshot(), stockPrices, [], LastDate(stockPrices), horizons: [5]));
+
+        var benchmarkPrices = Prices(5);
+        benchmarkPrices[0].Close = 0.000000000001m;
+        benchmarkPrices[5].Close = 1000m;
+        var label = Assert.Single(FutureOutcomeLabelCalculator.Calculate(
+            Snapshot(), Prices(5), benchmarkPrices, LastDate(benchmarkPrices), horizons: [5]));
+        Assert.Null(label.BenchmarkReturnPercent);
+        Assert.Null(label.OutperformedBenchmark);
+    }
+
     [Theory]
     [InlineData(0, true)]
     [InlineData(5, true)]
@@ -224,6 +242,26 @@ public sealed class FutureOutcomeLabelTests
         Assert.Equal(new[] { 5, 20, 60 }, labels.Select(x => x.HorizonTradingDays));
         Assert.Equal(first.Id, labels[0].Id);
         Assert.Empty(await repository.QueryAsync(2));
+    }
+
+    [Fact]
+    public async Task Workflow_SavesBoundedBatches_AndDetachesPersistedLabels()
+    {
+        await using var context = new TradingSimulatorDbContext(
+            new DbContextOptionsBuilder<TradingSimulatorDbContext>()
+                .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        context.FeatureSnapshots.AddRange(Enumerable.Range(1, 171).Select(Snapshot));
+        await context.SaveChangesAsync();
+        var prices = Prices(60);
+        var workflow = new FutureOutcomeLabelWorkflow(
+            new FeatureSnapshotRepository(context),
+            new FutureOutcomeLabelRepository(context),
+            new HistoricalData(prices));
+
+        await workflow.GenerateAsync(Date, Date, LastDate(prices));
+
+        Assert.Equal(171 * 3, await context.FutureOutcomeLabels.CountAsync());
+        Assert.Empty(context.ChangeTracker.Entries<FutureOutcomeLabel>());
     }
 
     [Fact]
