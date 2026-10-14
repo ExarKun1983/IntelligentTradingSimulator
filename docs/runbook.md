@@ -523,6 +523,46 @@ dotnet run --project IntelligentTradingSimulator.App -- \
 
 This captures human-readable console output, not a machine-readable export.
 
+### Daily snapshot CSV export
+
+Export persisted daily snapshots for a selected run without generating a console
+summary or fetching benchmark data:
+
+```bash
+dotnet run --project IntelligentTradingSimulator.App -- \
+  --backtest-run-id=123 \
+  --export-backtest-snapshots-csv=backtest-snapshots.csv
+```
+
+Alternatively, add `--export-backtest-snapshots-csv=<path>` to `--run-backtest`
+to export after the backtest succeeds. In both modes, a snapshot-only request
+skips summary generation and summary benchmark fetching; request
+`--export-backtest-csv=<path>` as well to generate the summary. This does not skip
+market data needed to execute a new backtest. The option does not support batch variant
+export. A selected run takes precedence over `--run-backtest`, as with summary
+reporting. Summary and snapshot exports can be requested together using separate
+output paths. Paths are compared as absolute paths with `.` and `..` resolved
+(case-insensitively on Windows). Colliding paths are rejected before running a
+backtest or writing either export, leaving any existing output untouched.
+
+The schema is:
+
+```text
+Date,PortfolioValue,Cash,ProfitLoss,ReturnPercent,TradesExecuted,RebalanceExecuted
+```
+
+Each persisted snapshot produces exactly one row, ordered by date; missing days
+are not filled in and records are not aggregated or deduplicated. Values are
+exported as persisted, without recalculation. Dates use `yyyy-MM-dd`, decimals use
+invariant full-precision numbers without grouping or percent signs, and booleans
+are `true`/`false`. `ReturnPercent` is in percentage points (`10.5` means 10.5%).
+The file uses UTF-8 without a BOM, commas, and CRLF line endings.
+
+The parent directory must exist and existing files are overwritten. An existing
+run with no snapshots produces a header-only file; an unknown run prints an error
+without touching the file. Selected failed or running runs can export their
+persisted partial snapshots for investigation. File-system errors propagate.
+
 ## Trade exit reasons
 
 Sell decisions can carry an `ExitReason`: `Manual`, `Rebalance`, `StopLoss`, or

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using IntelligentTradingSimulator.App;
 using IntelligentTradingSimulator.App.Configuration;
 using IntelligentTradingSimulator.App.Simulation;
@@ -15,6 +16,12 @@ using Microsoft.Extensions.DependencyInjection;
 if (!BacktestSummaryCsvCommandLineParser.TryParse(args, out var csvFilePath, out var csvError))
 {
     Console.WriteLine(csvError);
+    return;
+}
+
+if (!BacktestSnapshotCsvCommandLineParser.TryParse(args, out var snapshotCsvFilePath, out var snapshotCsvError))
+{
+    Console.WriteLine(snapshotCsvError);
     return;
 }
 
@@ -62,10 +69,12 @@ services.AddSingleton<PortfolioRebalancingService>();
 
 services.AddSingleton<ConsoleReporter>();
 services.AddSingleton<BacktestSummaryCsvExporter>();
+services.AddSingleton<BacktestSnapshotCsvExporter>();
 services.AddScoped<MarketDataWorkflow>();
 services.AddScoped<PortfolioWorkflow>();
 services.AddScoped<SimulationRunner>();
 services.AddScoped<IBacktestSummaryReportService, BacktestSummaryReportService>();
+services.AddScoped<BacktestReportWorkflow>();
 services.AddScoped<BacktestHistoricalMarketDataService>();
 services.AddScoped<IBenchmarkDataService, BenchmarkDataService>();
 services.AddScoped<IBacktestBenchmarkService, BacktestBenchmarkService>();
@@ -87,26 +96,8 @@ if (backtestRunIdArg is not null &&
         backtestRunIdArg["--backtest-run-id=".Length..],
         out var backtestRunId))
 {
-    var reportService =
-        scope.ServiceProvider.GetRequiredService<IBacktestSummaryReportService>();
-
-    var reporter =
-        scope.ServiceProvider.GetRequiredService<ConsoleReporter>();
-
-    var result = await reportService.GenerateAsync(backtestRunId);
-    reporter.PrintBacktestSummary(result);
-    if (csvFilePath is not null && result.IsSuccess)
-    {
-        if (result.Status != BacktestRunStatus.Completed)
-        {
-            Console.WriteLine("CSV export requires a completed backtest run.");
-            return;
-        }
-
-        await scope.ServiceProvider.GetRequiredService<BacktestSummaryCsvExporter>()
-            .ExportAsync(csvFilePath, [result]);
-        Console.WriteLine($"Backtest summary exported to {csvFilePath}");
-    }
+    await scope.ServiceProvider.GetRequiredService<BacktestReportWorkflow>()
+        .RunAsync(backtestRunId, csvFilePath, snapshotCsvFilePath);
     return;
 }
 
@@ -146,8 +137,6 @@ if (runBacktestArg is not null)
 
     var requestFactory = scope.ServiceProvider.GetRequiredService<BacktestEngineRequestFactory>();
     var engine = scope.ServiceProvider.GetRequiredService<IBacktestEngine>();
-    var reportService = scope.ServiceProvider.GetRequiredService<IBacktestSummaryReportService>();
-    var reporter = scope.ServiceProvider.GetRequiredService<ConsoleReporter>();
 
     var request = requestFactory.Create(
         name: name,
@@ -169,14 +158,8 @@ if (runBacktestArg is not null)
         return;
     }
 
-    var summaryResult = await reportService.GenerateAsync(engineResult.RunId);
-    reporter.PrintBacktestSummary(summaryResult);
-    if (csvFilePath is not null && summaryResult.IsSuccess)
-    {
-        await scope.ServiceProvider.GetRequiredService<BacktestSummaryCsvExporter>()
-            .ExportAsync(csvFilePath, [summaryResult]);
-        Console.WriteLine($"Backtest summary exported to {csvFilePath}");
-    }
+    await scope.ServiceProvider.GetRequiredService<BacktestReportWorkflow>()
+        .RunAsync(engineResult.RunId, csvFilePath, snapshotCsvFilePath);
     return;
 }
 

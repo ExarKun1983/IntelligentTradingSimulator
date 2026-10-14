@@ -8,6 +8,8 @@ public interface IBacktestRunRepository
 {
     Task AddAsync(BacktestRun run);
 
+    Task<bool> ExistsAsync(int id);
+
     Task<BacktestRun?> GetByIdAsync(int id);
 
     Task UpdateAsync(BacktestRun run);
