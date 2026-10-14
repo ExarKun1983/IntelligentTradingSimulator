@@ -37,15 +37,24 @@ public sealed class FeatureSnapshotRepository(
             };
         }).DistinctBy(x => (x.Symbol, x.AnalysisDate, x.StrategyId, x.BacktestRunId)).ToList();
 
-        foreach (var snapshot in snapshots)
+        if (snapshots.Count > 0)
         {
-            var exists = await dbContext.FeatureSnapshots.AnyAsync(x =>
-                x.Symbol == snapshot.Symbol &&
-                x.AnalysisDate == snapshot.AnalysisDate &&
-                x.StrategyId == snapshot.StrategyId &&
-                x.BacktestRunId == snapshot.BacktestRunId);
-            if (!exists)
-                dbContext.FeatureSnapshots.Add(snapshot);
+            var symbols = snapshots.Select(x => x.Symbol).Distinct().ToArray();
+            var from = snapshots.Min(x => x.AnalysisDate);
+            var to = snapshots.Max(x => x.AnalysisDate);
+            var existingKeys = await dbContext.FeatureSnapshots
+                .Where(x => x.StrategyId == strategyConfiguration.Id &&
+                    x.BacktestRunId == backtestRunId &&
+                    x.AnalysisDate >= from && x.AnalysisDate <= to &&
+                    symbols.Contains(x.Symbol))
+                .Select(x => new { x.Symbol, x.AnalysisDate })
+                .ToListAsync();
+            var existing = existingKeys
+                .Select(x => (x.Symbol, x.AnalysisDate))
+                .ToHashSet();
+
+            dbContext.FeatureSnapshots.AddRange(snapshots.Where(snapshot =>
+                !existing.Contains((snapshot.Symbol, snapshot.AnalysisDate))));
         }
 
         await dbContext.SaveChangesAsync();

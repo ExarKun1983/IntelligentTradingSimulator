@@ -99,6 +99,26 @@ public sealed class FeatureSnapshotPersistenceTests
     }
 
     [Fact]
+    public async Task SaveAsync_AddsOnlyMissingSnapshotsFromBatch()
+    {
+        await using var context = new TradingSimulatorDbContext(Options());
+        var repository = new FeatureSnapshotRepository(context);
+        var strategy = new StrategyConfiguration { Id = "batch" };
+        var original = Observation();
+        await repository.SaveAsync([original], strategy);
+
+        var changed = Observation();
+        changed.Score = 999m;
+        await repository.SaveAsync([changed, Observation("MSFT"), Observation("NVDA")], strategy);
+
+        var saved = await repository.QueryAsync(Date, Date);
+        Assert.Equal(3, saved.Count);
+        Assert.Equal(original.Score, Assert.Single(saved, x => x.Symbol == "AAPL").Score);
+        Assert.Contains(saved, x => x.Symbol == "MSFT");
+        Assert.Contains(saved, x => x.Symbol == "NVDA");
+    }
+
+    [Fact]
     public async Task SaveAsync_RejectsMissingOrMismatchedFeatures_WithoutPartialWrites()
     {
         await using var context = new TradingSimulatorDbContext(Options());
