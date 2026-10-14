@@ -53,7 +53,7 @@ Benchmark reporting is distinct from relative-strength scoring: the latter suppl
 
 ### Risk-management flow
 
-1. App validates strategy settings and supplies position-count, position-weight, stop-loss, and trailing-stop configuration to the relevant services.
+1. In backtests, each request supplies its variant's stop-loss and trailing-stop percentages to rebalancing. Recommendation and allocation services are singletons initialized from the active strategy configuration, so variant-specific `MaxPositions` and `MaxPositionWeight` values do not take effect.
 2. Core recommendation/allocation services limit selection and target exposure. [PortfolioRebalancingService](IntelligentTradingSimulator.Core/Services/PortfolioRebalancingService.cs) evaluates enabled position stops before normal allocation changes.
 3. With an available positive price, rebalancing updates the position's highest price since entry, checks the fixed stop against average entry price, then checks the trailing stop against that high-water mark. A fixed stop takes precedence if both trigger. Triggered positions are sold and excluded from recommendations for that execution, preventing immediate repurchase.
 4. `TradingEngine` updates cash, positions, and trade history, including exit reasons. Rebalancing then performs ordinary allocation sells before buys.
