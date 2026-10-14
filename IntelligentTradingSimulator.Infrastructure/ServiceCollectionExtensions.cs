@@ -1,5 +1,6 @@
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Services;
+using IntelligentTradingSimulator.Core.Training;
 using IntelligentTradingSimulator.Infrastructure.MarketData;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
 using IntelligentTradingSimulator.Infrastructure.Training;
@@ -35,6 +36,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IFeatureSnapshotRepository, FeatureSnapshotRepository>();
         services.AddScoped<IFutureOutcomeLabelRepository, FutureOutcomeLabelRepository>();
         services.AddScoped<FutureOutcomeLabelWorkflow>();
+        services.AddScoped<TrainingDatasetBuilder>();
         services.AddScoped<IBacktestSummaryReportService, BacktestSummaryReportService>();
 
         services.AddSingleton<IMarketDataProvider, YahooMarketDataProvider>();
