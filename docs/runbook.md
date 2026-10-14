@@ -149,6 +149,70 @@ and `FutureOutcomeLabels` on snapshot ID. Keep that join exclusively in offline
 training code: labels are not part of `StockRankingFeatures`, snapshot payloads,
 or scoring interfaces.
 
+### Offline dataset export
+
+`TrainingDatasetBuilder` (Core training namespace) is registered by
+`AddInfrastructure`. Resolve it inside a service scope in a separate offline job,
+after capturing feature snapshots and generating outcome labels:
+
+```csharp
+var builder = scope.ServiceProvider.GetRequiredService<TrainingDatasetBuilder>();
+var dataset = await builder.BuildAsync(new TrainingDatasetQuery
+{
+    From = new DateOnly(2025, 1, 1),
+    To = new DateOnly(2025, 12, 31),
+    StrategyId = "default",
+    HorizonTradingDays = 20,
+    BenchmarkSymbol = "SPY",
+    IncludeStrategyMetadata = true
+});
+await using var output = File.Create("training-dataset.json");
+await TrainingDatasetJsonExporter.ExportAsync(dataset, output);
+```
+
+Import `IntelligentTradingSimulator.Core.Training`,
+`IntelligentTradingSimulator.Infrastructure.Training`, and
+`Microsoft.Extensions.DependencyInjection` for this example.
+The builder returns an in-memory dataset; the exporter writes UTF-8 JSON to a
+caller-owned stream and leaves it open. Neither component fetches prices,
+generates labels, trains models, or participates in live/backtest scoring.
+
+Schema version `1` has three top-level fields: `schemaVersion`, `query`, and
+`rows`. The query records every effective filter, including normalized stock and
+benchmark symbols and the strategy-metadata option. Dates are ISO `yyyy-MM-dd`;
+numbers use culture-independent JSON notation; unavailable features and benchmark
+targets remain explicit `null`, never zero.
+
+Each row represents one snapshot/horizon/benchmark combination and includes:
+
+- Source snapshot ID, feature schema version, label ID, symbol, analysis date,
+  strategy ID, and optional backtest run ID.
+- A `features` object containing the stored `StockRankingFeatures`, including
+  optional fundamentals. Future outcomes remain outside this input object.
+- Horizon in trading sessions, outcome date, stock return, benchmark symbol,
+  optional benchmark return, relative return (stock minus benchmark, in percentage
+  points), and the stored outperform flag.
+- The captured `strategyConfigurationJson` when `IncludeStrategyMetadata` is
+  true (default false). Identity fields are always included.
+
+`From`/`To` are inclusive **analysis-date** bounds; outcomes may occur after `To`.
+Omitted bounds cover all dates. Optional `Symbol`, exact `StrategyId`,
+`BacktestRunId`, `HorizonTradingDays`, and `BenchmarkSymbol` filters combine with
+AND. Omitted context filters include all contexts. Invalid ranges, blank filters,
+and non-positive horizons/run IDs are rejected.
+Only snapshots with matching stored labels produce rows; an empty result still
+exports the schema and query. Multiple horizons or benchmarks repeat features
+in separate rows. Ordering is deterministic by analysis date, ordinal symbol,
+ordinal strategy ID, run ID, snapshot ID, horizon, then ordinal benchmark.
+
+This initial builder materializes the dataset and queries labels per snapshot;
+large datasets may need a future bulk/streaming implementation. Reproducing the
+same query requires retaining the source database/data vintage: newly captured
+snapshots or labels can add rows. Keep the export as the dataset artifact, and
+group repeated snapshots together when splitting training/evaluation data.
+Use chronological splits that account for label horizons to avoid leakage across
+evaluation boundaries. There is no CLI switch for this offline service.
+
 ## Fundamental data foundation
 
 `IFundamentalDataProvider` in Core returns a provider-neutral `FundamentalData` snapshot.
