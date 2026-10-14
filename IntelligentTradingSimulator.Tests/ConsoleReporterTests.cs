@@ -2,14 +2,68 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using IntelligentTradingSimulator.App.Simulation;
+using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
+using Xunit.Abstractions;
 
 namespace IntelligentTradingSimulator.Tests;
 
 [Collection("Console output")]
 public sealed class ConsoleReporterTests
 {
+    private readonly ITestOutputHelper _output;
+
+    public ConsoleReporterTests(ITestOutputHelper output)
+    {
+        _output = output;
+    }
+
+    [Fact]
+    public void PrintMarketRanking_UsesAlternativeExplanationService()
+    {
+        var service = new AlternativeExplanationService();
+        var reporter = new ConsoleReporter(
+            new PortfolioAllocationService(), new PortfolioContributionService(), service);
+
+        var output = CaptureOutput(() => reporter.PrintMarketRanking(
+            [new ObservationResult { Symbol = "TEST", Score = 42m }]));
+
+        Assert.Contains("Explanation: Alternative narrative for TEST at rank 1.", output);
+    }
+
+    private sealed class AlternativeExplanationService : IStockRankingExplanationService
+    {
+        public StockRankingExplanation Explain(ObservationResult observation, int? rank = null, ObservationResult? previous = null) =>
+            new(observation.Symbol, observation.Score, rank,
+                $"Alternative narrative for {observation.Symbol} at rank {rank}.", [], [], []);
+    }
+
+    [Fact]
+    public void PrintMarketRanking_ExplainsActualRankInputsAndScoreDrivers()
+    {
+        var candles = Enumerable.Range(0, 5).Select(index => new MarketCandle
+        {
+            Date = new DateTime(2026, 1, 1).AddDays(index),
+            Close = 100m + index, High = 101m + index, Low = 99m + index, Volume = 1000m
+        }).ToList();
+        var observation = new MarketObservationAnalyzer(
+            new StrategyConfiguration { MomentumScoreWeight = 1m }).Analyze("TEST", candles);
+
+        var output = CaptureOutput(() => CreateReporter().PrintMarketRanking(
+            [observation, new ObservationResult { Symbol = "CUSTOM", Score = -10m }]));
+        _output.WriteLine(output);
+
+        Assert.Contains("Explanation: TEST ranked #1 has score", output);
+        Assert.Contains("Momentum: 4%; increased score by 4 points.", output);
+        Assert.Contains("Largest positive contribution: SMA5 (+5 points)", output);
+        Assert.Contains("Largest negative contribution: Volatility", output);
+        Assert.Contains("RSI: N/A; unavailable; no score contribution reported", output);
+        Assert.Contains("Explanation: CUSTOM ranked #2 has score -10 points.", output);
+        Assert.Contains("Factor breakdown unavailable; ranking causes cannot be determined", output);
+        Assert.Contains("Risk context: ATR=N/A", output);
+    }
+
     [Fact]
     public void PrintMarketRanking_ShowsQualityPenaltyAndThresholdExplanation()
     {

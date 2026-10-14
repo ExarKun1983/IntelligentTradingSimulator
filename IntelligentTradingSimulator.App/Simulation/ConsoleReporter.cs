@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
 
@@ -11,13 +12,16 @@ public sealed class ConsoleReporter
 {
     private readonly PortfolioAllocationService _allocationService;
     private readonly PortfolioContributionService _contributionService;
+    private readonly IStockRankingExplanationService _explanationService;
 
     public ConsoleReporter(
         PortfolioAllocationService allocationService,
-        PortfolioContributionService contributionService)
+        PortfolioContributionService contributionService,
+        IStockRankingExplanationService? explanationService = null)
     {
         _allocationService = allocationService;
         _contributionService = contributionService;
+        _explanationService = explanationService ?? new StockRankingExplanationService();
     }
 
     public void PrintMarketRanking(
@@ -27,8 +31,9 @@ public sealed class ConsoleReporter
         Console.WriteLine("===== MARKET RANKING =====");
         Console.WriteLine();
 
-        foreach (var result in rankedResults)
+        for (var index = 0; index < rankedResults.Count; index++)
         {
+            var result = rankedResults[index];
             Console.WriteLine(
                 $"{result.Symbol}" +
                 $" | Momentum={result.MomentumPercent:N2}%" +
@@ -54,6 +59,13 @@ public sealed class ConsoleReporter
                         $"{factor.Factor}={(factor.Contribution.HasValue ? factor.Contribution.Value.ToString("G29") : "N/A")} [{factor.Status}]" +
                         (factor.Explanation is null ? "" : $" ({factor.Explanation})"))));
             }
+
+            var explanation = _explanationService.Explain(result, index + 1);
+            Console.WriteLine($"  Explanation: {explanation.Summary}");
+            foreach (var factor in explanation.Factors)
+                Console.WriteLine($"    {factor.Narrative}");
+            foreach (var context in explanation.Context)
+                Console.WriteLine($"    {context}");
 
             var fundamentals = result.Fundamentals;
             var asOfDate = fundamentals?.AsOfDate?.ToString("yyyy-MM-dd") ?? "N/A";
