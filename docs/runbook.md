@@ -70,8 +70,34 @@ chronological candle windows. Feature availability is independent of whether a
 scoring factor is enabled; scorer configuration still controls contributions.
 Fundamentals retain their own reporting date and missing-metric semantics; the
 row does not perform historical snapshot selection or guarantee point-in-time
-fundamental availability. Feature persistence, training, and model invocation
-are not introduced.
+fundamental availability. Training and model invocation are not introduced.
+
+### Daily feature snapshots
+
+Apply the `AddFeatureSnapshots` migration before running analysis. Normal analysis
+and each backtest day save every successfully analyzed stock, not just recommended
+stocks, to `FeatureSnapshots`. Insufficient-history and failed analyses produce no
+snapshot. Backtests retain their simulated date and run ID and do not fetch live
+fundamentals; candle date cutoffs remain unchanged. Normal analysis discards
+fundamentals with a known reporting date after the analysis date. Unknown reporting
+dates remain unknown and do not establish historical publication availability.
+
+The indexed identity is the normalized stock symbol (trimmed, uppercase), analysis
+date, strategy ID, and optional backtest run ID. Normal analysis has no run ID.
+Repeated saves retain the first snapshot for that identity, including its original
+score/configuration; use distinct strategy IDs for distinct configurations. SQL
+Server unique indexes enforce this identity, including normal-analysis rows with
+a null run ID. Concurrent duplicate inserts can fail the unique constraint rather
+than overwrite history.
+
+`IFeatureSnapshotRepository.QueryAsync(from, to, symbol, strategyId, backtestRunId)`
+returns detached rows in date/symbol/strategy/run order, with inclusive date bounds
+and optional filters. Omitted filters include all contexts. The version-1 JSON
+feature payload reuses `StockRankingFeatures` and preserves optional nulls and
+decimal factor values. Rows also retain the strategy configuration JSON, optional
+factor-contribution JSON, and nullable deterministic score (`decimal(28,12)`).
+The schema version allows future payload evolution; no future-outcome labels are
+generated. Deleting a backtest run cascades to its feature snapshots.
 
 ## Fundamental data foundation
 

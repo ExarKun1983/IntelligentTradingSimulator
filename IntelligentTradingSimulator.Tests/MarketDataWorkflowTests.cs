@@ -26,6 +26,51 @@ public sealed class MarketDataWorkflowTests : IDisposable
 
     public void Dispose() => _dbContext.Dispose();
 
+    [Fact]
+    public async Task CollectAndAnalyzeAsync_PersistsDatedFeatures_WithoutFutureInputs()
+    {
+        var date = new DateTime(2024, 1, 10);
+        var candles = BuildCandles(date.AddDays(-4), 5);
+        candles.Add(new MarketCandle
+        {
+            Date = date.AddDays(1), Close = 1000m, High = 2000m, Low = 1m, Volume = 100m
+        });
+        var strategy = new StrategyConfiguration { Id = "daily", UseRelativeStrength = false };
+        var fundamentals = new FakeFundamentalDataProvider(new Dictionary<string, FundamentalData?>
+        {
+            ["TEST"] = new FundamentalData
+            {
+                Symbol = "TEST", AsOfDate = new DateOnly(2024, 1, 11), RevenueGrowthPercent = 999m
+            }
+        });
+        var workflow = new MarketDataWorkflow(
+            new FakeMarketDataProvider(candles),
+            new MarketObservationAnalyzer(strategy),
+            new PortfolioRecommendationService(),
+            new ObservationResultRepository(_dbContext),
+            new FeatureSnapshotRepository(_dbContext),
+            strategy, fundamentals, new FixedTimeProvider(date));
+
+        var result = await workflow.CollectAndAnalyzeAsync(["TEST"], date.AddDays(-4));
+        await workflow.CollectAndAnalyzeAsync(["TEST"], date.AddDays(-4));
+
+        await using var readContext = new TradingSimulatorDbContext(_options);
+        var snapshot = Assert.Single(await new FeatureSnapshotRepository(readContext)
+            .QueryAsync(new DateOnly(2024, 1, 10), new DateOnly(2024, 1, 10), "TEST", "daily"));
+        var observation = Assert.Single(result.RankedResults);
+        Assert.Equal(observation.Score, snapshot.Score);
+        Assert.Equal(4m, snapshot.Features.MomentumPercent);
+        Assert.Null(snapshot.Features.Fundamentals);
+        Assert.Null(snapshot.BacktestRunId);
+        Assert.Equal(observation.Features!.AnalysisDate, snapshot.AnalysisDate);
+    }
+
+    private sealed class FixedTimeProvider(DateTime date) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(DateTime.SpecifyKind(date, DateTimeKind.Utc));
+        public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -47,6 +92,7 @@ public sealed class MarketDataWorkflowTests : IDisposable
         Assert.Empty(result.RankedResults);
         Assert.Empty(result.Recommendations);
         Assert.Equal(108m, result.Prices["TEST"]);
+        Assert.Empty(_dbContext.FeatureSnapshots);
     }
 
     [Theory]
@@ -93,6 +139,7 @@ public sealed class MarketDataWorkflowTests : IDisposable
                 new MarketObservationAnalyzer(strategy),
                 new PortfolioRecommendationService(),
                 new ObservationResultRepository(context),
+                new FeatureSnapshotRepository(context),
                 strategy);
             var result = await marketWorkflow.CollectAndAnalyzeAsync(["TEST"], date.AddDays(-10));
             Assert.Empty(result.RankedResults);
@@ -507,6 +554,7 @@ public sealed class MarketDataWorkflowTests : IDisposable
             new MarketObservationAnalyzer(strategy),
             new PortfolioRecommendationService(),
             new ObservationResultRepository(_dbContext),
+            new FeatureSnapshotRepository(_dbContext),
             strategy,
             fundamentalDataProvider);
     }
