@@ -26,8 +26,12 @@ public sealed class MarketDataWorkflowTests : IDisposable
 
     public void Dispose() => _dbContext.Dispose();
 
-    [Fact]
-    public async Task CollectAndAnalyzeAsync_PersistsDatedFeatures_WithoutFutureInputs()
+    [Theory]
+    [InlineData(ScoringEngineType.Composite)]
+    [InlineData(ScoringEngineType.RuleBased)]
+    [InlineData(ScoringEngineType.AI)]
+    public async Task CollectAndAnalyzeAsync_PersistsDatedFeatures_WithoutFutureInputs(
+        ScoringEngineType scoringEngine)
     {
         var date = new DateTime(2024, 1, 10);
         var candles = BuildCandles(date.AddDays(-4), 5);
@@ -35,7 +39,10 @@ public sealed class MarketDataWorkflowTests : IDisposable
         {
             Date = date.AddDays(1), Close = 1000m, High = 2000m, Low = 1m, Volume = 100m
         });
-        var strategy = new StrategyConfiguration { Id = "daily", UseRelativeStrength = false };
+        var strategy = new StrategyConfiguration
+        {
+            Id = "daily", UseRelativeStrength = false, ScoringEngine = scoringEngine
+        };
         var fundamentals = new FakeFundamentalDataProvider(new Dictionary<string, FundamentalData?>
         {
             ["TEST"] = new FundamentalData
@@ -45,7 +52,7 @@ public sealed class MarketDataWorkflowTests : IDisposable
         });
         var workflow = new MarketDataWorkflow(
             new FakeMarketDataProvider(candles),
-            new MarketObservationAnalyzer(strategy),
+            new MarketObservationAnalyzer(ScoringEngineFactory.Create(strategy)),
             new PortfolioRecommendationService(),
             new ObservationResultRepository(_dbContext),
             new FeatureSnapshotRepository(_dbContext),

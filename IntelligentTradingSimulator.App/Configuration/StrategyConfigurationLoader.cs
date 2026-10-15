@@ -70,15 +70,18 @@ public static class StrategyConfigurationLoader
 
     private static StrategyConfiguration BindAndValidate(string id, IConfigurationSection section)
     {
-        if (section["ScoringEngine"] is { } engineName && string.IsNullOrWhiteSpace(engineName))
+        var scoringEngine = ScoringEngineType.Composite;
+        if (section["ScoringEngine"] is { } engineName &&
+            (!Enum.TryParse(engineName.Trim(), ignoreCase: true, out scoringEngine) ||
+             !Enum.IsDefined(scoringEngine) ||
+             !string.Equals(engineName.Trim(), scoringEngine.ToString(), StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException(
                 $"Configuration value 'Strategies:{id}:ScoringEngine' must be Composite, RuleBased or AI.");
 
         var config = new StrategyConfiguration
         {
             Id = id,
-            ScoringEngine = section.GetValue<ScoringEngineType?>("ScoringEngine")
-                ?? ScoringEngineType.Composite,
+            ScoringEngine = scoringEngine,
             MaxPositions = section.GetValue<int?>("MaxPositions")
                 ?? StrategyConfiguration.DefaultMaxPositions,
             MaxPositionWeight = section.GetValue<decimal?>("MaxPositionWeight")
@@ -131,10 +134,6 @@ public static class StrategyConfigurationLoader
                 ?? QualityFilterAction.Neutral,
             QualityPenalty = section.GetValue<decimal?>("QualityPenalty") ?? 5m
         };
-
-        if (!Enum.IsDefined(config.ScoringEngine))
-            throw new InvalidOperationException(
-                $"Configuration value 'Strategies:{id}:ScoringEngine' must be Composite, RuleBased or AI.");
 
         foreach (var (name, action) in new[]
         {
