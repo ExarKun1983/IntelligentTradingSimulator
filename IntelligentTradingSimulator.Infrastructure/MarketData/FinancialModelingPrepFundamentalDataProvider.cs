@@ -50,11 +50,11 @@ public sealed class FinancialModelingPrepFundamentalDataProvider : IFundamentalD
 
         var growthUri = new Uri(
             baseUri,
-            $"api/v3/financial-growth/{encodedSymbol}?limit=1&apikey={encodedApiKey}");
+            $"stable/financial-growth?symbol={encodedSymbol}&limit=1&apikey={encodedApiKey}");
 
         var ratiosUri = new Uri(
             baseUri,
-            $"api/v3/ratios/{encodedSymbol}?limit=1&apikey={encodedApiKey}");
+            $"stable/ratios?symbol={encodedSymbol}&limit=1&apikey={encodedApiKey}");
 
         var growthTask = FetchEndpointAsync(growthUri, cancellationToken);
         var ratiosTask = FetchEndpointAsync(ratiosUri, cancellationToken);
@@ -138,7 +138,7 @@ public sealed class FinancialModelingPrepFundamentalDataProvider : IFundamentalD
             }
 
             var rawDebt = GetDecimalProperty(
-                ratiosElement.Value, "debtEquityRatio", "debtEquityRatioTTM", "debtToEquity");
+                ratiosElement.Value, "debtToEquityRatio", "debtEquityRatio", "debtEquityRatioTTM", "debtToEquity");
             if (rawDebt.HasValue)
             {
                 debt = rawDebt.Value;

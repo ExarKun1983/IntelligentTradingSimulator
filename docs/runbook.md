@@ -307,7 +307,12 @@ these snapshots must not be used as point-in-time backtest data.
 
 ### External provider: FinancialModelingPrep
 
-`FinancialModelingPrepFundamentalDataProvider` implements `IFundamentalDataProvider` to fetch fundamental metrics directly from FinancialModelingPrep (FMP) APIs (`financial-growth` and `ratios` endpoints).
+`FinancialModelingPrepFundamentalDataProvider` implements `IFundamentalDataProvider` to fetch fundamental metrics directly from the current FinancialModelingPrep (FMP) stable API endpoints:
+
+- `/stable/financial-growth?symbol={SYMBOL}&limit=1&apikey={API_KEY}`
+- `/stable/ratios?symbol={SYMBOL}&limit=1&apikey={API_KEY}`
+
+Both requests run in parallel, using the normalized uppercase symbol and URL-encoded symbol and API key. The configured `BaseUrl` and request timeout remain supported.
 
 Configure the FMP credentials and settings in `appsettings.json`:
 
@@ -326,6 +331,16 @@ Configure the FMP credentials and settings in `appsettings.json`:
 `RequestTimeoutSeconds` defaults to 10 and must be between 1 and 30 seconds. When the growth and ratios endpoints report different period-end dates, only metrics from the newer period are returned; if both dates are missing, no snapshot is returned.
 
 Never commit real API keys to source control. When configured with an API key, `FinancialModelingPrepFundamentalDataProvider` is registered in DI as the `IFundamentalDataProvider` implementation. If the API key is unconfigured or empty, fundamental data fetching is skipped during ranking workflows. In the market data ranking workflow, provider failures or missing data for individual stocks are handled safely without breaking the full ranking flow.
+
+For manual verification with a valid FMP account, set `$env:FMP_API_KEY` securely in your local environment, then run:
+
+```powershell
+$encodedApiKey = [Uri]::EscapeDataString($env:FMP_API_KEY.Trim())
+Invoke-RestMethod "https://financialmodelingprep.com/stable/ratios?symbol=MSFT&limit=1&apikey=$encodedApiKey"
+Invoke-RestMethod "https://financialmodelingprep.com/stable/financial-growth?symbol=MSFT&limit=1&apikey=$encodedApiKey"
+```
+
+Configure the application API key separately in your local `appsettings.json` as shown above (never commit the key), then run the normal ranking workflow. Supported symbols should show populated `Fundamentals: AsOf=... | RevGrowth=... | EpsGrowth=... | Margins=... | Debt=...` values rather than provider-failure warnings. Values and reporting dates depend on account coverage and the current FMP response. Growth and net profit margin fractions are converted to percentage points (for example, `0.125` becomes `12.5`); debt remains a debt-to-equity ratio. If endpoint reporting dates differ, only metrics from the newer period are used.
 
 Provider failures print an English console warning with the affected symbol and exception type, then ranking continues without fundamentals for that stock. Exception messages are omitted because they may contain credential-bearing request URLs.
 
