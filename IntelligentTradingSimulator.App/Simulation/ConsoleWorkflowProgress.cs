@@ -19,7 +19,7 @@ public sealed class ConsoleWorkflowProgress : IWorkflowProgress, IDisposable
     private OperationScope? _operation;
     private long? _lastOutput;
     private bool _disposed;
-    private bool _heartbeatStopped;
+    private bool _outputFailed;
 
     public ConsoleWorkflowProgress(
         TextWriter? output = null,
@@ -116,23 +116,13 @@ public sealed class ConsoleWorkflowProgress : IWorkflowProgress, IDisposable
     {
         lock (_gate)
         {
-            if (_disposed || _heartbeatStopped || _operation is null || !CanWrite())
+            if (_disposed || _outputFailed || _operation is null || !CanWrite())
             {
                 return;
             }
 
-            try
-            {
-                Write("Still waiting for completion");
-                return;
-            }
-            catch (Exception exception) when (exception is IOException or ObjectDisposedException)
-            {
-                _heartbeatStopped = true;
-            }
+            Write("Still waiting for completion");
         }
-
-        _timer.Dispose();
     }
 
     private bool CanWrite() => !_lastOutput.HasValue
@@ -140,6 +130,11 @@ public sealed class ConsoleWorkflowProgress : IWorkflowProgress, IDisposable
 
     private void Write(string message)
     {
+        if (_outputFailed)
+        {
+            return;
+        }
+
         var now = _timeProvider.GetTimestamp();
         var parts = new List<string> { message };
         Add(parts, "Workflow", _context.Workflow);
@@ -157,8 +152,16 @@ public sealed class ConsoleWorkflowProgress : IWorkflowProgress, IDisposable
         }
 
         Add(parts, "Workflow elapsed", FormatElapsed(_started, now));
-        _output.WriteLine(string.Join(" | ", parts).Replace('\r', ' ').Replace('\n', ' '));
-        _lastOutput = now;
+        try
+        {
+            _output.WriteLine(string.Join(" | ", parts).Replace('\r', ' ').Replace('\n', ' '));
+            _lastOutput = now;
+        }
+        catch (Exception exception) when (exception is IOException or ObjectDisposedException)
+        {
+            _outputFailed = true;
+            _timer.Dispose();
+        }
     }
 
     private string FormatElapsed(long started, long now) =>

@@ -21,6 +21,10 @@ current stage. Available context includes strategy, run, variant, date, and symb
 A heartbeat means the command is still waiting or working, not a guarantee that an external
 provider or database is responsive.
 
+Progress output is best-effort: if its writer reports an I/O error or is disposed,
+further progress output and heartbeats stop without interrupting data retrieval,
+financial calculations, or persistence.
+
 Backtest date percentages count inclusive calendar dates, including weekends, rather than
 trading sessions. Simulation completion is separate from command completion: summaries,
 benchmark calculations, and CSV exports may still be running after the simulation reaches

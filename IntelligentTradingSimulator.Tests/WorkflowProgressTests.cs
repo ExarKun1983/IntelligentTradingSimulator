@@ -256,23 +256,39 @@ public sealed class WorkflowProgressTests
         Assert.EndsWith(Environment.NewLine, output.ToString());
     }
 
-    [Fact]
-    public void FailedOperationAnnouncement_DoesNotLeaveAnOrphanHeartbeat()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void SynchronousOutputFailure_StopsOutputWithoutInterruptingScopesOrReports(
+        bool objectDisposed, bool reportFails)
     {
         var time = new ManualTimeProvider();
-        using var output = new FailOnceWriter();
+        using var output = new FailOnceProgressWriter(
+            reportFails ? "Explicit update" : "Starting Loading data", objectDisposed);
         using var progress = new ConsoleWorkflowProgress(output, time);
-        Assert.Throws<IOException>(() => progress.BeginOperation("Loading data"));
+        using (progress.BeginOperation("Loading data"))
+        {
+            progress.Report("Explicit update", force: true);
+            Assert.True(output.Failed);
+            Assert.True(time.Timer!.IsDisposed);
+            progress.Context = new WorkflowProgressContext { CompletedSymbols = 1 };
+            time.Timer.FireQueuedCallback();
+        }
+
+        var closedOutput = output.ToString();
         time.Advance(TimeSpan.FromSeconds(5));
-        Assert.Empty(output.ToString());
         using (progress.BeginOperation("Loading data")) { }
-        Assert.Contains("Starting Loading data", output.ToString());
+        progress.Report("Finished", force: true);
+        Assert.Equal(1, progress.Context.CompletedSymbols);
+        Assert.Equal(closedOutput, output.ToString());
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void HeartbeatOutputFailure_StopsTimerWithoutSwallowingSynchronousOutputErrors(bool writerDisposed)
+    public void HeartbeatOutputFailure_StopsTimerAndSubsequentOutput(bool writerDisposed)
     {
         var time = new ManualTimeProvider();
         using var output = new HeartbeatFailureWriter(writerDisposed);
@@ -284,15 +300,9 @@ public sealed class WorkflowProgressTests
         time.Timer.FireQueuedCallback();
         time.Advance(TimeSpan.FromSeconds(20));
         Assert.Equal(2, output.WriteAttempts);
-        var exception = Record.Exception(() => progress.Report("Explicit update", force: true));
-        if (writerDisposed)
-        {
-            Assert.IsType<ObjectDisposedException>(exception);
-        }
-        else
-        {
-            Assert.IsType<IOException>(exception);
-        }
+        progress.Report("Explicit update", force: true);
+        using (progress.BeginOperation("Next operation")) { }
+        Assert.Equal(2, output.WriteAttempts);
     }
 
     [Fact]
@@ -314,22 +324,6 @@ public sealed class WorkflowProgressTests
         output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
 
     private static string LastLine(StringWriter output) => Lines(output)[^1];
-
-    private sealed class FailOnceWriter : StringWriter
-    {
-        private bool _failed;
-
-        public override void WriteLine(string? value)
-        {
-            if (!_failed)
-            {
-                _failed = true;
-                throw new IOException("Output unavailable");
-            }
-
-            base.WriteLine(value);
-        }
-    }
 
     private sealed class HeartbeatFailureWriter(bool writerDisposed) : StringWriter
     {
@@ -416,5 +410,26 @@ public sealed class WorkflowProgressTests
                 return ValueTask.CompletedTask;
             }
         }
+    }
+}
+
+internal sealed class FailOnceProgressWriter(string failingMessage, bool objectDisposed) : StringWriter
+{
+    public bool Failed { get; private set; }
+
+    public override void WriteLine(string? value)
+    {
+        if (!Failed && value?.Contains(failingMessage, StringComparison.Ordinal) == true)
+        {
+            Failed = true;
+            if (objectDisposed)
+            {
+                throw new ObjectDisposedException(nameof(FailOnceProgressWriter));
+            }
+
+            throw new IOException("Output unavailable");
+        }
+
+        base.WriteLine(value);
     }
 }

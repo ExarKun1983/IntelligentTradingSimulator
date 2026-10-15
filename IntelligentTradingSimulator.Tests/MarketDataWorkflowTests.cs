@@ -139,6 +139,73 @@ public sealed class MarketDataWorkflowTests : IDisposable
     }
 
     [Theory]
+    [InlineData("Starting Fetching price data", false)]
+    [InlineData("Starting Fetching price data", true)]
+    [InlineData("Starting Fetching fundamental data", false)]
+    [InlineData("Starting Fetching fundamental data", true)]
+    [InlineData("Symbols processed:", false)]
+    [InlineData("Symbols processed:", true)]
+    [InlineData("Starting Saving observations", false)]
+    [InlineData("Starting Saving observations", true)]
+    public async Task CollectAndAnalyzeAsync_ProgressOutputFailurePreservesProviderCallsRankingsAndPersistence(
+        string failingMessage, bool objectDisposed)
+    {
+        var date = new DateTime(2024, 1, 10);
+        var candles = BuildCandles(date.AddDays(-4), 5);
+        using var output = new FailOnceProgressWriter(failingMessage, objectDisposed);
+        using var progress = new ConsoleWorkflowProgress(output, interval: TimeSpan.FromDays(1));
+        var provider = new FakeMarketDataProvider(new Dictionary<string, IReadOnlyList<MarketCandle>>
+        {
+            ["BBB"] = candles,
+            ["AAA"] = candles
+        });
+        var fundamentalCalls = new List<string>();
+        var fundamentals = new CallbackFundamentalDataProvider(symbol =>
+        {
+            fundamentalCalls.Add(symbol);
+            return Task.FromResult<FundamentalData?>(new FundamentalData
+            {
+                Symbol = symbol, AsOfDate = DateOnly.FromDateTime(date), RevenueGrowthPercent = 10m
+            });
+        });
+        var strategy = new StrategyConfiguration { UseRelativeStrength = false };
+        var analyzer = new MarketObservationAnalyzer(strategy);
+        var workflow = new MarketDataWorkflow(
+            provider, analyzer, new PortfolioRecommendationService(),
+            new ObservationResultRepository(_dbContext), new FeatureSnapshotRepository(_dbContext),
+            strategy, fundamentals, new FixedTimeProvider(date), progress);
+
+        var result = await workflow.CollectAndAnalyzeAsync(["BBB", "AAA"], date.AddDays(-4));
+
+        Assert.True(output.Failed);
+        Assert.Equal(new[] { "BBB", "AAA" }, provider.Calls);
+        Assert.Equal(provider.Calls, fundamentalCalls);
+        Assert.Equal(new[] { "AAA", "BBB" }, result.RankedResults.Select(x => x.Symbol));
+        Assert.Equal(2, progress.Context.CompletedSymbols);
+        Assert.Equal(2, result.Recommendations.Count);
+        Assert.All(result.RankedResults, observation =>
+        {
+            var expected = analyzer.Analyze(observation.Symbol, candles, candles, [], null, date,
+                new FundamentalData
+                {
+                    Symbol = observation.Symbol, AsOfDate = DateOnly.FromDateTime(date),
+                    RevenueGrowthPercent = 10m
+                });
+            Assert.Equal(expected.Score, observation.Score);
+            Assert.Equal(expected.FactorContributions, observation.FactorContributions);
+            Assert.Equal(104m, result.Prices[observation.Symbol]);
+        });
+        await using var readContext = new TradingSimulatorDbContext(_options);
+        Assert.Single(await readContext.ObservationRuns.ToListAsync());
+        var saved = await readContext.ObservationResults.OrderBy(x => x.RankPosition).ToListAsync();
+        Assert.Equal(result.RankedResults.Select(x => (x.Symbol, x.Score)),
+            saved.Select(x => (x.Symbol, x.Score)));
+        var features = await readContext.FeatureSnapshots.OrderBy(x => x.Symbol).ToListAsync();
+        Assert.Equal(result.RankedResults.Select(x => (x.Symbol, (decimal?)x.Score)),
+            features.Select(x => (x.Symbol, x.Score)));
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(1)]
     [InlineData(2)]

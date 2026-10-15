@@ -528,12 +528,19 @@ public sealed class BacktestDayProcessorTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task RunAsync_PersistsAutomaticStopLossExit_InFreshContext(bool progressEnabled)
+    [InlineData(false, null, false)]
+    [InlineData(true, null, false)]
+    [InlineData(true, "Starting Fetching price data", false)]
+    [InlineData(true, "Starting Fetching price data", true)]
+    [InlineData(true, "Starting Saving final backtest result", false)]
+    [InlineData(true, "Starting Saving final backtest result", true)]
+    public async Task RunAsync_PersistsAutomaticStopLossExit_InFreshContext(
+        bool progressEnabled, string? failingMessage, bool objectDisposed)
     {
         var startDate = new DateTime(2024, 1, 1);
-        using var output = new System.IO.StringWriter();
+        using var output = failingMessage is null
+            ? new System.IO.StringWriter()
+            : new FailOnceProgressWriter(failingMessage, objectDisposed);
         using var progress = progressEnabled
             ? new ConsoleWorkflowProgress(output, interval: TimeSpan.FromDays(1))
             : null;
@@ -568,7 +575,11 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.Equal(
             new[] { "AddRun", "SaveFeatures", "AddSnapshot", "SaveFeatures", "AddSnapshot", "UpdateRun" },
             repositories.Calls);
-        if (progressEnabled)
+        if (output is FailOnceProgressWriter failingOutput)
+        {
+            Assert.True(failingOutput.Failed);
+        }
+        else if (progressEnabled)
         {
             Assert.Contains("Starting Fetching price data", output.ToString());
             Assert.Contains("Simulation complete", output.ToString());
@@ -583,6 +594,10 @@ public sealed class BacktestDayProcessorTests : IDisposable
         await using var readContext = new TradingSimulatorDbContext(_options);
         var savedRun = await new BacktestRunRepository(readContext).GetByIdAsync(result.RunId);
         Assert.NotNull(savedRun?.Portfolio);
+        Assert.Equal(BacktestRunStatus.Completed, savedRun.Status);
+        Assert.Equal(result.FinalCapital, savedRun.FinalCapital);
+        Assert.Equal(result.TotalProfit, savedRun.TotalProfit);
+        Assert.Equal(result.TotalReturnPercent, savedRun.TotalReturnPercent);
         Assert.Empty(savedRun.Portfolio.Positions);
         var buy = Assert.Single(savedRun.Portfolio.Trades, x => x.Action == TradeActionType.Buy);
         var sell = Assert.Single(savedRun.Portfolio.Trades, x => x.Action == TradeActionType.Sell);
@@ -590,6 +605,13 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.Equal(90m, sell.Price);
         Assert.Equal(buy.Quantity, sell.Quantity);
         Assert.Equal(ExitReason.StopLoss, sell.ExitReason);
+        Assert.Equal(new[] { TradeActionType.Buy, TradeActionType.Sell },
+            savedRun.Portfolio.Trades.Select(trade => trade.Action));
+        var expectedQuantity = Math.Round(10_000m / 109m, 4, MidpointRounding.AwayFromZero);
+        Assert.Equal(expectedQuantity, buy.Quantity);
+        var expectedFinalCapital = Math.Round(expectedQuantity * 90m, 4);
+        Assert.Equal(expectedFinalCapital, result.FinalCapital);
+        Assert.Equal(expectedFinalCapital - 10_000m, result.TotalProfit);
         Assert.Equal(savedRun.FinalCapital, Math.Round(savedRun.Portfolio.Cash, 4));
         Assert.Single(await readContext.Trades.AsNoTracking()
             .Where(x => x.PortfolioId == savedRun.PortfolioId && x.ExitReason == ExitReason.StopLoss)
