@@ -949,8 +949,9 @@ dotnet run --project IntelligentTradingSimulator.App --configuration Release -- 
 ```
 
 Both options require a non-empty path and may occur only once. Export requires
-input, output must differ from input, and tuning cannot be combined with backtest
-execution/report/export modes. Invalid input exits with a nonzero status.
+input, output must be a new file (existing files and link aliases are never
+overwritten), and tuning cannot be combined with backtest execution/report/export
+modes. Invalid input exits with a nonzero status.
 The input is a JSON `StrategyTuningRequest` (camelCase or PascalCase properties;
 enum names or numbers). For example, two illustrative, not investment-recommended
 variants using default parameters except for Stop Loss:

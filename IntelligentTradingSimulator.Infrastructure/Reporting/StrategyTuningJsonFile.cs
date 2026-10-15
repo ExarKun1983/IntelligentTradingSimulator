@@ -26,7 +26,7 @@ public static class StrategyTuningJsonFile
         string path, StrategyTuningReport report, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(report);
-        await using var destination = File.Create(path);
+        await using var destination = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         await JsonSerializer.SerializeAsync(destination, report, Options, cancellationToken);
     }
 }

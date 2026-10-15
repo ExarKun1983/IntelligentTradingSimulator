@@ -97,6 +97,27 @@ public class StrategyTuningWorkflowTests : IDisposable
         Assert.Equal(original, await File.ReadAllTextAsync(path));
     }
 
+    [Fact]
+    public async Task RunAsync_PreservesExistingExportFile()
+    {
+        var input = await WriteRequestAsync();
+        var output = Path.Combine(_directory, "existing.json");
+        await File.WriteAllTextAsync(output, "existing research");
+        await Assert.ThrowsAsync<IOException>(() => _workflow.RunAsync(input, output));
+        Assert.Equal("existing research", await File.ReadAllTextAsync(output));
+    }
+
+    [Fact]
+    public async Task RunAsync_PreservesInputWhenOutputIsSymbolicLink()
+    {
+        var input = await WriteRequestAsync();
+        var original = await File.ReadAllTextAsync(input);
+        var output = Path.Combine(_directory, "alias.json");
+        File.CreateSymbolicLink(output, input);
+        await Assert.ThrowsAsync<IOException>(() => _workflow.RunAsync(input, output));
+        Assert.Equal(original, await File.ReadAllTextAsync(input));
+    }
+
     [Theory]
     [InlineData("null")]
     [InlineData("{invalid")]
