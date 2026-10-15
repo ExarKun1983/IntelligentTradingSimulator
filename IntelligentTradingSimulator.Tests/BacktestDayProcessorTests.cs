@@ -79,6 +79,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
 
     [Theory]
     [InlineData(ScoringEngineType.Composite)]
+    [InlineData(ScoringEngineType.RuleBased)]
     [InlineData(ScoringEngineType.AI)]
     public async Task ProcessAsync_PersistsAllAnalyzedStocks_WithRunContextAndNoFutureData(
         ScoringEngineType scoringEngine)
@@ -115,6 +116,11 @@ public sealed class BacktestDayProcessorTests : IDisposable
             Assert.Equal(new DateOnly(2024, 1, 10), snapshot.Features.AnalysisDate);
         });
         Assert.DoesNotContain(snapshots, x => x.Symbol == "SHORT");
+        var ranking = new MarketObservationAnalyzer(ScoringEngineFactory.Create(strategy))
+            .Analyze("AAPL", candles.Take(5).ToArray());
+        var backtest = result.Observations.Single(x => x.Symbol == "AAPL");
+        Assert.Equal(ranking.Score, backtest.Score);
+        Assert.Equal(ranking.FactorContributions, backtest.FactorContributions);
     }
 
     [Theory]
