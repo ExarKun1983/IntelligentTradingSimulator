@@ -22,7 +22,7 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
                 "date": "2025-12-31",
                 "symbol": "AAPL",
                 "revenueGrowth": 0.125,
-                "epsgrowth": 0.082
+                "epsGrowth": 0.082
               }
             ]
             """;
@@ -33,7 +33,7 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
                 "date": "2025-12-31",
                 "symbol": "AAPL",
                 "netProfitMargin": 0.235,
-                "debtEquityRatio": 1.45
+                "debtToEquityRatio": 1.45
               }
             ]
             """;

@@ -138,7 +138,7 @@ public sealed class FinancialModelingPrepFundamentalDataProvider : IFundamentalD
             }
 
             var rawDebt = GetDecimalProperty(
-                ratiosElement.Value, "debtEquityRatio", "debtEquityRatioTTM", "debtToEquity");
+                ratiosElement.Value, "debtToEquityRatio", "debtEquityRatio", "debtEquityRatioTTM", "debtToEquity");
             if (rawDebt.HasValue)
             {
                 debt = rawDebt.Value;
