@@ -93,6 +93,26 @@ public class StrategyTuningAnalysisServiceTests
     }
 
     [Fact]
+    public void Analyze_AcceptsCapitalAndReturnWithIndependentFourDecimalRounding()
+    {
+        const decimal initialCapital = 100.123456m;
+        const decimal finalCapital = 112.3456m;
+        var reportedReturn = Math.Round((finalCapital - initialCapital) / initialCapital * 100m, 4);
+        var roundedInitialCapital = Math.Round(initialCapital, 4);
+        var roundedRun = Run(1, returns: reportedReturn);
+        roundedRun.Summary.StartCapital = roundedInitialCapital;
+        roundedRun.Summary.FinalCapital = finalCapital;
+
+        var otherRun = Run(2, "other", 1m);
+        otherRun.Summary.StartCapital = roundedInitialCapital;
+        otherRun.Summary.FinalCapital = Math.Round(roundedInitialCapital * 1.01m, 4);
+
+        var report = _service.Analyze(new StrategyTuningRequest { Runs = [roundedRun, otherRun] });
+
+        Assert.Equal(reportedReturn, report.Analyses.Single(analysis => analysis.BacktestRunId == 1).Metrics.ReturnPercent);
+    }
+
+    [Fact]
     public void Analyze_UnderperformanceAndBenchmarkMatch_AreWeaknesses()
     {
         var report = _service.Analyze(new StrategyTuningRequest { Runs = [Run(1, returns: 9m), Run(2, returns: 10m)] });
@@ -157,6 +177,7 @@ public class StrategyTuningAnalysisServiceTests
     [InlineData("negative-trades")]
     [InlineData("missing-date")]
     [InlineData("inconsistent-relative-return")]
+    [InlineData("capital-return")]
     [InlineData("null-benchmark")]
     public void Analyze_RejectsInvalidOrIncomparableCompletedRuns(string invalid)
     {
@@ -179,6 +200,7 @@ public class StrategyTuningAnalysisServiceTests
                 run.Summary.BenchmarkComparisons = [new() { Symbol = "SPY", BenchmarkReturnPercent = 10m,
                     StrategyReturnPercent = 20m, RelativeReturnPercent = 50m, AlphaPercent = 50m }];
                 break;
+            case "capital-return": run.Summary.FinalCapital = 50m; break;
             case "null-benchmark": run.Summary.BenchmarkComparisons = [null!]; break;
         }
         Assert.Throws<ArgumentException>(() => _service.Analyze(new StrategyTuningRequest { Runs = [run, Run(2)] }));

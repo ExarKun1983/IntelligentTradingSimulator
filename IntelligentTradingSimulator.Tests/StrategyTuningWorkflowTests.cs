@@ -1,6 +1,8 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using IntelligentTradingSimulator.App.Configuration;
 using IntelligentTradingSimulator.App.Simulation;
+using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
 using IntelligentTradingSimulator.Infrastructure.Reporting;
@@ -142,15 +144,55 @@ public class StrategyTuningWorkflowTests : IDisposable
             StrategyTuningJsonFile.ReadAsync(Path.Combine(_directory, "missing.json")));
     }
 
-    private async Task<string> WriteRequestAsync()
+    [Fact]
+    public async Task ReadAsync_RequiresDrawdownEvidenceForCompletedRuns()
+    {
+        var input = await WriteRequestAsync();
+        await RemoveDrawdownAsync(input);
+
+        await Assert.ThrowsAsync<JsonException>(() => StrategyTuningJsonFile.ReadAsync(input));
+    }
+
+    [Theory]
+    [InlineData(BacktestRunStatus.Failed, false)]
+    [InlineData(BacktestRunStatus.Running, true)]
+    public async Task ReadAsync_AllowsOmittedDrawdownForFailedOrIncompleteRuns(
+        BacktestRunStatus status, bool isSuccess)
+    {
+        var input = await WriteRequestAsync(status, isSuccess);
+        await RemoveDrawdownAsync(input);
+
+        var request = await StrategyTuningJsonFile.ReadAsync(input);
+
+        Assert.Equal(status, request.Runs[0].Summary.Status);
+        Assert.Equal(0m, request.Runs[0].Summary.MaxDrawdownPercent);
+    }
+
+    private async Task<string> WriteRequestAsync(
+        BacktestRunStatus firstStatus = BacktestRunStatus.Completed, bool firstIsSuccess = true)
     {
         var path = Path.Combine(_directory, "input.json");
+        var runs = new[]
+        {
+            StrategyTuningAnalysisServiceTests.Run(1, "safe"),
+            StrategyTuningAnalysisServiceTests.Run(2, "risky", 30m, 25m)
+        };
+        runs[0].Summary.Status = firstStatus;
+        runs[0].Summary.IsSuccess = firstIsSuccess;
         var request = new StrategyTuningRequest
         {
             BenchmarkSymbol = " spy ",
-            Runs = [StrategyTuningAnalysisServiceTests.Run(1, "safe"), StrategyTuningAnalysisServiceTests.Run(2, "risky", 30m, 25m)]
+            Runs = runs
         };
         await File.WriteAllTextAsync(path, JsonSerializer.Serialize(request));
         return path;
+    }
+
+    private static async Task RemoveDrawdownAsync(string path)
+    {
+        var root = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
+        var runs = root["Runs"]!.AsArray();
+        runs[0]!["Summary"]!.AsObject().Remove("MaxDrawdownPercent");
+        await File.WriteAllTextAsync(path, root.ToJsonString());
     }
 }

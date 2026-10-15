@@ -1000,9 +1000,12 @@ objects that would fill omitted parameters with current code defaults.
 At least two uniquely identified runs are required; strategy IDs may repeat.
 Completed runs must share exact dates, positive initial capital, and the selected
 benchmark's return when available. Configuration IDs must match strategy IDs.
-Invalid metrics, duplicate run IDs/selected benchmarks, and inconsistent selected
-benchmark return differences are rejected. Failed/incomplete runs remain visible
-but unranked and unanalyzed. Ties use ordinal strategy ID, then ascending run ID.
+Their capital values must also agree with reported return, allowing for independent
+four-decimal rounding. JSON inputs must explicitly include `maxDrawdownPercent` for
+completed runs; failed/incomplete runs may omit it and remain visible but unranked
+and unanalyzed. Invalid metrics, duplicate run IDs/selected benchmarks, and
+inconsistent selected benchmark return differences are rejected. Ties use ordinal
+strategy ID, then ascending run ID.
 
 High-performing means return **strictly exceeds** the nonnegative research
 minimum and outperforms the selected benchmark. High-risk means positive maximum

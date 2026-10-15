@@ -9,6 +9,9 @@ namespace IntelligentTradingSimulator.Core.Services;
 public sealed class StrategyTuningAnalysisService(
     IStrategyComparisonReportService comparisonService) : IStrategyTuningAnalysisService
 {
+    private const decimal CapitalRoundingHalfUnit = 0.00005m;
+    private const decimal ReturnRoundingHalfUnit = 0.00005m;
+
     public StrategyTuningReport Analyze(StrategyTuningRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -38,6 +41,8 @@ public sealed class StrategyTuningAnalysisService(
                 summary.BenchmarkComparisons is null ||
                 summary.BenchmarkComparisons.Any(b => b is null || string.IsNullOrWhiteSpace(b.Symbol)))
                 throw new ArgumentException("Completed runs require valid dates, capital, and risk/trade metrics.", nameof(request));
+            if (!HasConsistentReturn(summary))
+                throw new ArgumentException("Completed runs must have capital values consistent with their reported return.", nameof(request));
             var cohort = completed[0].Summary;
             if (summary.StartDate != cohort.StartDate || summary.EndDate != cohort.EndDate ||
                 summary.StartCapital != cohort.StartCapital)
@@ -136,6 +141,20 @@ public sealed class StrategyTuningAnalysisService(
 
     private static bool IsCompleted(BacktestSummaryReportResult summary) =>
         summary.IsSuccess && summary.Status == BacktestRunStatus.Completed;
+
+    private static bool HasConsistentReturn(BacktestSummaryReportResult summary)
+    {
+        var minimumStartCapital = summary.StartCapital - CapitalRoundingHalfUnit;
+        if (minimumStartCapital <= 0m)
+            return false;
+
+        var minimumReturn = ((summary.FinalCapital - CapitalRoundingHalfUnit) /
+                            (summary.StartCapital + CapitalRoundingHalfUnit) - 1m) * 100m;
+        var maximumReturn = ((summary.FinalCapital + CapitalRoundingHalfUnit) /
+                            minimumStartCapital - 1m) * 100m;
+        return summary.ReturnPercent >= minimumReturn - ReturnRoundingHalfUnit &&
+               summary.ReturnPercent <= maximumReturn + ReturnRoundingHalfUnit;
+    }
 
     private static string Format(decimal value) => value.ToString("0.##", CultureInfo.InvariantCulture);
 }
