@@ -121,6 +121,53 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.DoesNotContain("Symbols processed:", output.ToString());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProcessAsync_ConsoleProgressWarnsOncePerRunForPartialDataAndUnavailableBenchmark(bool benchmarkThrows)
+    {
+        var date = new DateTime(2024, 1, 10);
+        using var output = new System.IO.StringWriter();
+        using var progress = new ConsoleWorkflowProgress(output, interval: TimeSpan.FromDays(1));
+        var provider = new FakeMarketDataProvider { ThrowForSymbol = benchmarkThrows ? "SPY" : null };
+        provider.SetData("PASS", BuildCandles(date.AddDays(-4), 6));
+        provider.SetData("SHORT", BuildCandles(date, 1));
+        var processor = BuildProcessor(provider, progress: progress);
+
+        foreach (var runId in new[] { 7, 8 })
+        {
+            for (var day = 0; day < 2; day++)
+            {
+                await processor.ProcessAsync(new BacktestDayRequest
+                {
+                    BacktestRunId = runId, CurrentDate = date.AddDays(day),
+                    HistoricalStartDate = date.AddDays(-4),
+                    Portfolio = new Portfolio { StartingCash = 1000m, Cash = 1000m },
+                    StrategyConfiguration = new StrategyConfiguration
+                    {
+                        UseRelativeStrength = true, RelativeStrengthBenchmarkSymbol = "SPY"
+                    },
+                    Symbols = ["PASS", "SHORT"]
+                });
+            }
+        }
+
+        var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var partialWarnings = lines.Where(x => x.StartsWith("Partial market data:")).ToList();
+        var benchmarkWarnings = lines.Where(x => x.StartsWith("Benchmark data unavailable for SPY")).ToList();
+        Assert.Equal(2, partialWarnings.Count);
+        Assert.Equal(2, benchmarkWarnings.Count);
+        Assert.All(partialWarnings, line =>
+            Assert.Contains("1 analyzed, 1 skipped, 0 failed", line));
+        for (var index = 0; index < 2; index++)
+        {
+            Assert.Contains($"Run: {7 + index}", partialWarnings[index]);
+            Assert.Contains($"Run: {7 + index}", benchmarkWarnings[index]);
+        }
+        Assert.Equal(new[] { "SPY", "PASS", "SHORT", "SPY", "PASS", "SHORT" }, provider.Calls);
+        Assert.Equal(4, await _dbContext.BacktestSnapshots.CountAsync());
+    }
+
     [Fact]
     public async Task ProcessAsync_ProgressScopesCachedRetrievalsAndCountsEverySymbolOutcome()
     {

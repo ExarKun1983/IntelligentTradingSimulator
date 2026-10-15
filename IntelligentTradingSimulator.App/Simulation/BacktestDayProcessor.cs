@@ -20,6 +20,8 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
     private readonly IBacktestSnapshotRepository _snapshotRepository;
     private readonly IFeatureSnapshotRepository _featureSnapshotRepository;
     private readonly IWorkflowProgress _progress;
+    private int? _partialDataWarningRunId;
+    private int? _benchmarkWarningRunId;
 
     public BacktestDayProcessor(
         BacktestHistoricalMarketDataService historicalDataService,
@@ -72,11 +74,15 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                     request.HistoricalStartDate,
                     request.CurrentDate,
                     request.CurrentDate);
+                if (benchmarkCandles.Count == 0)
+                {
+                    ReportBenchmarkUnavailable(benchmarkSymbol, request.BacktestRunId);
+                }
             }
             catch (Exception)
             {
                 Console.WriteLine($"Backtest: benchmark data unavailable for {benchmarkSymbol}.");
-                _progress.Report($"Benchmark data unavailable for {benchmarkSymbol}");
+                ReportBenchmarkUnavailable(benchmarkSymbol, request.BacktestRunId);
             }
         }
 
@@ -158,6 +164,14 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             }
         }
 
+        if ((skipped > 0 || failed > 0) && _partialDataWarningRunId != request.BacktestRunId)
+        {
+            _partialDataWarningRunId = request.BacktestRunId;
+            _progress.Report(
+                $"Partial market data: {succeeded} analyzed, {skipped} skipped, {failed} failed",
+                force: true);
+        }
+
         List<ObservationResult> rankedResults;
         IReadOnlyList<StockRecommendation> recommendations;
         using (_progress.BeginOperation("Building rankings"))
@@ -236,5 +250,16 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             Recommendations = recommendations,
             Observations = rankedResults
         };
+    }
+
+    private void ReportBenchmarkUnavailable(string symbol, int runId)
+    {
+        if (_benchmarkWarningRunId == runId)
+        {
+            return;
+        }
+
+        _benchmarkWarningRunId = runId;
+        _progress.Report($"Benchmark data unavailable for {symbol}", force: true);
     }
 }
