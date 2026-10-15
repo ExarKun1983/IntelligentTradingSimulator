@@ -13,6 +13,30 @@ using IntelligentTradingSimulator.Infrastructure.Reporting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
+if (!StrategyTuningCommandLineParser.TryParse(args, out var tuningInput, out var tuningOutput, out var tuningError))
+{
+    Console.WriteLine(tuningError);
+    Environment.ExitCode = 1;
+    return;
+}
+
+if (tuningInput is not null)
+{
+    try
+    {
+        await new StrategyTuningReportWorkflow(
+                new StrategyTuningAnalysisService(new StrategyComparisonReportService()))
+            .RunAsync(tuningInput, tuningOutput);
+    }
+    catch (Exception exception) when (exception is System.IO.IOException or UnauthorizedAccessException or
+                                    System.Text.Json.JsonException or ArgumentException)
+    {
+        Console.WriteLine($"Tuning analysis failed: {exception.Message}");
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 if (!BacktestSummaryCsvCommandLineParser.TryParse(args, out var csvFilePath, out var csvError))
 {
     Console.WriteLine(csvError);
