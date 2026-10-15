@@ -48,7 +48,8 @@ public sealed class OfflineModelEvaluationService(
                 row.Features.Fundamentals?.AsOfDate > row.AnalysisDate)
                 throw new ArgumentException("Invalid or future-dated feature/label data.", nameof(dataset));
         }
-        if (selected.GroupBy(row => (row.AnalysisDate, row.BacktestRunId, row.Symbol)).Any(group => group.Count() > 1))
+        if (selected.GroupBy(row => (row.AnalysisDate, row.BacktestRunId, Symbol: row.Symbol.Trim().ToUpperInvariant()))
+            .Any(group => group.Count() > 1))
             throw new ArgumentException("Duplicate symbols in an evaluation cohort.", nameof(dataset));
 
         var baseline = new CompositeScoringEngine(baselineConfiguration);

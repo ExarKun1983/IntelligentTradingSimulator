@@ -151,10 +151,13 @@ public class OfflineModelEvaluationTests
     [InlineData("outcome")]
     [InlineData("schema")]
     [InlineData("duplicate")]
+    [InlineData("duplicate-case")]
+    [InlineData("duplicate-whitespace")]
     public void Evaluate_RejectsInvalidRowsBeforeAnyScoring(string invalid)
     {
         var calls = 0;
-        var bad = Row("B", 1m, 2m,
+        var badSymbol = invalid is "duplicate-case" or "duplicate-whitespace" ? "AAPL" : "B";
+        var bad = Row(badSymbol, 1m, 2m,
             featureDate: invalid == "feature-date" ? Date.AddDays(1) : null,
             featureSymbol: invalid == "symbol" ? "OTHER" : null,
             fundamentalDate: invalid == "fundamentals" ? Date.AddDays(1) : null,
@@ -163,6 +166,10 @@ public class OfflineModelEvaluationTests
         var rows = new[] { Row("A", 1m, 2m), bad }.ToList();
         if (invalid == "duplicate")
             rows.Add(bad);
+        if (invalid == "duplicate-case")
+            rows.Add(Row("aapl", 1m, 2m));
+        if (invalid == "duplicate-whitespace")
+            rows.Add(Row(" AAPL ", 1m, 2m));
         Assert.Throws<ArgumentException>(() => Evaluate(rows, adapter: new Adapter(_ => { calls++; return 1m; })));
         Assert.Equal(0, calls);
     }
