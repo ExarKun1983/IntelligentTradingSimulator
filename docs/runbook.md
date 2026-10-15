@@ -924,6 +924,108 @@ Unreported publication timing and upstream feature leakage cannot be inferred
 or repaired by this evaluator. No claim of real-world investment performance
 is made.
 
+### Offline strategy tuning research
+
+`IStrategyTuningAnalysisService.Analyze(StrategyTuningRequest)` accepts multiple
+historical `BacktestSummaryReportResult` values, each paired with an optional
+historical `StrategyConfiguration`. Obtain summaries through
+`IBacktestSummaryReportService.GenerateAsync(runId)` and supply the parameter
+snapshots actually used for those runs. Backtest run records do not store those
+snapshots: do not substitute today's active configuration or infer parameters
+from a strategy name. Missing snapshots are reported and cannot be promising
+parameter candidates. No new backtests or external AI calls are made.
+
+The initial assistant is deterministic (`heuristic-v1`), not a trained optimizer.
+It reuses comparison return ranking and benchmark/risk metrics. Versioned JSON
+and a replaceable analysis interface support future optimization consumers
+without granting permission to change or deploy strategies.
+
+For database-free console analysis and optional JSON export:
+
+```bash
+dotnet run --project IntelligentTradingSimulator.App --configuration Release -- \
+  --tuning-input=/tmp/tuning-request.json \
+  --export-tuning-json=/tmp/tuning-research.json
+```
+
+Both options require a non-empty path and may occur only once. Export requires
+input, output must be a new file (existing files and link aliases are never
+overwritten), and tuning cannot be combined with backtest execution/report/export
+modes. Invalid input exits with a nonzero status.
+The input is a JSON `StrategyTuningRequest` (camelCase or PascalCase properties;
+enum names or numbers). For example, two illustrative, not investment-recommended
+variants using default parameters except for Stop Loss:
+
+```json
+{
+  "schemaVersion": 1,
+  "benchmarkSymbol": "SPY",
+  "minimumReturnPercent": 0,
+  "highRiskDrawdownPercent": 20,
+  "runs": [
+    {
+      "configuration": { "id": "stop-5", "stopLossPercent": 5 },
+      "summary": {
+        "backtestRunId": 1, "strategyId": "stop-5",
+        "isSuccess": true, "status": "Completed",
+        "startDate": "2025-01-01", "endDate": "2025-12-31",
+        "startCapital": 100000, "finalCapital": 115000, "returnPercent": 15,
+        "maxDrawdownPercent": 8, "recoveryTimeDays": 20, "tradesCount": 12,
+        "benchmarkComparisons": [
+          { "symbol": "SPY", "strategyReturnPercent": 15,
+            "benchmarkReturnPercent": 10, "relativeReturnPercent": 5, "alphaPercent": 5 }
+        ]
+      }
+    },
+    {
+      "configuration": { "id": "stop-10", "stopLossPercent": 10 },
+      "summary": {
+        "backtestRunId": 2, "strategyId": "stop-10",
+        "isSuccess": true, "status": "Completed",
+        "startDate": "2025-01-01", "endDate": "2025-12-31",
+        "startCapital": 100000, "finalCapital": 125000, "returnPercent": 25,
+        "maxDrawdownPercent": 25, "recoveryTimeDays": null, "tradesCount": 14,
+        "benchmarkComparisons": [
+          { "symbol": "SPY", "strategyReturnPercent": 25,
+            "benchmarkReturnPercent": 10, "relativeReturnPercent": 15, "alphaPercent": 15 }
+        ]
+      }
+    }
+  ]
+}
+```
+
+For actual research, serialize complete historical configurations, not partial
+objects that would fill omitted parameters with current code defaults.
+At least two uniquely identified runs are required; strategy IDs may repeat.
+Completed runs must share exact dates, positive initial capital, and the selected
+benchmark's return when available. Configuration IDs must match strategy IDs.
+Their capital values must also agree with reported return, allowing for independent
+four-decimal rounding. JSON inputs must explicitly include `maxDrawdownPercent` for
+completed runs; failed/incomplete runs may omit it and remain visible but unranked
+and unanalyzed. Invalid metrics, duplicate run IDs/selected benchmarks, and
+inconsistent selected benchmark return differences are rejected. Ties use ordinal
+strategy ID, then ascending run ID.
+
+High-performing means return **strictly exceeds** the nonnegative research
+minimum and outperforms the selected benchmark. High-risk means positive maximum
+drawdown **reaches or exceeds** the configured threshold (default 20%, allowed
+range `(0, 100]`). A high-performing run can also be high-risk. Promising requires
+high performance, below-threshold drawdown, executed trades, no unrecovered
+maximum drawdown, a parameter snapshot, and at least two completed runs.
+Missing benchmark evidence prevents high-performance/promising flags rather than
+silently assuming zero benchmark return. These are screening rules, not an
+overall winner or a forecast.
+
+Console/JSON output includes parameter combinations, return ranks, metrics,
+strengths, weaknesses, thresholds, and limitations. It never mutates parameters.
+Aggregate metrics cannot prove the parameter changes caused performance or
+verify matching universes, transaction costs, or historical data provenance.
+Researchers must check those assumptions and repeat evaluation on held-out
+periods; #57's offline scoring evaluation remains a separate complementary
+workflow, not evidence automatically supplied by this analysis. Future automated
+search, model-driven advice, and production deployment are not implemented.
+
 ## Verify local setup
 
 From the repository root, restore, build, and test the solution using the SDK configured in `global.json`. The tests use in-memory databases and do not require a running SQL Server or Yahoo Finance access:
