@@ -219,6 +219,27 @@ public sealed class BacktestEngineTests : IDisposable
         Assert.Equal(result.FinalCapital, saved.FinalCapital);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_RunCreatedProgressOutputFailureDoesNotAbandonRun(bool objectDisposed)
+    {
+        var progress = new OutputFailingProgress(
+            failingReport: "Backtest run created",
+            failingOperation: null,
+            CreateOutputException(objectDisposed));
+        var engine = new BacktestEngine(_runRepository, new StubDayProcessor(), progress);
+
+        var result = await engine.RunAsync(
+            BuildRequest(new DateTime(2024, 4, 1), new DateTime(2024, 4, 1)));
+
+        Assert.Equal(BacktestRunStatus.Completed, result.Status);
+
+        var saved = await _runRepository.GetByIdAsync(result.RunId);
+        Assert.NotNull(saved);
+        Assert.Equal(BacktestRunStatus.Completed, saved.Status);
+    }
+
     [Fact]
     public async Task RunAsync_MarksRunFailedWhenDayProcessorThrows()
     {
@@ -231,6 +252,31 @@ public sealed class BacktestEngineTests : IDisposable
         var result = await engine.RunAsync(BuildRequest(startDate, endDate));
 
         Assert.Equal(BacktestRunStatus.Failed, result.Status);
+
+        var saved = await _runRepository.GetByIdAsync(result.RunId);
+        Assert.NotNull(saved);
+        Assert.Equal(BacktestRunStatus.Failed, saved.Status);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_PersistsFailureWhenFailureProgressOutputFails(bool objectDisposed)
+    {
+        var date = new DateTime(2024, 5, 1);
+        var progress = new OutputFailingProgress(
+            failingReport: "Simulation failed",
+            failingOperation: "Marking backtest failed",
+            CreateOutputException(objectDisposed));
+        var engine = new BacktestEngine(
+            _runRepository,
+            new ThrowingDayProcessor(date),
+            progress);
+
+        var result = await engine.RunAsync(BuildRequest(date, date));
+
+        Assert.Equal(BacktestRunStatus.Failed, result.Status);
+        Assert.Equal("Simulated day processing failure.", result.ErrorMessage);
 
         var saved = await _runRepository.GetByIdAsync(result.RunId);
         Assert.NotNull(saved);
@@ -567,6 +613,43 @@ public sealed class BacktestEngineTests : IDisposable
 
         public IDisposable BeginOperation(string operation, string? symbol = null) =>
             NoopScope.Instance;
+
+        private sealed class NoopScope : IDisposable
+        {
+            public static NoopScope Instance { get; } = new();
+
+            public void Dispose()
+            {
+            }
+        }
+
+    }
+
+    private static Exception CreateOutputException(bool objectDisposed) =>
+        objectDisposed
+            ? new ObjectDisposedException("progress")
+            : new IOException("Progress output is unavailable.");
+
+    private sealed class OutputFailingProgress(
+        string? failingReport,
+        string? failingOperation,
+        Exception exception) : IWorkflowProgress
+    {
+        public WorkflowProgressContext Context { get; set; } = new();
+
+        public void Report(string message, bool force = false)
+        {
+            if (message == failingReport)
+                throw exception;
+        }
+
+        public IDisposable BeginOperation(string operation, string? symbol = null)
+        {
+            if (operation == failingOperation)
+                throw exception;
+
+            return NoopScope.Instance;
+        }
 
         private sealed class NoopScope : IDisposable
         {

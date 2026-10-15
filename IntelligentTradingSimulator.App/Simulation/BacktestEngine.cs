@@ -57,7 +57,7 @@ public sealed class BacktestEngine : IBacktestEngine
             await _runRepository.AddAsync(run);
         }
         _progress.Context = _progress.Context with { RunId = run.Id };
-        _progress.Report("Backtest run created", force: true);
+        ReportBestEffort("Backtest run created");
 
         var portfolio = new Portfolio
         {
@@ -133,11 +133,11 @@ public sealed class BacktestEngine : IBacktestEngine
         }
         catch (Exception ex)
         {
-            using (_progress.BeginOperation("Marking backtest failed"))
+            using (BeginOperationBestEffort("Marking backtest failed"))
             {
                 await _runRepository.MarkFailedAsync(run.Id);
             }
-            _progress.Report("Simulation failed", force: true);
+            ReportBestEffort("Simulation failed");
 
             return new BacktestEngineResult
             {
@@ -150,14 +150,64 @@ public sealed class BacktestEngine : IBacktestEngine
             };
         }
 
+        ReportBestEffort("Simulation complete");
+
+        return result;
+    }
+
+    private IDisposable BeginOperationBestEffort(string operation)
+    {
         try
         {
-            _progress.Report("Simulation complete", force: true);
+            return new BestEffortProgressScope(_progress.BeginOperation(operation));
+        }
+        catch (IOException)
+        {
+            return NoopProgressScope.Instance;
+        }
+        catch (ObjectDisposedException)
+        {
+            return NoopProgressScope.Instance;
+        }
+    }
+
+    private void ReportBestEffort(string message)
+    {
+        try
+        {
+            _progress.Report(message, force: true);
         }
         catch (IOException)
         {
         }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
 
-        return result;
+    private sealed class BestEffortProgressScope(IDisposable scope) : IDisposable
+    {
+        public void Dispose()
+        {
+            try
+            {
+                scope.Dispose();
+            }
+            catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+    }
+
+    private sealed class NoopProgressScope : IDisposable
+    {
+        public static NoopProgressScope Instance { get; } = new();
+
+        public void Dispose()
+        {
+        }
     }
 }
