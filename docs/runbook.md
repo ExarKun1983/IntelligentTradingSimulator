@@ -849,6 +849,81 @@ portfolio; their trade history cannot be reconstructed.
 This records reasons supplied by callers; the current application does not yet
 implement stop-loss or trailing-stop triggers. No new exit rules are introduced.
 
+## Offline model evaluation
+
+Use `TrainingDatasetBuilder.BuildAsync` to load stored historical features and
+labels, then `OfflineModelEvaluationService.Evaluate` to score them in memory.
+This is a library workflow, not a new CLI mode; neither evaluation nor report
+export fetches market data, trains a model, or makes deployment decisions.
+
+```csharp
+var dataset = await datasetBuilder.BuildAsync(new TrainingDatasetQuery
+{
+    From = new DateOnly(2025, 1, 1),
+    To = new DateOnly(2025, 3, 31),
+    StrategyId = "default",
+    HorizonTradingDays = 5,
+    BenchmarkSymbol = "SPY"
+});
+var baseline = new StrategyConfiguration();
+var evaluator = new OfflineModelEvaluationService(
+    new AiScoringEngine(baseline), baseline);
+var report = evaluator.Evaluate(dataset, new OfflineEvaluationRequest
+{
+    ModelId = "composite-placeholder-v1",
+    TrainingCutoff = new DateOnly(2024, 12, 31),
+    OutcomeCutoff = new DateOnly(2025, 4, 10),
+    TopCount = 10
+});
+await using var output = File.Create("offline-evaluation.json");
+await OfflineEvaluationJsonExporter.ExportAsync(report, output);
+```
+
+The types above are in `IntelligentTradingSimulator.Core.Training`,
+`IntelligentTradingSimulator.Core.Models`, `IntelligentTradingSimulator.Core.Services`,
+and `IntelligentTradingSimulator.Infrastructure.Training`.
+Replace the AI engine's `scoringAdapter` with a fixed local model adapter to
+evaluate a real model; the default placeholder deliberately matches composite
+scoring. The baseline always uses `CompositeScoringEngine` with the supplied
+configuration, regardless of that configuration's engine selector.
+
+Choose one strategy, label horizon, and benchmark per query. Date bounds are
+inclusive. Evaluation must start strictly after `TrainingCutoff`, and end on or
+before `OutcomeCutoff`. Rows with outcomes beyond that cutoff or outside the
+query are excluded and counted. Feature dates/symbols must match their rows;
+future-dated fundamentals, non-forward outcomes, unsupported schemas, and
+duplicate symbols within a date/run cohort are rejected before any scoring.
+Only features reach either scorer, never outcome labels.
+
+Metrics are calculated separately for model and baseline:
+
+- Directional accuracy is the percentage of eligible rows whose score sign
+  matches the forward-return sign; zero only matches zero. Ranking scores are
+  not necessarily return forecasts, so interpret this as a sign diagnostic.
+- Rank correlation is Spearman correlation using average ranks for ties,
+  calculated per analysis date/backtest run and averaged equally across valid
+  cohorts. Singleton or constant-rank cohorts have no correlation and do not
+  enter the mean; the report includes the valid cohort count.
+- Top forward return is the arithmetic mean of forward returns for up to
+  `TopCount` eligible selections per date/run, ordered by descending score then
+  ordinal symbol. Each selection has equal weight; this is not a portfolio
+  backtest or compounded return.
+
+The disqualification sentinel is excluded independently from each engine's
+metrics and selections, but retained in report rows. Empty metrics are `null`,
+not zero. Versioned JSON includes the query, model ID, cutoffs, baseline
+configuration, metrics, excluded count, scores, and feature/label identifiers.
+Repeat with different query dates while keeping the same model and configuration.
+
+Callers must ensure the model was frozen using only information available by
+`TrainingCutoff`, including training labels whose **outcome dates** do not exceed
+that cutoff. Evaluation cannot inspect an adapter's training provenance.
+Historical feature snapshots must themselves be point-in-time safe: a
+fundamental reporting-period end alone does not establish its publication date.
+Unreported publication timing and upstream feature leakage cannot be inferred
+or repaired by this evaluator. No claim of real-world investment performance
+is made.
+
 ## Verify local setup
 
 From the repository root, restore, build, and test the solution using the SDK configured in `global.json`. The tests use in-memory databases and do not require a running SQL Server or Yahoo Finance access:
