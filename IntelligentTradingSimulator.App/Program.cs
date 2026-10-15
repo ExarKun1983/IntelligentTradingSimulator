@@ -13,6 +13,22 @@ using IntelligentTradingSimulator.Infrastructure.Reporting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
+using var consoleProgress = new ConsoleWorkflowProgress();
+IWorkflowProgress progress = Array.Exists(args,
+    a => a.Equals("--no-progress", StringComparison.OrdinalIgnoreCase))
+    ? NullWorkflowProgress.Instance
+    : consoleProgress;
+using var commandOperation = progress.BeginOperation("Initializing application");
+
+void FinishCommand(string message)
+{
+    commandOperation.Dispose();
+    progress.Report(message, force: true);
+    consoleProgress.Dispose();
+}
+
+try
+{
 if (!StrategyTuningCommandLineParser.TryParse(args, out var tuningInput, out var tuningOutput, out var tuningError))
 {
     Console.WriteLine(tuningError);
@@ -24,6 +40,7 @@ if (tuningInput is not null)
 {
     try
     {
+        using var operation = progress.BeginOperation("Loading and generating tuning report");
         await new StrategyTuningReportWorkflow(
                 new StrategyTuningAnalysisService(new StrategyComparisonReportService()))
             .RunAsync(tuningInput, tuningOutput);
@@ -34,6 +51,7 @@ if (tuningInput is not null)
         Console.WriteLine($"Tuning analysis failed: {exception.Message}");
         Environment.ExitCode = 1;
     }
+    FinishCommand(Environment.ExitCode == 0 ? "Workflow completed" : "Workflow failed");
     return;
 }
 
@@ -71,6 +89,7 @@ var selectedStrategyConfiguration =
 
 var services = new ServiceCollection();
 
+services.AddSingleton<IWorkflowProgress>(progress);
 services.AddInfrastructure(connectionString, configuration);
 services.AddSingleton(selectedStrategyConfiguration);
 services.AddSingleton<BacktestEngineRequestFactory>();
@@ -129,8 +148,9 @@ if (backtestRunIdArg is not null &&
         backtestRunIdArg["--backtest-run-id=".Length..],
         out var backtestRunId))
 {
-    await scope.ServiceProvider.GetRequiredService<BacktestReportWorkflow>()
+    var reportCompleted = await scope.ServiceProvider.GetRequiredService<BacktestReportWorkflow>()
         .RunAsync(backtestRunId, csvFilePath, snapshotCsvFilePath);
+    FinishCommand(reportCompleted ? "Workflow completed" : "Workflow failed");
     return;
 }
 
@@ -188,11 +208,13 @@ if (runBacktestArg is not null)
     if (engineResult.Status == BacktestRunStatus.Failed)
     {
         Console.WriteLine($"Backtest failed: {engineResult.ErrorMessage}");
+        FinishCommand("Workflow failed");
         return;
     }
 
-    await scope.ServiceProvider.GetRequiredService<BacktestReportWorkflow>()
+    var reportCompleted = await scope.ServiceProvider.GetRequiredService<BacktestReportWorkflow>()
         .RunAsync(engineResult.RunId, csvFilePath, snapshotCsvFilePath);
+    FinishCommand(reportCompleted ? "Workflow completed" : "Workflow failed");
     return;
 }
 
@@ -265,6 +287,7 @@ if (runVariantsArg is not null)
     var batchResult = await variantRunner.RunAsync(allVariants, variantRunRequest);
 
     var summaries = new List<BacktestSummaryReportResult>(batchResult.Results.Count);
+    var allSucceeded = true;
 
     foreach (var variantResult in batchResult.Results)
     {
@@ -273,6 +296,7 @@ if (runVariantsArg is not null)
 
         if (variantResult.EngineResult.Status == BacktestRunStatus.Failed)
         {
+            allSucceeded = false;
             Console.WriteLine($"  Failed: {variantResult.EngineResult.ErrorMessage}");
             summaries.Add(new BacktestSummaryReportResult
             {
@@ -283,17 +307,46 @@ if (runVariantsArg is not null)
             continue;
         }
 
-        var variantSummary = await variantsReportService.GenerateAsync(variantResult.EngineResult.RunId);
+        progress.Context = progress.Context with
+        {
+            Workflow = "backtest-report",
+            StrategyId = variantResult.StrategyId,
+            RunId = variantResult.EngineResult.RunId,
+            Date = null,
+            CompletedDates = null,
+            TotalDates = null,
+            CompletedSymbols = null,
+            TotalSymbols = null,
+            VariantIndex = summaries.Count + 1
+        };
+        BacktestSummaryReportResult variantSummary;
+        using (progress.BeginOperation("Loading report database data and generating summary"))
+            variantSummary = await variantsReportService.GenerateAsync(variantResult.EngineResult.RunId);
+        allSucceeded &= variantSummary.IsSuccess;
         variantsReporter.PrintBacktestSummary(variantSummary);
         summaries.Add(variantSummary);
     }
 
+    progress.Context = new WorkflowProgressContext { Workflow = "strategy-comparison" };
     await scope.ServiceProvider.GetRequiredService<StrategyComparisonReportWorkflow>()
         .RunAsync(summaries, comparisonSortBy, comparisonBenchmark, comparisonCsvFilePath);
 
+    FinishCommand(allSucceeded ? "Workflow completed" : "Workflow completed with variant failures");
     return;
 }
 
 var runner = scope.ServiceProvider.GetRequiredService<SimulationRunner>();
 
 await runner.RunAsync();
+FinishCommand("Workflow completed");
+}
+catch (OperationCanceledException)
+{
+    FinishCommand("Workflow cancelled");
+    throw;
+}
+catch
+{
+    FinishCommand("Workflow failed");
+    throw;
+}

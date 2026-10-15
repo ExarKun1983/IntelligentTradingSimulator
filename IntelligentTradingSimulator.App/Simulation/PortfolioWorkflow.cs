@@ -20,6 +20,7 @@ public sealed class PortfolioWorkflow
     private readonly PortfolioPerformanceService _performanceService;
     private readonly ConsoleReporter _reporter;
     private readonly StrategyConfiguration _strategyConfiguration;
+    private readonly IWorkflowProgress _progress;
 
     public PortfolioWorkflow(
         PortfolioRepository portfolioRepository,
@@ -31,7 +32,8 @@ public sealed class PortfolioWorkflow
         PortfolioRebalancingService rebalancingService,
         PortfolioPerformanceService performanceService,
         ConsoleReporter reporter,
-        StrategyConfiguration? strategyConfiguration = null)
+        StrategyConfiguration? strategyConfiguration = null,
+        IWorkflowProgress? progress = null)
     {
         _portfolioRepository = portfolioRepository;
         _portfolioSnapshotRepository = portfolioSnapshotRepository;
@@ -43,13 +45,17 @@ public sealed class PortfolioWorkflow
         _performanceService = performanceService;
         _reporter = reporter;
         _strategyConfiguration = strategyConfiguration ?? new StrategyConfiguration();
+        _progress = progress ?? NullWorkflowProgress.Instance;
     }
 
     public async Task<PortfolioState> RunAsync(
         IReadOnlyList<StockRecommendation> recommendations,
         IReadOnlyDictionary<string, decimal> prices)
     {
-        var portfolio = await _portfolioRepository.GetLatestAsync();
+        using var operation = _progress.BeginOperation("Processing portfolio");
+        Portfolio? portfolio;
+        using (_progress.BeginOperation("Loading portfolio"))
+            portfolio = await _portfolioRepository.GetLatestAsync();
 
         if (portfolio is null)
         {
@@ -68,7 +74,8 @@ public sealed class PortfolioWorkflow
             }
         }
 
-        await _portfolioRepository.SaveAsync(portfolio);
+        using (_progress.BeginOperation("Saving portfolio prices"))
+            await _portfolioRepository.SaveAsync(portfolio);
 
         _rebalancingService.Execute(
             portfolio,
@@ -79,20 +86,22 @@ public sealed class PortfolioWorkflow
             _strategyConfiguration.StopLossPercent,
             _strategyConfiguration.TrailingStopPercent);
 
-        await _portfolioRepository.SaveAsync(portfolio);
+        using (_progress.BeginOperation("Saving rebalanced portfolio"))
+            await _portfolioRepository.SaveAsync(portfolio);
 
         var performance = _performanceService.Calculate(portfolio);
 
-        await _portfolioSnapshotRepository.SaveAsync(
-            new PortfolioSnapshot
-            {
-                PortfolioId = portfolio.Id,
-                Timestamp = DateTime.UtcNow,
-                PortfolioValue = Math.Round(performance.PortfolioValue, 2),
-                Cash = Math.Round(portfolio.Cash, 2),
-                ProfitLoss = Math.Round(performance.ProfitLoss, 2),
-                ReturnPercent = Math.Round(performance.ReturnPercent, 2)
-            });
+        using (_progress.BeginOperation("Saving portfolio snapshot"))
+            await _portfolioSnapshotRepository.SaveAsync(
+                new PortfolioSnapshot
+                {
+                    PortfolioId = portfolio.Id,
+                    Timestamp = DateTime.UtcNow,
+                    PortfolioValue = Math.Round(performance.PortfolioValue, 2),
+                    Cash = Math.Round(portfolio.Cash, 2),
+                    ProfitLoss = Math.Round(performance.ProfitLoss, 2),
+                    ReturnPercent = Math.Round(performance.ReturnPercent, 2)
+                });
 
         var totalValue =
             portfolio.Cash +
@@ -112,7 +121,8 @@ public sealed class PortfolioWorkflow
                 })
                 .ToList();
 
-        await _positionSnapshotRepository.SaveAsync(positionSnapshots);
+        using (_progress.BeginOperation("Saving position snapshots"))
+            await _positionSnapshotRepository.SaveAsync(positionSnapshots);
 
         return new PortfolioState(portfolio, performance, totalValue);
     }
@@ -137,7 +147,8 @@ public sealed class PortfolioWorkflow
             prices,
             _tradingEngine);
 
-        await _portfolioRepository.SaveAsync(portfolio);
+        using (_progress.BeginOperation("Saving initial portfolio"))
+            await _portfolioRepository.SaveAsync(portfolio);
 
         return portfolio;
     }

@@ -4,6 +4,30 @@ This guide covers the current console application and its SQL Server and Yahoo F
 
 For the connected feature-to-dataset-to-evaluation flow, implemented AI boundaries, safety constraints, and explicitly future roadmap, see the [AI-ready architecture and workflows](../README.md#ai-ready-architecture-and-workflows). The API and command examples below describe today's implementation; selecting the `AI` engine does not load a trained model.
 
+## Console workflow progress
+
+Progress is enabled by default for simulations, backtests, variant runs, and report/export
+commands. Add `--no-progress` to suppress progress lines while retaining the final console
+reports, warnings, and export confirmations:
+
+```bash
+dotnet run --project IntelligentTradingSimulator.App -- --run-backtest --no-progress
+```
+
+Progress uses plain text suitable for terminals and redirected logs. Routine updates are
+throttled; new stages and forced status messages are announced immediately. During a slow
+operation, a heartbeat is emitted about every five seconds, including elapsed time and the
+current stage. Available context includes strategy, run, variant, date, and symbol counts.
+A heartbeat means the command is still waiting or working, not a guarantee that an external
+provider or database is responsive.
+
+Backtest date percentages count inclusive calendar dates, including weekends, rather than
+trading sessions. Simulation completion is separate from command completion: summaries,
+benchmark calculations, and CSV exports may still be running after the simulation reaches
+100%. The final command-completion message follows all requested reporting and exports;
+an export is only confirmed after its write succeeds. Snapshot-only report exports do not
+generate summaries or request benchmarks.
+
 ## Prerequisites
 
 - The .NET SDK version in `global.json` (currently `9.0.318`; its `latestPatch` roll-forward setting permits later patches in that feature band).

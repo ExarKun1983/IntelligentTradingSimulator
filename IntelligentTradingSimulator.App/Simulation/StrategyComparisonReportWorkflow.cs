@@ -11,8 +11,11 @@ namespace IntelligentTradingSimulator.App.Simulation;
 public sealed class StrategyComparisonReportWorkflow(
     IStrategyComparisonReportService reportService,
     ConsoleReporter reporter,
-    StrategyComparisonCsvExporter exporter)
+    StrategyComparisonCsvExporter exporter,
+    IWorkflowProgress? progress = null)
 {
+    private readonly IWorkflowProgress _progress = progress ?? NullWorkflowProgress.Instance;
+
     public async Task RunAsync(
         IReadOnlyList<BacktestSummaryReportResult> summaries,
         StrategyComparisonSortMetric? sortBy,
@@ -20,12 +23,24 @@ public sealed class StrategyComparisonReportWorkflow(
         string? csvFilePath,
         CancellationToken cancellationToken = default)
     {
-        var report = reportService.Build(summaries, sortBy, benchmarkSymbol);
+        StrategyComparisonReport report;
+        using (_progress.BeginOperation("Generating strategy comparison"))
+            report = reportService.Build(summaries, sortBy, benchmarkSymbol);
         reporter.PrintVariantComparisonReport(report);
 
         if (csvFilePath is not null)
         {
-            await exporter.ExportAsync(csvFilePath, report, cancellationToken);
+            try
+            {
+                using (_progress.BeginOperation("Exporting strategy comparison"))
+                    await exporter.ExportAsync(csvFilePath, report, cancellationToken);
+            }
+            catch (Exception)
+            {
+                _progress.Report("Strategy comparison export failed.", force: true);
+                throw;
+            }
+            _progress.Report("Strategy comparison CSV export complete", force: true);
             Console.WriteLine($"Strategy comparison exported to {csvFilePath}");
         }
     }

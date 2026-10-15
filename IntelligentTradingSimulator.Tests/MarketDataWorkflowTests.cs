@@ -27,6 +27,139 @@ public sealed class MarketDataWorkflowTests : IDisposable
     public void Dispose() => _dbContext.Dispose();
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CollectAndAnalyzeAsync_PreservesWarningsAndForcesFinalProgressSummary(bool progressEnabled)
+    {
+        var date = new DateTime(2024, 1, 10);
+        using var progressOutput = new StringWriter();
+        using var progress = progressEnabled
+            ? new ConsoleWorkflowProgress(progressOutput, interval: TimeSpan.FromDays(1))
+            : null;
+        var provider = new FakeMarketDataProvider(new Dictionary<string, IReadOnlyList<MarketCandle>>
+        {
+            ["SKIP"] = BuildCandles(date, 1)
+        });
+        var strategy = new StrategyConfiguration
+        {
+            UseRelativeStrength = true, RelativeStrengthBenchmarkSymbol = "SPY"
+        };
+        var workflow = new MarketDataWorkflow(
+            provider, new MarketObservationAnalyzer(strategy), new PortfolioRecommendationService(),
+            new ObservationResultRepository(_dbContext), new FeatureSnapshotRepository(_dbContext),
+            strategy, timeProvider: new FixedTimeProvider(date), progress: progress);
+        using var output = new StringWriter();
+        var originalOut = Console.Out;
+        try
+        {
+            Console.SetOut(output);
+            await workflow.CollectAndAnalyzeAsync(["SKIP", "FAIL"], date);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        Assert.Contains("Benchmark data unavailable for SPY.", output.ToString());
+        Assert.Contains("Pomijam SKIP - za mało świeczek: 1", output.ToString());
+        Assert.Contains("Błąd pobierania danych dla FAIL:", output.ToString());
+        Assert.DoesNotContain("Symbols processed:", output.ToString());
+        if (progressEnabled)
+        {
+            Assert.Contains("Symbols processed: 0 analyzed, 1 skipped, 1 failed", progressOutput.ToString());
+        }
+        else
+        {
+            Assert.Equal("", progressOutput.ToString());
+        }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task CollectAndAnalyzeAsync_ProgressCountsAllSymbolOutcomesWithoutExtraFetches(int fundamentalsMode)
+    {
+        var date = new DateTime(2024, 1, 10);
+        var progress = new SimulationProgressRecorder
+        {
+            Context = new WorkflowProgressContext
+            {
+                Workflow = "stale", RunId = 999, CompletedDates = 99, TotalDates = 99,
+                VariantIndex = 9, TotalVariants = 9
+            }
+        };
+        var provider = new FakeMarketDataProvider(new Dictionary<string, IReadOnlyList<MarketCandle>>
+        {
+            ["PASS"] = BuildCandles(date.AddDays(-4), 5),
+            ["SKIP"] = BuildCandles(date, 1)
+        })
+        {
+            OnFetch = _ => Assert.Equal(1, progress.ActiveOperations)
+        };
+        var fundamentalCalls = 0;
+        IFundamentalDataProvider? fundamentals = fundamentalsMode == 0 ? null :
+            new CallbackFundamentalDataProvider(_ =>
+            {
+                fundamentalCalls++;
+                Assert.Equal(1, progress.ActiveOperations);
+                if (fundamentalsMode == 2)
+                    throw new HttpRequestException("Private upstream detail");
+                return Task.FromResult<FundamentalData?>(fundamentalsMode == 3
+                    ? new FundamentalData { Symbol = "PASS", AsOfDate = DateOnly.FromDateTime(date.AddDays(1)) }
+                    : null);
+            });
+        var strategy = new StrategyConfiguration { Id = "daily", UseRelativeStrength = false };
+        var workflow = new MarketDataWorkflow(
+            provider, new MarketObservationAnalyzer(strategy), new PortfolioRecommendationService(),
+            new ObservationResultRepository(_dbContext), new FeatureSnapshotRepository(_dbContext),
+            strategy, fundamentals, new FixedTimeProvider(date), progress);
+        var enumerations = 0;
+        IEnumerable<string> Symbols()
+        {
+            enumerations++;
+            Assert.Equal(1, enumerations);
+            yield return "PASS";
+            yield return "SKIP";
+            yield return "FAIL";
+        }
+
+        var result = await workflow.CollectAndAnalyzeAsync(Symbols(), date.AddDays(-4));
+
+        Assert.Single(result.RankedResults);
+        Assert.Equal(new[] { "PASS", "SKIP", "FAIL" }, provider.Calls);
+        Assert.Equal(fundamentalsMode == 0 ? 0 : 1, fundamentalCalls);
+        Assert.Equal(1, enumerations);
+        Assert.Equal("market-data", progress.Context.Workflow);
+        Assert.Equal("daily", progress.Context.StrategyId);
+        Assert.Equal(date, progress.Context.Date);
+        Assert.Null(progress.Context.RunId);
+        Assert.Null(progress.Context.CompletedDates);
+        Assert.Null(progress.Context.TotalDates);
+        Assert.Null(progress.Context.VariantIndex);
+        Assert.Null(progress.Context.TotalVariants);
+        Assert.Equal(3, progress.Context.TotalSymbols);
+        Assert.Equal(3, progress.Context.CompletedSymbols);
+        var symbolReports = progress.Reports.Where(x => x.Message.StartsWith("Symbols processed:")).ToList();
+        Assert.Equal(new int?[] { 1, 2, 3, 3 }, symbolReports.Select(x => x.Context.CompletedSymbols));
+        Assert.Equal("Symbols processed: 1 analyzed, 1 skipped, 1 failed", symbolReports.Last().Message);
+        Assert.True(symbolReports.Last().Force);
+        Assert.Equal(3, progress.Operations.Count(x => x.Operation == "Fetching price data"));
+        Assert.Equal(fundamentalsMode == 0 ? 0 : 1,
+            progress.Operations.Count(x => x.Operation == "Fetching fundamental data"));
+        Assert.Contains(progress.Reports, x => x.Message.Contains(
+            fundamentalsMode == 0 ? "no provider configured" :
+            fundamentalsMode == 2 ? "Continuing without fundamentals" : "Fundamentals unavailable"));
+        Assert.DoesNotContain(progress.Reports, x => x.Message.Contains("Private upstream detail"));
+        Assert.Contains(progress.Operations, x => x.Operation == "Building rankings");
+        Assert.Contains(progress.Operations, x => x.Operation == "Saving observations");
+        Assert.Contains(progress.Operations, x => x.Operation == "Saving feature snapshots");
+        Assert.Contains(progress.Operations, x => x.Operation == "Loading previous run");
+        Assert.Equal(0, progress.ActiveOperations);
+    }
+
+    [Theory]
     [InlineData(ScoringEngineType.Composite)]
     [InlineData(ScoringEngineType.RuleBased)]
     [InlineData(ScoringEngineType.AI)]
@@ -406,8 +539,10 @@ public sealed class MarketDataWorkflowTests : IDisposable
         Assert.Equal(0.5m, observation.Fundamentals.Debt);
     }
 
-    [Fact]
-    public async Task CollectAndAnalyzeAsync_ProviderFailureForOneStock_DoesNotBreakRankingFlow()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CollectAndAnalyzeAsync_ProviderFailureForOneStock_DoesNotBreakRankingFlow(bool progressEnabled)
     {
         var date = new DateTime(2024, 1, 10);
         var candlesFail = BuildCandles(date, 5);
@@ -437,25 +572,31 @@ public sealed class MarketDataWorkflowTests : IDisposable
             return Task.FromResult<FundamentalData?>(passFundamentals);
         });
 
-        var workflow = BuildWorkflow(marketProvider, fundamentalDataProvider: fundamentalProvider);
-
-        using var writer = new StringWriter();
+        var progress = progressEnabled ? new SimulationProgressRecorder() : null;
+        var workflow = BuildWorkflow(marketProvider, fundamentalDataProvider: fundamentalProvider, progress: progress);
+        using var output = new StringWriter();
         var originalOut = Console.Out;
         MarketDataResult result;
         try
         {
-            Console.SetOut(writer);
+            Console.SetOut(output);
             result = await workflow.CollectAndAnalyzeAsync(["FAIL", "PASS"], date);
         }
         finally
         {
             Console.SetOut(originalOut);
         }
-
         Assert.Contains(
             "Failed to fetch fundamental data for FAIL (HttpRequestException). Continuing without fundamentals.",
-            writer.ToString());
-        Assert.DoesNotContain("Simulated API failure", writer.ToString());
+            output.ToString());
+        Assert.DoesNotContain("Simulated API failure", output.ToString());
+        if (progress is not null)
+        {
+            Assert.Contains(progress.Reports,
+                x => x.Message == "Failed to fetch fundamental data for FAIL (HttpRequestException). Continuing without fundamentals.");
+            Assert.DoesNotContain(progress.Reports, x => x.Message.Contains("Simulated API failure"));
+            Assert.Equal(0, progress.ActiveOperations);
+        }
 
         Assert.Equal(2, result.RankedResults.Count);
 
@@ -554,7 +695,8 @@ public sealed class MarketDataWorkflowTests : IDisposable
     private MarketDataWorkflow BuildWorkflow(
         IMarketDataProvider provider,
         StrategyConfiguration? strategy = null,
-        IFundamentalDataProvider? fundamentalDataProvider = null)
+        IFundamentalDataProvider? fundamentalDataProvider = null,
+        IWorkflowProgress? progress = null)
     {
         return new MarketDataWorkflow(
             provider,
@@ -563,7 +705,8 @@ public sealed class MarketDataWorkflowTests : IDisposable
             new ObservationResultRepository(_dbContext),
             new FeatureSnapshotRepository(_dbContext),
             strategy,
-            fundamentalDataProvider);
+            fundamentalDataProvider,
+            progress: progress);
     }
 
     private static List<MarketCandle> BuildCandles(
@@ -605,6 +748,7 @@ public sealed class MarketDataWorkflowTests : IDisposable
         public DateTime LastFrom { get; private set; }
 
         public List<string> Calls { get; } = [];
+        public Action<string>? OnFetch { get; init; }
 
         public Task<IReadOnlyList<MarketCandle>> GetHistoricalDailyAsync(
             string symbol,
@@ -612,6 +756,7 @@ public sealed class MarketDataWorkflowTests : IDisposable
         {
             LastFrom = from.Date;
             Calls.Add(symbol);
+            OnFetch?.Invoke(symbol);
 
             return Task.FromResult<IReadOnlyList<MarketCandle>>(
                 _candlesBySymbol[symbol]
@@ -626,6 +771,7 @@ public sealed class MarketDataWorkflowTests : IDisposable
             DateTime to)
         {
             Calls.Add(symbol);
+            OnFetch?.Invoke(symbol);
             return Task.FromResult<IReadOnlyList<MarketCandle>>(
                 _candlesBySymbol[symbol]
                     .Where(x =>

@@ -20,6 +20,7 @@ public sealed class MarketDataWorkflow
     private readonly BacktestHistoricalMarketDataService _historicalDataService;
     private readonly IFundamentalDataProvider? _fundamentalDataProvider;
     private readonly TimeProvider _timeProvider;
+    private readonly IWorkflowProgress _progress;
 
     public MarketDataWorkflow(
         IMarketDataProvider provider,
@@ -29,7 +30,8 @@ public sealed class MarketDataWorkflow
         IFeatureSnapshotRepository featureSnapshotRepository,
         StrategyConfiguration? strategyConfiguration = null,
         IFundamentalDataProvider? fundamentalDataProvider = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IWorkflowProgress? progress = null)
     {
         _provider = provider;
         _analyzer = analyzer;
@@ -40,6 +42,7 @@ public sealed class MarketDataWorkflow
         _historicalDataService = new BacktestHistoricalMarketDataService(provider);
         _fundamentalDataProvider = fundamentalDataProvider;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _progress = progress ?? NullWorkflowProgress.Instance;
     }
 
     public async Task<MarketDataResult> CollectAndAnalyzeAsync(
@@ -49,6 +52,26 @@ public sealed class MarketDataWorkflow
         var results = new List<ObservationResult>();
         var prices = new Dictionary<string, decimal>();
         var analysisDate = _timeProvider.GetLocalNow().Date;
+        var symbolList = symbols.ToList();
+        var succeeded = 0;
+        var skipped = 0;
+        var failed = 0;
+        _progress.Context = _progress.Context with
+        {
+            Workflow = "market-data",
+            StrategyId = _strategyConfiguration.Id,
+            RunId = null,
+            Date = analysisDate,
+            CompletedDates = null,
+            TotalDates = null,
+            CompletedSymbols = 0,
+            TotalSymbols = symbolList.Count,
+            VariantIndex = null,
+            TotalVariants = null
+        };
+        _progress.Report(_fundamentalDataProvider is null
+            ? "Fundamentals unavailable: no provider configured"
+            : "Collecting market data", force: true);
         IReadOnlyList<MarketCandle> benchmarkCandles = [];
         var benchmarkSymbol = _strategyConfiguration.UseRelativeStrength
             ? _strategyConfiguration.RelativeStrengthBenchmarkSymbol
@@ -58,25 +81,30 @@ public sealed class MarketDataWorkflow
         {
             try
             {
+                using var operation = _progress.BeginOperation("Fetching benchmark data", benchmarkSymbol);
                 benchmarkCandles = await _historicalDataService.GetHistoricalDailyUpToAsync(
                     benchmarkSymbol, from, analysisDate, analysisDate);
             }
             catch (Exception)
             {
                 Console.WriteLine($"Benchmark data unavailable for {benchmarkSymbol}.");
+                _progress.Report($"Benchmark data unavailable for {benchmarkSymbol}");
             }
         }
 
-        foreach (var symbol in symbols)
+        foreach (var symbol in symbolList)
         {
             try
             {
-                var candles =
-                    await _provider.GetHistoricalDailyAsync(
+                IReadOnlyList<MarketCandle> candles;
+                using (_progress.BeginOperation("Fetching price data", symbol))
+                {
+                    candles = await _provider.GetHistoricalDailyAsync(
                         symbol,
                         MarketHistoryRequirements.GetEffectiveStartDate(
                             from,
                             analysisDate));
+                }
 
                 var historicalCandles =
                     candles
@@ -96,7 +124,7 @@ public sealed class MarketDataWorkflow
                 {
                     Console.WriteLine(
                         $"Pomijam {symbol} - za mało świeczek: {usableCandles.Count}");
-
+                    skipped++;
                     continue;
                 }
 
@@ -105,14 +133,19 @@ public sealed class MarketDataWorkflow
                 {
                     try
                     {
+                        using var operation = _progress.BeginOperation("Fetching fundamental data", symbol);
                         fundamentalData =
                             await _fundamentalDataProvider.GetFundamentalDataAsync(symbol);
                         if (fundamentalData?.AsOfDate > DateOnly.FromDateTime(analysisDate))
                             fundamentalData = null;
+                        if (fundamentalData is null)
+                            _progress.Report($"Fundamentals unavailable for {symbol}; continuing without fundamentals");
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine(
+                            $"Failed to fetch fundamental data for {symbol} ({ex.GetType().Name}). Continuing without fundamentals.");
+                        _progress.Report(
                             $"Failed to fetch fundamental data for {symbol} ({ex.GetType().Name}). Continuing without fundamentals.");
                     }
                 }
@@ -128,28 +161,48 @@ public sealed class MarketDataWorkflow
                         fundamentalData));
 
                 prices[symbol] = usableCandles.Last().Close;
+                succeeded++;
             }
             catch (Exception ex)
             {
                 Console.WriteLine(
                     $"Błąd pobierania danych dla {symbol}: {ex.Message}");
+                failed++;
+            }
+            finally
+            {
+                _progress.Context = _progress.Context with
+                {
+                    CompletedSymbols = succeeded + skipped + failed
+                };
+                _progress.Report($"Symbols processed: {succeeded} analyzed, {skipped} skipped, {failed} failed");
             }
         }
+        _progress.Report($"Symbols processed: {succeeded} analyzed, {skipped} skipped, {failed} failed", force: true);
 
-        var rankedResults =
-            results
+        List<ObservationResult> rankedResults;
+        IReadOnlyList<StockRecommendation> recommendations;
+        using (_progress.BeginOperation("Building rankings"))
+        {
+            rankedResults = results
                 .OrderByDescending(x => x.Score)
                 .ThenBy(x => x.Symbol, StringComparer.Ordinal)
                 .ToList();
 
-        var recommendations =
-            _recommendationService.Build(rankedResults);
+            recommendations = _recommendationService.Build(rankedResults);
+        }
 
-        await _observationResultRepository.SaveAsync(rankedResults);
-        await _featureSnapshotRepository.SaveAsync(rankedResults, _strategyConfiguration);
+        using (_progress.BeginOperation("Saving observations"))
+        {
+            await _observationResultRepository.SaveAsync(rankedResults);
+        }
+        using (_progress.BeginOperation("Saving feature snapshots"))
+        {
+            await _featureSnapshotRepository.SaveAsync(rankedResults, _strategyConfiguration);
+        }
 
-        var previousRun =
-            await _observationResultRepository.GetPreviousRunAsync();
+        using var previousRunOperation = _progress.BeginOperation("Loading previous run");
+        var previousRun = await _observationResultRepository.GetPreviousRunAsync();
 
         return new MarketDataResult(rankedResults, recommendations, prices, previousRun);
     }

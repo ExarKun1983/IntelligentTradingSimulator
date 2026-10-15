@@ -9,13 +9,16 @@ public sealed class BacktestBenchmarkService : IBacktestBenchmarkService
 {
     private readonly IBacktestRunRepository _runRepository;
     private readonly IBenchmarkDataService _benchmarkDataService;
+    private readonly IWorkflowProgress _progress;
 
     public BacktestBenchmarkService(
         IBacktestRunRepository runRepository,
-        IBenchmarkDataService benchmarkDataService)
+        IBenchmarkDataService benchmarkDataService,
+        IWorkflowProgress? progress = null)
     {
         _runRepository = runRepository;
         _benchmarkDataService = benchmarkDataService;
+        _progress = progress ?? NullWorkflowProgress.Instance;
     }
 
     public async Task<BacktestBenchmarkResult> GetForRunAsync(
@@ -28,10 +31,13 @@ public sealed class BacktestBenchmarkService : IBacktestBenchmarkService
         int backtestRunId,
         IEnumerable<string> symbols)
     {
-        var run = await _runRepository.GetByIdAsync(backtestRunId);
+        BacktestRun? run;
+        using (_progress.BeginOperation("Loading benchmark backtest run"))
+            run = await _runRepository.GetByIdAsync(backtestRunId);
 
         if (run is null)
         {
+            _progress.Report($"Benchmark report failed: backtest run {backtestRunId} not found.", force: true);
             return new BacktestBenchmarkResult
             {
                 IsSuccess = false,
@@ -39,8 +45,9 @@ public sealed class BacktestBenchmarkService : IBacktestBenchmarkService
             };
         }
 
-        var benchmarkResults =
-            await _benchmarkDataService.GetBenchmarkResultsAsync(
+        IReadOnlyList<BenchmarkResult> benchmarkResults;
+        using (_progress.BeginOperation("Calculating backtest benchmarks"))
+            benchmarkResults = await _benchmarkDataService.GetBenchmarkResultsAsync(
                 symbols,
                 run.StartDate,
                 run.EndDate);
