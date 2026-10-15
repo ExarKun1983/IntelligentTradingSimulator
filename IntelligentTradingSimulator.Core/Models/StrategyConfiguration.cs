@@ -23,6 +23,8 @@ public sealed class StrategyConfiguration
 
     public string Id { get; set; } = DefaultId;
 
+    public ScoringEngineType ScoringEngine { get; set; } = ScoringEngineType.Composite;
+
     public int MaxPositions { get; set; } = DefaultMaxPositions;
 
     public decimal MaxPositionWeight { get; set; } = DefaultMaxPositionWeight;

@@ -77,8 +77,11 @@ public sealed class BacktestDayProcessorTests : IDisposable
             .ToList();
     }
 
-    [Fact]
-    public async Task ProcessAsync_PersistsAllAnalyzedStocks_WithRunContextAndNoFutureData()
+    [Theory]
+    [InlineData(ScoringEngineType.Composite)]
+    [InlineData(ScoringEngineType.AI)]
+    public async Task ProcessAsync_PersistsAllAnalyzedStocks_WithRunContextAndNoFutureData(
+        ScoringEngineType scoringEngine)
     {
         var date = new DateTime(2024, 1, 10);
         var provider = new FakeMarketDataProvider();
@@ -87,7 +90,10 @@ public sealed class BacktestDayProcessorTests : IDisposable
         provider.SetData("AAPL", candles);
         provider.SetData("MSFT", candles);
         provider.SetData("SHORT", BuildCandles(date, 1));
-        var strategy = new StrategyConfiguration { Id = "historical", UseRelativeStrength = false };
+        var strategy = new StrategyConfiguration
+        {
+            Id = "historical", UseRelativeStrength = false, ScoringEngine = scoringEngine
+        };
 
         var result = await BuildProcessor(provider, maxPositions: 1).ProcessAsync(new BacktestDayRequest
         {
