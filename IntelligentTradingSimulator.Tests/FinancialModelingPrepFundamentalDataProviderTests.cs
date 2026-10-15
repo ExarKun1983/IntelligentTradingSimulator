@@ -22,7 +22,7 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
                 "date": "2025-12-31",
                 "symbol": "AAPL",
                 "revenueGrowth": 0.125,
-                "epsGrowth": 0.082
+                "epsgrowth": 0.082
               }
             ]
             """;
