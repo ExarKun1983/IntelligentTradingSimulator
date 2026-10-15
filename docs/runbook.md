@@ -2,6 +2,8 @@
 
 This guide covers the current console application and its SQL Server and Yahoo Finance dependencies. Backtests and the regular simulation retrieve market data from Yahoo Finance, so those runs require an internet connection.
 
+For the connected feature-to-dataset-to-evaluation flow, implemented AI boundaries, safety constraints, and explicitly future roadmap, see the [AI-ready architecture and workflows](../README.md#ai-ready-architecture-and-workflows). The API and command examples below describe today's implementation; selecting the `AI` engine does not load a trained model.
+
 ## Prerequisites
 
 - The .NET SDK version in `global.json` (currently `9.0.318`; its `latestPatch` roll-forward setting permits later patches in that feature band).
