@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using IntelligentTradingSimulator.App.Simulation;
 using IntelligentTradingSimulator.Core.Enums;
@@ -50,6 +51,69 @@ public sealed class StrategyVariantRunnerTests : IDisposable
             MaxPositionWeight = 25m,
             LookbackDays = 90
         };
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_ProgressIdentifiesVariantsAndReportsFailureBeforeContinuing(bool throws)
+    {
+        var progress = new SimulationProgressRecorder
+        {
+            Context = new WorkflowProgressContext { RunId = 999, CompletedDates = 99 }
+        };
+        var engine = new ProgressCapturingEngine(progress, throws);
+        var runner = new StrategyVariantRunner(engine, progress);
+        var date = new DateTime(2024, 1, 1);
+
+        var result = await runner.RunAsync(
+            [BuildVariant("fail"), BuildVariant("pass")], BuildRunRequest(date, date));
+
+        Assert.Equal(2, result.Results.Count);
+        Assert.Equal(2, engine.Contexts.Count);
+        for (var index = 0; index < engine.Contexts.Count; index++)
+        {
+            var context = engine.Contexts[index];
+            Assert.Equal(index == 0 ? "fail" : "pass", context.StrategyId);
+            Assert.Equal(index + 1, context.VariantIndex);
+            Assert.Equal(2, context.TotalVariants);
+            Assert.Null(context.RunId);
+            Assert.Null(context.CompletedDates);
+            Assert.Null(context.Date);
+        }
+        var terminals = progress.Reports.Where(x => x.Force && x.Message.StartsWith("Strategy variant")).ToList();
+        Assert.Equal(new[] { "Strategy variant failed", "Strategy variant complete" },
+            terminals.Select(x => x.Message));
+        Assert.Equal("fail", terminals[0].Context.StrategyId);
+        Assert.Equal("pass", terminals[1].Context.StrategyId);
+        Assert.Equal(42, terminals[1].Context.RunId);
+        Assert.Equal(0, progress.ActiveOperations);
+    }
+
+    [Fact]
+    public async Task RunAsync_ConsoleProgressAnnouncesEveryQuickVariantBeforeEngineCall()
+    {
+        using var output = new System.IO.StringWriter();
+        using var progress = new ConsoleWorkflowProgress(output, interval: TimeSpan.FromDays(1));
+        var engine = new CapturingEngine
+        {
+            OnRun = request => Assert.Contains(
+                $"Starting strategy variant | Workflow: backtest | Strategy: {request.StrategyId}",
+                output.ToString())
+        };
+        var date = new DateTime(2024, 1, 1);
+
+        await new StrategyVariantRunner(engine, progress).RunAsync(
+            [BuildVariant("alpha"), BuildVariant("beta")], BuildRunRequest(date, date));
+
+        var starts = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+            .Where(x => x.StartsWith("Starting strategy variant")).ToList();
+        Assert.Equal(2, starts.Count);
+        Assert.Contains("Strategy: alpha", starts[0]);
+        Assert.Contains("Variant: 1/2", starts[0]);
+        Assert.Contains("Strategy: beta", starts[1]);
+        Assert.Contains("Variant: 2/2", starts[1]);
+        Assert.Equal(2, engine.Requests.Count);
+    }
 
     [Fact]
     public async Task RunAsync_ReturnsOneResultPerVariant()
@@ -382,15 +446,35 @@ public sealed class StrategyVariantRunnerTests : IDisposable
     private sealed class CapturingEngine : IBacktestEngine
     {
         public List<BacktestEngineRequest> Requests { get; } = [];
+        public Action<BacktestEngineRequest>? OnRun { get; init; }
 
         public Task<BacktestEngineResult> RunAsync(BacktestEngineRequest request)
         {
+            OnRun?.Invoke(request);
             Requests.Add(request);
 
             return Task.FromResult(new BacktestEngineResult
             {
                 RunId = Requests.Count,
                 Status = BacktestRunStatus.Completed
+            });
+        }
+    }
+
+    private sealed class ProgressCapturingEngine(IWorkflowProgress progress, bool throws) : IBacktestEngine
+    {
+        public List<WorkflowProgressContext> Contexts { get; } = [];
+
+        public Task<BacktestEngineResult> RunAsync(BacktestEngineRequest request)
+        {
+            Contexts.Add(progress.Context);
+            if (Contexts.Count == 1 && throws)
+                throw new InvalidOperationException("Variant failed");
+
+            return Task.FromResult(new BacktestEngineResult
+            {
+                RunId = 42,
+                Status = Contexts.Count == 1 ? BacktestRunStatus.Failed : BacktestRunStatus.Completed
             });
         }
     }

@@ -9,10 +9,12 @@ namespace IntelligentTradingSimulator.App.Simulation;
 public sealed class StrategyVariantRunner : IStrategyVariantRunner
 {
     private readonly IBacktestEngine _engine;
+    private readonly IWorkflowProgress _progress;
 
-    public StrategyVariantRunner(IBacktestEngine engine)
+    public StrategyVariantRunner(IBacktestEngine engine, IWorkflowProgress? progress = null)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
+        _progress = progress ?? NullWorkflowProgress.Instance;
     }
 
     public async Task<StrategyVariantBatchResult> RunAsync(
@@ -27,8 +29,23 @@ public sealed class StrategyVariantRunner : IStrategyVariantRunner
 
         var results = new List<StrategyVariantRunResult>(variants.Count);
 
-        foreach (var variant in variants)
+        for (var variantIndex = 0; variantIndex < variants.Count; variantIndex++)
         {
+            var variant = variants[variantIndex];
+            _progress.Context = _progress.Context with
+            {
+                Workflow = "backtest",
+                StrategyId = variant.Id,
+                VariantIndex = variantIndex + 1,
+                TotalVariants = variants.Count,
+                RunId = null,
+                Date = null,
+                CompletedDates = null,
+                TotalDates = null,
+                CompletedSymbols = null,
+                TotalSymbols = null
+            };
+            _progress.Report("Starting strategy variant", force: true);
             var factory = new BacktestEngineRequestFactory(variant);
 
             var engineRequest = factory.Create(
@@ -52,6 +69,16 @@ public sealed class StrategyVariantRunner : IStrategyVariantRunner
                     ErrorMessage = ex.Message
                 };
             }
+
+            _progress.Context = _progress.Context with
+            {
+                RunId = engineResult.RunId > 0 ? engineResult.RunId : _progress.Context.RunId
+            };
+            _progress.Report(
+                engineResult.Status == BacktestRunStatus.Completed
+                    ? "Strategy variant complete"
+                    : "Strategy variant failed",
+                force: true);
 
             results.Add(new StrategyVariantRunResult
             {

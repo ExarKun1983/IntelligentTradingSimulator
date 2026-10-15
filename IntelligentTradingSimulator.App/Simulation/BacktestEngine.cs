@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading.Tasks;
 using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Interfaces;
@@ -12,17 +13,31 @@ public sealed class BacktestEngine : IBacktestEngine
 
     private readonly IBacktestRunRepository _runRepository;
     private readonly IBacktestDayProcessor _dayProcessor;
+    private readonly IWorkflowProgress _progress;
 
     public BacktestEngine(
         IBacktestRunRepository runRepository,
-        IBacktestDayProcessor dayProcessor)
+        IBacktestDayProcessor dayProcessor,
+        IWorkflowProgress? progress = null)
     {
         _runRepository = runRepository;
         _dayProcessor = dayProcessor;
+        _progress = progress ?? NullWorkflowProgress.Instance;
     }
 
     public async Task<BacktestEngineResult> RunAsync(BacktestEngineRequest request)
     {
+        _progress.Context = _progress.Context with
+        {
+            Workflow = "backtest",
+            StrategyId = request.StrategyId,
+            RunId = null,
+            Date = null,
+            CompletedDates = 0,
+            TotalDates = Math.Max(0, (request.EndDate.Date - request.StartDate.Date).Days + 1),
+            CompletedSymbols = null,
+            TotalSymbols = null
+        };
         var run = new BacktestRun
         {
             Name = request.Name,
@@ -37,7 +52,12 @@ public sealed class BacktestEngine : IBacktestEngine
             CreatedAt = DateTime.UtcNow
         };
 
-        await _runRepository.AddAsync(run);
+        using (_progress.BeginOperation("Creating backtest run"))
+        {
+            await _runRepository.AddAsync(run);
+        }
+        _progress.Context = _progress.Context with { RunId = run.Id };
+        ReportBestEffort("Backtest run created");
 
         var portfolio = new Portfolio
         {
@@ -46,6 +66,7 @@ public sealed class BacktestEngine : IBacktestEngine
             Cash = request.InitialCapital
         };
 
+        BacktestEngineResult result;
         try
         {
             var currentDate = request.StartDate.Date;
@@ -54,6 +75,13 @@ public sealed class BacktestEngine : IBacktestEngine
 
             while (currentDate <= endDate)
             {
+                _progress.Context = _progress.Context with
+                {
+                    Date = currentDate,
+                    CompletedSymbols = null,
+                    TotalSymbols = null
+                };
+                _progress.Report("Processing simulation date");
                 var dayRequest = new BacktestDayRequest
                 {
                     BacktestRunId = run.Id,
@@ -64,10 +92,19 @@ public sealed class BacktestEngine : IBacktestEngine
                     Symbols = request.Symbols
                 };
 
-                var dayResult = await _dayProcessor.ProcessAsync(dayRequest);
+                BacktestDayResult dayResult;
+                using (_progress.BeginOperation("Processing simulated dates"))
+                {
+                    dayResult = await _dayProcessor.ProcessAsync(dayRequest);
+                }
                 lastDayResult = dayResult;
 
                 portfolio = dayResult.Portfolio;
+                _progress.Context = _progress.Context with
+                {
+                    CompletedDates = (_progress.Context.CompletedDates ?? 0) + 1
+                };
+                _progress.Report("Simulation date complete");
                 currentDate = currentDate.AddDays(1);
             }
 
@@ -80,9 +117,12 @@ public sealed class BacktestEngine : IBacktestEngine
             run.Status = BacktestRunStatus.Completed;
             run.Portfolio = portfolio;
 
-            await _runRepository.UpdateAsync(run);
+            using (_progress.BeginOperation("Saving final backtest result"))
+            {
+                await _runRepository.UpdateAsync(run);
+            }
 
-            return new BacktestEngineResult
+            result = new BacktestEngineResult
             {
                 RunId = run.Id,
                 Status = BacktestRunStatus.Completed,
@@ -93,7 +133,11 @@ public sealed class BacktestEngine : IBacktestEngine
         }
         catch (Exception ex)
         {
-            await _runRepository.MarkFailedAsync(run.Id);
+            using (BeginOperationBestEffort("Marking backtest failed"))
+            {
+                await _runRepository.MarkFailedAsync(run.Id);
+            }
+            ReportBestEffort("Simulation failed");
 
             return new BacktestEngineResult
             {
@@ -104,6 +148,66 @@ public sealed class BacktestEngine : IBacktestEngine
                 TotalReturnPercent = 0m,
                 ErrorMessage = ex.Message
             };
+        }
+
+        ReportBestEffort("Simulation complete");
+
+        return result;
+    }
+
+    private IDisposable BeginOperationBestEffort(string operation)
+    {
+        try
+        {
+            return new BestEffortProgressScope(_progress.BeginOperation(operation));
+        }
+        catch (IOException)
+        {
+            return NoopProgressScope.Instance;
+        }
+        catch (ObjectDisposedException)
+        {
+            return NoopProgressScope.Instance;
+        }
+    }
+
+    private void ReportBestEffort(string message)
+    {
+        try
+        {
+            _progress.Report(message, force: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private sealed class BestEffortProgressScope(IDisposable scope) : IDisposable
+    {
+        public void Dispose()
+        {
+            try
+            {
+                scope.Dispose();
+            }
+            catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+    }
+
+    private sealed class NoopProgressScope : IDisposable
+    {
+        public static NoopProgressScope Instance { get; } = new();
+
+        public void Dispose()
+        {
         }
     }
 }

@@ -10,35 +10,42 @@ public sealed class SimulationRunner
     private readonly PortfolioWorkflow _portfolioWorkflow;
     private readonly ConsoleReporter _reporter;
     private readonly StrategyConfiguration _strategyConfiguration;
+    private readonly IWorkflowProgress _progress;
 
     public SimulationRunner(
         MarketDataWorkflow marketDataWorkflow,
         PortfolioWorkflow portfolioWorkflow,
         ConsoleReporter reporter,
-        StrategyConfiguration strategyConfiguration)
+        StrategyConfiguration strategyConfiguration,
+        IWorkflowProgress? progress = null)
     {
         _marketDataWorkflow = marketDataWorkflow;
         _portfolioWorkflow = portfolioWorkflow;
         _reporter = reporter;
         _strategyConfiguration = strategyConfiguration;
+        _progress = progress ?? NullWorkflowProgress.Instance;
     }
 
     public async Task RunAsync()
     {
+        _progress.Context = _progress.Context with { StrategyId = _strategyConfiguration.Id };
+        _progress.Report("Starting simulation.", force: true);
         var from =
             DateTime.Today.AddDays(
                 -_strategyConfiguration.LookbackDays);
 
-        var marketData =
-            await _marketDataWorkflow.CollectAndAnalyzeAsync(
+        MarketDataResult marketData;
+        using (_progress.BeginOperation("Collecting and analyzing simulation market data"))
+            marketData = await _marketDataWorkflow.CollectAndAnalyzeAsync(
                 StockUniverse.Symbols,
                 from);
 
         _reporter.PrintMarketRanking(marketData.RankedResults);
         _reporter.PrintRecommendations(marketData.Recommendations);
 
-        var portfolioState =
-            await _portfolioWorkflow.RunAsync(
+        PortfolioState portfolioState;
+        using (_progress.BeginOperation("Processing simulation portfolio"))
+            portfolioState = await _portfolioWorkflow.RunAsync(
                 marketData.Recommendations,
                 marketData.Prices);
 

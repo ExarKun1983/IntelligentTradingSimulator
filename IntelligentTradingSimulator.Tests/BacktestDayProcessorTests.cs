@@ -12,6 +12,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IntelligentTradingSimulator.Tests;
 
+[Collection("Console output")]
 public sealed class BacktestDayProcessorTests : IDisposable
 {
     private readonly DbContextOptions<TradingSimulatorDbContext> _options;
@@ -33,7 +34,10 @@ public sealed class BacktestDayProcessorTests : IDisposable
     private BacktestDayProcessor BuildProcessor(
         FakeMarketDataProvider provider,
         int maxPositions = 10,
-        decimal maxPositionWeight = 100m)
+        decimal maxPositionWeight = 100m,
+        IWorkflowProgress? progress = null,
+        IBacktestSnapshotRepository? snapshotRepository = null,
+        IFeatureSnapshotRepository? featureSnapshotRepository = null)
     {
         var historicalService = new BacktestHistoricalMarketDataService(provider);
         var analyzerFactory = new MarketObservationAnalyzerFactory();
@@ -55,8 +59,9 @@ public sealed class BacktestDayProcessorTests : IDisposable
             allocationEngine,
             tradingEngine,
             performanceService,
-            _snapshotRepository,
-            new FeatureSnapshotRepository(_dbContext));
+            snapshotRepository ?? _snapshotRepository,
+            featureSnapshotRepository ?? new FeatureSnapshotRepository(_dbContext),
+            progress);
     }
 
     private static List<MarketCandle> BuildCandles(
@@ -77,14 +82,217 @@ public sealed class BacktestDayProcessorTests : IDisposable
             .ToList();
     }
 
-    [Theory]
-    [InlineData(ScoringEngineType.Composite)]
-    [InlineData(ScoringEngineType.RuleBased)]
-    [InlineData(ScoringEngineType.AI)]
-    public async Task ProcessAsync_PersistsAllAnalyzedStocks_WithRunContextAndNoFutureData(
-        ScoringEngineType scoringEngine)
+    [Fact]
+    public async Task ProcessAsync_WithoutProgressPreservesBenchmarkAndSymbolWarnings()
     {
         var date = new DateTime(2024, 1, 10);
+        var provider = new FakeMarketDataProvider
+        {
+            ThrowForSymbol = "SPY",
+            OnFetch = symbol =>
+            {
+                if (symbol == "FAIL")
+                    throw new InvalidOperationException("Price unavailable.");
+            }
+        };
+        using var output = new System.IO.StringWriter();
+        var originalOut = Console.Out;
+        try
+        {
+            Console.SetOut(output);
+            await BuildProcessor(provider).ProcessAsync(new BacktestDayRequest
+            {
+                CurrentDate = date, HistoricalStartDate = date.AddDays(-10),
+                Portfolio = new Portfolio { StartingCash = 1000m, Cash = 1000m },
+                StrategyConfiguration = new StrategyConfiguration
+                {
+                    UseRelativeStrength = true, RelativeStrengthBenchmarkSymbol = "SPY"
+                },
+                Symbols = ["FAIL"]
+            });
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        Assert.Contains("Backtest: benchmark data unavailable for SPY.", output.ToString());
+        Assert.Contains("Backtest: skipping FAIL on 2024-01-10 — Price unavailable.", output.ToString());
+        Assert.DoesNotContain("Symbols processed:", output.ToString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProcessAsync_ConsoleProgressWarnsOncePerRunForPartialDataAndUnavailableBenchmark(bool benchmarkThrows)
+    {
+        var date = new DateTime(2024, 1, 10);
+        using var output = new System.IO.StringWriter();
+        using var progress = new ConsoleWorkflowProgress(output, interval: TimeSpan.FromDays(1));
+        var provider = new FakeMarketDataProvider { ThrowForSymbol = benchmarkThrows ? "SPY" : null };
+        provider.SetData("PASS", BuildCandles(date.AddDays(-4), 6));
+        provider.SetData("SHORT", BuildCandles(date, 1));
+        var processor = BuildProcessor(provider, progress: progress);
+
+        foreach (var runId in new[] { 7, 8 })
+        {
+            for (var day = 0; day < 2; day++)
+            {
+                await processor.ProcessAsync(new BacktestDayRequest
+                {
+                    BacktestRunId = runId, CurrentDate = date.AddDays(day),
+                    HistoricalStartDate = date.AddDays(-4),
+                    Portfolio = new Portfolio { StartingCash = 1000m, Cash = 1000m },
+                    StrategyConfiguration = new StrategyConfiguration
+                    {
+                        UseRelativeStrength = true, RelativeStrengthBenchmarkSymbol = "SPY"
+                    },
+                    Symbols = ["PASS", "SHORT"]
+                });
+            }
+        }
+
+        var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var partialWarnings = lines.Where(x => x.StartsWith("Partial market data:")).ToList();
+        var benchmarkWarnings = lines.Where(x => x.StartsWith("Benchmark data unavailable for SPY")).ToList();
+        Assert.Equal(2, partialWarnings.Count);
+        Assert.Equal(2, benchmarkWarnings.Count);
+        Assert.All(partialWarnings, line =>
+            Assert.Contains("1 analyzed, 1 skipped, 0 failed", line));
+        for (var index = 0; index < 2; index++)
+        {
+            Assert.Contains($"Run: {7 + index}", partialWarnings[index]);
+            Assert.Contains($"Run: {7 + index}", benchmarkWarnings[index]);
+        }
+        Assert.Equal(new[] { "SPY", "PASS", "SHORT", "SPY", "PASS", "SHORT" }, provider.Calls);
+        Assert.Equal(4, await _dbContext.BacktestSnapshots.CountAsync());
+    }
+
+    [Fact]
+    public async Task ProcessAsync_IntentionalUniverseExclusionDoesNotConsumePartialDataWarning()
+    {
+        var date = new DateTime(2024, 1, 10);
+        var progress = new SimulationProgressRecorder();
+        var provider = new FakeMarketDataProvider();
+        provider.SetData("PASS", BuildCandles(date.AddDays(-5), 6));
+        provider.SetData("HELD", BuildCandles(date.AddDays(-5), 6));
+        provider.SetData("SHORT", BuildCandles(date, 1));
+        var processor = BuildProcessor(provider, progress: progress);
+        var strategy = new StrategyConfiguration
+        {
+            UseRelativeStrength = false,
+            StopLossPercent = 10m
+        };
+
+        await processor.ProcessAsync(new BacktestDayRequest
+        {
+            BacktestRunId = 17,
+            CurrentDate = date,
+            HistoricalStartDate = date.AddDays(-5),
+            Portfolio = new Portfolio
+            {
+                StartingCash = 1000m,
+                Cash = 1000m,
+                Positions = [new Position
+                {
+                    Symbol = "HELD", Quantity = 1m, AveragePrice = 100m, CurrentPrice = 100m
+                }]
+            },
+            StrategyConfiguration = strategy,
+            Symbols = ["PASS"]
+        });
+
+        Assert.DoesNotContain(progress.Reports, x => x.Message.StartsWith("Partial market data:"));
+
+        await processor.ProcessAsync(new BacktestDayRequest
+        {
+            BacktestRunId = 17,
+            CurrentDate = date.AddDays(1),
+            HistoricalStartDate = date.AddDays(-5),
+            Portfolio = new Portfolio
+            {
+                StartingCash = 1000m,
+                Cash = 1000m,
+                Positions = [new Position
+                {
+                    Symbol = "HELD", Quantity = 1m, AveragePrice = 100m, CurrentPrice = 100m
+                }]
+            },
+            StrategyConfiguration = strategy,
+            Symbols = ["SHORT"]
+        });
+
+        var warning = Assert.Single(progress.Reports
+            .Where(x => x.Message.StartsWith("Partial market data:")));
+        Assert.Contains("0 analyzed, 1 skipped, 0 failed", warning.Message);
+        Assert.True(warning.Force);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ProgressScopesCachedRetrievalsAndCountsEverySymbolOutcome()
+    {
+        var date = new DateTime(2024, 1, 10);
+        var progress = new SimulationProgressRecorder();
+        var activeDuringFetch = new List<int>();
+        var provider = new FakeMarketDataProvider
+        {
+            ThrowForSymbol = "FAIL",
+            OnFetch = _ => activeDuringFetch.Add(progress.ActiveOperations)
+        };
+        provider.SetData("PASS", BuildCandles(date.AddDays(-4), 5));
+        provider.SetData("SKIP", BuildCandles(date, 1));
+        var processor = BuildProcessor(provider, progress: progress);
+        var request = new BacktestDayRequest
+        {
+            BacktestRunId = 7, CurrentDate = date, HistoricalStartDate = date.AddDays(-4),
+            Portfolio = new Portfolio { StartingCash = 10_000m, Cash = 10_000m },
+            StrategyConfiguration = new StrategyConfiguration
+            {
+                Id = "backtest-strategy", UseRelativeStrength = true, RelativeStrengthBenchmarkSymbol = "SPY"
+            },
+            Symbols = ["PASS", "SKIP", "FAIL"]
+        };
+
+        var result = await processor.ProcessAsync(request);
+        await processor.ProcessAsync(request);
+
+        Assert.Single(result.Observations);
+        Assert.Equal(new[] { "SPY", "PASS", "SKIP", "FAIL" }, provider.Calls);
+        Assert.All(activeDuringFetch, count => Assert.Equal(1, count));
+        Assert.Equal(6, progress.Operations.Count(x => x.Operation == "Fetching price data"));
+        Assert.Equal(2, progress.Operations.Count(x => x.Operation == "Fetching benchmark data"));
+        Assert.Contains(progress.Operations, x => x.Operation == "Building rankings");
+        Assert.Contains(progress.Operations, x => x.Operation == "Saving feature snapshots");
+        Assert.Contains(progress.Operations, x => x.Operation == "Processing portfolio");
+        Assert.Contains(progress.Operations, x => x.Operation == "Saving daily snapshot");
+        Assert.Equal(7, progress.Context.RunId);
+        Assert.Equal(date, progress.Context.Date);
+        Assert.Equal("backtest-strategy", progress.Context.StrategyId);
+        Assert.Equal(3, progress.Context.TotalSymbols);
+        Assert.Equal(3, progress.Context.CompletedSymbols);
+        Assert.Equal(new int?[] { 1, 2, 3, 1, 2, 3 },
+            progress.Reports.Where(x => x.Message.StartsWith("Symbols processed:"))
+                .Select(x => x.Context.CompletedSymbols));
+        Assert.Equal("Symbols processed: 1 analyzed, 1 skipped, 1 failed", progress.Reports.Last().Message);
+        Assert.Equal(0, progress.ActiveOperations);
+        Assert.Equal(2, await _dbContext.BacktestSnapshots.CountAsync());
+    }
+
+    [Theory]
+    [InlineData(ScoringEngineType.Composite, false)]
+    [InlineData(ScoringEngineType.Composite, true)]
+    [InlineData(ScoringEngineType.RuleBased, false)]
+    [InlineData(ScoringEngineType.RuleBased, true)]
+    [InlineData(ScoringEngineType.AI, false)]
+    [InlineData(ScoringEngineType.AI, true)]
+    public async Task ProcessAsync_PersistsAllAnalyzedStocks_WithRunContextAndNoFutureData(
+        ScoringEngineType scoringEngine, bool progressEnabled)
+    {
+        var date = new DateTime(2024, 1, 10);
+        using var output = new System.IO.StringWriter();
+        using var progress = progressEnabled
+            ? new ConsoleWorkflowProgress(output, interval: TimeSpan.FromDays(1))
+            : null;
         var provider = new FakeMarketDataProvider();
         var candles = BuildCandles(date.AddDays(-4), 6);
         candles[^1].Close = 1000m;
@@ -95,14 +303,29 @@ public sealed class BacktestDayProcessorTests : IDisposable
         {
             Id = "historical", UseRelativeStrength = false, ScoringEngine = scoringEngine
         };
+        var repositories = new CountingBacktestRepositories(_dbContext);
 
-        var result = await BuildProcessor(provider, maxPositions: 1).ProcessAsync(new BacktestDayRequest
+        var result = await BuildProcessor(provider, maxPositions: 1, progress: progress,
+            snapshotRepository: repositories, featureSnapshotRepository: repositories).ProcessAsync(new BacktestDayRequest
         {
             BacktestRunId = 10, CurrentDate = date, HistoricalStartDate = date.AddDays(-4),
             Symbols = ["AAPL", "MSFT", "SHORT"], StrategyConfiguration = strategy,
             Portfolio = new Portfolio { Cash = 1000m, StartingCash = 1000m }
         });
 
+        Assert.Equal(new[] { "AAPL", "MSFT", "SHORT" }, provider.Calls);
+        Assert.Equal(new[] { "SaveFeatures", "AddSnapshot" }, repositories.Calls);
+        if (progressEnabled)
+        {
+            Assert.Contains("Symbols: 3/3", output.ToString());
+            Assert.Contains("Starting Building rankings", output.ToString());
+            Assert.DoesNotContain("SHORT", output.ToString());
+            Assert.DoesNotContain("za mało", output.ToString());
+        }
+        else
+        {
+            Assert.Equal("", output.ToString());
+        }
         await using var readContext = new TradingSimulatorDbContext(_options);
         var snapshots = await new FeatureSnapshotRepository(readContext).QueryAsync(
             new DateOnly(2024, 1, 10), new DateOnly(2024, 1, 10), strategyId: "historical", backtestRunId: 10);
@@ -304,16 +527,33 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.Equal(109m, Assert.Single(portfolio.Positions).CurrentPrice);
     }
 
-    [Fact]
-    public async Task RunAsync_PersistsAutomaticStopLossExit_InFreshContext()
+    [Theory]
+    [InlineData(false, null, false)]
+    [InlineData(true, null, false)]
+    [InlineData(true, "Starting Fetching price data", false)]
+    [InlineData(true, "Starting Fetching price data", true)]
+    [InlineData(true, "Starting Saving final backtest result", false)]
+    [InlineData(true, "Starting Saving final backtest result", true)]
+    public async Task RunAsync_PersistsAutomaticStopLossExit_InFreshContext(
+        bool progressEnabled, string? failingMessage, bool objectDisposed)
     {
         var startDate = new DateTime(2024, 1, 1);
+        using var output = failingMessage is null
+            ? new System.IO.StringWriter()
+            : new FailOnceProgressWriter(failingMessage, objectDisposed);
+        using var progress = progressEnabled
+            ? new ConsoleWorkflowProgress(output, interval: TimeSpan.FromDays(1))
+            : null;
         var provider = new FakeMarketDataProvider();
         var candles = BuildCandles(startDate, 11);
         candles[^1].Close = 90m;
         provider.SetData("AAPL", candles);
+        var repositories = new CountingBacktestRepositories(_dbContext);
         var engine = new BacktestEngine(
-            new BacktestRunRepository(_dbContext), BuildProcessor(provider));
+            repositories,
+            BuildProcessor(provider, progress: progress,
+                snapshotRepository: repositories, featureSnapshotRepository: repositories),
+            progress);
 
         var result = await engine.RunAsync(new BacktestEngineRequest
         {
@@ -331,10 +571,33 @@ public sealed class BacktestDayProcessorTests : IDisposable
         });
 
         Assert.Equal(BacktestRunStatus.Completed, result.Status);
+        Assert.Equal(new[] { "AAPL", "AAPL" }, provider.Calls);
+        Assert.Equal(
+            new[] { "AddRun", "SaveFeatures", "AddSnapshot", "SaveFeatures", "AddSnapshot", "UpdateRun" },
+            repositories.Calls);
+        if (output is FailOnceProgressWriter failingOutput)
+        {
+            Assert.True(failingOutput.Failed);
+        }
+        else if (progressEnabled)
+        {
+            Assert.Contains("Starting Fetching price data", output.ToString());
+            Assert.Contains("Simulation complete", output.ToString());
+            Assert.Contains("Completed calendar dates: 2/2", output.ToString());
+            Assert.DoesNotContain("Workflow complete", output.ToString());
+        }
+        else
+        {
+            Assert.Equal("", output.ToString());
+        }
         await _dbContext.DisposeAsync();
         await using var readContext = new TradingSimulatorDbContext(_options);
         var savedRun = await new BacktestRunRepository(readContext).GetByIdAsync(result.RunId);
         Assert.NotNull(savedRun?.Portfolio);
+        Assert.Equal(BacktestRunStatus.Completed, savedRun.Status);
+        Assert.Equal(result.FinalCapital, savedRun.FinalCapital);
+        Assert.Equal(result.TotalProfit, savedRun.TotalProfit);
+        Assert.Equal(result.TotalReturnPercent, savedRun.TotalReturnPercent);
         Assert.Empty(savedRun.Portfolio.Positions);
         var buy = Assert.Single(savedRun.Portfolio.Trades, x => x.Action == TradeActionType.Buy);
         var sell = Assert.Single(savedRun.Portfolio.Trades, x => x.Action == TradeActionType.Sell);
@@ -342,6 +605,13 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.Equal(90m, sell.Price);
         Assert.Equal(buy.Quantity, sell.Quantity);
         Assert.Equal(ExitReason.StopLoss, sell.ExitReason);
+        Assert.Equal(new[] { TradeActionType.Buy, TradeActionType.Sell },
+            savedRun.Portfolio.Trades.Select(trade => trade.Action));
+        var expectedQuantity = Math.Round(10_000m / 109m, 4, MidpointRounding.AwayFromZero);
+        Assert.Equal(expectedQuantity, buy.Quantity);
+        var expectedFinalCapital = Math.Round(expectedQuantity * 90m, 4);
+        Assert.Equal(expectedFinalCapital, result.FinalCapital);
+        Assert.Equal(expectedFinalCapital - 10_000m, result.TotalProfit);
         Assert.Equal(savedRun.FinalCapital, Math.Round(savedRun.Portfolio.Cash, 4));
         Assert.Single(await readContext.Trades.AsNoTracking()
             .Where(x => x.PortfolioId == savedRun.PortfolioId && x.ExitReason == ExitReason.StopLoss)
@@ -1054,6 +1324,77 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.Single(result.Recommendations);
     }
 
+    private sealed class CountingBacktestRepositories(TradingSimulatorDbContext dbContext)
+        : IBacktestRunRepository, IBacktestSnapshotRepository, IFeatureSnapshotRepository
+    {
+        private readonly BacktestRunRepository _runs = new(dbContext);
+        private readonly BacktestSnapshotRepository _snapshots = new(dbContext);
+        private readonly FeatureSnapshotRepository _features = new(dbContext);
+        public List<string> Calls { get; } = [];
+
+        public Task AddAsync(BacktestRun run)
+        {
+            Calls.Add("AddRun");
+            return _runs.AddAsync(run);
+        }
+
+        public Task UpdateAsync(BacktestRun run)
+        {
+            Calls.Add("UpdateRun");
+            return _runs.UpdateAsync(run);
+        }
+
+        public Task MarkFailedAsync(int runId)
+        {
+            Calls.Add("MarkFailed");
+            return _runs.MarkFailedAsync(runId);
+        }
+
+        public Task<bool> ExistsAsync(int id)
+        {
+            Calls.Add("Exists");
+            return _runs.ExistsAsync(id);
+        }
+
+        public Task<BacktestRun?> GetByIdAsync(int id)
+        {
+            Calls.Add("GetRun");
+            return _runs.GetByIdAsync(id);
+        }
+
+        public Task AddAsync(BacktestSnapshot snapshot)
+        {
+            Calls.Add("AddSnapshot");
+            return _snapshots.AddAsync(snapshot);
+        }
+
+        public Task AddRangeAsync(IReadOnlyList<BacktestSnapshot> snapshots)
+        {
+            Calls.Add("AddSnapshots");
+            return _snapshots.AddRangeAsync(snapshots);
+        }
+
+        public Task<List<BacktestSnapshot>> GetByRunIdAsync(int runId)
+        {
+            Calls.Add("GetSnapshots");
+            return _snapshots.GetByRunIdAsync(runId);
+        }
+
+        public Task SaveAsync(IReadOnlyList<ObservationResult> observations,
+            StrategyConfiguration strategyConfiguration, int? backtestRunId = null)
+        {
+            Calls.Add("SaveFeatures");
+            return _features.SaveAsync(observations, strategyConfiguration, backtestRunId);
+        }
+
+        public Task<List<FeatureSnapshot>> QueryAsync(DateOnly from, DateOnly to,
+            string? symbol = null, string? strategyId = null, int? backtestRunId = null)
+        {
+            Calls.Add("QueryFeatures");
+            return _features.QueryAsync(from, to, symbol, strategyId, backtestRunId);
+        }
+    }
+
     private sealed class FakeMarketDataProvider : IMarketDataProvider
     {
         private readonly Dictionary<string, IReadOnlyList<MarketCandle>> _data
@@ -1066,6 +1407,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
         public List<string> Calls { get; } = [];
 
         public string? ThrowForSymbol { get; init; }
+        public Action<string>? OnFetch { get; init; }
 
         public void SetData(string symbol, IReadOnlyList<MarketCandle> candles)
         {
@@ -1087,6 +1429,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
             LastRangeFrom = from.Date;
             LastRangeTo = to.Date;
             Calls.Add(symbol);
+            OnFetch?.Invoke(symbol);
 
             if (symbol == ThrowForSymbol)
             {

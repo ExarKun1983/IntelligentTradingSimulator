@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using IntelligentTradingSimulator.App.Configuration;
 using IntelligentTradingSimulator.App.Simulation;
@@ -198,6 +200,47 @@ public sealed class BacktestEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_CompletionProgressIoFailureDoesNotMarkPersistedRunFailed()
+    {
+        var engine = new BacktestEngine(
+            _runRepository,
+            new StubDayProcessor(),
+            new CompletionReportFailingProgress());
+
+        var result = await engine.RunAsync(
+            BuildRequest(new DateTime(2024, 4, 1), new DateTime(2024, 4, 1)));
+
+        Assert.Equal(BacktestRunStatus.Completed, result.Status);
+        Assert.Equal(10_000m, result.FinalCapital);
+
+        var saved = await _runRepository.GetByIdAsync(result.RunId);
+        Assert.NotNull(saved);
+        Assert.Equal(BacktestRunStatus.Completed, saved.Status);
+        Assert.Equal(result.FinalCapital, saved.FinalCapital);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_RunCreatedProgressOutputFailureDoesNotAbandonRun(bool objectDisposed)
+    {
+        var progress = new OutputFailingProgress(
+            failingReport: "Backtest run created",
+            failingOperation: null,
+            CreateOutputException(objectDisposed));
+        var engine = new BacktestEngine(_runRepository, new StubDayProcessor(), progress);
+
+        var result = await engine.RunAsync(
+            BuildRequest(new DateTime(2024, 4, 1), new DateTime(2024, 4, 1)));
+
+        Assert.Equal(BacktestRunStatus.Completed, result.Status);
+
+        var saved = await _runRepository.GetByIdAsync(result.RunId);
+        Assert.NotNull(saved);
+        Assert.Equal(BacktestRunStatus.Completed, saved.Status);
+    }
+
+    [Fact]
     public async Task RunAsync_MarksRunFailedWhenDayProcessorThrows()
     {
         var startDate = new DateTime(2024, 5, 1);
@@ -215,11 +258,37 @@ public sealed class BacktestEngineTests : IDisposable
         Assert.Equal(BacktestRunStatus.Failed, saved.Status);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_PersistsFailureWhenFailureProgressOutputFails(bool objectDisposed)
+    {
+        var date = new DateTime(2024, 5, 1);
+        var progress = new OutputFailingProgress(
+            failingReport: "Simulation failed",
+            failingOperation: "Marking backtest failed",
+            CreateOutputException(objectDisposed));
+        var engine = new BacktestEngine(
+            _runRepository,
+            new ThrowingDayProcessor(date),
+            progress);
+
+        var result = await engine.RunAsync(BuildRequest(date, date));
+
+        Assert.Equal(BacktestRunStatus.Failed, result.Status);
+        Assert.Equal("Simulated day processing failure.", result.ErrorMessage);
+
+        var saved = await _runRepository.GetByIdAsync(result.RunId);
+        Assert.NotNull(saved);
+        Assert.Equal(BacktestRunStatus.Failed, saved.Status);
+    }
+
     [Fact]
     public async Task RunAsync_MarksRunFailedWhenFinalPortfolioSaveThrows()
     {
         var repository = new FinalSaveFailingRepository(_dbContext);
-        var engine = new BacktestEngine(repository, new StubDayProcessor());
+        var progress = new SimulationProgressRecorder();
+        var engine = new BacktestEngine(repository, new StubDayProcessor(), progress);
 
         var result = await engine.RunAsync(
             BuildRequest(new DateTime(2024, 5, 1), new DateTime(2024, 5, 1)));
@@ -231,6 +300,98 @@ public sealed class BacktestEngineTests : IDisposable
         Assert.Equal(BacktestRunStatus.Failed, saved.Status);
         Assert.Null(saved.Portfolio);
         Assert.Empty(await _dbContext.Portfolios.ToListAsync());
+        Assert.Equal(0, progress.ActiveOperations);
+        Assert.Equal(
+            new[] { "Creating backtest run", "Processing simulated dates", "Saving final backtest result", "Marking backtest failed" },
+            progress.Operations.Select(x => x.Operation));
+        Assert.Equal("Simulation failed", progress.Reports.Last().Message);
+        Assert.True(progress.Reports.Last().Force);
+    }
+
+    [Fact]
+    public async Task RunAsync_AnnouncesPersistedIdAndKeepsDateScopeWhileProcessorIsPending()
+    {
+        var date = new DateTime(2024, 1, 5);
+        var progress = new SimulationProgressRecorder();
+        var processor = new PendingDayProcessor();
+        var pendingRun = new BacktestEngine(_runRepository, processor, progress)
+            .RunAsync(BuildRequest(date, date));
+        var request = await processor.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        try
+        {
+            Assert.False(pendingRun.IsCompleted);
+            Assert.Equal(1, progress.ActiveOperations);
+            var operation = progress.Operations.Last();
+            Assert.Equal("Processing simulated dates", operation.Operation);
+            Assert.Equal(request.BacktestRunId, operation.Context.RunId);
+            Assert.True(operation.Context.RunId > 0);
+            Assert.Equal(date, operation.Context.Date);
+            Assert.Equal(0, operation.Context.CompletedDates);
+            Assert.Equal(1, operation.Context.TotalDates);
+            var created = Assert.Single(progress.Reports, x => x.Message == "Backtest run created");
+            Assert.True(created.Force);
+            Assert.Equal(request.BacktestRunId, created.Context.RunId);
+        }
+        finally
+        {
+            processor.Completion.SetResult(new BacktestDayResult
+            {
+                Portfolio = request.Portfolio,
+                Snapshot = new BacktestSnapshot { PortfolioValue = request.Portfolio.TotalValue }
+            });
+            await pendingRun;
+        }
+        Assert.Equal(0, progress.ActiveOperations);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_ProgressCountsSuccessfulCalendarDatesAndClearsStaleContext(bool fail)
+    {
+        var start = new DateTime(2024, 1, 5);
+        var progress = new SimulationProgressRecorder
+        {
+            Context = new WorkflowProgressContext
+            {
+                Workflow = "stale", StrategyId = "stale", RunId = 999, Date = start.AddYears(-1),
+                CompletedDates = 99, TotalDates = 99, CompletedSymbols = 99, TotalSymbols = 99,
+                VariantIndex = 2, TotalVariants = 3
+            }
+        };
+        var processor = new StubDayProcessor();
+        var engine = new BacktestEngine(_runRepository,
+            fail ? new ThrowingDayProcessor(start.AddDays(1)) : processor, progress);
+
+        var result = await engine.RunAsync(BuildRequest(start, start.AddDays(2)));
+
+        var creating = progress.Operations.First();
+        Assert.Equal("Creating backtest run", creating.Operation);
+        Assert.Equal("backtest", creating.Context.Workflow);
+        Assert.Equal("momentum-default", creating.Context.StrategyId);
+        Assert.Null(creating.Context.RunId);
+        Assert.Null(creating.Context.Date);
+        Assert.Null(creating.Context.CompletedSymbols);
+        Assert.Null(creating.Context.TotalSymbols);
+        Assert.Equal(0, creating.Context.CompletedDates);
+        Assert.Equal(3, creating.Context.TotalDates);
+        var days = progress.Reports.Where(x => x.Message == "Processing simulation date").ToList();
+        Assert.Equal(fail ? 2 : 3, days.Count);
+        for (var index = 0; index < days.Count; index++)
+        {
+            Assert.Equal(start.AddDays(index), days[index].Context.Date);
+            Assert.Equal(index, days[index].Context.CompletedDates);
+            Assert.Equal(result.RunId, days[index].Context.RunId);
+        }
+        Assert.Equal(fail ? 1 : 3, progress.Context.CompletedDates);
+        Assert.Equal(2, progress.Context.VariantIndex);
+        Assert.Equal(3, progress.Context.TotalVariants);
+        Assert.Equal(fail ? "Simulation failed" : "Simulation complete", progress.Reports.Last().Message);
+        Assert.True(progress.Reports.Last().Force);
+        Assert.DoesNotContain(progress.Reports, x => x.Message == "Workflow complete");
+        Assert.Equal(0, progress.ActiveOperations);
+        if (!fail)
+            Assert.Equal(3, processor.CallCount);
     }
 
     [Fact]
@@ -274,6 +435,20 @@ public sealed class BacktestEngineTests : IDisposable
     }
 
     // ── Stubs ──────────────────────────────────────────────────────────────
+
+    private sealed class PendingDayProcessor : IBacktestDayProcessor
+    {
+        public TaskCompletionSource<BacktestDayRequest> Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<BacktestDayResult> Completion { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<BacktestDayResult> ProcessAsync(BacktestDayRequest request)
+        {
+            Started.SetResult(request);
+            return Completion.Task;
+        }
+    }
 
     private sealed class StubDayProcessor : IBacktestDayProcessor
     {
@@ -422,5 +597,89 @@ public sealed class BacktestEngineTests : IDisposable
 
         public Task MarkFailedAsync(int runId) =>
             _innerRepository.MarkFailedAsync(runId);
+    }
+
+    private sealed class CompletionReportFailingProgress : IWorkflowProgress
+    {
+        public WorkflowProgressContext Context { get; set; } = new();
+
+        public void Report(string message, bool force = false)
+        {
+            if (message == "Simulation complete")
+            {
+                throw new IOException("Progress output is unavailable.");
+            }
+        }
+
+        public IDisposable BeginOperation(string operation, string? symbol = null) =>
+            NoopScope.Instance;
+
+        private sealed class NoopScope : IDisposable
+        {
+            public static NoopScope Instance { get; } = new();
+
+            public void Dispose()
+            {
+            }
+        }
+
+    }
+
+    private static Exception CreateOutputException(bool objectDisposed) =>
+        objectDisposed
+            ? new ObjectDisposedException("progress")
+            : new IOException("Progress output is unavailable.");
+
+    private sealed class OutputFailingProgress(
+        string? failingReport,
+        string? failingOperation,
+        Exception exception) : IWorkflowProgress
+    {
+        public WorkflowProgressContext Context { get; set; } = new();
+
+        public void Report(string message, bool force = false)
+        {
+            if (message == failingReport)
+                throw exception;
+        }
+
+        public IDisposable BeginOperation(string operation, string? symbol = null)
+        {
+            if (operation == failingOperation)
+                throw exception;
+
+            return NoopScope.Instance;
+        }
+
+        private sealed class NoopScope : IDisposable
+        {
+            public static NoopScope Instance { get; } = new();
+
+            public void Dispose()
+            {
+            }
+        }
+    }
+}
+
+internal sealed class SimulationProgressRecorder : IWorkflowProgress
+{
+    public WorkflowProgressContext Context { get; set; } = new();
+    public List<(string Message, bool Force, WorkflowProgressContext Context)> Reports { get; } = [];
+    public List<(string Operation, string? Symbol, WorkflowProgressContext Context)> Operations { get; } = [];
+    public int ActiveOperations { get; private set; }
+
+    public void Report(string message, bool force = false) => Reports.Add((message, force, Context));
+
+    public IDisposable BeginOperation(string operation, string? symbol = null)
+    {
+        Operations.Add((operation, symbol, Context));
+        ActiveOperations++;
+        return new Scope(this);
+    }
+
+    private sealed class Scope(SimulationProgressRecorder owner) : IDisposable
+    {
+        public void Dispose() => owner.ActiveOperations--;
     }
 }
