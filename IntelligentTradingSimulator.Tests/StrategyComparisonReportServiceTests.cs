@@ -20,6 +20,7 @@ public sealed class StrategyComparisonReportServiceTests
         new BacktestSummaryReportResult
         {
             IsSuccess = true,
+            Status = IntelligentTradingSimulator.Core.Enums.BacktestRunStatus.Completed,
             StrategyId = strategyId,
             StartCapital = 100_000m,
             FinalCapital = finalCapital,

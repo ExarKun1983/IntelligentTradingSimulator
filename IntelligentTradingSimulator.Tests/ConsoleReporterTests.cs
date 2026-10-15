@@ -20,6 +20,51 @@ public sealed class ConsoleReporterTests
     }
 
     [Fact]
+    public void PrintResultReports_IncludeExplanationsWithoutBenchmarkMetrics()
+    {
+        var reporter = CreateReporter();
+        var summary = new BacktestSummaryReportResult
+        {
+            IsSuccess = true, Status = Core.Enums.BacktestRunStatus.Completed,
+            StrategyId = "test", ReturnPercent = -5m, BacktestRunId = 42,
+            StartDate = new(2024, 1, 1), EndDate = new(2024, 1, 31),
+            StartCapital = 100m, FinalCapital = 95m, Profit = -5m
+        };
+
+        var backtest = CaptureOutput(() => reporter.PrintBacktestSummary(summary));
+        var comparison = CaptureOutput(() => reporter.PrintVariantComparisonReport(
+            new StrategyComparisonReportService().Build([summary])));
+        _output.WriteLine(backtest);
+        _output.WriteLine(comparison);
+
+        Assert.Contains("Explanation: Strategy test returned -5%", backtest);
+        Assert.Contains("Benchmark metrics are unavailable", backtest);
+        Assert.Contains("Recovery Time:  N/A (no drawdown)", backtest);
+        Assert.DoesNotContain("Recovery Time:  N/A (not recovered)", backtest);
+        Assert.Contains("Explanation: Strategy results", comparison);
+        Assert.Contains("Strategy test: Return was -5%", comparison);
+        Assert.Contains("causal drivers and factor differences cannot be determined", comparison);
+    }
+
+    [Fact]
+    public void PrintResultReports_UsesAlternativeResultExplanationService()
+    {
+        var reporter = new ConsoleReporter(new PortfolioAllocationService(),
+            new PortfolioContributionService(), resultExplanationService: new AlternativeResultExplanationService());
+
+        Assert.Contains("Explanation: Alternative backtest.", CaptureOutput(() =>
+            reporter.PrintBacktestSummary(new BacktestSummaryReportResult())));
+        Assert.Contains("Explanation: Alternative comparison.", CaptureOutput(() =>
+            reporter.PrintVariantComparisonReport(new StrategyComparisonReport())));
+    }
+
+    private sealed class AlternativeResultExplanationService : IResultExplanationService
+    {
+        public ResultExplanation Explain(BacktestSummaryReportResult result) => new("Alternative backtest.", [], []);
+        public ResultExplanation Explain(StrategyComparisonReport report) => new("Alternative comparison.", [], []);
+    }
+
+    [Fact]
     public void PrintMarketRanking_UsesAlternativeExplanationService()
     {
         var service = new AlternativeExplanationService();
@@ -259,7 +304,9 @@ public sealed class ConsoleReporterTests
         [
             new BacktestSummaryReportResult
             {
-                StrategyId = "lowest-drawdown", IsSuccess = true, ReturnPercent = -5m, MaxDrawdownPercent = 1m
+                StrategyId = "lowest-drawdown", IsSuccess = true,
+                Status = IntelligentTradingSimulator.Core.Enums.BacktestRunStatus.Completed,
+                ReturnPercent = -5m, MaxDrawdownPercent = 1m
             },
             new BacktestSummaryReportResult
             {
@@ -267,7 +314,9 @@ public sealed class ConsoleReporterTests
             },
             new BacktestSummaryReportResult
             {
-                StrategyId = "higher-return", IsSuccess = true, ReturnPercent = 10m, MaxDrawdownPercent = 5m
+                StrategyId = "higher-return", IsSuccess = true,
+                Status = IntelligentTradingSimulator.Core.Enums.BacktestRunStatus.Completed,
+                ReturnPercent = 10m, MaxDrawdownPercent = 5m
             }
         ], metric);
 

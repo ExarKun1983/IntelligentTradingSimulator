@@ -99,6 +99,30 @@ history or establish causality for changed inputs. Console output uses the suppl
 ranking order and does not fetch previous runs or claim that a stock entered the
 top five without previous rank evidence. No LLM or external service is invoked.
 
+### Backtest and strategy comparison explanations
+
+Console backtest summaries (including `--backtest-run-id`) and variant comparison
+reports include deterministic narratives of the supplied persisted report metrics:
+capital, return, trades, maximum drawdown, peak-to-trough duration, recovery, and
+benchmark-relative performance. Alpha is the simple return difference, not a
+risk-adjusted measure. Comparison explanations respect the selected ranking metric,
+identify metric ties, and show return/drawdown differences without declaring an
+overall or future winner. Without a ranking, no winner is inferred.
+
+`IResultExplanationService` returns a `ResultExplanation` containing a summary,
+details, and evidence limitations. It can be replaced by a future LLM-assisted
+implementation without changing reporting or calculations. No external AI service
+is called. Failed or incomplete backtests do not receive completed-outcome claims.
+Unavailable benchmarks are explicitly reported. CSV formats are unchanged.
+
+Aggregate reports do not contain holding-level return attribution or factor
+breakdowns. Explanations therefore do not invent return/drawdown causes or factor
+differences from strategy names or scores. Persisted stock factor contributions
+explain ranking scores, not realized portfolio performance. Comparison reports
+also lack dates, so the generator cannot independently verify matching periods.
+Attribution and factor-history integration are follow-up work, not prediction or
+strategy tuning.
+
 ### Daily feature snapshots
 
 Apply the `AddFeatureSnapshots` migration before running analysis. Normal analysis

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 
@@ -25,6 +26,7 @@ public sealed class StrategyComparisonReportService : IStrategyComparisonReportS
             {
                 StrategyId = s.StrategyId,
                 IsSuccess = s.IsSuccess,
+                Status = s.Status,
                 ErrorMessage = s.ErrorMessage,
                 StartCapital = s.StartCapital,
                 FinalCapital = s.FinalCapital,
@@ -71,7 +73,7 @@ public sealed class StrategyComparisonReportService : IStrategyComparisonReportS
         StrategyComparisonSortMetric metric,
         string? benchmarkSymbol)
     {
-        if (!entry.IsSuccess)
+        if (!entry.IsSuccess || entry.Status != BacktestRunStatus.Completed)
             return null;
 
         var benchmark = entry.BenchmarkComparisons.FirstOrDefault(

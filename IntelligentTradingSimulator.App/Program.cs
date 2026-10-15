@@ -74,6 +74,7 @@ services.AddSingleton<PortfolioContributionService>();
 services.AddSingleton<PortfolioRebalancingService>();
 
 services.AddSingleton<ConsoleReporter>();
+services.AddSingleton<IResultExplanationService, ResultExplanationService>();
 services.AddSingleton<BacktestSummaryCsvExporter>();
 services.AddSingleton<BacktestSnapshotCsvExporter>();
 services.AddSingleton<StrategyComparisonCsvExporter>();
