@@ -13,15 +13,18 @@ public sealed class ConsoleReporter
     private readonly PortfolioAllocationService _allocationService;
     private readonly PortfolioContributionService _contributionService;
     private readonly IStockRankingExplanationService _explanationService;
+    private readonly IResultExplanationService _resultExplanationService;
 
     public ConsoleReporter(
         PortfolioAllocationService allocationService,
         PortfolioContributionService contributionService,
-        IStockRankingExplanationService? explanationService = null)
+        IStockRankingExplanationService? explanationService = null,
+        IResultExplanationService? resultExplanationService = null)
     {
         _allocationService = allocationService;
         _contributionService = contributionService;
         _explanationService = explanationService ?? new StockRankingExplanationService();
+        _resultExplanationService = resultExplanationService ?? new ResultExplanationService();
     }
 
     public void PrintMarketRanking(
@@ -261,6 +264,7 @@ public sealed class ConsoleReporter
     {
         Console.WriteLine();
         Console.WriteLine("===== STRATEGY COMPARISON REPORT =====");
+        PrintExplanation(_resultExplanationService.Explain(report));
 
         if (report.SortBy.HasValue)
         {
@@ -326,6 +330,7 @@ public sealed class ConsoleReporter
     {
         Console.WriteLine();
         Console.WriteLine("===== BACKTEST SUMMARY =====");
+        PrintExplanation(_resultExplanationService.Explain(result));
 
         if (!result.IsSuccess)
         {
@@ -348,7 +353,9 @@ public sealed class ConsoleReporter
         Console.WriteLine($"DD Duration:    {result.DrawdownDurationDays} day(s)");
         Console.WriteLine(result.RecoveryTimeDays.HasValue
             ? $"Recovery Time:  {result.RecoveryTimeDays.Value} day(s)"
-            : "Recovery Time:  N/A (not recovered)");
+            : result.MaxDrawdownPercent == 0m
+                ? "Recovery Time:  N/A (no drawdown)"
+                : "Recovery Time:  N/A (not recovered)");
 
         if (result.BenchmarkComparisons.Count == 0)
         {
@@ -367,5 +374,14 @@ public sealed class ConsoleReporter
             Console.WriteLine($"  Alpha:            {comparison.AlphaPercent:N2}%");
             Console.WriteLine($"  Outcome:          {comparison.Outcome}");
         }
+    }
+
+    private static void PrintExplanation(ResultExplanation explanation)
+    {
+        Console.WriteLine($"Explanation: {explanation.Summary}");
+        foreach (var detail in explanation.Details)
+            Console.WriteLine($"  {detail}");
+        foreach (var limitation in explanation.Limitations)
+            Console.WriteLine($"  Limitation: {limitation}");
     }
 }
