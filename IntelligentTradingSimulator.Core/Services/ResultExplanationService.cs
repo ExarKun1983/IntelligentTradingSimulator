@@ -43,6 +43,12 @@ public sealed class ResultExplanationService : IResultExplanationService
                 continue;
             }
 
+            if (entry.Status != BacktestRunStatus.Completed)
+            {
+                details.Add($"Strategy {entry.StrategyId} has no completed result; run status is {entry.Status}.");
+                continue;
+            }
+
             details.Add($"Strategy {entry.StrategyId}: " + string.Join(" ",
                 Metrics(entry.ReturnPercent, entry.MaxDrawdownPercent,
                     entry.DrawdownDurationDays, entry.RecoveryTimeDays, entry.TradesCount)));
@@ -57,17 +63,19 @@ public sealed class ResultExplanationService : IResultExplanationService
             ? "No strategy results to explain."
             : "Strategy results are described without an overall winner; no available ranking was supplied.";
         var top = report.TopStrategy;
-        if (top is { IsSuccess: true } && report.SortBy is { } metric &&
+        if (top is { IsSuccess: true, Status: BacktestRunStatus.Completed } && report.SortBy is { } metric &&
             Metric(top, metric, report.BenchmarkSymbol) is { } topValue)
         {
             summary = $"Strategy {top.StrategyId} is ranked first by {metric}={Number(topValue)}" +
                 (report.BenchmarkSymbol is null ? "." : $" against {report.BenchmarkSymbol}.");
             var ties = report.Entries.Where(entry => entry.IsSuccess &&
+                entry.Status == BacktestRunStatus.Completed &&
                 !ReferenceEquals(entry, top) && entry.Rank.HasValue &&
                 Metric(entry, metric, report.BenchmarkSymbol) == topValue).ToList();
             if (ties.Count > 0)
                 details.Add($"The leading metric is tied with {string.Join(", ", ties.Select(entry => entry.StrategyId))}; ordinal strategy-ID tie-breaking determines order, not metric superiority.");
-            foreach (var other in report.Entries.Where(entry => entry.IsSuccess && !ReferenceEquals(entry, top)))
+            foreach (var other in report.Entries.Where(entry =>
+                entry.IsSuccess && entry.Status == BacktestRunStatus.Completed && !ReferenceEquals(entry, top)))
                 details.Add($"Compared with {other.StrategyId}, {top.StrategyId} has a return difference of {Number(top.ReturnPercent - other.ReturnPercent)} percentage points and a maximum drawdown difference of {Number(top.MaxDrawdownPercent - other.MaxDrawdownPercent)} percentage points (positive drawdown difference means deeper loss).");
         }
 

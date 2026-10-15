@@ -22,10 +22,12 @@ public sealed class StrategyComparisonReportWorkflowTests
                 new StrategyComparisonCsvExporter());
             await workflow.RunAsync(
             [
-                new() { StrategyId = "lower", IsSuccess = true, ReturnPercent = -2m,
+                new() { StrategyId = "lower", IsSuccess = true,
+                    Status = IntelligentTradingSimulator.Core.Enums.BacktestRunStatus.Completed, ReturnPercent = -2m,
                     BenchmarkComparisons = [new() { Symbol = "SPY", AlphaPercent = -3m }] },
                 new() { StrategyId = "failed", ErrorMessage = "No data" },
-                new() { StrategyId = "higher", IsSuccess = true, ReturnPercent = 10m,
+                new() { StrategyId = "higher", IsSuccess = true,
+                    Status = IntelligentTradingSimulator.Core.Enums.BacktestRunStatus.Completed, ReturnPercent = 10m,
                     BenchmarkComparisons = [new() { Symbol = "SPY", AlphaPercent = 9m }] }
             ], sortBy, benchmark, path);
 

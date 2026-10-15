@@ -304,7 +304,9 @@ public sealed class ConsoleReporterTests
         [
             new BacktestSummaryReportResult
             {
-                StrategyId = "lowest-drawdown", IsSuccess = true, ReturnPercent = -5m, MaxDrawdownPercent = 1m
+                StrategyId = "lowest-drawdown", IsSuccess = true,
+                Status = IntelligentTradingSimulator.Core.Enums.BacktestRunStatus.Completed,
+                ReturnPercent = -5m, MaxDrawdownPercent = 1m
             },
             new BacktestSummaryReportResult
             {
@@ -312,7 +314,9 @@ public sealed class ConsoleReporterTests
             },
             new BacktestSummaryReportResult
             {
-                StrategyId = "higher-return", IsSuccess = true, ReturnPercent = 10m, MaxDrawdownPercent = 5m
+                StrategyId = "higher-return", IsSuccess = true,
+                Status = IntelligentTradingSimulator.Core.Enums.BacktestRunStatus.Completed,
+                ReturnPercent = 10m, MaxDrawdownPercent = 5m
             }
         ], metric);
 

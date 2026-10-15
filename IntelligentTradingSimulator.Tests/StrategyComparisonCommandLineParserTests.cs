@@ -1,3 +1,4 @@
+using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.App.Configuration;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
@@ -143,6 +144,7 @@ public sealed class StrategyComparisonCommandLineParserTests
             new BacktestSummaryReportResult
             {
                 IsSuccess = true,
+                Status = BacktestRunStatus.Completed,
                 StrategyId = "alpha-winner",
                 BenchmarkComparisons =
                 [
@@ -153,6 +155,7 @@ public sealed class StrategyComparisonCommandLineParserTests
             new BacktestSummaryReportResult
             {
                 IsSuccess = true,
+                Status = BacktestRunStatus.Completed,
                 StrategyId = "relative-winner",
                 BenchmarkComparisons =
                 [

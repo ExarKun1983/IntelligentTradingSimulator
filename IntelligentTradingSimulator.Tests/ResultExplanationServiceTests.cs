@@ -141,6 +141,32 @@ public sealed class ResultExplanationServiceTests
         Assert.DoesNotContain(result.Details, item => item.StartsWith("Strategy failed: Return"));
     }
 
+    [Theory]
+    [InlineData(BacktestRunStatus.Running)]
+    [InlineData(BacktestRunStatus.Failed)]
+    public void Explain_Comparison_SuccessfulIncompleteRunsAreNotRankedOrExplained(BacktestRunStatus status)
+    {
+        var completed = Completed();
+        completed.StrategyId = "completed";
+        completed.ReturnPercent = 10m;
+        var incomplete = Completed();
+        incomplete.StrategyId = status.ToString();
+        incomplete.Status = status;
+        incomplete.ReturnPercent = 100m;
+
+        var report = new StrategyComparisonReportService().Build(
+            [incomplete, completed], StrategyComparisonSortMetric.ReturnPercent);
+        var result = _service.Explain(report);
+
+        Assert.Equal("completed", report.TopStrategy?.StrategyId);
+        var incompleteEntry = Assert.Single(report.Entries, entry => entry.StrategyId == status.ToString());
+        Assert.Null(incompleteEntry.Rank);
+        Assert.Contains(result.Details, item =>
+            item.Contains($"{status} has no completed result; run status is {status}"));
+        Assert.DoesNotContain(result.Details, item => item.StartsWith($"Strategy {status}: Return"));
+        Assert.DoesNotContain(result.Details, item => item.Contains($"Compared with {status}"));
+    }
+
     [Fact]
     public void Explain_EmptyOrUnsortedComparison_DoesNotInventWinner()
     {

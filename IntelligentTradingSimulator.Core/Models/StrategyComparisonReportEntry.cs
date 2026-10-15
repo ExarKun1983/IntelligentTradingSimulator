@@ -1,3 +1,5 @@
+using IntelligentTradingSimulator.Core.Enums;
+
 namespace IntelligentTradingSimulator.Core.Models;
 
 public sealed class StrategyComparisonReportEntry
@@ -7,6 +9,8 @@ public sealed class StrategyComparisonReportEntry
     public int? Rank { get; set; }
 
     public bool IsSuccess { get; set; }
+
+    public BacktestRunStatus Status { get; set; }
 
     public string? ErrorMessage { get; set; }
 

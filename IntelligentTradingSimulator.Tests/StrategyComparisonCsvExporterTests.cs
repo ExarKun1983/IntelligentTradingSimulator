@@ -32,7 +32,8 @@ public sealed class StrategyComparisonCsvExporterTests
                 "default,1,True,,1000.25,1105.27625,10.5,2.1234567890123456789012345678,3,5,7\r\n",
                 writer.ToString());
             var properties = typeof(StrategyComparisonReportEntry).GetProperties()
-                .Where(p => p.Name != nameof(StrategyComparisonReportEntry.BenchmarkComparisons))
+                .Where(p => p.Name is not nameof(StrategyComparisonReportEntry.BenchmarkComparisons)
+                    and not nameof(StrategyComparisonReportEntry.Status))
                 .Select(p => p.Name).OrderBy(name => name).ToArray();
             Assert.Equal(properties, Header.Split(',').OrderBy(name => name).ToArray());
         }
@@ -186,6 +187,7 @@ public sealed class StrategyComparisonCsvExporterTests
         StrategyId = "default",
         Rank = 1,
         IsSuccess = true,
+        Status = IntelligentTradingSimulator.Core.Enums.BacktestRunStatus.Completed,
         StartCapital = 1000.25m,
         FinalCapital = 1105.27625m,
         ReturnPercent = 10.5m,
