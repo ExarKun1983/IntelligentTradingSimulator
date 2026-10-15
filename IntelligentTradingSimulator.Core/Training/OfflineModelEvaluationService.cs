@@ -43,7 +43,8 @@ public sealed class OfflineModelEvaluationService(
         foreach (var row in selected)
         {
             if (row.FeatureSchemaVersion != 1 || row.OutcomeDate <= row.AnalysisDate ||
-                row.Features.AnalysisDate != row.AnalysisDate || row.Features.Symbol != row.Symbol ||
+                row.Features.AnalysisDate != row.AnalysisDate ||
+                !string.Equals(row.Features.Symbol.Trim(), row.Symbol.Trim(), StringComparison.OrdinalIgnoreCase) ||
                 row.Features.Fundamentals?.AsOfDate > row.AnalysisDate)
                 throw new ArgumentException("Invalid or future-dated feature/label data.", nameof(dataset));
         }

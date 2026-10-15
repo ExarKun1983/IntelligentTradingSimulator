@@ -258,21 +258,21 @@ public class OfflineModelEvaluationTests
         var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         await using var context = new TradingSimulatorDbContext(options);
-        var source = Row("A", 1m, 2m);
-        var snapshot = new FeatureSnapshot
-        {
-            Symbol = source.Symbol, AnalysisDate = source.AnalysisDate, StrategyId = source.StrategyId,
-            Features = source.Features, StrategyConfigurationJson = "{}"
-        };
-        context.FeatureSnapshots.Add(snapshot);
-        await context.SaveChangesAsync();
-        context.FutureOutcomeLabels.Add(new FutureOutcomeLabel
-        {
-            FeatureSnapshotId = snapshot.Id, HorizonTradingDays = source.HorizonTradingDays,
-            OutcomeDate = source.OutcomeDate, ReturnPercent = source.ReturnPercent,
-            BenchmarkSymbol = source.BenchmarkSymbol
-        });
-        await context.SaveChangesAsync();
+        var source = Row("aapl", 1m, 2m);
+        var featureSnapshots = new FeatureSnapshotRepository(context);
+        await featureSnapshots.SaveAsync(
+            [new ObservationResult { Symbol = source.Symbol, Features = source.Features, Score = 1m }],
+            new StrategyConfiguration { Id = source.StrategyId });
+        var snapshot = Assert.Single(await featureSnapshots.QueryAsync(Date, Date));
+        await new FutureOutcomeLabelRepository(context).SaveAsync(
+        [
+            new FutureOutcomeLabel
+            {
+                FeatureSnapshotId = snapshot.Id, HorizonTradingDays = source.HorizonTradingDays,
+                OutcomeDate = source.OutcomeDate, ReturnPercent = source.ReturnPercent,
+                BenchmarkSymbol = source.BenchmarkSymbol
+            }
+        ]);
         var builder = new TrainingDatasetBuilder(
             new FeatureSnapshotRepository(context), new FutureOutcomeLabelRepository(context));
 
