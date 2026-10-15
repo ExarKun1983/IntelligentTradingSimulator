@@ -56,6 +56,7 @@ public sealed class MarketDataWorkflow
         var succeeded = 0;
         var skipped = 0;
         var failed = 0;
+        var unavailableFundamentals = 0;
         _progress.Context = _progress.Context with
         {
             Workflow = "market-data",
@@ -84,11 +85,16 @@ public sealed class MarketDataWorkflow
                 using var operation = _progress.BeginOperation("Fetching benchmark data", benchmarkSymbol);
                 benchmarkCandles = await _historicalDataService.GetHistoricalDailyUpToAsync(
                     benchmarkSymbol, from, analysisDate, analysisDate);
+                if (benchmarkCandles.Count == 0)
+                {
+                    Console.WriteLine($"Benchmark data unavailable for {benchmarkSymbol}.");
+                    _progress.Report($"Benchmark data unavailable for {benchmarkSymbol}", force: true);
+                }
             }
             catch (Exception)
             {
                 Console.WriteLine($"Benchmark data unavailable for {benchmarkSymbol}.");
-                _progress.Report($"Benchmark data unavailable for {benchmarkSymbol}");
+                _progress.Report($"Benchmark data unavailable for {benchmarkSymbol}", force: true);
             }
         }
 
@@ -139,10 +145,14 @@ public sealed class MarketDataWorkflow
                         if (fundamentalData?.AsOfDate > DateOnly.FromDateTime(analysisDate))
                             fundamentalData = null;
                         if (fundamentalData is null)
+                        {
+                            unavailableFundamentals++;
                             _progress.Report($"Fundamentals unavailable for {symbol}; continuing without fundamentals");
+                        }
                     }
                     catch (Exception ex)
                     {
+                        unavailableFundamentals++;
                         Console.WriteLine(
                             $"Failed to fetch fundamental data for {symbol} ({ex.GetType().Name}). Continuing without fundamentals.");
                         _progress.Report(
@@ -179,6 +189,12 @@ public sealed class MarketDataWorkflow
             }
         }
         _progress.Report($"Symbols processed: {succeeded} analyzed, {skipped} skipped, {failed} failed", force: true);
+        if (unavailableFundamentals > 0)
+        {
+            _progress.Report(
+                $"Fundamentals unavailable for {unavailableFundamentals} symbols; Continuing without fundamentals",
+                force: true);
+        }
 
         List<ObservationResult> rankedResults;
         IReadOnlyList<StockRecommendation> recommendations;

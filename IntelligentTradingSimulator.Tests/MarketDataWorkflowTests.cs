@@ -74,6 +74,70 @@ public sealed class MarketDataWorkflowTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task CollectAndAnalyzeAsync_ReportsEmptyBenchmarkWithoutRetryingProvider()
+    {
+        var date = new DateTime(2024, 1, 10);
+        using var progressOutput = new StringWriter();
+        using var progress = new ConsoleWorkflowProgress(
+            progressOutput, interval: TimeSpan.FromDays(1));
+        var provider = new FakeMarketDataProvider(
+            new Dictionary<string, IReadOnlyList<MarketCandle>>
+            {
+                ["SPY"] = [],
+                ["PASS"] = BuildCandles(date.AddDays(-4), 5)
+            });
+        var strategy = new StrategyConfiguration
+        {
+            UseRelativeStrength = true,
+            RelativeStrengthBenchmarkSymbol = "SPY"
+        };
+        var workflow = new MarketDataWorkflow(
+            provider, new MarketObservationAnalyzer(strategy), new PortfolioRecommendationService(),
+            new ObservationResultRepository(_dbContext), new FeatureSnapshotRepository(_dbContext),
+            strategy, timeProvider: new FixedTimeProvider(date), progress: progress);
+
+        await workflow.CollectAndAnalyzeAsync(["PASS"], date.AddDays(-4));
+
+        Assert.Equal(new[] { "SPY", "PASS" }, provider.Calls);
+        Assert.Single(progressOutput.ToString().Split(Environment.NewLine)
+            .Where(line => line.StartsWith("Benchmark data unavailable for SPY")));
+    }
+
+    [Fact]
+    public async Task CollectAndAnalyzeAsync_ConsoleProgressForcesOneAggregateFundamentalsWarning()
+    {
+        var date = new DateTime(2024, 1, 10);
+        using var progressOutput = new StringWriter();
+        using var progress = new ConsoleWorkflowProgress(
+            progressOutput, interval: TimeSpan.FromDays(1));
+        var provider = new FakeMarketDataProvider(
+            new Dictionary<string, IReadOnlyList<MarketCandle>>
+            {
+                ["AAA"] = BuildCandles(date.AddDays(-4), 5),
+                ["BBB"] = BuildCandles(date.AddDays(-4), 5),
+                ["CCC"] = BuildCandles(date.AddDays(-4), 5)
+            });
+        var fundamentalCalls = 0;
+        var fundamentals = new CallbackFundamentalDataProvider(_ =>
+        {
+            fundamentalCalls++;
+            return Task.FromResult<FundamentalData?>(null);
+        });
+        var strategy = new StrategyConfiguration { UseRelativeStrength = false };
+        var workflow = new MarketDataWorkflow(
+            provider, new MarketObservationAnalyzer(strategy), new PortfolioRecommendationService(),
+            new ObservationResultRepository(_dbContext), new FeatureSnapshotRepository(_dbContext),
+            strategy, fundamentals, new FixedTimeProvider(date), progress);
+
+        await workflow.CollectAndAnalyzeAsync(["AAA", "BBB", "CCC"], date.AddDays(-4));
+
+        var warning = Assert.Single(progressOutput.ToString().Split(Environment.NewLine)
+            .Where(line => line.StartsWith("Fundamentals unavailable for 3 symbols")));
+        Assert.Contains("Continuing without fundamentals", warning);
+        Assert.Equal(3, fundamentalCalls);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(1)]

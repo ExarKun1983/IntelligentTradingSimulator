@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using IntelligentTradingSimulator.App.Configuration;
@@ -196,6 +197,26 @@ public sealed class BacktestEngineTests : IDisposable
         var saved = await _runRepository.GetByIdAsync(result.RunId);
         Assert.NotNull(saved);
         Assert.Equal(BacktestRunStatus.Completed, saved.Status);
+    }
+
+    [Fact]
+    public async Task RunAsync_CompletionProgressIoFailureDoesNotMarkPersistedRunFailed()
+    {
+        var engine = new BacktestEngine(
+            _runRepository,
+            new StubDayProcessor(),
+            new CompletionReportFailingProgress());
+
+        var result = await engine.RunAsync(
+            BuildRequest(new DateTime(2024, 4, 1), new DateTime(2024, 4, 1)));
+
+        Assert.Equal(BacktestRunStatus.Completed, result.Status);
+        Assert.Equal(10_000m, result.FinalCapital);
+
+        var saved = await _runRepository.GetByIdAsync(result.RunId);
+        Assert.NotNull(saved);
+        Assert.Equal(BacktestRunStatus.Completed, saved.Status);
+        Assert.Equal(result.FinalCapital, saved.FinalCapital);
     }
 
     [Fact]
@@ -530,6 +551,31 @@ public sealed class BacktestEngineTests : IDisposable
 
         public Task MarkFailedAsync(int runId) =>
             _innerRepository.MarkFailedAsync(runId);
+    }
+
+    private sealed class CompletionReportFailingProgress : IWorkflowProgress
+    {
+        public WorkflowProgressContext Context { get; set; } = new();
+
+        public void Report(string message, bool force = false)
+        {
+            if (message == "Simulation complete")
+            {
+                throw new IOException("Progress output is unavailable.");
+            }
+        }
+
+        public IDisposable BeginOperation(string operation, string? symbol = null) =>
+            NoopScope.Instance;
+
+        private sealed class NoopScope : IDisposable
+        {
+            public static NoopScope Instance { get; } = new();
+
+            public void Dispose()
+            {
+            }
+        }
     }
 }
 

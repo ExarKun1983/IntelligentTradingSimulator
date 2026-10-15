@@ -169,6 +169,66 @@ public sealed class BacktestDayProcessorTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessAsync_IntentionalUniverseExclusionDoesNotConsumePartialDataWarning()
+    {
+        var date = new DateTime(2024, 1, 10);
+        var progress = new SimulationProgressRecorder();
+        var provider = new FakeMarketDataProvider();
+        provider.SetData("PASS", BuildCandles(date.AddDays(-5), 6));
+        provider.SetData("HELD", BuildCandles(date.AddDays(-5), 6));
+        provider.SetData("SHORT", BuildCandles(date, 1));
+        var processor = BuildProcessor(provider, progress: progress);
+        var strategy = new StrategyConfiguration
+        {
+            UseRelativeStrength = false,
+            StopLossPercent = 10m
+        };
+
+        await processor.ProcessAsync(new BacktestDayRequest
+        {
+            BacktestRunId = 17,
+            CurrentDate = date,
+            HistoricalStartDate = date.AddDays(-5),
+            Portfolio = new Portfolio
+            {
+                StartingCash = 1000m,
+                Cash = 1000m,
+                Positions = [new Position
+                {
+                    Symbol = "HELD", Quantity = 1m, AveragePrice = 100m, CurrentPrice = 100m
+                }]
+            },
+            StrategyConfiguration = strategy,
+            Symbols = ["PASS"]
+        });
+
+        Assert.DoesNotContain(progress.Reports, x => x.Message.StartsWith("Partial market data:"));
+
+        await processor.ProcessAsync(new BacktestDayRequest
+        {
+            BacktestRunId = 17,
+            CurrentDate = date.AddDays(1),
+            HistoricalStartDate = date.AddDays(-5),
+            Portfolio = new Portfolio
+            {
+                StartingCash = 1000m,
+                Cash = 1000m,
+                Positions = [new Position
+                {
+                    Symbol = "HELD", Quantity = 1m, AveragePrice = 100m, CurrentPrice = 100m
+                }]
+            },
+            StrategyConfiguration = strategy,
+            Symbols = ["SHORT"]
+        });
+
+        var warning = Assert.Single(progress.Reports
+            .Where(x => x.Message.StartsWith("Partial market data:")));
+        Assert.Contains("0 analyzed, 1 skipped, 0 failed", warning.Message);
+        Assert.True(warning.Force);
+    }
+
+    [Fact]
     public async Task ProcessAsync_ProgressScopesCachedRetrievalsAndCountsEverySymbolOutcome()
     {
         var date = new DateTime(2024, 1, 10);

@@ -94,6 +94,7 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             : request.Symbols).ToList();
         var succeeded = 0;
         var skipped = 0;
+        var insufficientHistorySkipped = 0;
         var failed = 0;
         _progress.Context = _progress.Context with { CompletedSymbols = 0, TotalSymbols = symbols.Count };
 
@@ -129,8 +130,14 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                     prices[symbol] = usableCandles.Last().Close;
                 }
 
-                if (usableCandles.Count < 5 ||
-                    !request.Symbols.Contains(symbol, StringComparer.OrdinalIgnoreCase))
+                if (usableCandles.Count < 5)
+                {
+                    skipped++;
+                    insufficientHistorySkipped++;
+                    continue;
+                }
+
+                if (!request.Symbols.Contains(symbol, StringComparer.OrdinalIgnoreCase))
                 {
                     skipped++;
                     continue;
@@ -164,11 +171,12 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             }
         }
 
-        if ((skipped > 0 || failed > 0) && _partialDataWarningRunId != request.BacktestRunId)
+        if ((insufficientHistorySkipped > 0 || failed > 0) &&
+            _partialDataWarningRunId != request.BacktestRunId)
         {
             _partialDataWarningRunId = request.BacktestRunId;
             _progress.Report(
-                $"Partial market data: {succeeded} analyzed, {skipped} skipped, {failed} failed",
+                $"Partial market data: {succeeded} analyzed, {insufficientHistorySkipped} skipped, {failed} failed",
                 force: true);
         }
 

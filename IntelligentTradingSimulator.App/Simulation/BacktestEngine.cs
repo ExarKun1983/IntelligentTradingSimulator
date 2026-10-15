@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading.Tasks;
 using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Interfaces;
@@ -65,6 +66,7 @@ public sealed class BacktestEngine : IBacktestEngine
             Cash = request.InitialCapital
         };
 
+        BacktestEngineResult result;
         try
         {
             var currentDate = request.StartDate.Date;
@@ -119,9 +121,8 @@ public sealed class BacktestEngine : IBacktestEngine
             {
                 await _runRepository.UpdateAsync(run);
             }
-            _progress.Report("Simulation complete", force: true);
 
-            return new BacktestEngineResult
+            result = new BacktestEngineResult
             {
                 RunId = run.Id,
                 Status = BacktestRunStatus.Completed,
@@ -148,5 +149,15 @@ public sealed class BacktestEngine : IBacktestEngine
                 ErrorMessage = ex.Message
             };
         }
+
+        try
+        {
+            _progress.Report("Simulation complete", force: true);
+        }
+        catch (IOException)
+        {
+        }
+
+        return result;
     }
 }
