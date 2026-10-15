@@ -72,6 +72,33 @@ Fundamentals retain their own reporting date and missing-metric semantics; the
 row does not perform historical snapshot selection or guarantee point-in-time
 fundamental availability. Training and model invocation are not introduced.
 
+### Ranking explanations
+
+Console market rankings include template-based explanations of each supplied
+rank, score, and factor's actual input, status, and applied contribution.
+The largest positive and negative contributions are identified only when the
+breakdown reconciles to the ranking score. Disabled, unavailable, neutral, and
+disqualified factors remain distinct. Missing data does not establish a cause
+(for example, missing RSI does not necessarily mean insufficient history).
+Quality-filter reasons are copied from scorer diagnostics, not reconstructed.
+ATR and fundamental snapshots are contextual information, not additional score
+contributions. No explanations change scores, ranking order, or eligibility.
+
+`IStockRankingExplanationService` separates narrative generation from scoring and
+reporting, allowing a future alternative generator. The template implementation
+uses `StockRankingFeatures` when present and legacy observation fields otherwise.
+It retains factor evidence alongside narrative text and uses invariant,
+full-precision decimal formatting. Unknown factors are reported without inventing
+their inputs. Scorers without breakdowns explicitly report that causes are unknown.
+
+Call `Explain(observation, rank, previous)` with an optional earlier observation
+for the same symbol to describe score and shared contribution changes. Changed
+factor sets or unavailable contributions are reported as comparison limitations.
+Callers must ensure comparable strategy/run contexts; the service does not load
+history or establish causality for changed inputs. Console output uses the supplied
+ranking order and does not fetch previous runs or claim that a stock entered the
+top five without previous rank evidence. No LLM or external service is invoked.
+
 ### Daily feature snapshots
 
 Apply the `AddFeatureSnapshots` migration before running analysis. Normal analysis
