@@ -44,7 +44,7 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
             Assert.Contains("apikey=test-api-key", url);
             Assert.Contains("limit=1", url);
 
-            if (url.Contains("/financial-growth/AAPL"))
+            if (url.Contains("/stable/financial-growth?symbol=AAPL&"))
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
@@ -52,7 +52,7 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
                 };
             }
 
-            if (url.Contains("/ratios/AAPL"))
+            if (url.Contains("/stable/ratios?symbol=AAPL&"))
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
@@ -65,7 +65,7 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
 
         var provider = CreateProvider(handler);
 
-        var result = await provider.GetFundamentalDataAsync("aapl");
+        var result = await provider.GetFundamentalDataAsync(" aapl ");
 
         Assert.NotNull(result);
         Assert.Equal("AAPL", result.Symbol);
@@ -107,7 +107,7 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    url.Contains("/financial-growth/AAPL") ? growthJson : ratiosJson)
+                    url.Contains("/stable/financial-growth?symbol=AAPL&") ? growthJson : ratiosJson)
             };
         });
 
@@ -172,7 +172,7 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
         var handler = new MockHttpMessageHandler(request =>
         {
             var url = request.RequestUri!.ToString();
-            if (url.Contains("/financial-growth/MSFT"))
+            if (url.Contains("/stable/financial-growth?symbol=MSFT&"))
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
@@ -180,7 +180,7 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
                 };
             }
 
-            if (url.Contains("/ratios/MSFT"))
+            if (url.Contains("/stable/ratios?symbol=MSFT&"))
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
@@ -204,13 +204,16 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
         Assert.Equal(0.85m, result.Debt);
     }
 
-    [Fact]
-    public async Task GetFundamentalDataAsync_ReturnsNullWhenBothEndpointsReturnEmpty()
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task GetFundamentalDataAsync_ReturnsNullWhenBothEndpointsReturnEmpty(string content)
     {
         var handler = new MockHttpMessageHandler(_ =>
             new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("[]")
+                Content = new StringContent(content)
             });
 
         var provider = CreateProvider(handler);
@@ -233,8 +236,10 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
         Assert.Null(result);
     }
 
-    [Fact]
-    public async Task GetFundamentalDataAsync_ReturnsPartialWhenOnlyOneEndpointSucceeds()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GetFundamentalDataAsync_ReturnsPartialWhenOnlyOneEndpointSucceeds(bool growthSucceeds)
     {
         var growthJson = """
             [
@@ -249,11 +254,13 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
         var handler = new MockHttpMessageHandler(request =>
         {
             var url = request.RequestUri!.ToString();
-            if (url.Contains("/financial-growth/XYZ"))
+            if (url.Contains("/stable/financial-growth?symbol=XYZ&") == growthSucceeds)
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new StringContent(growthJson)
+                    Content = new StringContent(growthSucceeds
+                        ? growthJson
+                        : """[{"date":"2025-06-30","netProfitMargin":0.20,"debtEquityRatio":0.75}]""")
                 };
             }
 
@@ -267,10 +274,58 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
         Assert.NotNull(result);
         Assert.Equal("XYZ", result.Symbol);
         Assert.Equal(new DateOnly(2025, 6, 30), result.AsOfDate);
-        Assert.Equal(5.0m, result.RevenueGrowthPercent);
+        Assert.Equal(growthSucceeds ? 5.0m : (decimal?)null, result.RevenueGrowthPercent);
         Assert.Null(result.EpsGrowthPercent);
-        Assert.Null(result.Margins);
-        Assert.Null(result.Debt);
+        Assert.Equal(growthSucceeds ? (decimal?)null : 20m, result.Margins);
+        Assert.Equal(growthSucceeds ? (decimal?)null : 0.75m, result.Debt);
+    }
+
+    [Theory]
+    [InlineData("https://financialmodelingprep.com/", "/stable/")]
+    [InlineData("https://example.test/fmp", "/fmp/stable/")]
+    public async Task GetFundamentalDataAsync_UsesStableEndpointsWithEncodedQueryParameters(
+        string baseUrl,
+        string expectedPathPrefix)
+    {
+        var requestedPaths = new List<string>();
+        var handler = new MockHttpMessageHandler(request =>
+        {
+            var uri = request.RequestUri!;
+            Assert.Equal(new Uri(baseUrl).Host, uri.Host);
+            Assert.Equal("?symbol=BRK%2FB%20%26%2B%3F%23&limit=1&apikey=key%20%26%2B%2F%3F%23", uri.Query);
+            requestedPaths.Add(uri.AbsolutePath);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("[]")
+            };
+        });
+        var provider = CreateProvider(handler, " key &+/?# ", baseUrl);
+
+        await provider.GetFundamentalDataAsync(" brk/b &+?# ");
+
+        Assert.Equal(
+            new[] { expectedPathPrefix + "financial-growth", expectedPathPrefix + "ratios" },
+            requestedPaths.OrderBy(path => path, StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("Error Message")]
+    [InlineData("errorMessage")]
+    [InlineData("error")]
+    public async Task GetFundamentalDataAsync_PropagatesProviderJsonError(string errorProperty)
+    {
+        var handler = new MockHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(
+                    new Dictionary<string, string> { [errorProperty] = "Provider rejected request." }))
+            });
+        var provider = CreateProvider(handler);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => provider.GetFundamentalDataAsync("AAPL"));
+
+        Assert.Contains("Provider rejected request.", exception.Message);
     }
 
     [Fact]
@@ -458,7 +513,8 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
 
     private static FinancialModelingPrepFundamentalDataProvider CreateProvider(
         HttpMessageHandler handler,
-        string apiKey = ValidApiKey)
+        string apiKey = ValidApiKey,
+        string baseUrl = "https://financialmodelingprep.com/")
     {
         var httpClient = new HttpClient(handler)
         {
@@ -468,7 +524,7 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
         var options = Options.Create(new FinancialModelingPrepOptions
         {
             ApiKey = apiKey,
-            BaseUrl = "https://financialmodelingprep.com/"
+            BaseUrl = baseUrl
         });
 
         return new FinancialModelingPrepFundamentalDataProvider(httpClient, options);
