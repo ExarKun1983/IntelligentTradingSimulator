@@ -20,6 +20,8 @@ public sealed class BacktestSummaryReportResult
 
     public DateTime EndDate { get; set; }
 
+    public DateTime? HistoricalStartDate { get; set; }
+
     public decimal StartCapital { get; set; }
 
     public decimal FinalCapital { get; set; }

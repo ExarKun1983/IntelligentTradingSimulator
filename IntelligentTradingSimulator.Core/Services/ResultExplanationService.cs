@@ -81,7 +81,7 @@ public sealed class ResultExplanationService : IResultExplanationService
 
         return new(summary, details,
             [AttributionLimitation,
-             "Ranking describes only the selected metric, not overall quality or future performance. Comparison reports do not carry date ranges; period comparability cannot be verified here."]);
+             "Ranking describes only the selected metric, not overall quality or future performance. Verify each variant's reported date range and historical window before comparing results."]);
     }
 
     private static List<string> Metrics(decimal returns, decimal drawdown, int duration, int? recovery, int trades) =>

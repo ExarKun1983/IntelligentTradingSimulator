@@ -38,6 +38,34 @@ public sealed class StrategyComparisonReportServiceTests
         };
 
     [Fact]
+    public void Build_PreservesEachVariantsDatesIncludingFailedRuns()
+    {
+        var summaries = new[]
+        {
+            BuildSuccess("default"),
+            BuildSuccess("conservative"),
+            BuildFailed("aggressive")
+        };
+        var lookbacks = new[] { 90, 180, 60 };
+        for (var index = 0; index < summaries.Length; index++)
+        {
+            summaries[index].StartDate = new DateTime(2020, 1, 1);
+            summaries[index].EndDate = new DateTime(2024, 12, 31);
+            summaries[index].HistoricalStartDate = summaries[index].StartDate.AddDays(-lookbacks[index]);
+        }
+
+        var report = CreateService().Build(summaries, StrategyComparisonSortMetric.ReturnPercent);
+
+        foreach (var entry in report.Entries)
+        {
+            var summary = summaries.Single(s => s.StrategyId == entry.StrategyId);
+            Assert.Equal(summary.StartDate, entry.StartDate);
+            Assert.Equal(summary.EndDate, entry.EndDate);
+            Assert.Equal(summary.HistoricalStartDate, entry.HistoricalStartDate);
+        }
+    }
+
+    [Fact]
     public void Build_ReturnsOneEntryPerSummary()
     {
         var service = CreateService();

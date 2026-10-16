@@ -47,12 +47,14 @@ public sealed class StrategyVariantRunner : IStrategyVariantRunner
             };
             _progress.Report("Starting strategy variant", force: true);
             var factory = new BacktestEngineRequestFactory(variant);
+            var variantHistoricalStartDate =
+                request.StartDate.Date.AddDays(-variant.LookbackDays);
 
             var engineRequest = factory.Create(
                 name: $"{request.NamePrefix} [{variant.Id}]",
                 startDate: request.StartDate,
                 endDate: request.EndDate,
-                historicalStartDate: request.HistoricalStartDate,
+                historicalStartDate: variantHistoricalStartDate,
                 initialCapital: request.InitialCapital,
                 symbols: request.Symbols);
 
@@ -83,6 +85,7 @@ public sealed class StrategyVariantRunner : IStrategyVariantRunner
             results.Add(new StrategyVariantRunResult
             {
                 StrategyId = variant.Id,
+                HistoricalStartDate = engineRequest.HistoricalStartDate,
                 EngineResult = engineResult
             });
         }

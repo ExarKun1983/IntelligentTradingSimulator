@@ -116,6 +116,80 @@ public sealed class StrategyVariantRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_UsesEachVariantsLookbackInsteadOfSharedHistoricalStartDate()
+    {
+        var engine = new CapturingEngine();
+        var variants = new List<StrategyConfiguration>
+        {
+            new() { Id = "default", LookbackDays = 90 },
+            new() { Id = "conservative", LookbackDays = 180 },
+            new() { Id = "aggressive", LookbackDays = 60 }
+        };
+        var request = BuildRunRequest(
+            new DateTime(2020, 1, 1, 15, 30, 0),
+            new DateTime(2024, 12, 31));
+        request.HistoricalStartDate = request.StartDate.AddDays(-365);
+
+        var result = await new StrategyVariantRunner(engine).RunAsync(variants, request);
+
+        var expectedDates = new[]
+        {
+            new DateTime(2019, 10, 3),
+            new DateTime(2019, 7, 5),
+            new DateTime(2019, 11, 2)
+        };
+        Assert.Equal(expectedDates, engine.Requests.Select(r => r.HistoricalStartDate));
+        Assert.Equal(expectedDates, result.Results.Select(r => r.HistoricalStartDate));
+        Assert.All(engine.Requests, r =>
+        {
+            Assert.Equal(request.StartDate, r.StartDate);
+            Assert.Equal(request.EndDate, r.EndDate);
+            Assert.Equal(request.InitialCapital, r.InitialCapital);
+            Assert.Same(request.Symbols, r.Symbols);
+        });
+    }
+
+    [Fact]
+    public async Task RunAsync_DefaultUsesSameHistoricalWindowAsStandaloneBacktest()
+    {
+        var variant = BuildVariant("default");
+        var request = BuildRunRequest(new DateTime(2020, 1, 1), new DateTime(2024, 12, 31));
+        request.HistoricalStartDate = request.StartDate.AddDays(-180);
+        var standaloneRequest = new BacktestEngineRequestFactory(variant).Create(
+            "Standalone default",
+            request.StartDate,
+            request.EndDate,
+            request.StartDate.AddDays(-variant.LookbackDays),
+            request.InitialCapital,
+            request.Symbols);
+        var engine = new CapturingEngine();
+
+        await new StrategyVariantRunner(engine).RunAsync(
+            [new() { Id = "conservative", LookbackDays = 180 }, variant], request);
+
+        var comparisonRequest = engine.Requests.Single(r => r.StrategyId == "default");
+        Assert.Equal(standaloneRequest.StartDate, comparisonRequest.StartDate);
+        Assert.Equal(standaloneRequest.EndDate, comparisonRequest.EndDate);
+        Assert.Equal(standaloneRequest.HistoricalStartDate, comparisonRequest.HistoricalStartDate);
+        Assert.Same(standaloneRequest.StrategyConfiguration, comparisonRequest.StrategyConfiguration);
+        Assert.Same(standaloneRequest.Symbols, comparisonRequest.Symbols);
+        Assert.Equal(standaloneRequest.InitialCapital, comparisonRequest.InitialCapital);
+    }
+
+    [Fact]
+    public async Task RunAsync_PreservesHistoricalWindowWhenEngineThrows()
+    {
+        var date = new DateTime(2020, 1, 1);
+        var runner = new StrategyVariantRunner(new ThrowingEngine("default"));
+
+        var batch = await runner.RunAsync([BuildVariant("default")], BuildRunRequest(date, date));
+
+        var result = Assert.Single(batch.Results);
+        Assert.Equal(BacktestRunStatus.Failed, result.EngineResult.Status);
+        Assert.Equal(new DateTime(2019, 10, 3), result.HistoricalStartDate);
+    }
+
+    [Fact]
     public async Task RunAsync_ReturnsOneResultPerVariant()
     {
         var engine = BuildEngine();

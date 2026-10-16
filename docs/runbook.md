@@ -697,6 +697,15 @@ dotnet run --project IntelligentTradingSimulator.App -- \
 ```
 
 The variants command loads every entry under `Strategies` and prints a comparison of completed results.
+Each variant uses its own `LookbackDays`: its historical start is the backtest
+start date (at midnight) minus that many calendar days, just as for a standalone
+backtest with the same strategy and dates. The console comparison identifies each
+variant's backtest period, historical data window (historical start through backtest
+end), and initial lookback in days, including failed runs. This is the requested
+strategy window; indicators such as the 52-week high may fetch additional history.
+The historical start remains fixed as the simulation advances; it is not a rolling
+lookback. Equivalent input windows do not guarantee identical results if external
+market or fundamental data changes between executions.
 
 Add `--comparison-sort-by=ReturnPercent` to rank the comparison by total return.
 Supported metrics are `ReturnPercent`, `MaxDrawdownPercent`, `TradesCount`,
@@ -748,7 +757,7 @@ variant, including failures. Strategy names are the report's `StrategyId` values
 Base columns match the comparison entry fields:
 
 ```text
-StrategyId,Rank,IsSuccess,ErrorMessage,StartCapital,FinalCapital,ReturnPercent,MaxDrawdownPercent,DrawdownDurationDays,RecoveryTimeDays,TradesCount
+StrategyId,Rank,IsSuccess,ErrorMessage,StartDate,EndDate,HistoricalStartDate,StartCapital,FinalCapital,ReturnPercent,MaxDrawdownPercent,DrawdownDurationDays,RecoveryTimeDays,TradesCount
 ```
 
 For each benchmark present anywhere in the report, columns are appended in
@@ -758,6 +767,10 @@ ordinal symbol order as `<symbol>.StrategyReturnPercent`,
 `QQQ` and `SPY` has both column groups on every row; benchmarks do not create
 extra rows. Unavailable benchmark metrics, ranks, and recovery times are empty.
 Failed variants retain their status and error but have empty performance metrics.
+Dates use `yyyy-MM-dd`. `StartDate` and `EndDate` identify the backtest period;
+`HistoricalStartDate` identifies each variant's requested history start. Historical
+start is empty when unavailable (for example, a summary loaded from an older
+persisted run); it is not reconstructed from potentially changed configuration.
 No calculations or rankings are changed by export.
 
 Files use UTF-8 without a BOM, CRLF record separators, and invariant decimal
