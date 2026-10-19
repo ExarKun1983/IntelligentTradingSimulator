@@ -66,12 +66,15 @@ public sealed class MarketCandleRepository(TradingSimulatorDbContext dbContext) 
                 x.Volume != group.First().Volume)))
             throw new ArgumentException("Conflicting candles were returned for the same date.");
 
+        var isolationLevel = dbContext.Database.IsSqlServer()
+            ? IsolationLevel.ReadCommitted
+            : IsolationLevel.Serializable;
         await using var transaction = dbContext.Database.IsRelational()
-            ? await dbContext.Database.BeginTransactionAsync(IsolationLevel.Serializable)
+            ? await dbContext.Database.BeginTransactionAsync(isolationLevel)
             : null;
         if (dbContext.Database.IsSqlServer())
         {
-            // Coordinate independent processes before acquiring shared range locks.
+            // Coordinate independent processes before reading or inserting snapshots.
             var resource = $"MarketCandles:{source.ToUpperInvariant()}:{symbol}";
             await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
                 DECLARE @result int;

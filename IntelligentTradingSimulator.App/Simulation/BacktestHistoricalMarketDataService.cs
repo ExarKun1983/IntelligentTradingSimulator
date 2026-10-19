@@ -90,15 +90,16 @@ public sealed class BacktestHistoricalMarketDataService
             var currentDay = DateTime.UtcNow.Date;
             var source = HistoricalMarketDataPolicy.Source;
             var mode = HistoricalMarketDataPolicy.PriceAdjustmentMode;
-            var stored = _repository is null ? [] :
-                await _repository.GetRangeAsync(symbol, source, mode, fromDate, toDate);
             var coverage = _repository is null ? [] :
                 await _repository.GetCoverageAsync(symbol, source, mode, fromDate, toDate);
+            var stored = _repository is null ? [] :
+                await _repository.GetRangeAsync(symbol, source, mode, fromDate, toDate);
             var hasPersistedData = stored.Count > 0 || coverage.Count > 0;
             var covered = coverage.Select(x => (From: x.From, To: x.To))
                 .Concat(stored.Select(x => (From: x.Date.Date, To: x.Date.Date)));
             var missing = FindMissingRanges(fromDate, toDate, covered);
             var fetched = new List<MarketCandle>();
+            var upserted = false;
             foreach (var range in missing)
             {
                 _progress.Report($"{symbol} | {range.From:yyyy-MM-dd} to {range.To:yyyy-MM-dd} | external provider");
@@ -106,10 +107,13 @@ public sealed class BacktestHistoricalMarketDataService
                     ?? throw new InvalidOperationException("The market-data provider returned no response.");
                 var bounded = loaded.Where(x => x.Date.Date >= range.From && x.Date.Date <= range.To).ToList();
                 if (_repository is not null)
+                {
                     await _repository.UpsertAsync(symbol, source, mode, range.From, range.To, bounded);
+                    upserted = true;
+                }
                 fetched.AddRange(bounded);
             }
-            if (_repository is not null)
+            if (_repository is not null && upserted)
                 stored = await _repository.GetRangeAsync(symbol, source, mode, fromDate, toDate);
             var origin = missing.Count == 0 ? "database" :
                 hasPersistedData ? "database and external provider" : "external provider";

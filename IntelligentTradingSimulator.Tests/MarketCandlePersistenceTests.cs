@@ -3,11 +3,22 @@ using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Infrastructure.Migrations;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
+using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Migrations.Operations;
 
 namespace IntelligentTradingSimulator.Tests;
+
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class SqlServerFactAttribute : FactAttribute
+{
+    public SqlServerFactAttribute()
+    {
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ITS_SQLSERVER_TEST_CONNECTION_STRING")))
+            Skip = "Set ITS_SQLSERVER_TEST_CONNECTION_STRING to run SQL Server concurrency tests.";
+    }
+}
 
 public sealed class MarketCandlePersistenceTests : IAsyncLifetime
 {
@@ -169,10 +180,12 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
         provider.Candles = [Candle(0, 500), Candle(1, 500), Candle(3, 500)];
         await using var nextContext = NewContext();
         var progress = new RecordingProgress();
-        var nextService = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(nextContext), progress);
+        var countingRepository = new CountingRepository(new MarketCandleRepository(nextContext));
+        var nextService = new BacktestHistoricalMarketDataService(provider, countingRepository, progress);
         var overlap = await nextService.GetHistoricalDailyUpToAsync("AAPL", Start.AddDays(1), Start.AddDays(5), Start.AddDays(2));
         Assert.Equal(100m, Assert.Single(overlap).Close);
         Assert.Single(provider.Requests);
+        Assert.Equal(1, countingRepository.RangeReadCount);
         Assert.Contains(progress.Messages, x => x.EndsWith("| database"));
     }
 
@@ -180,7 +193,7 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
     public async Task Service_FetchesOnlyLeadingInternalAndTrailingGaps()
     {
         await using var context = NewContext();
-        var repository = new MarketCandleRepository(context);
+        var repository = new CountingRepository(new MarketCandleRepository(context));
         await repository.UpsertAsync("AAPL", Source, Mode, Start.AddDays(2), Start.AddDays(3), [Candle(2)]);
         await repository.UpsertAsync("AAPL", Source, Mode, Start.AddDays(6), Start.AddDays(7), [Candle(6)]);
         var provider = new FakeProvider
@@ -198,6 +211,7 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
             (Start.AddDays(8), Start.AddDays(9))
         }, provider.Requests);
         Assert.Equal(8, result.Count);
+        Assert.Equal(2, repository.RangeReadCount);
         Assert.Equal(100, result.Single(x => x.Date == Start.AddDays(2)).Close);
         Assert.Equal(8, await context.MarketCandles.CountAsync());
         Assert.Contains(progress.Messages, x => x.EndsWith("| database and external provider"));
@@ -310,6 +324,60 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
         Assert.Equal(4, await context.MarketCandles.CountAsync());
     }
 
+    [SqlServerFact]
+    public async Task SqlServer_ConcurrentIndependentUpsertsPreserveCommittedSnapshots()
+    {
+        var configuredConnectionString = Environment.GetEnvironmentVariable("ITS_SQLSERVER_TEST_CONNECTION_STRING");
+
+        var connectionStringBuilder = new SqlConnectionStringBuilder(configuredConnectionString)
+        {
+            InitialCatalog = $"MarketCandleConcurrency_{Guid.NewGuid():N}"
+        };
+        var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
+            .UseSqlServer(connectionStringBuilder.ConnectionString)
+            .Options;
+
+        try
+        {
+            await using (var setupContext = new TradingSimulatorDbContext(options))
+                await setupContext.Database.EnsureCreatedAsync();
+
+            async Task Upsert(string symbol, decimal close)
+            {
+                await using var context = new TradingSimulatorDbContext(options);
+                await new MarketCandleRepository(context).UpsertAsync(
+                    symbol, Source, Mode, Start, Start.AddDays(2), [Candle(0, close)]);
+            }
+
+            await Task.WhenAll(Upsert("AAPL", 100m), Upsert("MSFT", 100m));
+            await Task.WhenAll(Upsert("NVDA", 200m), Upsert("NVDA", 300m));
+
+            await using var verifyContext = new TradingSimulatorDbContext(options);
+            var candles = await verifyContext.MarketCandles.AsNoTracking().OrderBy(x => x.Symbol).ToListAsync();
+            Assert.Collection(candles,
+                x => Assert.Equal("AAPL", x.Symbol),
+                x => Assert.Equal("MSFT", x.Symbol),
+                x =>
+                {
+                    Assert.Equal("NVDA", x.Symbol);
+                    Assert.Contains(x.Close, new[] { 200m, 300m });
+                });
+            Assert.All(candles, x => Assert.Equal(Start, x.Date));
+            var coverage = await verifyContext.MarketDataCoverage.AsNoTracking().OrderBy(x => x.Symbol).ToListAsync();
+            Assert.Equal(new[] { "AAPL", "MSFT", "NVDA" }, coverage.Select(x => x.Symbol));
+            Assert.All(coverage, x =>
+            {
+                Assert.Equal(Start, x.From);
+                Assert.Equal(Start.AddDays(2), x.To);
+            });
+        }
+        finally
+        {
+            await using var cleanupContext = new TradingSimulatorDbContext(options);
+            await cleanupContext.Database.EnsureDeletedAsync();
+        }
+    }
+
     [Fact]
     public async Task Service_FailedLoadIsMemoizedButNewScopeCanRetry_WithoutCertifyingInvalidResponse()
     {
@@ -357,10 +425,12 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
     private sealed class CountingRepository(IMarketCandleRepository inner) : IMarketCandleRepository
     {
         public int ReadCount { get; private set; }
+        public int RangeReadCount { get; private set; }
         public Func<Task>? BeforeCoverage { get; init; }
         public Task<IReadOnlyList<MarketCandle>> GetRangeAsync(string symbol, string source, string mode, DateTime from, DateTime to)
         {
             ReadCount++;
+            RangeReadCount++;
             return inner.GetRangeAsync(symbol, source, mode, from, to);
         }
         public async Task<IReadOnlyList<MarketDataCoverage>> GetCoverageAsync(string symbol, string source, string mode, DateTime from, DateTime to)
