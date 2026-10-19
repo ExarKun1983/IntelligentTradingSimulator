@@ -48,15 +48,7 @@ public sealed class BacktestHistoricalMarketDataService
                 cacheKey,
                 _ => new Lazy<Task<IReadOnlyList<MarketCandle>>>(() => LoadRangeAsync(symbol, fromDate, toDate)));
 
-        try
-        {
-            return await load.Value;
-        }
-        catch
-        {
-            _cachedRanges.TryRemove(new KeyValuePair<string, Lazy<Task<IReadOnlyList<MarketCandle>>>>(cacheKey, load));
-            throw;
-        }
+        return await load.Value;
     }
 
     public async Task<IReadOnlyList<MarketCandle>> GetHistoricalDailyUpToAsync(

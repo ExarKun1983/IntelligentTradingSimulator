@@ -36,15 +36,20 @@ public sealed class YahooMarketDataProvider
         var yahooClient =
             new YahooClient();
 
+        // Yahoo's period2 is exclusive; the application range is inclusive.
+        DateTime? exclusiveEnd = toDate == DateTime.MaxValue.Date
+            ? null
+            : DateTime.SpecifyKind(toDate.AddDays(1), DateTimeKind.Utc);
         var data =
             await yahooClient.GetHistoricalDataAsync(
                 symbol,
                 DataFrequency.Daily,
-                fromDate);
+                DateTime.SpecifyKind(fromDate, DateTimeKind.Utc),
+                exclusiveEnd);
 
         return data
             .Where(x =>
-                x.Date.Date <= toDate)
+                x.Date.Date >= fromDate && x.Date.Date <= toDate)
             .Select(x => new MarketCandle
             {
                 Date = x.Date,

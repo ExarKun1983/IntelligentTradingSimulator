@@ -120,6 +120,8 @@ Progress identifies database, external-provider, or combined reads. Exact-range
 in-memory caching avoids repeated database reads within a scope, while durable
 coverage supports overlapping requests and subsequent processes. Every backtest
 result remains filtered to its simulated date, even when the cached range is wider.
+As before, failed requests are memoized within the current scope; start a new
+command/scope to retry after resolving a provider or database failure.
 Ordinary non-backtest market-data workflows continue using `IMarketDataProvider`.
 
 ## Ranking feature inputs

@@ -1,9 +1,11 @@
 using IntelligentTradingSimulator.App.Simulation;
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
+using IntelligentTradingSimulator.Infrastructure.Migrations;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Migrations.Operations;
 
 namespace IntelligentTradingSimulator.Tests;
 
@@ -30,6 +32,37 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
         Date = Start.AddDays(day), Open = close, High = close + 1m,
         Low = close - 1m, Close = close, Volume = 1000m
     };
+
+    [Fact]
+    public void Migration_AddsOnlyMarketDataTablesAndUniqueIndexes_AndCanBeReversed()
+    {
+        var migration = new AddMarketCandles();
+        var tables = migration.UpOperations.OfType<CreateTableOperation>().ToList();
+        Assert.Equal(2, tables.Count);
+        var candles = Assert.Single(tables, x => x.Name == "MarketCandles");
+        Assert.Equal("date", Assert.Single(candles.Columns, x => x.Name == "Date").ColumnType);
+        Assert.Equal(12, Assert.Single(candles.Columns, x => x.Name == "Close").Scale);
+        Assert.Contains(candles.Columns, x => x.Name == "DownloadedAt" && !x.IsNullable);
+        Assert.Contains(candles.Columns, x => x.Name == "PriceAdjustmentMode" && !x.IsNullable);
+        Assert.Contains(tables, x => x.Name == "MarketDataCoverage");
+        var indexes = migration.UpOperations.OfType<CreateIndexOperation>().ToList();
+        Assert.Equal(2, indexes.Count);
+        Assert.All(indexes, x => Assert.True(x.IsUnique));
+        Assert.Contains(indexes, x => x.Table == "MarketCandles" &&
+            x.Columns.SequenceEqual(["Symbol", "Source", "Date"]));
+        Assert.Equal(new[] { "MarketCandles", "MarketDataCoverage" },
+            migration.DownOperations.OfType<DropTableOperation>().Select(x => x.Name));
+
+        using var sqlServerContext = new TradingSimulatorDbContext(
+            new DbContextOptionsBuilder<TradingSimulatorDbContext>().UseSqlServer().Options);
+        Assert.False(sqlServerContext.Database.HasPendingModelChanges());
+        var query = sqlServerContext.MarketCandles.Where(x =>
+            x.Symbol == "AAPL" && x.Source == Source && x.Date >= Start && x.Date <= Start.AddDays(3))
+            .OrderBy(x => x.Date).ToQueryString();
+        Assert.Contains("[MarketCandles]", query);
+        Assert.Contains("[Source]", query);
+        Assert.Contains("ORDER BY", query);
+    }
 
     [Fact]
     public async Task Repository_RoundTripsRangeAcrossContexts_AndBulkUpsertPreservesSnapshot()
@@ -205,22 +238,42 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Service_FailedLoadCanBeRetried_WithoutCertifyingInvalidResponse()
+    public async Task Service_ConcurrentDifferentRangesSerializeScopedDatabaseAccess()
+    {
+        await using var context = NewContext();
+        var repository = new MarketCandleRepository(context);
+        var provider = new FakeProvider { Candles = [Candle(0), Candle(1), Candle(2), Candle(3)] };
+        var service = new BacktestHistoricalMarketDataService(provider, repository);
+        var results = await Task.WhenAll(
+            service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)),
+            service.GetHistoricalDailyRangeAsync("AAPL", Start.AddDays(1), Start.AddDays(3)));
+        Assert.All(results, x => Assert.Equal(3, x.Count));
+        Assert.Equal(new[] { (Start, Start.AddDays(2)), (Start.AddDays(3), Start.AddDays(3)) }, provider.Requests);
+        Assert.Equal(4, await context.MarketCandles.CountAsync());
+    }
+
+    [Fact]
+    public async Task Service_FailedLoadIsMemoizedButNewScopeCanRetry_WithoutCertifyingInvalidResponse()
     {
         await using var context = NewContext();
         var provider = new FakeProvider { Fail = true };
         var service = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(context));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
+        Assert.Single(provider.Requests);
         Assert.Empty(await context.MarketDataCoverage.ToListAsync());
         provider.Fail = false;
         var invalid = Candle(0);
         invalid.Volume = -1;
         provider.Candles = [invalid];
+        service = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(context));
         await Assert.ThrowsAsync<ArgumentException>(() =>
             service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
         Assert.Empty(await context.MarketDataCoverage.ToListAsync());
         provider.Candles = [Candle(0)];
+        service = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(context));
         Assert.Single(await service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
         Assert.Equal(3, provider.Requests.Count);
     }
