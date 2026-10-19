@@ -399,7 +399,7 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Service_FailedLoadIsMemoizedButNewScopeCanRetry_WithoutCertifyingInvalidResponse()
+    public async Task Service_FailedLoadCanRetryInSameScope_WithoutCertifyingInvalidResponse()
     {
         await using var context = NewContext();
         var provider = new FakeProvider { Fail = true };
@@ -408,20 +408,18 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
             service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
-        Assert.Single(provider.Requests);
+        Assert.Equal(2, provider.Requests.Count);
         Assert.Empty(await context.MarketDataCoverage.ToListAsync());
         provider.Fail = false;
         var invalid = Candle(0);
         invalid.Volume = -1;
         provider.Candles = [invalid];
-        service = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(context));
         await Assert.ThrowsAsync<ArgumentException>(() =>
             service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
         Assert.Empty(await context.MarketDataCoverage.ToListAsync());
         provider.Candles = [Candle(0)];
-        service = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(context));
         Assert.Single(await service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
-        Assert.Equal(3, provider.Requests.Count);
+        Assert.Equal(4, provider.Requests.Count);
     }
 
     private sealed class FakeProvider : IMarketDataProvider
