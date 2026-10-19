@@ -1,6 +1,6 @@
 # Local development runbook
 
-This guide covers the current console application and its SQL Server and Yahoo Finance dependencies. Backtests and the regular simulation retrieve market data from Yahoo Finance, so those runs require an internet connection.
+This guide covers the current console application and its SQL Server and Yahoo Finance dependencies. Backtests reuse persisted historical candles; missing ranges and the regular simulation require Yahoo Finance access.
 
 For the connected feature-to-dataset-to-evaluation flow, implemented AI boundaries, safety constraints, and explicitly future roadmap, see the [AI-ready architecture and workflows](../README.md#ai-ready-architecture-and-workflows). The API and command examples below describe today's implementation; selecting the `AI` engine does not load a trained model.
 
@@ -76,6 +76,51 @@ In `IntelligentTradingSimulator.App/appsettings.json`, set `ConnectionStrings:Tr
 ```
 
 Use a SQL Server login with permission to create and update the application's database schema. The app project copies `appsettings.json` to its output directory. Keep real credentials local; do not commit them.
+
+## Persistent historical market data
+
+Apply the `AddMarketCandles` migration before running backtests or synchronization.
+Preload an inclusive range without starting a backtest:
+
+```bash
+dotnet run --project IntelligentTradingSimulator.App -- --sync-market-data --from=2019-01-01 --to=2024-12-31
+```
+
+By default this loads the stock universe and SPY/QQQ/IWM benchmarks. Restrict it with
+`--symbols=AAPL,MSFT,SPY`. Both dates are required, must be ordered, and must precede
+today (UTC). `--no-progress` works as for other workflows. Synchronization exits
+after loading; run the backtest or variants command separately against the same
+database. Include the strategy lookback and 52-week history before the backtest
+start (the analyzer can require 504 calendar days), as well as all held symbols
+and benchmarks, to avoid provider calls during a backtest.
+
+`MarketCandles` stores normalized symbols, daily OHLCV, `Source=YahooFinance`,
+`PriceAdjustmentMode=YahooOhlc`, and UTC `DownloadedAt`. `YahooOhlc` means the
+provider's Open/High/Low/Close fields, **not** its dividend-adjusted AdjustedClose.
+No additional adjustment is performed. Yahoo may incorporate corporate-action
+adjustments into OHLC; these are provider-reported values, not guaranteed
+point-in-time unadjusted prices. An incompatible adjustment convention for the
+same source/date is rejected, never silently mixed.
+
+The unique `(Symbol, Source, Date)` index prevents duplicate candles. Bulk upsert
+is **first download wins**: repeat/overlapping downloads retain existing OHLCV and
+timestamps so strategy variants and later processes reuse identical stored input.
+The database is the snapshot; retain a database backup for reproducibility across
+database resets. This is not a versioned corporate-action or as-of-data service.
+Today's incomplete candles and future candles are not persisted or marked covered.
+
+`MarketDataCoverage` records successfully fetched inclusive intervals, including
+empty weekends/holidays, in the same transaction as the candles. Retrieval reads
+the database first, subtracts covered intervals and already stored candle dates,
+and requests only the remaining calendar gaps. A successful empty provider response
+is considered covered; failures, null responses, and invalid OHLCV are not.
+Unexpected provider omissions within a successful response therefore require an
+explicit database repair; there is no automatic refresh of stored snapshots.
+Progress identifies database, external-provider, or combined reads. Exact-range
+in-memory caching avoids repeated database reads within a scope, while durable
+coverage supports overlapping requests and subsequent processes. Every backtest
+result remains filtered to its simulated date, even when the cached range is wider.
+Ordinary non-backtest market-data workflows continue using `IMarketDataProvider`.
 
 ## Ranking feature inputs
 
