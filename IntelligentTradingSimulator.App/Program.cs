@@ -29,6 +29,14 @@ void FinishCommand(string message)
 
 try
 {
+if (!MarketDataSyncCommandLineParser.TryParse(
+    args, out var synchronizeMarketData, out var syncFrom, out var syncTo, out var syncSymbols, out var syncError))
+{
+    Console.WriteLine(syncError);
+    Environment.ExitCode = 1;
+    return;
+}
+
 if (!StrategyTuningCommandLineParser.TryParse(args, out var tuningInput, out var tuningOutput, out var tuningError))
 {
     Console.WriteLine(tuningError);
@@ -138,6 +146,19 @@ services.AddSingleton<IStrategyComparisonReportService, StrategyComparisonReport
 await using var provider = services.BuildServiceProvider();
 
 using var scope = provider.CreateScope();
+
+if (synchronizeMarketData)
+{
+    var historicalData = scope.ServiceProvider.GetRequiredService<BacktestHistoricalMarketDataService>();
+    foreach (var symbol in syncSymbols)
+    {
+        using var operation = progress.BeginOperation("Synchronizing historical market data", symbol);
+        var candles = await historicalData.GetHistoricalDailyRangeAsync(symbol, syncFrom, syncTo);
+        Console.WriteLine($"{symbol}: {candles.Count} candles available for {syncFrom:yyyy-MM-dd} to {syncTo:yyyy-MM-dd}.");
+    }
+    FinishCommand("Market-data synchronization completed");
+    return;
+}
 
 var backtestRunIdArg = Array.Find(
     args,

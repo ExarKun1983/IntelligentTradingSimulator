@@ -35,6 +35,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IBacktestSnapshotRepository, BacktestSnapshotRepository>();
         services.AddScoped<IFeatureSnapshotRepository, FeatureSnapshotRepository>();
         services.AddScoped<IFutureOutcomeLabelRepository, FutureOutcomeLabelRepository>();
+        services.AddScoped<IMarketCandleRepository, MarketCandleRepository>();
         services.AddScoped<FutureOutcomeLabelWorkflow>();
         services.AddScoped<TrainingDatasetBuilder>();
         services.AddScoped<IBacktestSummaryReportService, BacktestSummaryReportService>();

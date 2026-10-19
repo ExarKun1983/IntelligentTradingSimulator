@@ -223,6 +223,103 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     b.ToTable("FutureOutcomeLabels", (string)null);
                 });
 
+            modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.MarketCandleEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<decimal>("Close")
+                        .HasPrecision(28, 12)
+                        .HasColumnType("decimal(28,12)");
+
+                    b.Property<DateTime>("Date")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime>("DownloadedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("High")
+                        .HasPrecision(28, 12)
+                        .HasColumnType("decimal(28,12)");
+
+                    b.Property<decimal>("Low")
+                        .HasPrecision(28, 12)
+                        .HasColumnType("decimal(28,12)");
+
+                    b.Property<decimal>("Open")
+                        .HasPrecision(28, 12)
+                        .HasColumnType("decimal(28,12)");
+
+                    b.Property<string>("PriceAdjustmentMode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Symbol")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<decimal>("Volume")
+                        .HasPrecision(28, 4)
+                        .HasColumnType("decimal(28,4)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Symbol", "Source", "Date")
+                        .IsUnique();
+
+                    b.ToTable("MarketCandles", (string)null);
+                });
+
+            modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.MarketDataCoverage", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("DownloadedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("From")
+                        .HasColumnType("date");
+
+                    b.Property<string>("PriceAdjustmentMode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Symbol")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTime>("To")
+                        .HasColumnType("date");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Symbol", "Source", "PriceAdjustmentMode", "From", "To")
+                        .IsUnique();
+
+                    b.ToTable("MarketDataCoverage", (string)null);
+                });
+
             modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.ObservationResultEntity", b =>
                 {
                     b.Property<int>("Id")

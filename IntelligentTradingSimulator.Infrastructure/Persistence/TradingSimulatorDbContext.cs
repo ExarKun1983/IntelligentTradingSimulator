@@ -42,6 +42,8 @@ public sealed class TradingSimulatorDbContext : DbContext
 
     public DbSet<FeatureSnapshot> FeatureSnapshots => Set<FeatureSnapshot>();
     public DbSet<FutureOutcomeLabel> FutureOutcomeLabels => Set<FutureOutcomeLabel>();
+    public DbSet<MarketCandleEntity> MarketCandles => Set<MarketCandleEntity>();
+    public DbSet<MarketDataCoverage> MarketDataCoverage => Set<MarketDataCoverage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -51,6 +53,34 @@ public sealed class TradingSimulatorDbContext : DbContext
         ConfigureBacktestSnapshot(modelBuilder);
         ConfigureFeatureSnapshot(modelBuilder);
         ConfigureFutureOutcomeLabel(modelBuilder);
+        ConfigureMarketData(modelBuilder);
+    }
+
+    private static void ConfigureMarketData(ModelBuilder modelBuilder)
+    {
+        var candle = modelBuilder.Entity<MarketCandleEntity>();
+        candle.ToTable("MarketCandles");
+        candle.HasKey(x => x.Id);
+        candle.Property(x => x.Symbol).HasMaxLength(20).IsRequired();
+        candle.Property(x => x.Source).HasMaxLength(50).IsRequired();
+        candle.Property(x => x.PriceAdjustmentMode).HasMaxLength(50).IsRequired();
+        candle.Property(x => x.Date).HasColumnType("date");
+        candle.Property(x => x.Open).HasPrecision(28, 12);
+        candle.Property(x => x.High).HasPrecision(28, 12);
+        candle.Property(x => x.Low).HasPrecision(28, 12);
+        candle.Property(x => x.Close).HasPrecision(28, 12);
+        candle.Property(x => x.Volume).HasPrecision(28, 4);
+        candle.HasIndex(x => new { x.Symbol, x.Source, x.Date }).IsUnique();
+
+        var coverage = modelBuilder.Entity<MarketDataCoverage>();
+        coverage.ToTable("MarketDataCoverage");
+        coverage.HasKey(x => x.Id);
+        coverage.Property(x => x.Symbol).HasMaxLength(20).IsRequired();
+        coverage.Property(x => x.Source).HasMaxLength(50).IsRequired();
+        coverage.Property(x => x.PriceAdjustmentMode).HasMaxLength(50).IsRequired();
+        coverage.Property(x => x.From).HasColumnType("date");
+        coverage.Property(x => x.To).HasColumnType("date");
+        coverage.HasIndex(x => new { x.Symbol, x.Source, x.PriceAdjustmentMode, x.From, x.To }).IsUnique();
     }
 
     private static void ConfigureFutureOutcomeLabel(ModelBuilder modelBuilder)
