@@ -69,18 +69,34 @@ public sealed class MarketCandleRepository(TradingSimulatorDbContext dbContext) 
         await using var transaction = dbContext.Database.IsRelational()
             ? await dbContext.Database.BeginTransactionAsync(IsolationLevel.Serializable)
             : null;
-        var existing = await dbContext.MarketCandles
+        if (dbContext.Database.IsSqlServer())
+        {
+            // Coordinate independent processes before acquiring shared range locks.
+            var resource = $"MarketCandles:{source.ToUpperInvariant()}:{symbol}";
+            await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
+                DECLARE @result int;
+                EXEC @result = sys.sp_getapplock
+                    @Resource = {resource}, @LockMode = N'Exclusive',
+                    @LockOwner = N'Transaction', @LockTimeout = 60000;
+                IF @result < 0 THROW 51000, 'Could not acquire the market-data snapshot lock.', 1;
+                """);
+        }
+        var existing = await dbContext.MarketCandles.AsNoTracking()
             .Where(x => x.Symbol == symbol && x.Source == source && x.Date >= from && x.Date <= to)
             .ToListAsync();
         if (existing.Any(x => x.PriceAdjustmentMode != priceAdjustmentMode))
             throw new InvalidOperationException("Cannot mix price-adjustment conventions for a market-data source.");
+        var existingCoverage = await dbContext.MarketDataCoverage.AsNoTracking()
+            .Where(x => x.Symbol == symbol && x.Source == source && x.PriceAdjustmentMode == priceAdjustmentMode &&
+                x.From <= to && x.To >= from).ToListAsync();
         var existingDates = existing.Select(x => x.Date).ToHashSet();
         var downloadedAt = DateTime.UtcNow;
         var coverageEnd = to < downloadedAt.Date ? to : downloadedAt.Date.AddDays(-1);
 
         // First download wins: an upsert must not revise an existing backtest snapshot.
         dbContext.MarketCandles.AddRange(candles.DistinctBy(x => x.Date.Date)
-            .Where(x => x.Date.Date <= coverageEnd && !existingDates.Contains(x.Date.Date))
+            .Where(x => x.Date.Date <= coverageEnd && !existingDates.Contains(x.Date.Date) &&
+                !existingCoverage.Any(range => range.From <= x.Date.Date && range.To >= x.Date.Date))
             .Select(x => new MarketCandleEntity
             {
                 Symbol = symbol, Source = source, PriceAdjustmentMode = priceAdjustmentMode,
@@ -89,9 +105,7 @@ public sealed class MarketCandleRepository(TradingSimulatorDbContext dbContext) 
             }));
 
         // Do not certify today's incomplete session or future dates as fully downloaded.
-        if (coverageEnd >= from && !await dbContext.MarketDataCoverage.AnyAsync(x =>
-                x.Symbol == symbol && x.Source == source && x.PriceAdjustmentMode == priceAdjustmentMode &&
-                x.From <= from && x.To >= coverageEnd))
+        if (coverageEnd >= from && !existingCoverage.Any(x => x.From <= from && x.To >= coverageEnd))
         {
             dbContext.MarketDataCoverage.Add(new MarketDataCoverage
             {

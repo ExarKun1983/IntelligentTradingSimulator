@@ -87,6 +87,7 @@ public sealed class BacktestHistoricalMarketDataService
         await _loadLock.WaitAsync();
         try
         {
+            var currentDay = DateTime.UtcNow.Date;
             var source = HistoricalMarketDataPolicy.Source;
             var mode = HistoricalMarketDataPolicy.PriceAdjustmentMode;
             var stored = _repository is null ? [] :
@@ -113,7 +114,10 @@ public sealed class BacktestHistoricalMarketDataService
             var origin = missing.Count == 0 ? "database" :
                 hasPersistedData ? "database and external provider" : "external provider";
             _progress.Report($"{symbol} | {fromDate:yyyy-MM-dd} to {toDate:yyyy-MM-dd} | {origin}");
-            return stored.Concat(fetched).DistinctBy(x => x.Date.Date).OrderBy(x => x.Date).ToList();
+            // A competing download may have certified an empty interval first.
+            // Only the committed snapshot is authoritative for completed days.
+            var nonPersisted = _repository is null ? fetched : fetched.Where(x => x.Date.Date >= currentDay);
+            return stored.Concat(nonPersisted).DistinctBy(x => x.Date.Date).OrderBy(x => x.Date).ToList();
         }
         finally
         {

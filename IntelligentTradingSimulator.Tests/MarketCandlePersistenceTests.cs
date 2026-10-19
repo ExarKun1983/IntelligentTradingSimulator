@@ -222,6 +222,41 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Repository_OverlappingUpsertPreservesPreviouslyCoveredEmptyDates()
+    {
+        await using var context = NewContext();
+        var repository = new MarketCandleRepository(context);
+        await repository.UpsertAsync("AAPL", Source, Mode, Start.AddDays(1), Start.AddDays(2), [Candle(1)]);
+        await repository.UpsertAsync("AAPL", Source, Mode, Start, Start.AddDays(3),
+            [Candle(0), Candle(1, 200), Candle(2), Candle(3)]);
+        var result = await repository.GetRangeAsync("AAPL", Source, Mode, Start, Start.AddDays(3));
+        Assert.Equal(new[] { Start, Start.AddDays(1), Start.AddDays(3) }, result.Select(x => x.Date));
+        Assert.All(result, x => Assert.Equal(100m, x.Close));
+    }
+
+    [Fact]
+    public async Task Service_DelayedResponseUsesWinningCommittedSnapshotIncludingEmptyDates()
+    {
+        await using var context = NewContext();
+        var provider = new FakeProvider
+        {
+            Candles = [Candle(0, 200), Candle(1, 200), Candle(2, 200)],
+            BeforeReturn = async () =>
+            {
+                await using var otherContext = NewContext();
+                await new MarketCandleRepository(otherContext).UpsertAsync(
+                    "AAPL", Source, Mode, Start, Start.AddDays(2), [Candle(0)]);
+            }
+        };
+        var service = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(context));
+        var result = await service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2));
+        var winner = Assert.Single(result);
+        Assert.Equal(Start, winner.Date);
+        Assert.Equal(100m, winner.Close);
+        Assert.Single(await context.MarketCandles.ToListAsync());
+    }
+
+    [Fact]
     public async Task Service_ConcurrentExactRangeRequestsUseMemoryWithoutFurtherDatabaseReads()
     {
         await using var context = NewContext();
@@ -283,6 +318,7 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
         public IReadOnlyList<MarketCandle> Candles { get; set; } = [];
         public List<(DateTime From, DateTime To)> Requests { get; } = [];
         public bool Fail { get; set; }
+        public Func<Task>? BeforeReturn { get; init; }
         public Task<IReadOnlyList<MarketCandle>> GetHistoricalDailyAsync(string symbol, DateTime from) =>
             throw new NotSupportedException();
         public async Task<IReadOnlyList<MarketCandle>> GetHistoricalDailyAsync(string symbol, DateTime from, DateTime to)
@@ -290,6 +326,7 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
             Requests.Add((from, to));
             await Task.Yield();
             if (Fail) throw new InvalidOperationException("Provider unavailable");
+            if (BeforeReturn is not null) await BeforeReturn();
             return Candles;
         }
     }

@@ -105,6 +105,10 @@ same source/date is rejected, never silently mixed.
 The unique `(Symbol, Source, Date)` index prevents duplicate candles. Bulk upsert
 is **first download wins**: repeat/overlapping downloads retain existing OHLCV and
 timestamps so strategy variants and later processes reuse identical stored input.
+Covered empty dates are preserved too: a delayed overlapping response cannot fill
+a gap already certified by an earlier download. SQL Server writes take a
+transaction-owned application lock per source/symbol to coordinate separate
+processes before reading/inserting the snapshot.
 The database is the snapshot; retain a database backup for reproducibility across
 database resets. This is not a versioned corporate-action or as-of-data service.
 Today's incomplete candles and future candles are not persisted or marked covered.
