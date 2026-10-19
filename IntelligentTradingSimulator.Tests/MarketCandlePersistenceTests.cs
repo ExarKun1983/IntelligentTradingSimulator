@@ -257,6 +257,29 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Service_CommitBetweenInitialReadsDoesNotCacheStaleCandles()
+    {
+        await using var context = NewContext();
+        var repository = new CountingRepository(new MarketCandleRepository(context))
+        {
+            BeforeCoverage = async () =>
+            {
+                await using var otherContext = NewContext();
+                await new MarketCandleRepository(otherContext).UpsertAsync(
+                    "AAPL", Source, Mode, Start, Start.AddDays(2), [Candle(0)]);
+            }
+        };
+        var provider = new FakeProvider();
+        var service = new BacktestHistoricalMarketDataService(provider, repository);
+        var result = await service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2));
+        Assert.Equal(100m, Assert.Single(result).Close);
+        Assert.Empty(provider.Requests);
+        var reads = repository.ReadCount;
+        Assert.Single(await service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
+        Assert.Equal(reads, repository.ReadCount);
+    }
+
+    [Fact]
     public async Task Service_ConcurrentExactRangeRequestsUseMemoryWithoutFurtherDatabaseReads()
     {
         await using var context = NewContext();
@@ -334,15 +357,17 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
     private sealed class CountingRepository(IMarketCandleRepository inner) : IMarketCandleRepository
     {
         public int ReadCount { get; private set; }
+        public Func<Task>? BeforeCoverage { get; init; }
         public Task<IReadOnlyList<MarketCandle>> GetRangeAsync(string symbol, string source, string mode, DateTime from, DateTime to)
         {
             ReadCount++;
             return inner.GetRangeAsync(symbol, source, mode, from, to);
         }
-        public Task<IReadOnlyList<MarketDataCoverage>> GetCoverageAsync(string symbol, string source, string mode, DateTime from, DateTime to)
+        public async Task<IReadOnlyList<MarketDataCoverage>> GetCoverageAsync(string symbol, string source, string mode, DateTime from, DateTime to)
         {
             ReadCount++;
-            return inner.GetCoverageAsync(symbol, source, mode, from, to);
+            if (BeforeCoverage is not null) await BeforeCoverage();
+            return await inner.GetCoverageAsync(symbol, source, mode, from, to);
         }
         public Task UpsertAsync(string symbol, string source, string mode, DateTime from, DateTime to, IReadOnlyList<MarketCandle> candles) =>
             inner.UpsertAsync(symbol, source, mode, from, to, candles);

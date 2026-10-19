@@ -109,7 +109,7 @@ public sealed class BacktestHistoricalMarketDataService
                     await _repository.UpsertAsync(symbol, source, mode, range.From, range.To, bounded);
                 fetched.AddRange(bounded);
             }
-            if (_repository is not null && missing.Count > 0)
+            if (_repository is not null)
                 stored = await _repository.GetRangeAsync(symbol, source, mode, fromDate, toDate);
             var origin = missing.Count == 0 ? "database" :
                 hasPersistedData ? "database and external provider" : "external provider";
