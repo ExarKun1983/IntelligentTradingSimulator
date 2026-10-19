@@ -101,6 +101,28 @@ public sealed class BacktestHistoricalMarketDataServiceTests
     }
 
     [Fact]
+    public async Task GetHistoricalDailyRangeAsync_UsesUtcDateForUnpersistedCandleCutoff()
+    {
+        var provider = new FakeMarketDataProvider();
+        provider.SetData(
+            "TSLA",
+            Candles(
+                new DateTime(2024, 3, 1),
+                new DateTime(2024, 3, 2)));
+        var service = new BacktestHistoricalMarketDataService(
+            provider,
+            new EmptyMarketCandleRepository(),
+            timeProvider: new FixedTimeProvider(new DateTimeOffset(2024, 3, 2, 0, 30, 0, TimeSpan.Zero)));
+
+        var result = await service.GetHistoricalDailyRangeAsync(
+            "TSLA",
+            new DateTime(2024, 3, 1),
+            new DateTime(2024, 3, 2));
+
+        Assert.Equal(new DateTime(2024, 3, 2), Assert.Single(result).Date.Date);
+    }
+
+    [Fact]
     public async Task GetHistoricalDailyUpToAsync_ReturnsEmpty_WhenDataIsMissing()
     {
         var provider = new FakeMarketDataProvider();
@@ -177,5 +199,26 @@ public sealed class BacktestHistoricalMarketDataServiceTests
 
             return Task.FromResult<IReadOnlyList<MarketCandle>>(result);
         }
+    }
+
+    private sealed class EmptyMarketCandleRepository : IMarketCandleRepository
+    {
+        public Task<IReadOnlyList<MarketCandle>> GetRangeAsync(
+            string symbol, string source, string priceAdjustmentMode, DateTime from, DateTime to) =>
+            Task.FromResult<IReadOnlyList<MarketCandle>>([]);
+
+        public Task<IReadOnlyList<MarketDataCoverage>> GetCoverageAsync(
+            string symbol, string source, string priceAdjustmentMode, DateTime from, DateTime to) =>
+            Task.FromResult<IReadOnlyList<MarketDataCoverage>>([]);
+
+        public Task UpsertAsync(
+            string symbol, string source, string priceAdjustmentMode,
+            DateTime from, DateTime to, IReadOnlyList<MarketCandle> candles) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }

@@ -14,17 +14,20 @@ public sealed class BacktestHistoricalMarketDataService
     private readonly IMarketDataProvider _marketDataProvider;
     private readonly IMarketCandleRepository? _repository;
     private readonly IWorkflowProgress _progress;
+    private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _loadLock = new(1, 1);
     private readonly ConcurrentDictionary<string, Lazy<Task<IReadOnlyList<MarketCandle>>>> _cachedRanges = new(StringComparer.OrdinalIgnoreCase);
 
     public BacktestHistoricalMarketDataService(
         IMarketDataProvider marketDataProvider,
         IMarketCandleRepository? repository = null,
-        IWorkflowProgress? progress = null)
+        IWorkflowProgress? progress = null,
+        TimeProvider? timeProvider = null)
     {
         _marketDataProvider = marketDataProvider;
         _repository = repository;
         _progress = progress ?? NullWorkflowProgress.Instance;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<IReadOnlyList<MarketCandle>> GetHistoricalDailyRangeAsync(
@@ -87,7 +90,7 @@ public sealed class BacktestHistoricalMarketDataService
         await _loadLock.WaitAsync();
         try
         {
-            var currentDay = DateTime.UtcNow.Date;
+            var currentDay = _timeProvider.GetUtcNow().UtcDateTime.Date;
             var source = HistoricalMarketDataPolicy.Source;
             var mode = HistoricalMarketDataPolicy.PriceAdjustmentMode;
             var coverage = _repository is null ? [] :
