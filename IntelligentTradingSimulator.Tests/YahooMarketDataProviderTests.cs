@@ -24,6 +24,8 @@ public sealed class YahooMarketDataProviderTests
         await provider.GetHistoricalDailyAsync("AAPL", from, to);
 
         Assert.Equal("AAPL", requestedSymbol);
+        Assert.Equal(DateTimeKind.Utc, requestedFrom.Kind);
+        Assert.Equal(DateTimeKind.Utc, requestedTo!.Value.Kind);
         Assert.Equal(DateTime.SpecifyKind(from, DateTimeKind.Utc), requestedFrom);
         Assert.Equal(DateTime.SpecifyKind(to.AddDays(1), DateTimeKind.Utc), requestedTo);
     }

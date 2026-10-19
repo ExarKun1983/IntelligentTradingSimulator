@@ -167,6 +167,26 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Repository_RejectsIncompatibleModeOverCoveredEmptyDates()
+    {
+        await using var context = NewContext();
+        var repository = new MarketCandleRepository(context);
+        await repository.UpsertAsync("AAPL", Source, Mode, Start, Start.AddDays(2), [Candle(0)]);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            repository.UpsertAsync("AAPL", Source, "AdjustedClose", Start.AddDays(1), Start.AddDays(1),
+                [Candle(1, 200)]));
+
+        var candles = await repository.GetRangeAsync("AAPL", Source, Mode, Start, Start.AddDays(2));
+        Assert.Equal(Start, Assert.Single(candles).Date);
+        Assert.Equal(100m, candles[0].Close);
+        var coverage = Assert.Single(await context.MarketDataCoverage.ToListAsync());
+        Assert.Equal(Mode, coverage.PriceAdjustmentMode);
+        Assert.Equal(Start, coverage.From);
+        Assert.Equal(Start.AddDays(2), coverage.To);
+    }
+
+    [Fact]
     public async Task Service_SecondProcessAndOverlappingStrategyRangeUseIdenticalDatabaseSnapshot()
     {
         var provider = new FakeProvider { Candles = [Candle(0), Candle(1), Candle(3)] };

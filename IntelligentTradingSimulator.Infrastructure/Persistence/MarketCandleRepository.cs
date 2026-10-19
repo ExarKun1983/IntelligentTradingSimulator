@@ -89,9 +89,13 @@ public sealed class MarketCandleRepository(TradingSimulatorDbContext dbContext) 
             .ToListAsync();
         if (existing.Any(x => x.PriceAdjustmentMode != priceAdjustmentMode))
             throw new InvalidOperationException("Cannot mix price-adjustment conventions for a market-data source.");
-        var existingCoverage = await dbContext.MarketDataCoverage.AsNoTracking()
-            .Where(x => x.Symbol == symbol && x.Source == source && x.PriceAdjustmentMode == priceAdjustmentMode &&
-                x.From <= to && x.To >= from).ToListAsync();
+        var overlappingCoverage = await dbContext.MarketDataCoverage.AsNoTracking()
+            .Where(x => x.Symbol == symbol && x.Source == source && x.From <= to && x.To >= from)
+            .ToListAsync();
+        if (overlappingCoverage.Any(x => x.PriceAdjustmentMode != priceAdjustmentMode))
+            throw new InvalidOperationException("Cannot mix price-adjustment conventions for a market-data source.");
+        var existingCoverage = overlappingCoverage
+            .Where(x => x.PriceAdjustmentMode == priceAdjustmentMode).ToList();
         var existingDates = existing.Select(x => x.Date).ToHashSet();
         var downloadedAt = DateTime.UtcNow;
         var coverageEnd = to < downloadedAt.Date ? to : downloadedAt.Date.AddDays(-1);
