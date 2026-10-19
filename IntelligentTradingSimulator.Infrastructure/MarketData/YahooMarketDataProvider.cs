@@ -89,7 +89,7 @@ public sealed class YahooMarketDataProvider
         var end = new DateTimeOffset(exclusiveEnd).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
         var uri = $"https://query1.finance.yahoo.com/v8/finance/chart/{Uri.EscapeDataString(symbol)}" +
             $"?period1={start}&period2={end}&interval=1d";
-        using var response = await _confirmationClient.GetAsync(uri);
+        using var response = await DownloadConfirmationAsync(uri);
         if (response.StatusCode != HttpStatusCode.OK && response.StatusCode != HttpStatusCode.NotFound)
         {
             response.EnsureSuccessStatusCode();
@@ -130,6 +130,30 @@ public sealed class YahooMarketDataProvider
             return false;
         return quotes[0].EnumerateObject().All(x =>
             x.Value.ValueKind == JsonValueKind.Array && x.Value.GetArrayLength() == 0);
+    }
+
+    private async Task<HttpResponseMessage> DownloadConfirmationAsync(string uri)
+    {
+        var response = await SendConfirmationRequestAsync(uri);
+        if (response.StatusCode != HttpStatusCode.Unauthorized)
+            return response;
+
+        response.Dispose();
+        // Keep the cookie and crumb on the same client; neither is persisted.
+        using var crumbResponse = await SendConfirmationRequestAsync("https://query1.finance.yahoo.com/v1/test/getcrumb");
+        crumbResponse.EnsureSuccessStatusCode();
+        var crumb = await crumbResponse.Content.ReadAsStringAsync();
+        if (string.IsNullOrWhiteSpace(crumb))
+            throw new InvalidOperationException("Yahoo Finance returned no session crumb.");
+        return await SendConfirmationRequestAsync(uri + "&crumb=" + Uri.EscapeDataString(crumb));
+    }
+
+    private async Task<HttpResponseMessage> SendConfirmationRequestAsync(string uri)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        request.Headers.UserAgent.ParseAdd(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36");
+        return await _confirmationClient.SendAsync(request);
     }
 
     private static async Task<IReadOnlyList<MarketCandle>> DownloadFromYahooAsync(

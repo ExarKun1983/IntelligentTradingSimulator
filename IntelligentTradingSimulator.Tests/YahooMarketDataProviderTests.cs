@@ -52,6 +52,42 @@ public sealed class YahooMarketDataProviderTests
         Assert.Equal("/v8/finance/chart/SPY", handler.Request!.AbsolutePath);
         Assert.Equal("?period1=1578700800&period2=1578873600&interval=1d", handler.Request.Query);
         Assert.Equal(1, handler.RequestCount);
+        Assert.Contains("Mozilla/5.0", handler.UserAgent);
+    }
+
+    [Fact]
+    public async Task GetHistoricalDailyAsync_ConfirmationCanAuthenticateAndRetryIdenticalRangeOnce()
+    {
+        using var handler = new ConfirmationHandler(HttpStatusCode.OK,
+            """{"chart":{"error":null,"result":[{"meta":{"symbol":"AAPL"},"indicators":{"quote":[{}]}}]}}""")
+        {
+            RequireCrumb = true
+        };
+        using var client = new HttpClient(handler);
+
+        Assert.Empty(await UnavailableProvider(client).GetHistoricalDailyAsync("AAPL", Saturday, Sunday));
+
+        Assert.Equal(2, handler.RequestCount);
+        Assert.Equal(1, handler.CrumbRequestCount);
+        Assert.Equal("?period1=1578700800&period2=1578873600&interval=1d&crumb=test%2Fsession", handler.Request!.Query);
+    }
+
+    [Theory]
+    [InlineData(401, "")]
+    [InlineData(429, "rate limited")]
+    [InlineData(500, "server error")]
+    [InlineData(200, "")]
+    public async Task GetHistoricalDailyAsync_FailedConfirmationAuthenticationRemainsRetryable(int status, string crumb)
+    {
+        using var handler = new ConfirmationHandler(HttpStatusCode.OK, "{}")
+        {
+            RequireCrumb = true, CrumbStatus = (HttpStatusCode)status, Crumb = crumb
+        };
+        using var client = new HttpClient(handler);
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            UnavailableProvider(client).GetHistoricalDailyAsync("AAPL", Saturday, Sunday));
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Equal(1, handler.CrumbRequestCount);
     }
 
     [Theory]
@@ -133,15 +169,28 @@ public sealed class YahooMarketDataProviderTests
     private sealed class ConfirmationHandler(HttpStatusCode status, string json) : HttpMessageHandler
     {
         public Uri? Request { get; private set; }
+        public string UserAgent { get; private set; } = "";
         public int RequestCount { get; private set; }
         public bool Fail { get; init; }
+        public bool RequireCrumb { get; init; }
+        public int CrumbRequestCount { get; private set; }
+        public HttpStatusCode CrumbStatus { get; init; } = HttpStatusCode.OK;
+        public string Crumb { get; init; } = "test/session";
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            UserAgent = request.Headers.UserAgent.ToString();
+            if (request.RequestUri!.AbsolutePath == "/v1/test/getcrumb")
+            {
+                CrumbRequestCount++;
+                return Task.FromResult(new HttpResponseMessage(CrumbStatus) { Content = new StringContent(Crumb) });
+            }
             Request = request.RequestUri;
             RequestCount++;
             if (Fail)
                 throw new HttpRequestException("Network unavailable");
+            if (RequireCrumb && (RequestCount == 1 || !Request!.Query.Contains("&crumb=")))
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
             return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(json) });
         }
     }

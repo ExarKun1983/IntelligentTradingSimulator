@@ -212,7 +212,8 @@ public sealed class BacktestDayProcessorTests : IDisposable
             Assert.Contains($"Run: {7 + index}", partialWarnings[index]);
             Assert.Contains($"Run: {7 + index}", benchmarkWarnings[index]);
         }
-        Assert.Equal(new[] { "SPY", "PASS", "SHORT", "SPY", "PASS", "SHORT" }, provider.Calls);
+        var expectedCalls = new[] { "SPY", "PASS", "SHORT", "SPY", "PASS", "SHORT" };
+        Assert.Equal(benchmarkThrows ? expectedCalls.Concat(["SPY", "SPY"]) : expectedCalls, provider.Calls);
         Assert.Equal(4, await _dbContext.BacktestSnapshots.CountAsync());
     }
 
@@ -305,7 +306,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
         await processor.ProcessAsync(request);
 
         Assert.Single(result.Observations);
-        Assert.Equal(new[] { "SPY", "PASS", "SKIP", "FAIL" }, provider.Calls);
+        Assert.Equal(new[] { "SPY", "PASS", "SKIP", "FAIL", "FAIL" }, provider.Calls);
         Assert.All(activeDuringFetch, count => Assert.Equal(1, count));
         Assert.Equal(6, progress.Operations.Count(x => x.Operation == "Fetching price data"));
         Assert.Equal(2, progress.Operations.Count(x => x.Operation == "Fetching benchmark data"));

@@ -125,6 +125,9 @@ The Yahoo client uses the same "Requested Information Not Available On Yahoo Fin
 exception for empty charts and HTTP 404, so that message alone is **not** proof of
 no data. For that ambiguous exception on a bounded request, the adapter makes one
 additional chart request for the identical UTC range (Yahoo's end is exclusive).
+Confirmation uses a browser-compatible user agent. If Yahoo requires authentication
+(HTTP 401), it acquires a session crumb on the same cookie-enabled client and retries
+the identical chart range once. Cookies/crumbs are never persisted in the database.
 It confirms emptiness only for:
 
 - HTTP 200 with no chart error, one matching-symbol result, empty/absent timestamps,
@@ -137,7 +140,7 @@ Generic 404/delisting messages, network errors, rate limits, server errors, malf
 responses, and unknown errors remain failures. There is no weekend/calendar guess
 or catch-all empty fallback. Confirmation failures also propagate. Faulted loads
 are evicted from the in-process cache so later calls can retry in the same scope;
-there is no automatic retry loop.
+there is no general automatic retry loop.
 Confirmed empty ranges (including pre-listing ranges) add coverage without fake
 candles. Earlier persisted candles still return, subject to the simulated-date
 cutoff. Benchmarks use the same retrieval path. Coverage suppresses repeat requests
