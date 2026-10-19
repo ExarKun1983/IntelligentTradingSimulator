@@ -7,7 +7,7 @@ namespace IntelligentTradingSimulator.Infrastructure.Reporting;
 public sealed class StrategyComparisonCsvExporter
 {
     private const string Header =
-        "StrategyId,Rank,IsSuccess,ErrorMessage,StartCapital,FinalCapital,ReturnPercent," +
+        "StrategyId,Rank,IsSuccess,ErrorMessage,StartDate,EndDate,HistoricalStartDate,StartCapital,FinalCapital,ReturnPercent," +
         "MaxDrawdownPercent,DrawdownDurationDays,RecoveryTimeDays,TradesCount";
 
     private static readonly string[] BenchmarkFields =
@@ -60,6 +60,9 @@ public sealed class StrategyComparisonCsvExporter
                 Format(entry.Rank),
                 entry.IsSuccess.ToString(),
                 EscapeText(entry.ErrorMessage ?? ""),
+                entry.StartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                entry.EndDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                entry.HistoricalStartDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "",
                 entry.IsSuccess ? Format(entry.StartCapital) : "",
                 entry.IsSuccess ? Format(entry.FinalCapital) : "",
                 entry.IsSuccess ? Format(entry.ReturnPercent) : "",

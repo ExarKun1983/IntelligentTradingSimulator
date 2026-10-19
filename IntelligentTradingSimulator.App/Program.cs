@@ -260,19 +260,11 @@ if (runVariantsArg is not null)
 
     IReadOnlyList<string> variantsSymbols = StockUniverse.Symbols;
 
-    var longestLookback = 0;
-    foreach (var v in allVariants)
-    {
-        if (v.LookbackDays > longestLookback)
-            longestLookback = v.LookbackDays;
-    }
-
     var variantRunRequest = new StrategyVariantRunRequest
     {
         NamePrefix = $"Backtest {variantsStartDate:yyyy-MM-dd} to {variantsEndDate:yyyy-MM-dd}",
         StartDate = variantsStartDate,
         EndDate = variantsEndDate,
-        HistoricalStartDate = variantsStartDate.AddDays(-longestLookback),
         InitialCapital = 100_000m,
         Symbols = variantsSymbols
     };
@@ -302,6 +294,9 @@ if (runVariantsArg is not null)
             {
                 IsSuccess = false,
                 StrategyId = variantResult.StrategyId,
+                StartDate = variantsStartDate.Date,
+                EndDate = variantsEndDate.Date,
+                HistoricalStartDate = variantResult.HistoricalStartDate,
                 ErrorMessage = variantResult.EngineResult.ErrorMessage
             });
             continue;
@@ -322,6 +317,9 @@ if (runVariantsArg is not null)
         BacktestSummaryReportResult variantSummary;
         using (progress.BeginOperation("Loading report database data and generating summary"))
             variantSummary = await variantsReportService.GenerateAsync(variantResult.EngineResult.RunId);
+        variantSummary.StartDate = variantsStartDate.Date;
+        variantSummary.EndDate = variantsEndDate.Date;
+        variantSummary.HistoricalStartDate = variantResult.HistoricalStartDate;
         allSucceeded &= variantSummary.IsSuccess;
         variantsReporter.PrintBacktestSummary(variantSummary);
         summaries.Add(variantSummary);

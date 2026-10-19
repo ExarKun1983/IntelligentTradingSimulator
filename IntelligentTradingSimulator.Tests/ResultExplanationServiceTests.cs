@@ -103,7 +103,8 @@ public sealed class ResultExplanationServiceTests
         Assert.Contains($"Strategy {leader} is ranked first by {metric}={value}", result.Summary);
         Assert.Contains(result.Details, item => item.Contains("return difference of") && item.Contains("maximum drawdown difference of"));
         Assert.Contains(result.Limitations, item => item.Contains("not overall quality or future performance"));
-        Assert.Contains(result.Limitations, item => item.Contains("period comparability cannot be verified"));
+        Assert.Contains(result.Limitations, item => item.Contains("reported date range and historical window"));
+        Assert.DoesNotContain(result.Limitations, item => item.Contains("do not carry date ranges"));
     }
 
     [Fact]

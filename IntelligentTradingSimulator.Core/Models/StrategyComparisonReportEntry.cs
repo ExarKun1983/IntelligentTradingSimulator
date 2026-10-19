@@ -14,6 +14,12 @@ public sealed class StrategyComparisonReportEntry
 
     public string? ErrorMessage { get; set; }
 
+    public DateTime StartDate { get; set; }
+
+    public DateTime EndDate { get; set; }
+
+    public DateTime? HistoricalStartDate { get; set; }
+
     public decimal StartCapital { get; set; }
 
     public decimal FinalCapital { get; set; }

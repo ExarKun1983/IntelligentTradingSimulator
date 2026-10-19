@@ -289,6 +289,11 @@ public sealed class ConsoleReporter
             if (report.SortBy.HasValue)
                 Console.WriteLine($"  Rank:         {entry.Rank?.ToString() ?? "N/A"}");
 
+            Console.WriteLine($"  Period:       {entry.StartDate:yyyy-MM-dd} to {entry.EndDate:yyyy-MM-dd}");
+            Console.WriteLine(entry.HistoricalStartDate is DateTime historicalStartDate
+                ? $"  Historical window: {historicalStartDate:yyyy-MM-dd} to {entry.EndDate:yyyy-MM-dd} (initial lookback: {(entry.StartDate.Date - historicalStartDate.Date).Days} days)"
+                : "  Historical window: N/A");
+
             if (!entry.IsSuccess)
             {
                 Console.WriteLine($"  Status:       Failed");

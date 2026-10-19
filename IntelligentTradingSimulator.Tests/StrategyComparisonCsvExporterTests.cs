@@ -8,7 +8,7 @@ namespace IntelligentTradingSimulator.Tests;
 public sealed class StrategyComparisonCsvExporterTests
 {
     private const string Header =
-        "StrategyId,Rank,IsSuccess,ErrorMessage,StartCapital,FinalCapital,ReturnPercent," +
+        "StrategyId,Rank,IsSuccess,ErrorMessage,StartDate,EndDate,HistoricalStartDate,StartCapital,FinalCapital,ReturnPercent," +
         "MaxDrawdownPercent,DrawdownDurationDays,RecoveryTimeDays,TradesCount";
 
     [Theory]
@@ -29,7 +29,7 @@ public sealed class StrategyComparisonCsvExporterTests
             });
 
             Assert.Equal(Header + "\r\n" +
-                "default,1,True,,1000.25,1105.27625,10.5,2.1234567890123456789012345678,3,5,7\r\n",
+                "default,1,True,,2020-01-01,2024-12-31,2019-10-03,1000.25,1105.27625,10.5,2.1234567890123456789012345678,3,5,7\r\n",
                 writer.ToString());
             var properties = typeof(StrategyComparisonReportEntry).GetProperties()
                 .Where(p => p.Name is not nameof(StrategyComparisonReportEntry.BenchmarkComparisons)
@@ -74,7 +74,7 @@ public sealed class StrategyComparisonCsvExporterTests
         Assert.EndsWith(",10.5,12,-1.5,-1.5,Underperform,10.5,4.125,6.375,6.375,Outperform", lines[1]);
         Assert.StartsWith("a-second,,True,", lines[2]);
         Assert.EndsWith(",3,,7,,,,,,0,0,0,0,Outperform", lines[2]);
-        Assert.All(lines, line => Assert.Equal(21, line.Split(',').Length));
+        Assert.All(lines, line => Assert.Equal(24, line.Split(',').Length));
     }
 
     [Fact]
@@ -86,11 +86,39 @@ public sealed class StrategyComparisonCsvExporterTests
             Entries =
             [
                 CreateEntry(),
-                new() { StrategyId = "failed", ErrorMessage = "Unavailable", ReturnPercent = 123m }
+                new()
+                {
+                    StrategyId = "failed", ErrorMessage = "Unavailable", ReturnPercent = 123m,
+                    StartDate = new DateTime(2020, 1, 1), EndDate = new DateTime(2024, 12, 31),
+                    HistoricalStartDate = new DateTime(2019, 7, 5)
+                }
             ]
         });
 
-        Assert.EndsWith("failed,,False,Unavailable,,,,,,,\r\n", writer.ToString());
+        Assert.EndsWith("failed,,False,Unavailable,2020-01-01,2024-12-31,2019-07-05,,,,,,,\r\n", writer.ToString());
+    }
+
+    [Fact]
+    public async Task WriteAsync_PreservesDifferentHistoricalWindowsAndLeavesUnknownHistoryEmpty()
+    {
+        var entries = new[] { CreateEntry(), CreateEntry(), CreateEntry() };
+        entries[1].StrategyId = "conservative";
+        entries[1].HistoricalStartDate = new DateTime(2019, 7, 5);
+        entries[2].StrategyId = "aggressive";
+        entries[2].HistoricalStartDate = new DateTime(2019, 11, 2);
+        using var writer = new StringWriter();
+
+        await new StrategyComparisonCsvExporter().WriteAsync(writer, new() { Entries = entries });
+
+        var lines = writer.ToString().Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+        Assert.Contains(",2020-01-01,2024-12-31,2019-10-03,", lines[1]);
+        Assert.Contains(",2020-01-01,2024-12-31,2019-07-05,", lines[2]);
+        Assert.Contains(",2020-01-01,2024-12-31,2019-11-02,", lines[3]);
+
+        entries[0].HistoricalStartDate = null;
+        using var unknownWriter = new StringWriter();
+        await new StrategyComparisonCsvExporter().WriteAsync(unknownWriter, new() { Entries = [entries[0]] });
+        Assert.Contains(",2020-01-01,2024-12-31,,1000.25,", unknownWriter.ToString());
     }
 
     [Fact]
@@ -188,6 +216,9 @@ public sealed class StrategyComparisonCsvExporterTests
         Rank = 1,
         IsSuccess = true,
         Status = IntelligentTradingSimulator.Core.Enums.BacktestRunStatus.Completed,
+        StartDate = new DateTime(2020, 1, 1),
+        EndDate = new DateTime(2024, 12, 31),
+        HistoricalStartDate = new DateTime(2019, 10, 3),
         StartCapital = 1000.25m,
         FinalCapital = 1105.27625m,
         ReturnPercent = 10.5m,

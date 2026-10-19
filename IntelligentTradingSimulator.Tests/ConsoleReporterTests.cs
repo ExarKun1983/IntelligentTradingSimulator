@@ -717,6 +717,36 @@ public sealed class ConsoleReporterTests
         Assert.Contains("momentum-capped-v2", output);
     }
 
+    [Theory]
+    [InlineData(60, "2019-11-02", true)]
+    [InlineData(90, "2019-10-03", true)]
+    [InlineData(180, "2019-07-05", false)]
+    public void PrintVariantComparisonReport_ShowsDatesAndHistoricalWindow(
+        int lookbackDays, string historicalStart, bool isSuccess)
+    {
+        var startDate = new DateTime(2020, 1, 1);
+        var report = new StrategyComparisonReport
+        {
+            Entries =
+            [
+                new()
+                {
+                    StrategyId = "test",
+                    IsSuccess = isSuccess,
+                    StartDate = startDate,
+                    EndDate = new DateTime(2024, 12, 31),
+                    HistoricalStartDate = startDate.AddDays(-lookbackDays)
+                }
+            ]
+        };
+
+        var output = CaptureOutput(() => CreateReporter().PrintVariantComparisonReport(report));
+
+        Assert.Contains("Period:       2020-01-01 to 2024-12-31", output);
+        Assert.Contains(
+            $"Historical window: {historicalStart} to 2024-12-31 (initial lookback: {lookbackDays} days)", output);
+    }
+
     [Fact]
     public void PrintVariantComparisonReport_IncludesHeader()
     {

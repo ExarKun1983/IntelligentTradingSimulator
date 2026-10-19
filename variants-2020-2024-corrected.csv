@@ -1,0 +1,4 @@
+StrategyId,Rank,IsSuccess,ErrorMessage,StartDate,EndDate,HistoricalStartDate,StartCapital,FinalCapital,ReturnPercent,MaxDrawdownPercent,DrawdownDurationDays,RecoveryTimeDays,TradesCount
+aggressive,,False,Keyword not supported: '******;trustservercertificate'.,2020-01-01,2024-12-31,2019-11-02,,,,,,,
+conservative,,False,Keyword not supported: '******;trustservercertificate'.,2020-01-01,2024-12-31,2019-07-05,,,,,,,
+default,,False,Keyword not supported: '******;trustservercertificate'.,2020-01-01,2024-12-31,2019-10-03,,,,,,,
