@@ -116,10 +116,50 @@ Today's incomplete candles and future candles are not persisted or marked covere
 `MarketDataCoverage` records successfully fetched inclusive intervals, including
 empty weekends/holidays, in the same transaction as the candles. Retrieval reads
 the database first, subtracts covered intervals and already stored candle dates,
-and requests only the remaining calendar gaps. A successful empty provider response
-is considered covered; failures, null responses, and invalid OHLCV are not.
+and requests only the remaining calendar gaps. The provider contract classifies a
+returned candle list as success and an empty list as **confirmed no data**.
+Failures, null responses, and invalid OHLCV are not covered.
 Unexpected provider omissions within a successful response therefore require an
 explicit database repair; there is no automatic refresh of stored snapshots.
+The Yahoo client uses the same "Requested Information Not Available On Yahoo Finance"
+exception for empty charts and HTTP 404, so that message alone is **not** proof of
+no data. For that ambiguous exception on a bounded request, the adapter makes one
+additional chart request for the identical UTC range (Yahoo's end is exclusive).
+It confirms emptiness only for:
+
+- HTTP 200 with no chart error, one matching-symbol result, empty/absent timestamps,
+  and an empty quote object or empty quote arrays.
+- HTTP 404 with `chart.result=null`, error code `Not Found`, and the exact
+  `Data doesn't exist for startDate = <requested Unix start>, endDate = <requested Unix end>`
+  description.
+
+Generic 404/delisting messages, network errors, rate limits, server errors, malformed
+responses, and unknown errors remain failures. There is no weekend/calendar guess
+or catch-all empty fallback. Confirmation failures also propagate. Faulted loads
+are evicted from the in-process cache so later calls can retry in the same scope;
+there is no automatic retry loop.
+Confirmed empty ranges (including pre-listing ranges) add coverage without fake
+candles. Earlier persisted candles still return, subject to the simulated-date
+cutoff. Benchmarks use the same retrieval path. Coverage suppresses repeat requests
+only within the confirmed interval; the next uncovered trading date is still fetched.
+
+To repair incorrectly certified empty coverage, stop backtests/synchronization and
+back up the database. Inspect and delete **all coverage rows overlapping the affected
+range** for the specific normalized `Symbol`, `Source`, and `PriceAdjustmentMode`.
+For example, after reviewing matching rows, use parameterized SQL with this predicate:
+
+```sql
+DELETE FROM MarketDataCoverage
+WHERE Symbol = @symbol AND Source = @source AND PriceAdjustmentMode = @mode
+  AND [From] <= @to AND [To] >= @from;
+```
+
+Keep `MarketCandles` unchanged to preserve valid first-download-wins prices.
+Deleting an overlapping row can reopen a larger interval than the repair range;
+existing candle dates still prevent redundant candle downloads. Restart the process
+to discard its successful in-memory cache, then synchronize the affected range again.
+Review the fetched candles/coverage before rerunning strategy comparisons.
+
 Progress identifies database, external-provider, or combined reads. Exact-range
 in-memory caching avoids repeated database reads within a scope, while durable
 coverage supports overlapping requests and subsequent processes. Every backtest

@@ -37,9 +37,10 @@ public sealed class BacktestDayProcessorTests : IDisposable
         decimal maxPositionWeight = 100m,
         IWorkflowProgress? progress = null,
         IBacktestSnapshotRepository? snapshotRepository = null,
-        IFeatureSnapshotRepository? featureSnapshotRepository = null)
+        IFeatureSnapshotRepository? featureSnapshotRepository = null,
+        IMarketCandleRepository? marketCandleRepository = null)
     {
-        var historicalService = new BacktestHistoricalMarketDataService(provider);
+        var historicalService = new BacktestHistoricalMarketDataService(provider, marketCandleRepository);
         var analyzerFactory = new MarketObservationAnalyzerFactory();
         var recommendationService =
             new PortfolioRecommendationService(maxPositions);
@@ -62,6 +63,53 @@ public sealed class BacktestDayProcessorTests : IDisposable
             snapshotRepository ?? _snapshotRepository,
             featureSnapshotRepository ?? new FeatureSnapshotRepository(_dbContext),
             progress);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ConfirmedWeekendTailKeepsPersistedSymbolAndBenchmarkAvailable()
+    {
+        var monday = new DateTime(2024, 1, 1);
+        var friday = monday.AddDays(4);
+        var saturday = monday.AddDays(5);
+        var repository = new MarketCandleRepository(_dbContext);
+        foreach (var symbol in new[] { "AAPL", "SPY" })
+        {
+            await repository.UpsertAsync(symbol, HistoricalMarketDataPolicy.Source,
+                HistoricalMarketDataPolicy.PriceAdjustmentMode,
+                MarketHistoryRequirements.GetEffectiveStartDate(monday, saturday),
+                friday, BuildCandles(monday, 5));
+        }
+        var provider = new FakeMarketDataProvider();
+        var processor = BuildProcessor(provider, marketCandleRepository: repository);
+        using var output = new System.IO.StringWriter();
+        var originalOut = Console.Out;
+        try
+        {
+            Console.SetOut(output);
+            for (var day = 0; day < 2; day++)
+            {
+                var result = await processor.ProcessAsync(new BacktestDayRequest
+                {
+                    CurrentDate = saturday.AddDays(day), HistoricalStartDate = monday,
+                    Portfolio = new Portfolio { StartingCash = 1000m, Cash = 1000m },
+                    StrategyConfiguration = new StrategyConfiguration
+                    {
+                        UseRelativeStrength = true, RelativeStrengthBenchmarkSymbol = "SPY"
+                    },
+                    Symbols = ["AAPL"]
+                });
+                var observation = Assert.Single(result.Observations);
+                Assert.Equal("AAPL", observation.Symbol);
+                Assert.Equal(0m, observation.RelativeStrengthPercent);
+            }
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+        Assert.DoesNotContain("skipping", output.ToString());
+        Assert.DoesNotContain("benchmark data unavailable", output.ToString());
+        Assert.Equal(10, await _dbContext.MarketCandles.CountAsync());
     }
 
     private static List<MarketCandle> BuildCandles(
