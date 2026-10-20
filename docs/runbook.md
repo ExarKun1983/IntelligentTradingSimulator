@@ -138,10 +138,33 @@ It confirms emptiness only for:
 - HTTP 404 with `chart.result=null`, error code `Not Found`, and the exact
   `Data doesn't exist for startDate = <requested Unix start>, endDate = <requested Unix end>`
   description, returned by the chart endpoint for the requested symbol.
+- HTTP 400 with `chart.result=null`, error code `Bad Request`, and the same exact
+  range-specific description, **plus** a successful symbol validation (below).
 
-HTTP 400 is not an accepted confirmation status, even if its body resembles a
-no-data response. Invalid requests, unclassified BadRequest responses, generic
-404/delisting messages, authentication failures after the bounded session retry,
+Yahoo returns the 400 shape for a valid symbol queried wholly before its listing.
+Captured live on 2026-10-20 for PLTR `period1=1557446400&period2=1557878400`
+(May 10–14, 2019 inclusive):
+
+```json
+{"chart":{"result":null,"error":{"code":"Bad Request","description":"Data doesn't exist for startDate = 1557446400, endDate = 1557878400"}}}
+```
+
+That body echoes only the dates, not the symbol, so it cannot by itself distinguish
+a pre-listing range from an unknown ticker. For this case only, the provider makes
+one more bounded chart request for the same symbol (`range=1d&interval=1d`,
+same session handling) and confirms emptiness only if it returns HTTP 200,
+`chart.error=null`, exactly one result whose `meta.symbol` matches
+(case-insensitively), and a numeric `meta.firstTradeDate` (Unix seconds) at or after the
+requested exclusive end. In other words, the whole requested range must precede Yahoo's
+first trade for a symbol Yahoo currently resolves. Unknown tickers (Yahoo 404
+`No data found, symbol may be delisted`), missing/null/non-numeric `firstTradeDate`,
+a first trade before the requested end, a mismatched symbol, and any non-200 or
+malformed validation response remain failures. Neither the listing date alone nor the
+status, code, or a message substring is enough; both checks must pass.
+
+Any other HTTP 400 remains a failure, including a body with a different code, any
+date mismatch, extra text, a non-null result, or malformed JSON. Invalid requests,
+unclassified BadRequest responses, generic 404/delisting messages, authentication failures after the bounded session retry,
 network errors, rate limits, server errors, malformed responses, and unknown errors
 remain failures. There is no weekend/calendar guess
 or catch-all empty fallback. Confirmation failures also propagate. Faulted loads
@@ -161,13 +184,17 @@ OoplesFinance.YahooFinanceAPI 1.7.1 package's
 The client discards the failure response body and exposes neither a typed HTTP status
 nor that body on this exception. A live bounded PLTR chart probe for
 `period1=1557446400&period2=1557878400` (May 10–14, 2019 inclusive) could not resolve
-Yahoo's hostname in the implementation sandbox; no live body was captured there.
-Deterministic regressions reproduce the exact client exception and require a separate
-structured confirmation. They cover rolling starts May 10–15, 2019 for simulated
+Yahoo's hostname in the implementation sandbox; the body above was captured by a user
+with `curl.exe`. Yahoo's unknown-ticker and `firstTradeDate` shapes could not be
+re-probed live from the sandbox; tests model them on commonly observed chart
+responses, and any deviation fails closed (no coverage).
+Deterministic regressions reproduce the exact client exception and the captured 400
+body and require structured confirmation. They cover rolling starts May 10–15, 2019 for simulated
 September 25–30, 2020: after confirming May 10–14 once, persisted coverage suppresses
 all overlapping gap requests while candles from September 30 onward stay unchanged.
-If Yahoo returns only an unclassified 400 during confirmation, the interval remains
-uncovered and retryable; do not manually certify it based solely on a known listing date.
+If Yahoo returns an unclassified 400, or the symbol validation fails, the interval
+remains uncovered and retryable; do not manually certify it based solely on a known
+listing date.
 
 To repair incorrectly certified empty coverage, stop backtests/synchronization and
 back up the database. Inspect and delete **all coverage rows overlapping the affected
