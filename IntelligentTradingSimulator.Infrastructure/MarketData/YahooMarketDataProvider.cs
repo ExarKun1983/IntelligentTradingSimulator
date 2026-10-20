@@ -92,6 +92,15 @@ public sealed class YahooMarketDataProvider
         var uri = $"https://query1.finance.yahoo.com/v8/finance/chart/{Uri.EscapeDataString(symbol)}" +
             $"?period1={start}&period2={end}&interval=1d";
         using var response = await DownloadConfirmationAsync(uri);
+        if (response.StatusCode == HttpStatusCode.BadRequest)
+        {
+            // Yahoo's range-specific 400 body does not identify the symbol, so it alone cannot
+            // distinguish a pre-listing range from an unknown ticker. Validate the symbol separately.
+            if (await IsRangeNoDataErrorAsync(response, "Bad Request", start, end) &&
+                await ConfirmListedAfterAsync(symbol, exclusiveEnd))
+                return true;
+            response.EnsureSuccessStatusCode();
+        }
         if (response.StatusCode != HttpStatusCode.OK && response.StatusCode != HttpStatusCode.NotFound)
         {
             response.EnsureSuccessStatusCode();
@@ -107,11 +116,8 @@ public sealed class YahooMarketDataProvider
 
         if (error.ValueKind == JsonValueKind.Object)
         {
-            return response.StatusCode == HttpStatusCode.NotFound && result.ValueKind == JsonValueKind.Null &&
-                error.TryGetProperty("code", out var code) && code.ValueKind == JsonValueKind.String &&
-                code.GetString() == "Not Found" &&
-                error.TryGetProperty("description", out var description) && description.ValueKind == JsonValueKind.String &&
-                description.GetString() == $"Data doesn't exist for startDate = {start}, endDate = {end}";
+            return response.StatusCode == HttpStatusCode.NotFound &&
+                IsRangeNoDataError(result, error, "Not Found", start, end);
         }
         if (response.StatusCode != HttpStatusCode.OK || error.ValueKind != JsonValueKind.Null ||
             result.ValueKind != JsonValueKind.Array || result.GetArrayLength() != 1)
@@ -132,6 +138,60 @@ public sealed class YahooMarketDataProvider
             return false;
         return quotes[0].EnumerateObject().All(x =>
             x.Value.ValueKind == JsonValueKind.Array && x.Value.GetArrayLength() == 0);
+    }
+
+    private static async Task<bool> IsRangeNoDataErrorAsync(
+        HttpResponseMessage response, string expectedCode, string start, string end)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var root = document.RootElement;
+            return root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("chart", out var chart) && chart.ValueKind == JsonValueKind.Object &&
+                chart.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object &&
+                chart.TryGetProperty("result", out var result) &&
+                IsRangeNoDataError(result, error, expectedCode, start, end);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsRangeNoDataError(
+        JsonElement result, JsonElement error, string expectedCode, string start, string end) =>
+        result.ValueKind == JsonValueKind.Null &&
+        error.TryGetProperty("code", out var code) && code.ValueKind == JsonValueKind.String &&
+        code.GetString() == expectedCode &&
+        error.TryGetProperty("description", out var description) && description.ValueKind == JsonValueKind.String &&
+        description.GetString() == $"Data doesn't exist for startDate = {start}, endDate = {end}";
+
+    // Bounded metadata lookup: the symbol must resolve on the chart endpoint and Yahoo's
+    // first trade date must be at or after the requested exclusive end (wholly pre-listing).
+    private async Task<bool> ConfirmListedAfterAsync(string symbol, DateTime exclusiveEnd)
+    {
+        var uri = $"https://query1.finance.yahoo.com/v8/finance/chart/{Uri.EscapeDataString(symbol)}" +
+            "?range=1d&interval=1d";
+        using var response = await DownloadConfirmationAsync(uri);
+        response.EnsureSuccessStatusCode();
+        if (response.StatusCode != HttpStatusCode.OK)
+            return false;
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("chart", out var chart) || chart.ValueKind != JsonValueKind.Object ||
+            !chart.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.Null ||
+            !chart.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Array ||
+            result.GetArrayLength() != 1 || result[0].ValueKind != JsonValueKind.Object ||
+            !result[0].TryGetProperty("meta", out var meta) || meta.ValueKind != JsonValueKind.Object ||
+            !meta.TryGetProperty("symbol", out var returnedSymbol) || returnedSymbol.ValueKind != JsonValueKind.String ||
+            !string.Equals(returnedSymbol.GetString(), symbol, StringComparison.OrdinalIgnoreCase) ||
+            !meta.TryGetProperty("firstTradeDate", out var firstTradeDate) ||
+            firstTradeDate.ValueKind != JsonValueKind.Number ||
+            !firstTradeDate.TryGetInt64(out var firstTradeSeconds))
+            return false;
+        return firstTradeSeconds >= new DateTimeOffset(exclusiveEnd).ToUnixTimeSeconds();
     }
 
     private async Task<HttpResponseMessage> DownloadConfirmationAsync(string uri)

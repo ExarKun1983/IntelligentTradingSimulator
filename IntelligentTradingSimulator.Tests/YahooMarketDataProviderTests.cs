@@ -124,6 +124,151 @@ public sealed class YahooMarketDataProviderTests
         Assert.Equal(1, handler.RequestCount);
     }
 
+    // Exact body returned by Yahoo for PLTR, May 10-14, 2019 (period2 exclusive), captured 2026-10-20.
+    private const string PltrPreListingBadRequest =
+        """{"chart":{"result":null,"error":{"code":"Bad Request","description":"Data doesn't exist for startDate = 1557446400, endDate = 1557878400"}}}""";
+    private const string PltrMetadata =
+        """{"chart":{"result":[{"meta":{"symbol":"PLTR","firstTradeDate":1601472600},"indicators":{"quote":[{}]}}],"error":null}}""";
+    private static readonly DateTime PltrFrom = new(2019, 5, 10);
+    private static readonly DateTime PltrTo = new(2019, 5, 14);
+
+    [Theory]
+    [InlineData("PLTR")]
+    [InlineData("pltr")]
+    public async Task GetHistoricalDailyAsync_ConfirmsActualPltrBadRequestAfterSymbolValidation(string symbol)
+    {
+        using var handler = new ConfirmationHandler(HttpStatusCode.BadRequest, PltrPreListingBadRequest)
+        {
+            MetadataStatus = HttpStatusCode.OK, MetadataJson = PltrMetadata
+        };
+        using var client = new HttpClient(handler);
+        var provider = new YahooMarketDataProvider(
+            (_, _, _) => throw new InvalidOperationException(BadRequestMessage), client);
+
+        Assert.Empty(await provider.GetHistoricalDailyAsync(symbol, PltrFrom, PltrTo));
+
+        Assert.Equal($"/v8/finance/chart/{symbol}", handler.Request!.AbsolutePath);
+        Assert.Equal("?period1=1557446400&period2=1557878400&interval=1d", handler.Request.Query);
+        Assert.Equal($"/v8/finance/chart/{symbol}", handler.MetadataRequest!.AbsolutePath);
+        Assert.Equal("?range=1d&interval=1d", handler.MetadataRequest.Query);
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Equal(1, handler.MetadataRequestCount);
+    }
+
+    [Fact]
+    public async Task GetHistoricalDailyAsync_ExactBadRequestMetadataAuthenticationFailureRemainsFailure()
+    {
+        using var handler = new ConfirmationHandler(HttpStatusCode.BadRequest, PltrPreListingBadRequest)
+        {
+            MetadataStatus = HttpStatusCode.Unauthorized, MetadataJson = "{}"
+        };
+        using var client = new HttpClient(handler);
+        var provider = new YahooMarketDataProvider(
+            (_, _, _) => throw new InvalidOperationException(BadRequestMessage), client);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => provider.GetHistoricalDailyAsync("PLTR", PltrFrom, PltrTo));
+
+        Assert.Equal(2, handler.MetadataRequestCount);
+        Assert.Equal(1, handler.SessionRequestCount);
+        Assert.Equal(1, handler.CrumbRequestCount);
+    }
+
+    public static TheoryData<int, string, int, string> UnconfirmedBadRequestCases => new()
+    {
+        // Mismatched dates, code, description, result, and malformed/unknown shapes never reach symbol validation.
+        { 400, """{"chart":{"result":null,"error":{"code":"Bad Request","description":"Data doesn't exist for startDate = 1557446400, endDate = 1557964800"}}}""", 200, PltrMetadata },
+        { 400, """{"chart":{"result":null,"error":{"code":"Bad Request","description":"Data doesn't exist for startDate = 1557360000, endDate = 1557878400"}}}""", 200, PltrMetadata },
+        { 400, """{"chart":{"result":null,"error":{"code":"Not Found","description":"Data doesn't exist for startDate = 1557446400, endDate = 1557878400"}}}""", 200, PltrMetadata },
+        { 400, """{"chart":{"result":null,"error":{"code":"bad request","description":"Data doesn't exist for startDate = 1557446400, endDate = 1557878400"}}}""", 200, PltrMetadata },
+        { 400, """{"chart":{"result":null,"error":{"code":"Bad Request","description":"Data doesn't exist for startDate = 1557446400, endDate = 1557878400."}}}""", 200, PltrMetadata },
+        { 400, """{"chart":{"result":null,"error":{"code":"Bad Request","description":"Invalid input: Data doesn't exist for startDate = 1557446400, endDate = 1557878400"}}}""", 200, PltrMetadata },
+        { 400, """{"chart":{"result":null,"error":{"code":"Bad Request","description":"Invalid input"}}}""", 200, PltrMetadata },
+        { 400, """{"chart":{"result":[],"error":{"code":"Bad Request","description":"Data doesn't exist for startDate = 1557446400, endDate = 1557878400"}}}""", 200, PltrMetadata },
+        { 400, """{"chart":{"error":{"code":"Bad Request","description":"Data doesn't exist for startDate = 1557446400, endDate = 1557878400"}}}""", 200, PltrMetadata },
+        { 400, """{"chart":{"result":null,"error":"Data doesn't exist for startDate = 1557446400, endDate = 1557878400"}}""", 200, PltrMetadata },
+        { 400, """{"chart":{"result":null,"error":{"code":"Bad Request","description":null}}}""", 200, PltrMetadata },
+        { 400, """{"result":null,"error":{"code":"Bad Request","description":"Data doesn't exist for startDate = 1557446400, endDate = 1557878400"}}""", 200, PltrMetadata },
+        { 400, "Data doesn't exist for startDate = 1557446400, endDate = 1557878400", 200, PltrMetadata },
+        { 400, "", 200, PltrMetadata },
+        { 400, "[]", 200, PltrMetadata },
+    };
+
+    public static TheoryData<int, string, int, string> UnvalidatedSymbolCases => new()
+    {
+        // Exact range-specific 400, but the symbol cannot be positively validated as listed after the range.
+        { 400, PltrPreListingBadRequest, 404, """{"chart":{"result":null,"error":{"code":"Not Found","description":"No data found, symbol may be delisted"}}}""" },
+        { 400, PltrPreListingBadRequest, 400, """{"chart":{"result":null,"error":{"code":"Bad Request","description":"Invalid input"}}}""" },
+        { 400, PltrPreListingBadRequest, 429, "{}" },
+        { 400, PltrPreListingBadRequest, 500, "{}" },
+        { 400, PltrPreListingBadRequest, 200, "not json" },
+        { 400, PltrPreListingBadRequest, 200, "{}" },
+        { 400, PltrPreListingBadRequest, 200, """{"chart":{"result":null,"error":null}}""" },
+        { 400, PltrPreListingBadRequest, 200, """{"chart":{"result":[],"error":null}}""" },
+        { 400, PltrPreListingBadRequest, 200, """{"chart":{"result":[{"meta":{"symbol":"PLTR","firstTradeDate":1601472600}}],"error":{"code":"Unknown"}}}""" },
+        { 400, PltrPreListingBadRequest, 200, """{"chart":{"result":[{"meta":{"symbol":"OTHER","firstTradeDate":1601472600}}],"error":null}}""" },
+        { 400, PltrPreListingBadRequest, 200, """{"chart":{"result":[{"meta":{"firstTradeDate":1601472600}}],"error":null}}""" },
+        { 400, PltrPreListingBadRequest, 200, """{"chart":{"result":[{"meta":{"symbol":"PLTR"}}],"error":null}}""" },
+        { 400, PltrPreListingBadRequest, 200, """{"chart":{"result":[{"meta":{"symbol":"PLTR","firstTradeDate":null}}],"error":null}}""" },
+        { 400, PltrPreListingBadRequest, 200, """{"chart":{"result":[{"meta":{"symbol":"PLTR","firstTradeDate":"1601472600"}}],"error":null}}""" },
+        { 400, PltrPreListingBadRequest, 200, """{"chart":{"result":[{"meta":{"symbol":"PLTR","firstTradeDate":1601472600}},{"meta":{"symbol":"PLTR","firstTradeDate":1601472600}}],"error":null}}""" },
+        // Listed before or during the requested range: the 400 is not a pre-listing result.
+        { 400, PltrPreListingBadRequest, 200, """{"chart":{"result":[{"meta":{"symbol":"PLTR","firstTradeDate":1557878399}}],"error":null}}""" },
+        { 400, PltrPreListingBadRequest, 200, """{"chart":{"result":[{"meta":{"symbol":"PLTR","firstTradeDate":1557446400}}],"error":null}}""" },
+        { 400, PltrPreListingBadRequest, 200, """{"chart":{"result":[{"meta":{"symbol":"PLTR","firstTradeDate":345479400}}],"error":null}}""" },
+    };
+
+    [Theory]
+    [MemberData(nameof(UnconfirmedBadRequestCases))]
+    [MemberData(nameof(UnvalidatedSymbolCases))]
+    public async Task GetHistoricalDailyAsync_DoesNotConfirmUnvalidatedPltrBadRequest(
+        int status, string json, int metadataStatus, string metadataJson)
+    {
+        foreach (var message in new[] { UnavailableMessage, BadRequestMessage })
+        {
+            using var handler = new ConfirmationHandler((HttpStatusCode)status, json)
+            {
+                MetadataStatus = (HttpStatusCode)metadataStatus, MetadataJson = metadataJson
+            };
+            using var client = new HttpClient(handler);
+            var provider = new YahooMarketDataProvider(
+                (_, _, _) => throw new InvalidOperationException(message), client);
+
+            await Assert.ThrowsAnyAsync<Exception>(() => provider.GetHistoricalDailyAsync("PLTR", PltrFrom, PltrTo));
+            Assert.Equal(1, handler.RequestCount);
+            Assert.True(handler.MetadataRequestCount <= 1);
+        }
+    }
+
+    [Fact]
+    public async Task GetHistoricalDailyAsync_UnknownTickerExactBadRequestRemainsFailure()
+    {
+        using var handler = new ConfirmationHandler(HttpStatusCode.BadRequest, PltrPreListingBadRequest);
+        using var client = new HttpClient(handler);
+        var provider = new YahooMarketDataProvider(
+            (_, _, _) => throw new InvalidOperationException(BadRequestMessage), client);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            provider.GetHistoricalDailyAsync("ZZZXQ", PltrFrom, PltrTo));
+
+        Assert.Equal(HttpStatusCode.NotFound, ex.StatusCode);
+        Assert.Equal("/v8/finance/chart/ZZZXQ", handler.MetadataRequest!.AbsolutePath);
+        Assert.Equal(1, handler.MetadataRequestCount);
+    }
+
+    [Fact]
+    public async Task GetHistoricalDailyAsync_ExactBadRequestMetadataNetworkFailureRemainsFailure()
+    {
+        using var handler = new ConfirmationHandler(HttpStatusCode.BadRequest, PltrPreListingBadRequest)
+        {
+            MetadataStatus = HttpStatusCode.OK, MetadataJson = PltrMetadata
+        };
+        using var client = new HttpClient(new MetadataFailureHandler(handler));
+        var provider = new YahooMarketDataProvider(
+            (_, _, _) => throw new InvalidOperationException(BadRequestMessage), client);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => provider.GetHistoricalDailyAsync("PLTR", PltrFrom, PltrTo));
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData(" ")]
@@ -222,6 +367,14 @@ public sealed class YahooMarketDataProviderTests
     private static YahooMarketDataProvider UnavailableProvider(HttpClient client) =>
         new((_, _, _) => throw new InvalidOperationException(UnavailableMessage), client);
 
+    private sealed class MetadataFailureHandler(HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            request.RequestUri!.Query.Contains("range=")
+                ? throw new HttpRequestException("Network unavailable")
+                : base.SendAsync(request, cancellationToken);
+    }
+
     private sealed class ConfirmationHandler(HttpStatusCode status, string json) : HttpMessageHandler
     {
         public Uri? Request { get; private set; }
@@ -235,6 +388,11 @@ public sealed class YahooMarketDataProviderTests
         public string Crumb { get; init; } = "test/session";
         public string? CrumbCookie { get; private set; }
         public string? ChartCookie { get; private set; }
+        public HttpStatusCode MetadataStatus { get; init; } = HttpStatusCode.NotFound;
+        public string MetadataJson { get; init; } =
+            """{"chart":{"result":null,"error":{"code":"Not Found","description":"No data found, symbol may be delisted"}}}""";
+        public Uri? MetadataRequest { get; private set; }
+        public int MetadataRequestCount { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -253,6 +411,12 @@ public sealed class YahooMarketDataProviderTests
                 if (RequireCrumb && CrumbCookie != "A1=test-session")
                     return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
                 return Task.FromResult(new HttpResponseMessage(CrumbStatus) { Content = new StringContent(Crumb) });
+            }
+            if (request.RequestUri!.Query.Contains("range="))
+            {
+                MetadataRequest = request.RequestUri;
+                MetadataRequestCount++;
+                return Task.FromResult(new HttpResponseMessage(MetadataStatus) { Content = new StringContent(MetadataJson) });
             }
             Request = request.RequestUri;
             RequestCount++;
