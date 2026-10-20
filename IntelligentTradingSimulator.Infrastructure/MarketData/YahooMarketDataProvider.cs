@@ -139,20 +139,31 @@ public sealed class YahooMarketDataProvider
             return response;
 
         response.Dispose();
-        // Keep the cookie and crumb on the same client; neither is persisted.
-        using var crumbResponse = await SendConfirmationRequestAsync("https://query1.finance.yahoo.com/v1/test/getcrumb");
+        using var sessionResponse = await SendConfirmationRequestAsync("https://fc.yahoo.com");
+        var cookies = sessionResponse.Headers.TryGetValues("Set-Cookie", out var setCookieHeaders)
+            ? string.Join("; ", setCookieHeaders
+                .Select(x => x.Split(';', 2)[0])
+                .Where(x => !string.IsNullOrWhiteSpace(x)))
+            : "";
+        if (string.IsNullOrWhiteSpace(cookies))
+            throw new InvalidOperationException("Yahoo Finance did not provide a session cookie.");
+
+        using var crumbResponse = await SendConfirmationRequestAsync(
+            "https://query1.finance.yahoo.com/v1/test/getcrumb", cookies);
         crumbResponse.EnsureSuccessStatusCode();
         var crumb = await crumbResponse.Content.ReadAsStringAsync();
         if (string.IsNullOrWhiteSpace(crumb))
             throw new InvalidOperationException("Yahoo Finance returned no session crumb.");
-        return await SendConfirmationRequestAsync(uri + "&crumb=" + Uri.EscapeDataString(crumb));
+        return await SendConfirmationRequestAsync(uri + "&crumb=" + Uri.EscapeDataString(crumb), cookies);
     }
 
-    private async Task<HttpResponseMessage> SendConfirmationRequestAsync(string uri)
+    private async Task<HttpResponseMessage> SendConfirmationRequestAsync(string uri, string? cookies = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
         request.Headers.UserAgent.ParseAdd(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36");
+        if (!string.IsNullOrWhiteSpace(cookies))
+            request.Headers.TryAddWithoutValidation("Cookie", cookies);
         return await _confirmationClient.SendAsync(request);
     }
 

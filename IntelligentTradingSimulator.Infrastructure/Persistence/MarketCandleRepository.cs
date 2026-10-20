@@ -101,7 +101,7 @@ public sealed class MarketCandleRepository(TradingSimulatorDbContext dbContext) 
         var coverageEnd = to < downloadedAt.Date ? to : downloadedAt.Date.AddDays(-1);
 
         // First download wins: an upsert must not revise an existing backtest snapshot.
-        dbContext.MarketCandles.AddRange(candles.DistinctBy(x => x.Date.Date)
+        var newCandles = candles.DistinctBy(x => x.Date.Date)
             .Where(x => x.Date.Date <= coverageEnd && !existingDates.Contains(x.Date.Date) &&
                 !existingCoverage.Any(range => range.From <= x.Date.Date && range.To >= x.Date.Date))
             .Select(x => new MarketCandleEntity
@@ -109,20 +109,34 @@ public sealed class MarketCandleRepository(TradingSimulatorDbContext dbContext) 
                 Symbol = symbol, Source = source, PriceAdjustmentMode = priceAdjustmentMode,
                 Date = x.Date.Date, Open = x.Open, High = x.High, Low = x.Low,
                 Close = x.Close, Volume = x.Volume, DownloadedAt = downloadedAt
-            }));
+            }).ToList();
+        dbContext.MarketCandles.AddRange(newCandles);
 
         // Do not certify today's incomplete session or future dates as fully downloaded.
+        MarketDataCoverage? newCoverage = null;
         if (coverageEnd >= from && !existingCoverage.Any(x => x.From <= from && x.To >= coverageEnd))
         {
-            dbContext.MarketDataCoverage.Add(new MarketDataCoverage
+            newCoverage = new MarketDataCoverage
             {
                 Symbol = symbol, Source = source, PriceAdjustmentMode = priceAdjustmentMode,
                 From = from, To = coverageEnd, DownloadedAt = downloadedAt
-            });
+            };
+            dbContext.MarketDataCoverage.Add(newCoverage);
         }
-        await dbContext.SaveChangesAsync();
-        if (transaction is not null)
-            await transaction.CommitAsync();
+        try
+        {
+            await dbContext.SaveChangesAsync();
+            if (transaction is not null)
+                await transaction.CommitAsync();
+        }
+        catch
+        {
+            foreach (var candle in newCandles)
+                dbContext.Entry(candle).State = EntityState.Detached;
+            if (newCoverage is not null)
+                dbContext.Entry(newCoverage).State = EntityState.Detached;
+            throw;
+        }
     }
 
     private static string NormalizeSymbol(string symbol)

@@ -68,7 +68,10 @@ public sealed class YahooMarketDataProviderTests
         Assert.Empty(await UnavailableProvider(client).GetHistoricalDailyAsync("AAPL", Saturday, Sunday));
 
         Assert.Equal(2, handler.RequestCount);
+        Assert.Equal(1, handler.SessionRequestCount);
         Assert.Equal(1, handler.CrumbRequestCount);
+        Assert.Equal("A1=test-session", handler.CrumbCookie);
+        Assert.Equal(handler.CrumbCookie, handler.ChartCookie);
         Assert.Equal("?period1=1578700800&period2=1578873600&interval=1d&crumb=test%2Fsession", handler.Request!.Query);
     }
 
@@ -87,6 +90,7 @@ public sealed class YahooMarketDataProviderTests
         await Assert.ThrowsAnyAsync<Exception>(() =>
             UnavailableProvider(client).GetHistoricalDailyAsync("AAPL", Saturday, Sunday));
         Assert.Equal(1, handler.RequestCount);
+        Assert.Equal(1, handler.SessionRequestCount);
         Assert.Equal(1, handler.CrumbRequestCount);
     }
 
@@ -171,25 +175,42 @@ public sealed class YahooMarketDataProviderTests
         public Uri? Request { get; private set; }
         public string UserAgent { get; private set; } = "";
         public int RequestCount { get; private set; }
+        public int SessionRequestCount { get; private set; }
         public bool Fail { get; init; }
         public bool RequireCrumb { get; init; }
         public int CrumbRequestCount { get; private set; }
         public HttpStatusCode CrumbStatus { get; init; } = HttpStatusCode.OK;
         public string Crumb { get; init; } = "test/session";
+        public string? CrumbCookie { get; private set; }
+        public string? ChartCookie { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             UserAgent = request.Headers.UserAgent.ToString();
+            if (request.RequestUri!.Host == "fc.yahoo.com")
+            {
+                SessionRequestCount++;
+                var response = new HttpResponseMessage(HttpStatusCode.NotFound);
+                response.Headers.TryAddWithoutValidation("Set-Cookie", "A1=test-session; Path=/; Secure");
+                return Task.FromResult(response);
+            }
             if (request.RequestUri!.AbsolutePath == "/v1/test/getcrumb")
             {
                 CrumbRequestCount++;
+                CrumbCookie = request.Headers.GetValues("Cookie").FirstOrDefault();
+                if (RequireCrumb && CrumbCookie != "A1=test-session")
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
                 return Task.FromResult(new HttpResponseMessage(CrumbStatus) { Content = new StringContent(Crumb) });
             }
             Request = request.RequestUri;
             RequestCount++;
+            ChartCookie = request.Headers.Contains("Cookie")
+                ? request.Headers.GetValues("Cookie").FirstOrDefault()
+                : null;
             if (Fail)
                 throw new HttpRequestException("Network unavailable");
-            if (RequireCrumb && (RequestCount == 1 || !Request!.Query.Contains("&crumb=")))
+            if (RequireCrumb && (RequestCount == 1 || !Request!.Query.Contains("&crumb=") ||
+                ChartCookie != "A1=test-session"))
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
             return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(json) });
         }

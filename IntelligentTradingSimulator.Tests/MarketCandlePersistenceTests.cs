@@ -9,6 +9,7 @@ using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Migrations.Operations;
 
 namespace IntelligentTradingSimulator.Tests;
@@ -393,6 +394,42 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Service_FailedSaveCanRetryWithoutDiscardingUnrelatedTrackedChanges()
+    {
+        var interceptor = new FailFirstSaveInterceptor();
+        var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
+            .UseSqlite(_connection)
+            .AddInterceptors(interceptor)
+            .Options;
+        await using var context = new TradingSimulatorDbContext(options);
+        var unrelated = new MarketCandleEntity
+        {
+            Symbol = "MSFT", Source = Source, PriceAdjustmentMode = Mode, Date = Start,
+            Open = 100m, High = 101m, Low = 99m, Close = 100m, Volume = 1000m,
+            DownloadedAt = DateTime.UtcNow
+        };
+        context.MarketCandles.Add(unrelated);
+        var provider = new FakeProvider { Candles = [Candle(0)] };
+        var service = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(context));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
+
+        Assert.Equal(EntityState.Added, context.Entry(unrelated).State);
+        Assert.Equal(new object[] { unrelated },
+            context.ChangeTracker.Entries<MarketCandleEntity>().Select(x => x.Entity));
+        Assert.Empty(context.ChangeTracker.Entries<MarketDataCoverage>());
+
+        var result = await service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2));
+
+        Assert.Single(result);
+        Assert.Equal(2, provider.Requests.Count);
+        Assert.Equal(2, await context.MarketCandles.CountAsync());
+        Assert.Single(await context.MarketDataCoverage.ToListAsync());
+        Assert.Equal(EntityState.Unchanged, context.Entry(unrelated).State);
+    }
+
+    [Fact]
     public async Task Repository_OverlappingUpsertPreservesPreviouslyCoveredEmptyDates()
     {
         await using var context = NewContext();
@@ -598,6 +635,21 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
             if (Fail) throw new InvalidOperationException("Provider unavailable");
             if (BeforeReturn is not null) await BeforeReturn();
             return Candles;
+        }
+    }
+
+    private sealed class FailFirstSaveInterceptor : SaveChangesInterceptor
+    {
+        private int _attempts;
+
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _attempts) == 1)
+                throw new InvalidOperationException("Simulated first-save failure.");
+            return base.SavingChangesAsync(eventData, result, cancellationToken);
         }
     }
 
