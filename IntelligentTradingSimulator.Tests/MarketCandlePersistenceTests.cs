@@ -2,10 +2,15 @@ using IntelligentTradingSimulator.App.Simulation;
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Infrastructure.Migrations;
+using IntelligentTradingSimulator.Infrastructure.MarketData;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
+using System.Data.Common;
+using System.Net;
+using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Migrations.Operations;
 
 namespace IntelligentTradingSimulator.Tests;
@@ -255,6 +260,186 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
         Assert.Single(await context.MarketDataCoverage.ToListAsync());
     }
 
+    [Theory]
+    [InlineData("AAPL", 5)]
+    [InlineData("MSFT", 6)]
+    [InlineData("SPY", 5)]
+    [InlineData("SPY", 6)]
+    [InlineData("AAPL", 14)]
+    public async Task Service_ConfirmedEmptyTailReturnsPersistedCandlesAndIsNotRequestedAgain(string symbol, int tailDay)
+    {
+        // 2024-01-05 is Friday; 2024-01-15 is the Martin Luther King Jr. holiday.
+        var lastTradingDay = tailDay == 14 ? 11 : 4;
+        await using (var context = NewContext())
+        {
+            var repository = new MarketCandleRepository(context);
+            await repository.UpsertAsync(symbol, Source, Mode, Start, Start.AddDays(lastTradingDay),
+                [Candle(0), Candle(lastTradingDay)]);
+        }
+        using var handler = new EmptyChartHandler(symbol);
+        using var client = new HttpClient(handler);
+        var requests = new List<(DateTime From, DateTime To)>();
+        var provider = new YahooMarketDataProvider((_, from, to) =>
+        {
+            requests.Add((from.Date, to!.Value.Date.AddDays(-1)));
+            throw new InvalidOperationException("Requested Information Not Available On Yahoo Finance");
+        }, client);
+
+        await using (var context = NewContext())
+        {
+            var service = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(context));
+            var result = await service.GetHistoricalDailyUpToAsync(
+                symbol, Start, Start.AddDays(tailDay), Start.AddDays(tailDay));
+            Assert.Equal(new[] { Start, Start.AddDays(lastTradingDay) }, result.Select(x => x.Date));
+            Assert.All(result, x => Assert.Equal(100m, x.Close));
+            Assert.Single(await service.GetHistoricalDailyUpToAsync(
+                symbol, Start, Start.AddDays(tailDay), Start));
+        }
+        await using var nextContext = NewContext();
+        var nextService = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(nextContext));
+        Assert.Equal(2, (await nextService.GetHistoricalDailyUpToAsync(
+            symbol, Start, Start.AddDays(tailDay), Start.AddDays(tailDay))).Count);
+        Assert.Equal(2, (await nextService.GetHistoricalDailyUpToAsync(
+            symbol, Start, Start.AddDays(tailDay - 1), Start.AddDays(tailDay - 1))).Count);
+        Assert.Equal((Start.AddDays(lastTradingDay + 1), Start.AddDays(tailDay)), Assert.Single(requests));
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Equal(2, await nextContext.MarketCandles.CountAsync());
+        var coverage = await nextContext.MarketDataCoverage.OrderBy(x => x.From).ToListAsync();
+        Assert.Equal(2, coverage.Count);
+        Assert.Equal(Start.AddDays(lastTradingDay + 1), coverage[1].From);
+        Assert.Equal(Start.AddDays(tailDay), coverage[1].To);
+    }
+
+    [Fact]
+    public async Task Service_ConfirmedWeekendDoesNotHideNextMondayTradingSession()
+    {
+        await using var context = NewContext();
+        var repository = new MarketCandleRepository(context);
+        await repository.UpsertAsync("AAPL", Source, Mode, Start, Start.AddDays(4), [Candle(4)]);
+        var provider = new FakeProvider();
+        var service = new BacktestHistoricalMarketDataService(provider, repository);
+        Assert.Single(await service.GetHistoricalDailyUpToAsync("AAPL", Start, Start.AddDays(6), Start.AddDays(6)));
+        provider.Candles = [Candle(7, 110)];
+        var monday = await service.GetHistoricalDailyUpToAsync("AAPL", Start, Start.AddDays(7), Start.AddDays(7));
+        Assert.Equal(new[] { Start.AddDays(4), Start.AddDays(7) }, monday.Select(x => x.Date));
+        Assert.Equal(110m, monday[^1].Close);
+        Assert.Equal(new[]
+        {
+            (Start.AddDays(5), Start.AddDays(6)),
+            (Start.AddDays(7), Start.AddDays(7))
+        }, provider.Requests);
+        await service.GetHistoricalDailyUpToAsync("AAPL", Start, Start.AddDays(6), Start.AddDays(6));
+        Assert.Equal(2, provider.Requests.Count);
+    }
+
+    [Theory]
+    [InlineData("PLTR")]
+    [InlineData("SNOW")]
+    public async Task Service_ConfirmedPreListingRangePersistsCoverageWithoutCandles(string symbol)
+    {
+        using var handler = new EmptyChartHandler(symbol, preListing: true);
+        using var client = new HttpClient(handler);
+        var provider = new YahooMarketDataProvider(
+            (_, _, _) => throw new InvalidOperationException("Requested Information Not Available On Yahoo Finance"), client);
+        await using (var context = NewContext())
+        {
+            var service = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(context));
+            for (var day = 10; day <= 12; day++)
+                Assert.Empty(await service.GetHistoricalDailyUpToAsync(
+                    symbol, new DateTime(2020, 1, 11), new DateTime(2020, 1, 12), new DateTime(2020, 1, day)));
+        }
+        await using var nextContext = NewContext();
+        Assert.Empty(await new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(nextContext))
+            .GetHistoricalDailyRangeAsync(symbol, new DateTime(2020, 1, 11), new DateTime(2020, 1, 12)));
+        var coverage = Assert.Single(await nextContext.MarketDataCoverage.ToListAsync());
+        Assert.Equal(symbol, coverage.Symbol);
+        Assert.Equal(new DateTime(2020, 1, 11), coverage.From);
+        Assert.Equal(new DateTime(2020, 1, 12), coverage.To);
+        Assert.Empty(await nextContext.MarketCandles.ToListAsync());
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Theory]
+    [InlineData("network")]
+    [InlineData("rate")]
+    [InlineData("server")]
+    [InlineData("malformed")]
+    [InlineData("unknown")]
+    public async Task Service_UnclassifiedProviderFailuresDoNotCreateCoverageAndRemainRetryable(string failure)
+    {
+        Exception expected = failure switch
+        {
+            "network" => new HttpRequestException("Network unavailable"),
+            "rate" => new HttpRequestException("Rate limited", null, HttpStatusCode.TooManyRequests),
+            "server" => new HttpRequestException("Server error", null, HttpStatusCode.InternalServerError),
+            "malformed" => new JsonException("Malformed response"),
+            _ => new InvalidOperationException("Unknown provider failure")
+        };
+        var calls = 0;
+        var provider = new YahooMarketDataProvider((_, _, _) =>
+        {
+            calls++;
+            throw expected;
+        });
+        await using var context = NewContext();
+        var service = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(context));
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var actual = await Assert.ThrowsAnyAsync<Exception>(() =>
+                service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
+            Assert.Same(expected, actual);
+        }
+        Assert.Equal(2, calls);
+        Assert.Empty(await context.MarketDataCoverage.ToListAsync());
+        Assert.Empty(await context.MarketCandles.ToListAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Service_FailedPersistenceCanRetryWithoutDiscardingUnrelatedTrackedChanges(bool failCommit)
+    {
+        IInterceptor interceptor = failCommit
+            ? new FailFirstCommitInterceptor()
+            : new FailFirstSaveInterceptor();
+        var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
+            .UseSqlite(_connection)
+            .AddInterceptors(interceptor)
+            .Options;
+        await using var context = new TradingSimulatorDbContext(options);
+        var unrelated = new MarketCandleEntity
+        {
+            Symbol = "MSFT", Source = Source, PriceAdjustmentMode = Mode, Date = Start,
+            Open = 100m, High = 101m, Low = 99m, Close = 100m, Volume = 1000m,
+            DownloadedAt = DateTime.UtcNow
+        };
+        context.MarketCandles.Add(unrelated);
+        var provider = new FakeProvider { Candles = [Candle(0)] };
+        var service = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(context));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
+
+        Assert.Equal(EntityState.Added, context.Entry(unrelated).State);
+        Assert.Equal(new object[] { unrelated },
+            context.ChangeTracker.Entries<MarketCandleEntity>().Select(x => x.Entity));
+        Assert.Empty(context.ChangeTracker.Entries<MarketDataCoverage>());
+        await using (var readContext = NewContext())
+        {
+            Assert.Empty(await readContext.MarketCandles.ToListAsync());
+            Assert.Empty(await readContext.MarketDataCoverage.ToListAsync());
+        }
+
+        var result = await service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2));
+
+        Assert.Single(result);
+        Assert.Equal(2, provider.Requests.Count);
+        Assert.Equal(2, await context.MarketCandles.CountAsync());
+        Assert.Single(await context.MarketDataCoverage.ToListAsync());
+        Assert.Equal(EntityState.Unchanged, context.Entry(unrelated).State);
+        Assert.All(context.ChangeTracker.Entries(), entry => Assert.Equal(EntityState.Unchanged, entry.State));
+    }
+
     [Fact]
     public async Task Repository_OverlappingUpsertPreservesPreviouslyCoveredEmptyDates()
     {
@@ -399,7 +584,7 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Service_FailedLoadIsMemoizedButNewScopeCanRetry_WithoutCertifyingInvalidResponse()
+    public async Task Service_FailedLoadCanRetryInSameScope_WithoutCertifyingInvalidResponse()
     {
         await using var context = NewContext();
         var provider = new FakeProvider { Fail = true };
@@ -408,20 +593,42 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
             service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
-        Assert.Single(provider.Requests);
+        Assert.Equal(2, provider.Requests.Count);
         Assert.Empty(await context.MarketDataCoverage.ToListAsync());
         provider.Fail = false;
         var invalid = Candle(0);
         invalid.Volume = -1;
         provider.Candles = [invalid];
-        service = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(context));
         await Assert.ThrowsAsync<ArgumentException>(() =>
             service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
         Assert.Empty(await context.MarketDataCoverage.ToListAsync());
         provider.Candles = [Candle(0)];
-        service = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(context));
         Assert.Single(await service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
-        Assert.Equal(3, provider.Requests.Count);
+        Assert.Equal(4, provider.Requests.Count);
+    }
+
+    private sealed class EmptyChartHandler(string symbol, bool preListing = false) : HttpMessageHandler
+    {
+        public int RequestCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            var json = preListing
+                ? """{"chart":{"result":null,"error":{"code":"Not Found","description":"Data doesn't exist for startDate = 1578700800, endDate = 1578873600"}}}"""
+                : JsonSerializer.Serialize(new
+                {
+                    chart = new
+                    {
+                        result = new[] { new { meta = new { symbol }, indicators = new { quote = new[] { new { } } } } },
+                        error = (object?)null
+                    }
+                });
+            return Task.FromResult(new HttpResponseMessage(preListing ? HttpStatusCode.NotFound : HttpStatusCode.OK)
+            {
+                Content = new StringContent(json)
+            });
+        }
     }
 
     private sealed class FakeProvider : IMarketDataProvider
@@ -439,6 +646,37 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
             if (Fail) throw new InvalidOperationException("Provider unavailable");
             if (BeforeReturn is not null) await BeforeReturn();
             return Candles;
+        }
+    }
+
+    private sealed class FailFirstCommitInterceptor : DbTransactionInterceptor
+    {
+        private int _attempts;
+
+        public override ValueTask<InterceptionResult> TransactionCommittingAsync(
+            DbTransaction transaction,
+            TransactionEventData eventData,
+            InterceptionResult result,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _attempts) == 1)
+                throw new InvalidOperationException("Simulated first-commit failure.");
+            return base.TransactionCommittingAsync(transaction, eventData, result, cancellationToken);
+        }
+    }
+
+    private sealed class FailFirstSaveInterceptor : SaveChangesInterceptor
+    {
+        private int _attempts;
+
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _attempts) == 1)
+                throw new InvalidOperationException("Simulated first-save failure.");
+            return base.SavingChangesAsync(eventData, result, cancellationToken);
         }
     }
 

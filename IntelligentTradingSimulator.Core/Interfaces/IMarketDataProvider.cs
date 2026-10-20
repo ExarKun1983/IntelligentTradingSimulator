@@ -10,6 +10,8 @@ namespace IntelligentTradingSimulator.Core.Interfaces;
 
 public interface IMarketDataProvider
 {
+    // An empty list confirms no candles exist in the requested range.
+    // Transient, malformed, null, or unclassified responses must throw instead.
     Task<IReadOnlyList<MarketCandle>>
         GetHistoricalDailyAsync(
             string symbol,
