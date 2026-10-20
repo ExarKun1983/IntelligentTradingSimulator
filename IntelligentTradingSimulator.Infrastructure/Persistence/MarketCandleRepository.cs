@@ -125,9 +125,10 @@ public sealed class MarketCandleRepository(TradingSimulatorDbContext dbContext) 
         }
         try
         {
-            await dbContext.SaveChangesAsync();
+            await dbContext.SaveChangesAsync(acceptAllChangesOnSuccess: false);
             if (transaction is not null)
                 await transaction.CommitAsync();
+            dbContext.ChangeTracker.AcceptAllChanges();
         }
         catch
         {

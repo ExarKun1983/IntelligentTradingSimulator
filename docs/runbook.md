@@ -141,6 +141,9 @@ responses, and unknown errors remain failures. There is no weekend/calendar gues
 or catch-all empty fallback. Confirmation failures also propagate. Faulted loads
 are evicted from the in-process cache so later calls can retry in the same scope;
 there is no general automatic retry loop.
+If saving or committing market data fails, only that upsert's pending candles and
+coverage are detached. Unrelated pending changes remain retryable; tracked changes
+are accepted only after the transaction commits successfully.
 Confirmed empty ranges (including pre-listing ranges) add coverage without fake
 candles. Earlier persisted candles still return, subject to the simulated-date
 cutoff. Benchmarks use the same retrieval path. Coverage suppresses repeat requests
@@ -167,8 +170,7 @@ Progress identifies database, external-provider, or combined reads. Exact-range
 in-memory caching avoids repeated database reads within a scope, while durable
 coverage supports overlapping requests and subsequent processes. Every backtest
 result remains filtered to its simulated date, even when the cached range is wider.
-As before, failed requests are memoized within the current scope; start a new
-command/scope to retry after resolving a provider or database failure.
+Failed requests are not memoized; retry after resolving a provider or database failure.
 Ordinary non-backtest market-data workflows continue using `IMarketDataProvider`.
 
 ## Ranking feature inputs

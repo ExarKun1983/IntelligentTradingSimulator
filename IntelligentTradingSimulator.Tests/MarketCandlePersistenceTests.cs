@@ -4,6 +4,7 @@ using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Infrastructure.Migrations;
 using IntelligentTradingSimulator.Infrastructure.MarketData;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
+using System.Data.Common;
 using System.Net;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
@@ -393,10 +394,14 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
         Assert.Empty(await context.MarketCandles.ToListAsync());
     }
 
-    [Fact]
-    public async Task Service_FailedSaveCanRetryWithoutDiscardingUnrelatedTrackedChanges()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Service_FailedPersistenceCanRetryWithoutDiscardingUnrelatedTrackedChanges(bool failCommit)
     {
-        var interceptor = new FailFirstSaveInterceptor();
+        IInterceptor interceptor = failCommit
+            ? new FailFirstCommitInterceptor()
+            : new FailFirstSaveInterceptor();
         var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
             .UseSqlite(_connection)
             .AddInterceptors(interceptor)
@@ -419,6 +424,11 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
         Assert.Equal(new object[] { unrelated },
             context.ChangeTracker.Entries<MarketCandleEntity>().Select(x => x.Entity));
         Assert.Empty(context.ChangeTracker.Entries<MarketDataCoverage>());
+        await using (var readContext = NewContext())
+        {
+            Assert.Empty(await readContext.MarketCandles.ToListAsync());
+            Assert.Empty(await readContext.MarketDataCoverage.ToListAsync());
+        }
 
         var result = await service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2));
 
@@ -427,6 +437,7 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
         Assert.Equal(2, await context.MarketCandles.CountAsync());
         Assert.Single(await context.MarketDataCoverage.ToListAsync());
         Assert.Equal(EntityState.Unchanged, context.Entry(unrelated).State);
+        Assert.All(context.ChangeTracker.Entries(), entry => Assert.Equal(EntityState.Unchanged, entry.State));
     }
 
     [Fact]
@@ -635,6 +646,22 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
             if (Fail) throw new InvalidOperationException("Provider unavailable");
             if (BeforeReturn is not null) await BeforeReturn();
             return Candles;
+        }
+    }
+
+    private sealed class FailFirstCommitInterceptor : DbTransactionInterceptor
+    {
+        private int _attempts;
+
+        public override ValueTask<InterceptionResult> TransactionCommittingAsync(
+            DbTransaction transaction,
+            TransactionEventData eventData,
+            InterceptionResult result,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _attempts) == 1)
+                throw new InvalidOperationException("Simulated first-commit failure.");
+            return base.TransactionCommittingAsync(transaction, eventData, result, cancellationToken);
         }
     }
 
