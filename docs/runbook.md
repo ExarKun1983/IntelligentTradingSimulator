@@ -122,9 +122,12 @@ Failures, null responses, and invalid OHLCV are not covered.
 Unexpected provider omissions within a successful response therefore require an
 explicit database repair; there is no automatic refresh of stored snapshots.
 The Yahoo client uses the same "Requested Information Not Available On Yahoo Finance"
-exception for empty charts and HTTP 404, so that message alone is **not** proof of
-no data. For that ambiguous exception on a bounded request, the adapter makes one
-additional chart request for the identical UTC range (Yahoo's end is exclusive).
+exception for empty charts and HTTP 404. It also reports HTTP 400 as
+`InvalidOperationException("Yahoo Finance Server Error BadRequest")`, including the
+reported PLTR pre-listing failure. Neither message alone is **proof of no data**.
+Only these exact, non-derived `InvalidOperationException` shapes on a bounded request
+with a nonblank symbol trigger an additional chart request for the identical symbol
+and UTC range (Yahoo's end is exclusive).
 Confirmation uses a browser-compatible user agent. If Yahoo requires authentication
 (HTTP 401), it acquires a session crumb on the same cookie-enabled client and retries
 the identical chart range once. Cookies/crumbs are never persisted in the database.
@@ -134,10 +137,13 @@ It confirms emptiness only for:
   and an empty quote object or empty quote arrays.
 - HTTP 404 with `chart.result=null`, error code `Not Found`, and the exact
   `Data doesn't exist for startDate = <requested Unix start>, endDate = <requested Unix end>`
-  description.
+  description, returned by the chart endpoint for the requested symbol.
 
-Generic 404/delisting messages, network errors, rate limits, server errors, malformed
-responses, and unknown errors remain failures. There is no weekend/calendar guess
+HTTP 400 is not an accepted confirmation status, even if its body resembles a
+no-data response. Invalid requests, unclassified BadRequest responses, generic
+404/delisting messages, authentication failures after the bounded session retry,
+network errors, rate limits, server errors, malformed responses, and unknown errors
+remain failures. There is no weekend/calendar guess
 or catch-all empty fallback. Confirmation failures also propagate. Faulted loads
 are evicted from the in-process cache so later calls can retry in the same scope;
 there is no general automatic retry loop.
@@ -148,6 +154,20 @@ Confirmed empty ranges (including pre-listing ranges) add coverage without fake
 candles. Earlier persisted candles still return, subject to the simulated-date
 cutoff. Benchmarks use the same retrieval path. Coverage suppresses repeat requests
 only within the confirmed interval; the next uncovered trading date is still fetched.
+
+The BadRequest exception mapping was verified against the installed
+OoplesFinance.YahooFinanceAPI 1.7.1 package's
+[`DownloadHelper.DownloadRawDataAsync`](https://github.com/Ooples-Finance-LLC/OoplesFinance.YahooFinanceAPI/blob/4a59f93a95f1cc24cc1c5ed8f85708425d06d9ff/src/Helpers/DownloadHelper.cs#L91-L100).
+The client discards the failure response body and exposes neither a typed HTTP status
+nor that body on this exception. A live bounded PLTR chart probe for
+`period1=1557446400&period2=1557878400` (May 10–14, 2019 inclusive) could not resolve
+Yahoo's hostname in the implementation sandbox; no live body was captured there.
+Deterministic regressions reproduce the exact client exception and require a separate
+structured confirmation. They cover rolling starts May 10–15, 2019 for simulated
+September 25–30, 2020: after confirming May 10–14 once, persisted coverage suppresses
+all overlapping gap requests while candles from September 30 onward stay unchanged.
+If Yahoo returns only an unclassified 400 during confirmation, the interval remains
+uncovered and retryable; do not manually certify it based solely on a known listing date.
 
 To repair incorrectly certified empty coverage, stop backtests/synchronization and
 back up the database. Inspect and delete **all coverage rows overlapping the affected

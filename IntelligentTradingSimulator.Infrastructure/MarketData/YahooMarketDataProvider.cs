@@ -12,6 +12,7 @@ public sealed class YahooMarketDataProvider
     : IMarketDataProvider
 {
     private const string UnavailableMessage = "Requested Information Not Available On Yahoo Finance";
+    private const string BadRequestMessage = "Yahoo Finance Server Error BadRequest";
     private static readonly HttpClient ConfirmationClient = new();
     private readonly Func<string, DateTime, DateTime?, Task<IReadOnlyList<MarketCandle>>> _download;
     private readonly HttpClient _confirmationClient;
@@ -67,10 +68,11 @@ public sealed class YahooMarketDataProvider
         }
         catch (InvalidOperationException ex) when (
             ex.GetType() == typeof(InvalidOperationException) &&
-            ex.Message == UnavailableMessage && exclusiveEnd.HasValue)
+            (ex.Message == UnavailableMessage || ex.Message == BadRequestMessage) &&
+            exclusiveEnd.HasValue && !string.IsNullOrWhiteSpace(symbol))
         {
-            // The client uses this message for both empty charts and HTTP 404.
-            // Do not certify either without inspecting a structured, bounded response.
+            // Neither the client's unavailable message nor HTTP 400 proves no data.
+            // Require a structured, bounded confirmation before certifying coverage.
             if (await ConfirmEmptyRangeAsync(symbol, utcFrom, exclusiveEnd.Value))
                 return [];
             throw;
