@@ -8,6 +8,7 @@ namespace IntelligentTradingSimulator.Tests;
 public sealed class YahooMarketDataProviderTests
 {
     private const string UnavailableMessage = "Requested Information Not Available On Yahoo Finance";
+    private const string BadRequestMessage = "Yahoo Finance Server Error BadRequest";
     private static readonly DateTime Saturday = new(2020, 1, 11);
     private static readonly DateTime Sunday = new(2020, 1, 12);
 
@@ -106,6 +107,44 @@ public sealed class YahooMarketDataProviderTests
     }
 
     [Theory]
+    [InlineData(404, """{"chart":{"result":null,"error":{"code":"Not Found","description":"Data doesn't exist for startDate = 1557446400, endDate = 1557878400"}}}""")]
+    [InlineData(200, """{"chart":{"result":[{"meta":{"symbol":"PLTR"},"indicators":{"quote":[{}]}}],"error":null}}""")]
+    public async Task GetHistoricalDailyAsync_ConfirmsPltrPreListingBadRequestOnlyAfterStructuredConfirmation(
+        int status, string json)
+    {
+        using var handler = new ConfirmationHandler((HttpStatusCode)status, json);
+        using var client = new HttpClient(handler);
+        var provider = new YahooMarketDataProvider(
+            (_, _, _) => throw new InvalidOperationException(BadRequestMessage), client);
+
+        Assert.Empty(await provider.GetHistoricalDailyAsync("PLTR", new DateTime(2019, 5, 10), new DateTime(2019, 5, 14)));
+
+        Assert.Equal("/v8/finance/chart/PLTR", handler.Request!.AbsolutePath);
+        Assert.Equal("?period1=1557446400&period2=1557878400&interval=1d", handler.Request.Query);
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("PLTR")]
+    public async Task GetHistoricalDailyAsync_DoesNotConfirmBadRequestForInvalidSymbolOrUnboundedRange(string symbol)
+    {
+        using var handler = new ConfirmationHandler(HttpStatusCode.OK, "{}");
+        using var client = new HttpClient(handler);
+        var expected = new InvalidOperationException(BadRequestMessage);
+        var provider = new YahooMarketDataProvider((_, _, _) => throw expected, client);
+
+        Assert.Same(expected, await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            provider.GetHistoricalDailyAsync(symbol, Saturday, symbol == "PLTR" ? DateTime.MaxValue.Date : Sunday)));
+        Assert.Equal(0, handler.RequestCount);
+    }
+
+    [Theory]
+    [InlineData(400, """{"chart":{"result":null,"error":{"code":"Bad Request","description":"Invalid input"}}}""")]
+    [InlineData(400, """{"chart":{"result":null,"error":{"code":"Not Found","description":"Data doesn't exist for startDate = 1578700800, endDate = 1578873600"}}}""")]
+    [InlineData(401, "{}")]
+    [InlineData(403, "{}")]
     [InlineData(429, """{"chart":{"result":null,"error":{"code":"Not Found","description":"Data doesn't exist for startDate = 1578700800, endDate = 1578873600"}}}""")]
     [InlineData(500, """{"chart":{"result":null,"error":{"code":"Not Found","description":"Data doesn't exist for startDate = 1578700800, endDate = 1578873600"}}}""")]
     [InlineData(503, "{}")]
@@ -124,16 +163,26 @@ public sealed class YahooMarketDataProviderTests
     [InlineData(200, """{"chart":{"result":[{"meta":{"symbol":"AAPL"},"indicators":{"quote":[{}]}}],"error":{"code":"Unknown"}}}""")]
     public async Task GetHistoricalDailyAsync_DoesNotConfirmUnknownOrFailedResponses(int status, string json)
     {
-        using var client = new HttpClient(new ConfirmationHandler((HttpStatusCode)status, json));
+        foreach (var message in new[] { UnavailableMessage, BadRequestMessage })
+        {
+            using var handler = new ConfirmationHandler((HttpStatusCode)status, json);
+            using var client = new HttpClient(handler);
+            var provider = new YahooMarketDataProvider(
+                (_, _, _) => throw new InvalidOperationException(message), client);
 
-        await Assert.ThrowsAnyAsync<Exception>(() =>
-            UnavailableProvider(client).GetHistoricalDailyAsync("AAPL", Saturday, Sunday));
+            await Assert.ThrowsAnyAsync<Exception>(() =>
+                provider.GetHistoricalDailyAsync("AAPL", Saturday, Sunday));
+            Assert.Equal(status == 401 ? 2 : 1, handler.RequestCount);
+        }
     }
 
     [Theory]
     [InlineData("network")]
     [InlineData("rate")]
     [InlineData("server")]
+    [InlineData("authentication")]
+    [InlineData("bad-request-http")]
+    [InlineData("bad-request-unknown")]
     [InlineData("malformed")]
     [InlineData("unknown")]
     [InlineData("null")]
@@ -146,6 +195,9 @@ public sealed class YahooMarketDataProviderTests
             "network" => new HttpRequestException(UnavailableMessage),
             "rate" => new HttpRequestException(UnavailableMessage, null, HttpStatusCode.TooManyRequests),
             "server" => new HttpRequestException(UnavailableMessage, null, HttpStatusCode.InternalServerError),
+            "authentication" => new InvalidOperationException("Yahoo Finance Server Error Unauthorized"),
+            "bad-request-http" => new HttpRequestException(BadRequestMessage, null, HttpStatusCode.BadRequest),
+            "bad-request-unknown" => new InvalidOperationException(BadRequestMessage + ": invalid input"),
             "malformed" => new JsonException(UnavailableMessage),
             _ => new InvalidOperationException("Unknown provider failure")
         };

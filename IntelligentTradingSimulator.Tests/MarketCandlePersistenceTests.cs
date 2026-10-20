@@ -359,8 +359,101 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
         Assert.Equal(1, handler.RequestCount);
     }
 
+    [Fact]
+    public async Task Service_PltrBadRequestConfirmsRollingPreListingGapWithoutChangingListedCandles()
+    {
+        var listingDate = new DateTime(2020, 9, 30);
+        var existingStart = new DateTime(2019, 5, 15);
+        var end = new DateTime(2024, 12, 31);
+        string snapshot;
+        await using (var context = NewContext())
+        {
+            var first = Candle(0);
+            first.Date = listingDate;
+            var last = Candle(0, 200m);
+            last.Date = end;
+            await new MarketCandleRepository(context).UpsertAsync(
+                "PLTR", Source, Mode, existingStart, end, [first, last]);
+            snapshot = JsonSerializer.Serialize(await context.MarketCandles.AsNoTracking().OrderBy(x => x.Date).ToListAsync());
+        }
+        using var handler = new EmptyChartHandler("PLTR", preListing: true);
+        using var client = new HttpClient(handler);
+        var requests = new List<(DateTime From, DateTime To)>();
+        var provider = new YahooMarketDataProvider((symbol, from, to) =>
+        {
+            Assert.Equal("PLTR", symbol);
+            requests.Add((from.Date, to!.Value.Date.AddDays(-1)));
+            throw new InvalidOperationException("Yahoo Finance Server Error BadRequest");
+        }, client);
+
+        for (var day = 25; day <= 30; day++)
+        {
+            var simulatedDate = new DateTime(2020, 9, day);
+            var from = MarketHistoryRequirements.GetEffectiveStartDate(new DateTime(2020, 1, 1), simulatedDate);
+            Assert.Equal(new DateTime(2019, 5, day - 15), from);
+            // Use a fresh service/context to prove persisted coverage, not just an exact-range cache hit.
+            await using var context = NewContext();
+            var service = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(context));
+            var result = await service.GetHistoricalDailyUpToAsync("PLTR", from, end, simulatedDate);
+            if (day < 30)
+                Assert.Empty(result);
+            else
+            {
+                Assert.Equal(listingDate, Assert.Single(result).Date);
+                Assert.Equal(100m, result[0].Close);
+            }
+            Assert.Equal((new DateTime(2019, 5, 10), new DateTime(2019, 5, 14)), Assert.Single(requests));
+        }
+
+        await using var verifyContext = NewContext();
+        var coverage = await verifyContext.MarketDataCoverage.OrderBy(x => x.From).ToListAsync();
+        Assert.Equal(2, coverage.Count);
+        Assert.Equal(new DateTime(2019, 5, 10), coverage[0].From);
+        Assert.Equal(new DateTime(2019, 5, 14), coverage[0].To);
+        Assert.Equal(existingStart, coverage[1].From);
+        Assert.Equal(end, coverage[1].To);
+        Assert.Equal(snapshot, JsonSerializer.Serialize(
+            await verifyContext.MarketCandles.AsNoTracking().OrderBy(x => x.Date).ToListAsync()));
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Theory]
+    [InlineData(400, """{"chart":{"result":null,"error":{"code":"Bad Request","description":"Invalid input"}}}""")]
+    [InlineData(400, """{"chart":{"result":null,"error":{"code":"Not Found","description":"Data doesn't exist for startDate = 1557446400, endDate = 1557878400"}}}""")]
+    [InlineData(401, "{}")]
+    [InlineData(403, "{}")]
+    [InlineData(429, "{}")]
+    [InlineData(500, "{}")]
+    [InlineData(404, """{"chart":{"result":null,"error":{"code":"Not Found","description":"No data found, symbol may be delisted"}}}""")]
+    [InlineData(200, "not json")]
+    [InlineData(200, "{}")]
+    [InlineData(0, "network")]
+    public async Task Service_UnconfirmedBadRequestDoesNotCreateCoverageAndRemainsRetryable(int status, string json)
+    {
+        using var handler = new FailedConfirmationHandler((HttpStatusCode)status, json);
+        using var client = new HttpClient(handler);
+        var calls = 0;
+        var provider = new YahooMarketDataProvider((_, _, _) =>
+        {
+            calls++;
+            throw new InvalidOperationException("Yahoo Finance Server Error BadRequest");
+        }, client);
+        await using var context = NewContext();
+        var service = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(context));
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            await Assert.ThrowsAnyAsync<Exception>(() => service.GetHistoricalDailyRangeAsync(
+                "PLTR", new DateTime(2019, 5, 10), new DateTime(2019, 5, 14)));
+            Assert.Empty(await context.MarketDataCoverage.ToListAsync());
+            Assert.Empty(await context.MarketCandles.ToListAsync());
+        }
+        Assert.Equal(2, calls);
+        Assert.True(handler.RequestCount >= 2);
+    }
+
     [Theory]
     [InlineData("network")]
+    [InlineData("authentication")]
     [InlineData("rate")]
     [InlineData("server")]
     [InlineData("malformed")]
@@ -370,6 +463,7 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
         Exception expected = failure switch
         {
             "network" => new HttpRequestException("Network unavailable"),
+            "authentication" => new InvalidOperationException("Yahoo Finance Authentication Error"),
             "rate" => new HttpRequestException("Rate limited", null, HttpStatusCode.TooManyRequests),
             "server" => new HttpRequestException("Server error", null, HttpStatusCode.InternalServerError),
             "malformed" => new JsonException("Malformed response"),
@@ -607,6 +701,19 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
         Assert.Equal(4, provider.Requests.Count);
     }
 
+    private sealed class FailedConfirmationHandler(HttpStatusCode status, string json) : HttpMessageHandler
+    {
+        public int RequestCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            if (json == "network")
+                throw new HttpRequestException("Network unavailable");
+            return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(json) });
+        }
+    }
+
     private sealed class EmptyChartHandler(string symbol, bool preListing = false) : HttpMessageHandler
     {
         public int RequestCount { get; private set; }
@@ -614,8 +721,21 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             RequestCount++;
+            var periods = request.RequestUri!.Query.TrimStart('?').Split('&')
+                .Select(x => x.Split('=', 2)).ToDictionary(x => x[0], x => x[1]);
             var json = preListing
-                ? """{"chart":{"result":null,"error":{"code":"Not Found","description":"Data doesn't exist for startDate = 1578700800, endDate = 1578873600"}}}"""
+                ? JsonSerializer.Serialize(new
+                {
+                    chart = new
+                    {
+                        result = (object?)null,
+                        error = new
+                        {
+                            code = "Not Found",
+                            description = $"Data doesn't exist for startDate = {periods["period1"]}, endDate = {periods["period2"]}"
+                        }
+                    }
+                })
                 : JsonSerializer.Serialize(new
                 {
                     chart = new
