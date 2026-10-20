@@ -219,13 +219,31 @@ public sealed class YahooMarketDataProviderTests
 
     [Theory]
     [MemberData(nameof(UnconfirmedBadRequestCases))]
-    [MemberData(nameof(UnvalidatedSymbolCases))]
-    public async Task GetHistoricalDailyAsync_DoesNotConfirmUnvalidatedPltrBadRequest(
+    public async Task GetHistoricalDailyAsync_DoesNotConfirmOrValidateSymbolForUnmatchedBadRequest(
         int status, string json, int metadataStatus, string metadataJson)
     {
+        var handler = await AssertPltrBadRequestFails(status, json, metadataStatus, metadataJson,
+            typeof(HttpRequestException));
+        Assert.Equal(0, handler.MetadataRequestCount);
+    }
+
+    [Theory]
+    [MemberData(nameof(UnvalidatedSymbolCases))]
+    public async Task GetHistoricalDailyAsync_DoesNotConfirmExactBadRequestWithoutSymbolValidation(
+        int status, string json, int metadataStatus, string metadataJson)
+    {
+        var handler = await AssertPltrBadRequestFails(status, json, metadataStatus, metadataJson,
+            metadataJson == "not json" ? typeof(JsonException) : typeof(HttpRequestException));
+        Assert.Equal(1, handler.MetadataRequestCount);
+    }
+
+    private static async Task<ConfirmationHandler> AssertPltrBadRequestFails(
+        int status, string json, int metadataStatus, string metadataJson, Type expectedException)
+    {
+        ConfirmationHandler? last = null;
         foreach (var message in new[] { UnavailableMessage, BadRequestMessage })
         {
-            using var handler = new ConfirmationHandler((HttpStatusCode)status, json)
+            var handler = new ConfirmationHandler((HttpStatusCode)status, json)
             {
                 MetadataStatus = (HttpStatusCode)metadataStatus, MetadataJson = metadataJson
             };
@@ -233,10 +251,14 @@ public sealed class YahooMarketDataProviderTests
             var provider = new YahooMarketDataProvider(
                 (_, _, _) => throw new InvalidOperationException(message), client);
 
-            await Assert.ThrowsAnyAsync<Exception>(() => provider.GetHistoricalDailyAsync("PLTR", PltrFrom, PltrTo));
+            var ex = await Assert.ThrowsAnyAsync<Exception>(() => provider.GetHistoricalDailyAsync("PLTR", PltrFrom, PltrTo));
+            Assert.IsAssignableFrom(expectedException, ex);
             Assert.Equal(1, handler.RequestCount);
-            Assert.True(handler.MetadataRequestCount <= 1);
+            if (last is not null)
+                Assert.Equal(last.MetadataRequestCount, handler.MetadataRequestCount);
+            last = handler;
         }
+        return last!;
     }
 
     [Fact]

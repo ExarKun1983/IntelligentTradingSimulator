@@ -97,7 +97,7 @@ public sealed class YahooMarketDataProvider
             // Yahoo's range-specific 400 body does not identify the symbol, so it alone cannot
             // distinguish a pre-listing range from an unknown ticker. Validate the symbol separately.
             if (await IsRangeNoDataErrorAsync(response, "Bad Request", start, end) &&
-                await ConfirmListedAfterAsync(symbol, exclusiveEnd))
+                await ConfirmListedAfterAsync(symbol, long.Parse(end, CultureInfo.InvariantCulture)))
                 return true;
             response.EnsureSuccessStatusCode();
         }
@@ -169,7 +169,7 @@ public sealed class YahooMarketDataProvider
 
     // Bounded metadata lookup: the symbol must resolve on the chart endpoint and Yahoo's
     // first trade date must be at or after the requested exclusive end (wholly pre-listing).
-    private async Task<bool> ConfirmListedAfterAsync(string symbol, DateTime exclusiveEnd)
+    private async Task<bool> ConfirmListedAfterAsync(string symbol, long exclusiveEndSeconds)
     {
         var uri = $"https://query1.finance.yahoo.com/v8/finance/chart/{Uri.EscapeDataString(symbol)}" +
             "?range=1d&interval=1d";
@@ -191,7 +191,7 @@ public sealed class YahooMarketDataProvider
             firstTradeDate.ValueKind != JsonValueKind.Number ||
             !firstTradeDate.TryGetInt64(out var firstTradeSeconds))
             return false;
-        return firstTradeSeconds >= new DateTimeOffset(exclusiveEnd).ToUnixTimeSeconds();
+        return firstTradeSeconds >= exclusiveEndSeconds;
     }
 
     private async Task<HttpResponseMessage> DownloadConfirmationAsync(string uri)
