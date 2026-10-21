@@ -130,6 +130,40 @@ public sealed class BacktestDayProcessorTests : IDisposable
             .ToList();
     }
 
+    [Theory]
+    [InlineData(TradeActionType.Buy)]
+    [InlineData(TradeActionType.Sell)]
+    public async Task ProcessAsync_TradesUseSimulatedDayTimestamp(TradeActionType action)
+    {
+        var startDate = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var simulatedDate = startDate.AddDays(9);
+        var provider = new FakeMarketDataProvider();
+        provider.SetData("AAPL", BuildCandles(startDate, 10));
+        var portfolio = new Portfolio { StartingCash = 10_000m, Cash = 10_000m };
+        if (action == TradeActionType.Sell)
+        {
+            portfolio.Cash = 0m;
+            portfolio.Positions.Add(new Position
+            {
+                Symbol = "AAPL", Quantity = 100m, AveragePrice = 100m, CurrentPrice = 109m
+            });
+        }
+
+        var result = await BuildProcessor(provider, maxPositionWeight: 50m).ProcessAsync(new BacktestDayRequest
+        {
+            CurrentDate = simulatedDate,
+            HistoricalStartDate = startDate,
+            Portfolio = portfolio,
+            StrategyConfiguration = new StrategyConfiguration { UseRelativeStrength = false },
+            Symbols = ["AAPL"]
+        });
+
+        var trade = Assert.Single(result.Portfolio.Trades);
+        Assert.Equal(action, trade.Action);
+        Assert.Equal(simulatedDate, trade.Timestamp);
+        Assert.Equal(1, result.Snapshot.TradesExecuted);
+    }
+
     [Fact]
     public async Task ProcessAsync_WithoutProgressPreservesBenchmarkAndSymbolWarnings()
     {
@@ -440,6 +474,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
             Assert.Equal(currentPrice, sell.Price);
             Assert.Equal(10m, sell.Quantity);
             Assert.Equal(ExitReason.StopLoss, sell.ExitReason);
+            Assert.Equal(date, sell.Timestamp);
         }
         else
         {
@@ -490,6 +525,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
             Assert.Empty(portfolio.Positions);
             var sell = Assert.Single(portfolio.Trades);
             Assert.Equal(ExitReason.TrailingStop, sell.ExitReason);
+            Assert.Equal(date, sell.Timestamp);
             Assert.Equal(price, sell.Price);
             Assert.Equal(10m, sell.Quantity);
         }
@@ -650,6 +686,8 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.Empty(savedRun.Portfolio.Positions);
         var buy = Assert.Single(savedRun.Portfolio.Trades, x => x.Action == TradeActionType.Buy);
         var sell = Assert.Single(savedRun.Portfolio.Trades, x => x.Action == TradeActionType.Sell);
+        Assert.Equal(startDate.AddDays(9), buy.Timestamp);
+        Assert.Equal(startDate.AddDays(10), sell.Timestamp);
         Assert.Equal(109m, buy.Price);
         Assert.Equal(90m, sell.Price);
         Assert.Equal(buy.Quantity, sell.Quantity);

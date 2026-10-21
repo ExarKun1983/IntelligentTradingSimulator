@@ -13,14 +13,16 @@ public sealed class TradingEngine
     public void Execute(
     Portfolio portfolio,
     TradingDecision decision,
-    decimal currentPrice)
+    decimal currentPrice,
+    DateTime? simulatedTimestamp = null)
     {
         if (decision.Action == TradeActionType.Buy)
         {
             ExecuteBuy(
                 portfolio,
                 decision,
-                currentPrice);
+                currentPrice,
+                simulatedTimestamp);
 
             return;
         }
@@ -30,7 +32,8 @@ public sealed class TradingEngine
             ExecuteSell(
                 portfolio,
                 decision,
-                currentPrice);
+                currentPrice,
+                simulatedTimestamp);
 
             return;
         }
@@ -44,7 +47,8 @@ public sealed class TradingEngine
     private void ExecuteBuy(
         Portfolio portfolio,
         TradingDecision decision,
-        decimal currentPrice)
+        decimal currentPrice,
+        DateTime? simulatedTimestamp)
     {
         if (portfolio.Cash < decision.Amount)
         {
@@ -103,7 +107,7 @@ public sealed class TradingEngine
         portfolio.Trades.Add(
             new Trade
             {
-                Timestamp = DateTime.UtcNow,
+                Timestamp = simulatedTimestamp ?? DateTime.UtcNow,
                 Symbol = decision.Symbol,
                 Action = TradeActionType.Buy,
                 Quantity = quantity,
@@ -114,7 +118,8 @@ public sealed class TradingEngine
     private void ExecuteSell(
         Portfolio portfolio,
         TradingDecision decision,
-        decimal currentPrice)
+        decimal currentPrice,
+        DateTime? simulatedTimestamp)
     {
         var position =
             portfolio.Positions.FirstOrDefault(
@@ -145,7 +150,7 @@ public sealed class TradingEngine
         portfolio.Trades.Add(
             new Trade
             {
-                Timestamp = DateTime.UtcNow,
+                Timestamp = simulatedTimestamp ?? DateTime.UtcNow,
                 Symbol = decision.Symbol,
                 Action = TradeActionType.Sell,
                 ExitReason = decision.ExitReason ?? ExitReason.Manual,

@@ -8,6 +8,57 @@ public sealed class TradingEngineTests
 {
     private readonly TradingEngine _engine = new();
 
+    [Theory]
+    [InlineData(TradeActionType.Buy)]
+    [InlineData(TradeActionType.Sell)]
+    public void Execute_UsesProvidedSimulatedTimestamp(TradeActionType action)
+    {
+        var simulatedTimestamp = new DateTime(2024, 1, 15, 14, 30, 45, DateTimeKind.Utc);
+        var portfolio = new Portfolio
+        {
+            Cash = 1_000m,
+            Positions = [new Position { Symbol = "AAPL", Quantity = 10m, CurrentPrice = 100m }]
+        };
+        var decision = new TradingDecision { Symbol = "AAPL", Action = action, Amount = 500m };
+
+        _engine.Execute(portfolio, decision, currentPrice: 100m, simulatedTimestamp: simulatedTimestamp);
+
+        var trade = Assert.Single(portfolio.Trades);
+        Assert.Equal(action, trade.Action);
+        Assert.Equal(simulatedTimestamp, trade.Timestamp);
+        Assert.Equal(DateTimeKind.Utc, trade.Timestamp.Kind);
+    }
+
+    [Theory]
+    [InlineData(TradeActionType.Buy, false)]
+    [InlineData(TradeActionType.Sell, false)]
+    [InlineData(TradeActionType.Buy, true)]
+    [InlineData(TradeActionType.Sell, true)]
+    public void Execute_UsesUtcNowWithoutSimulatedTimestamp(TradeActionType action, bool explicitNull)
+    {
+        var portfolio = new Portfolio
+        {
+            Cash = 1_000m,
+            Positions = [new Position { Symbol = "AAPL", Quantity = 10m, CurrentPrice = 100m }]
+        };
+        var decision = new TradingDecision { Symbol = "AAPL", Action = action, Amount = 500m };
+        var before = DateTime.UtcNow;
+
+        if (explicitNull)
+        {
+            _engine.Execute(portfolio, decision, currentPrice: 100m, simulatedTimestamp: null);
+        }
+        else
+        {
+            _engine.Execute(portfolio, decision, currentPrice: 100m);
+        }
+
+        var after = DateTime.UtcNow;
+        var trade = Assert.Single(portfolio.Trades);
+        Assert.InRange(trade.Timestamp, before, after);
+        Assert.Equal(DateTimeKind.Utc, trade.Timestamp.Kind);
+    }
+
     [Fact]
     public void Execute_Buy_ReducesCashAndCreatesPosition()
     {

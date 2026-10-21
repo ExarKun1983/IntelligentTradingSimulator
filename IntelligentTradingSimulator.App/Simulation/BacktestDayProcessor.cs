@@ -223,7 +223,8 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                     _allocationEngine,
                     _tradingEngine,
                     request.StrategyConfiguration.StopLossPercent,
-                    request.StrategyConfiguration.TrailingStopPercent);
+                    request.StrategyConfiguration.TrailingStopPercent,
+                    simulatedTimestamp: request.CurrentDate);
 
                 rebalanceExecuted = recommendations.Count > 0;
             }
