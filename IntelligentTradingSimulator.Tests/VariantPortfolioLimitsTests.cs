@@ -37,14 +37,22 @@ public sealed class VariantPortfolioLimitsTests
                 Assert.Equal(Symbols.Take(variant.MaxPositions), day.Recommendations.Select(x => x.Symbol));
             });
 
-            var first = days[0];
-            Assert.True(first.Recommendations[0].AllocationPercent > 60m);
+            var signal = days[0];
+            Assert.True(signal.Recommendations[0].AllocationPercent > 60m);
+            Assert.Empty(signal.Trades);
+            Assert.Empty(signal.Holdings);
+            Assert.Equal(0, signal.Snapshot.TradesExecuted);
+            Assert.False(signal.Snapshot.RebalanceExecuted);
+            Assert.Equal(InitialCapital, signal.Cash);
+
+            var first = days[1];
             Assert.Equal(variant.MaxPositions, first.Trades.Count);
             Assert.Equal(variant.MaxPositions, first.Holdings.Count);
             Assert.All(first.Trades, trade =>
             {
                 Assert.Equal(TradeActionType.Buy, trade.Action);
-                var recommendation = first.Recommendations.Single(x => x.Symbol == trade.Symbol);
+                Assert.Equal(Start.AddDays(1), trade.Timestamp);
+                var recommendation = signal.Recommendations.Single(x => x.Symbol == trade.Symbol);
                 var target = InitialCapital * Math.Min(recommendation.AllocationPercent, variant.MaxPositionWeight) / 100m;
                 var tolerance = trade.Price * 0.000000005m + 0.000000005m;
                 Assert.InRange(trade.Quantity * trade.Price, target - tolerance, target + tolerance);

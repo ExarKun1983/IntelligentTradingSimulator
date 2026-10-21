@@ -16,5 +16,7 @@ public sealed class BacktestDayRequest
 
     public Portfolio Portfolio { get; set; } = null!;
 
+    public BacktestExecutionState ExecutionState { get; set; } = new();
+
     public IReadOnlyList<string> Symbols { get; set; } = [];
 }

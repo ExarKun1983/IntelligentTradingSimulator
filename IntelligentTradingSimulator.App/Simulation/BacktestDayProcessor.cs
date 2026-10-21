@@ -12,7 +12,6 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
 {
     private readonly BacktestHistoricalMarketDataService _historicalDataService;
     private readonly MarketObservationAnalyzerFactory _analyzerFactory;
-    private readonly PortfolioRebalancingService _rebalancingService;
     private readonly PortfolioAllocationService _allocationService;
     private readonly TradingEngine _tradingEngine;
     private readonly PortfolioPerformanceService _performanceService;
@@ -35,7 +34,6 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
     {
         _historicalDataService = historicalDataService;
         _analyzerFactory = analyzerFactory;
-        _rebalancingService = rebalancingService;
         _allocationService = allocationService;
         _tradingEngine = tradingEngine;
         _performanceService = performanceService;
@@ -60,6 +58,9 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             new PortfolioAllocationEngine(_allocationService, request.StrategyConfiguration.MaxPositionWeight);
         var observationResults = new List<ObservationResult>();
         var prices = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        var opens = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        var histories = new Dictionary<string, (List<MarketCandle> Usable, List<MarketCandle> Historical)>(
+            StringComparer.OrdinalIgnoreCase);
         IReadOnlyList<MarketCandle> benchmarkCandles = [];
         var benchmarkSymbol = request.StrategyConfiguration.UseRelativeStrength
             ? request.StrategyConfiguration.RelativeStrengthBenchmarkSymbol
@@ -87,12 +88,9 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             }
         }
 
-        var riskExitsEnabled = request.StrategyConfiguration.StopLossPercent.HasValue ||
-            request.StrategyConfiguration.TrailingStopPercent.HasValue;
-        var symbols = (riskExitsEnabled
-            ? request.Symbols.Concat(request.Portfolio.Positions.Select(x => x.Symbol))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-            : request.Symbols).ToList();
+        var symbols = request.Symbols.Concat(request.Portfolio.Positions.Select(x => x.Symbol))
+            .Concat(request.ExecutionState.Pending.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var succeeded = 0;
         var skipped = 0;
         var insufficientHistorySkipped = 0;
@@ -126,9 +124,20 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                             request.HistoricalStartDate.Date)
                         .ToList();
 
-                if (riskExitsEnabled && usableCandles.Count > 0)
+                var currentCandle = historicalCandles.LastOrDefault(x => x.Date.Date == request.CurrentDate.Date);
+                if (currentCandle is null)
                 {
-                    prices[symbol] = usableCandles.Last().Close;
+                    skipped++;
+                    continue;
+                }
+
+                if (TradingPrecisionPolicy.TryNormalizePrice(currentCandle.Open, out var open))
+                {
+                    opens[symbol] = open;
+                }
+                if (TradingPrecisionPolicy.TryNormalizePrice(currentCandle.Close, out var close))
+                {
+                    prices[symbol] = close;
                 }
 
                 if (usableCandles.Count < 5)
@@ -144,16 +153,7 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                     continue;
                 }
 
-                observationResults.Add(
-                    analyzer.Analyze(
-                        symbol,
-                        usableCandles,
-                        historicalCandles,
-                        benchmarkCandles,
-                        benchmarkSymbol,
-                        request.CurrentDate));
-
-                prices[symbol] = usableCandles.Last().Close;
+                histories[symbol] = (usableCandles, historicalCandles);
                 succeeded++;
             }
             catch (Exception ex)
@@ -181,6 +181,40 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 force: true);
         }
 
+        var portfolio = request.Portfolio;
+        var tradesBeforeOpen = portfolio.Trades.Count;
+        using (_progress.BeginOperation("Executing pending opening intents"))
+        {
+            request.ExecutionState.ExecuteOpen(
+                portfolio, request.CurrentDate, opens, allocationEngine, _tradingEngine);
+        }
+
+        using (_progress.BeginOperation("Marking closing prices"))
+        {
+            foreach (var position in portfolio.Positions)
+            {
+                if (prices.TryGetValue(position.Symbol, out var close))
+                {
+                    position.CurrentPrice = close;
+                }
+            }
+        }
+
+        foreach (var (symbol, history) in histories)
+        {
+            try
+            {
+                observationResults.Add(analyzer.Analyze(
+                    symbol, history.Usable, history.Historical,
+                    benchmarkCandles, benchmarkSymbol, request.CurrentDate));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"Backtest: skipping {symbol} on {request.CurrentDate:yyyy-MM-dd} — {ex.Message}");
+            }
+        }
+
         List<ObservationResult> rankedResults;
         IReadOnlyList<StockRecommendation> recommendations;
         using (_progress.BeginOperation("Building rankings"))
@@ -190,7 +224,9 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 .ThenBy(x => x.Symbol, StringComparer.Ordinal)
                 .ToList();
 
-            recommendations = recommendationService.Build(rankedResults);
+            recommendations = request.ExecutionState.BuildRecommendations(rankedResults, recommendationService);
+            request.ExecutionState.GenerateAfterClose(
+                portfolio, request.CurrentDate, prices, recommendations, rankedResults, request.StrategyConfiguration);
         }
 
         using (_progress.BeginOperation("Saving feature snapshots"))
@@ -199,39 +235,14 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 rankedResults, request.StrategyConfiguration, request.BacktestRunId);
         }
 
-        var portfolio = request.Portfolio;
         BacktestSnapshot snapshot;
 
         using (_progress.BeginOperation("Processing portfolio"))
         {
-            foreach (var position in portfolio.Positions)
-            {
-                if (prices.TryGetValue(position.Symbol, out var currentPrice)
-                    && TradingPrecisionPolicy.TryNormalizePrice(currentPrice, out var normalizedPrice))
-                {
-                    position.CurrentPrice = normalizedPrice;
-                }
-            }
-
-            var tradesBeforeRebalance = portfolio.Trades.Count;
-            var rebalanceExecuted = false;
-
-            if (recommendations.Count > 0 || riskExitsEnabled)
-            {
-                _rebalancingService.Execute(
-                    portfolio,
-                    recommendations,
-                    prices,
-                    allocationEngine,
-                    _tradingEngine,
-                    request.StrategyConfiguration.StopLossPercent,
-                    request.StrategyConfiguration.TrailingStopPercent,
-                    simulatedTimestamp: request.CurrentDate);
-
-                rebalanceExecuted = recommendations.Count > 0;
-            }
-
-            var tradesExecutedToday = portfolio.Trades.Count - tradesBeforeRebalance;
+            var openingTrades = portfolio.Trades.Skip(tradesBeforeOpen).ToList();
+            var tradesExecutedToday = openingTrades.Count;
+            var rebalanceExecuted = openingTrades.Any(
+                x => x.Action == Core.Enums.TradeActionType.Buy || x.ExitReason == Core.Enums.ExitReason.Rebalance);
 
             var performance = _performanceService.Calculate(portfolio);
 

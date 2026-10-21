@@ -631,9 +631,9 @@ Each strategy supports these settings:
 
 The loader validates strategy settings at startup. Missing settings use the defaults in `StrategyConfiguration`; invalid or missing active strategy sections stop startup with a configuration error. All weights must be non-negative decimals, including weights for disabled factors. At least one scoring factor must have a positive weight and be enabled (where a toggle exists); RSI also needs a positive bonus or penalty. Eligibility and quality filters alone are not an active scoring-factor set.
 
-Set `"StopLossPercent": 10` on a strategy to exit an entire position when its available end-of-day close is at or below 90% of its average entry price. Both backtests and current portfolio simulations execute these sells before rebalancing and persist `ExitReason.StopLoss` in trade history. A stopped symbol is not repurchased in the same step, but may be recommended again on later steps. Missing or non-positive prices, non-positive entry prices, and non-positive quantities do not trigger a stop. Backtests use only prices available on or before the simulated date, including held symbols outside the requested universe, and do not require enough candles for scoring to evaluate a stop. No intraday fills or execution at the threshold price are modeled.
+Set `"StopLossPercent": 10` on a strategy to exit an entire position when its available end-of-day close is at or below 90% of its average entry price. Current portfolio simulations execute these sells before rebalancing; backtests queue a close-evaluated exit for a later valid instrument open, as described in [Backtest causal execution](#backtest-causal-execution). Both persist `ExitReason.StopLoss` on actual fills. A stopped symbol is not repurchased in the same step, but may be recommended again on later steps. Missing or non-positive prices, non-positive entry prices, and non-positive quantities do not trigger a stop. Backtests evaluate fresh closes, including held symbols outside the requested universe, without requiring enough candles for scoring. No intraday fills or execution at the threshold price are modeled.
 
-Set `"TrailingStopPercent": 10` to sell an entire position when the available close is at or below 90% of its `HighestPriceSinceEntry`, even if it remains above entry price. The high starts at the purchase price, increases with observed prices, and is persisted between current portfolio simulations. Additional buys and partial sells retain the high; a new position after full liquidation starts a new high. Tracking continues when the stop is disabled, including in current simulations with fewer than five scoring candles: available latest closes are retained regardless of either exit setting. Both modes persist `ExitReason.TrailingStop`, skip missing/non-positive prices and non-positive quantities, and prevent same-step repurchases. Stop Loss takes precedence when both stops trigger. Like Stop Loss, evaluation uses available daily closes, not intraday highs or threshold fills. Current simulation requires an available price for the held symbol; backtests also fetch held symbols outside the requested universe without requiring scoring history. The migration initializes existing positions from the greater of their known average entry/current price (or zero if neither is positive); historical highs before this migration cannot be reconstructed.
+Set `"TrailingStopPercent": 10` to sell an entire position when the available close is at or below 90% of its `HighestPriceSinceEntry`, even if it remains above entry price. The high starts at the purchase price, increases with observed closes, and is persisted between current portfolio simulations. Backtests track entry execution price and completed closes only, never the daily `High`, and queue triggered exits for a later valid open. Additional buys and partial sells retain the high; a new position after full liquidation starts a new high. Tracking continues when the stop is disabled, including in current simulations with fewer than five scoring candles: available latest closes are retained regardless of either exit setting. Both modes persist `ExitReason.TrailingStop`, skip missing/non-positive prices and non-positive quantities, and prevent same-step repurchases. Stop Loss takes precedence when both stops trigger. Like Stop Loss, evaluation uses available daily closes, not intraday highs or threshold fills. Current simulation requires an available price for the held symbol; backtests also fetch held symbols outside the requested universe without requiring scoring history. The migration initializes existing positions from the greater of their known average entry/current price (or zero if neither is positive); historical highs before this migration cannot be reconstructed.
 
 Each entry under `Strategies` binds independently, so comparison variants can use different factor toggles, weights, and Relative Strength benchmarks. For example, add these entries to compare an RSI/Relative Strength setup against a 52-week-high setup:
 
@@ -953,6 +953,80 @@ dotnet run --project IntelligentTradingSimulator.App -- --backtest-run-id=123
 
 Replace `123` with the database ID reported for a completed run.
 
+### Backtest causal execution
+
+Backtests use run-local, ephemeral pending intents per symbol. This execution
+model requires no new migration and does not change live/current portfolio
+simulation behavior. Each fresh run starts with isolated pending state.
+
+- **First date and warmup:** history before `StartDate` warms indicators only;
+  it cannot generate pre-start orders. The first simulated date marks available
+  closes and generates after-close signals only, with no opening fills.
+- **Opening phase:** an intent can execute only at a valid actual candle `Open`
+  for that instrument on a date strictly after its signal date. There is no
+  fallback execution price, weekday rule, or inferred trading session. A missing
+  candle or invalid `Open` leaves the original intent pending. Ordinary newer
+  targets cannot replace it while pending; a close-evaluated stop can override a
+  target and remains sticky until its eligible opening attempt.
+- **Attempts and allocation:** an eligible opening attempt consumes the intent
+  once, even if cash or the minimum trade threshold prevents a fill. A later
+  fresh close may generate a new target. All eligible sells precede buys.
+  Opening allocation valuation uses eligible opening prices and prior known
+  values only, never that date's closing candle fields.
+- **Closing phase:** only after opening trades may closing candle fields be
+  used for analysis, closing-price marks, and stop evaluation. If today's close
+  is invalid, today's valid open may value holdings; an absent candle retains
+  the prior valuation. An invalid close generates no signal or stop. Trailing highs
+  use completed closes and entry execution prices, not daily `High` or an
+  assumed intraday price path. Signals and feature snapshots retain the signal
+  day's date, not the later execution date.
+- **Gaps and recommendations:** signals/features require a fresh candle.
+  Rankings may retain latest known observations across gaps, but only fresh
+  symbols can enqueue ordinary targets. When a positive recommendation set
+  exists, excluded held symbols with fresh closes receive liquidation targets
+  subject to the pending-intent rules. With no positive recommendations,
+  ordinary holdings are preserved; stops are still evaluated on fresh closes.
+- **End and reporting:** pending intents remaining after `EndDate` are discarded;
+  there are no fills beyond the requested period. Daily snapshots cover every
+  calendar date, including non-trading dates. `TradesExecuted` counts actual
+  fills; `RebalanceExecuted` means actual rebalance trades occurred, not merely
+  that recommendations were generated, and risk-only exits do not set it.
+
+Commissions, spread, slippage, universe selection, and corporate-action handling
+remain unchanged limitations. Persisted older results are not rewritten.
+Historical returns are not correctness targets: causal execution may change
+returns in either direction, with no claim that a correction improves or lowers
+performance.
+
+#### Rerun and reconcile Q1/full-year 2020
+
+These commands use the existing `Program.cs` variant/date options and
+`StrategyComparisonCommandLineParser` / `StrategyComparisonCsvCommandLineParser`;
+they are instructions, not evidence of manual runs:
+
+```bash
+dotnet run --project IntelligentTradingSimulator.App --configuration Release -- \
+  --run-variants --backtest-start=2020-01-01 --backtest-end=2020-03-31 \
+  --comparison-sort-by=ReturnPercent --export-comparison-csv=comparison-Q1-2020.csv
+
+dotnet run --project IntelligentTradingSimulator.App --configuration Release -- \
+  --run-variants --backtest-start=2020-01-01 --backtest-end=2020-12-31 \
+  --comparison-sort-by=ReturnPercent --export-comparison-csv=comparison-full2020.csv
+```
+
+Each command creates new runs for every configured strategy; keep configuration,
+stored candle inputs, and universe fixed when comparing results. Record the new
+run IDs and input/configuration provenance separately from older runs. Comparison
+CSVs summarize outcomes; they do not prove execution timing. For each run, use
+`--backtest-run-id=<id> --export-backtest-snapshots-csv=<path>` to inspect snapshots
+and load persisted `Portfolio.Trades` to reconcile fill dates, prices, quantities,
+cash, and exit reasons against actual instrument opens and prior signal-day
+observations/features. Check first-day zero fills, pending gaps, sells before
+buys, closing marks, calendar-day coverage, actual-fill counts, and absence of
+post-end fills. Snapshot-only export does not regenerate execution or repair old
+results; investigate discrepancies from inputs and event order rather than
+trying to reproduce a previous return.
+
 ## Benchmarks and output
 
 Successful backtest summaries include benchmark comparisons for `SPY`, `QQQ`, and `IWM`, using the same start and end dates as the run. Benchmark data is fetched from Yahoo Finance when the summary is generated; unavailable benchmark data may result in no benchmark section.
@@ -1123,8 +1197,9 @@ New completed backtests persist their portfolio and trade history. Apply the
 Normal portfolio queries exclude backtest portfolios. Older runs have no saved
 portfolio; their trade history cannot be reconstructed.
 
-This records reasons supplied by callers; the current application does not yet
-implement stop-loss or trailing-stop triggers. No new exit rules are introduced.
+This records reasons supplied by callers. Stop-loss and trailing-stop settings
+are described above; backtests use the delayed execution rules in
+[Backtest causal execution](#backtest-causal-execution).
 
 ## Offline model evaluation
 
