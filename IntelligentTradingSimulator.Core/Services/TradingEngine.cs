@@ -72,8 +72,15 @@ public sealed class TradingEngine
                 return;
             }
 
+            var requestedNotional = quantity * price;
+            if (Math.Round(requestedNotional, TradingPrecisionPolicy.CashScale,
+                    MidpointRounding.AwayFromZero) <= 0m)
+            {
+                return;
+            }
+
             var hasSupportedNotional =
-                TradingPrecisionPolicy.TryNormalizeNotional(quantity * price, out notional);
+                TradingPrecisionPolicy.TryNormalizeNotional(requestedNotional, out notional);
             if (!hasSupportedNotional || notional > portfolio.Cash)
             {
                 if (decision.Amount - portfolio.Cash > price * 0.00000001m)

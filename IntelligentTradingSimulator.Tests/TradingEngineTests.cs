@@ -283,6 +283,32 @@ public sealed class TradingEngineTests
         Assert.True(trade.Quantity * trade.Price <= 100m);
     }
 
+    [Fact]
+    public void Execute_Buy_RejectsZeroNotionalBeforeAffordabilityAdjustment()
+    {
+        var existingPosition = new Position
+        {
+            Symbol = "OTHER", Quantity = 2m, AveragePrice = 10m, CurrentPrice = 12m
+        };
+        var portfolio = new Portfolio
+        {
+            StartingCash = 100m,
+            Cash = 100m,
+            Positions = [existingPosition]
+        };
+
+        _engine.Execute(portfolio,
+            new TradingDecision { Symbol = "TEST", Action = TradeActionType.Buy, Amount = 0.000000005m },
+            0.4m);
+
+        Assert.Equal(100m, portfolio.Cash);
+        Assert.Same(existingPosition, Assert.Single(portfolio.Positions));
+        Assert.Equal(2m, existingPosition.Quantity);
+        Assert.Equal(10m, existingPosition.AveragePrice);
+        Assert.Equal(12m, existingPosition.CurrentPrice);
+        Assert.Empty(portfolio.Trades);
+    }
+
     [Theory]
     [InlineData(0, 100, 10)]
     [InlineData(-1, 100, 10)]
