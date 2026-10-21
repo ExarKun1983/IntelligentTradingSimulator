@@ -8,6 +8,7 @@ using IntelligentTradingSimulator.App.Simulation;
 using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
+using IntelligentTradingSimulator.Core.Services;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -395,28 +396,30 @@ public sealed class BacktestEngineTests : IDisposable
     }
 
     [Fact]
-    public async Task RunAsync_FinalizesMetricsFromLastDaySnapshot_NotPortfolioTotalValue()
+    public async Task RunAsync_FinalMetricsMatchLastSnapshotAndPersistedTotalsAtRoundingMidpoint()
     {
         var startDate = new DateTime(2024, 6, 1);
-        var endDate = new DateTime(2024, 6, 2);
-        const decimal initialCapital = 10_000m;
-        const decimal snapshotPortfolioValue = 12_500m;
-
-        // Processor returns a snapshot whose PortfolioValue differs from
-        // portfolio.TotalValue to verify the engine uses the snapshot.
-        var processor = new SnapshotOverrideDayProcessor(snapshotPortfolioValue);
+        const decimal initialCapital = 100m;
+        const decimal endingValue = 99.99995m;
+        var processor = new RoundingBoundaryDayProcessor(endingValue);
         var engine = BuildEngine(processor);
 
-        var result = await engine.RunAsync(BuildRequest(startDate, endDate, initialCapital));
+        var result = await engine.RunAsync(BuildRequest(startDate, startDate, initialCapital));
 
+        var snapshot = Assert.IsType<BacktestSnapshot>(processor.LastSnapshot);
+        Assert.Equal(100.0000m, snapshot.PortfolioValue);
+        Assert.Equal(-0.0001m, snapshot.ProfitLoss);
+        Assert.Equal(-0.0001m, snapshot.ReturnPercent);
         Assert.Equal(BacktestRunStatus.Completed, result.Status);
-        Assert.Equal(snapshotPortfolioValue, result.FinalCapital);
-        Assert.Equal(snapshotPortfolioValue - initialCapital, result.TotalProfit);
+        Assert.Equal(snapshot.PortfolioValue, result.FinalCapital);
+        Assert.Equal(snapshot.ProfitLoss, result.TotalProfit);
+        Assert.Equal(snapshot.ReturnPercent, result.TotalReturnPercent);
 
         var saved = await _runRepository.GetByIdAsync(result.RunId);
         Assert.NotNull(saved);
-        Assert.Equal(snapshotPortfolioValue, saved.FinalCapital);
-        Assert.Equal(snapshotPortfolioValue - initialCapital, saved.TotalProfit);
+        Assert.Equal(snapshot.PortfolioValue, saved.FinalCapital);
+        Assert.Equal(snapshot.ProfitLoss, saved.TotalProfit);
+        Assert.Equal(snapshot.ReturnPercent, saved.TotalReturnPercent);
     }
 
     [Fact]
@@ -542,28 +545,41 @@ public sealed class BacktestEngineTests : IDisposable
         }
     }
 
-    private sealed class SnapshotOverrideDayProcessor : IBacktestDayProcessor
+    private sealed class RoundingBoundaryDayProcessor : IBacktestDayProcessor
     {
-        private readonly decimal _snapshotPortfolioValue;
+        private readonly decimal _endingValue;
 
-        public SnapshotOverrideDayProcessor(decimal snapshotPortfolioValue)
+        public RoundingBoundaryDayProcessor(decimal endingValue)
         {
-            _snapshotPortfolioValue = snapshotPortfolioValue;
+            _endingValue = endingValue;
         }
+
+        public BacktestSnapshot? LastSnapshot { get; private set; }
 
         public Task<BacktestDayResult> ProcessAsync(BacktestDayRequest request)
         {
+            var portfolio = request.Portfolio;
+            portfolio.Cash = _endingValue;
+            var profitLoss = portfolio.TotalValue - portfolio.StartingCash;
+            var returnPercent = portfolio.StartingCash > 0m
+                ? profitLoss / portfolio.StartingCash * 100m
+                : 0m;
+            var snapshot = new BacktestSnapshot
+            {
+                BacktestRunId = request.BacktestRunId,
+                Date = request.CurrentDate.Date,
+                PortfolioValue = TradingPrecisionPolicy.RoundReport(portfolio.TotalValue),
+                Cash = TradingPrecisionPolicy.RoundReport(portfolio.Cash),
+                ProfitLoss = TradingPrecisionPolicy.RoundReport(profitLoss),
+                ReturnPercent = TradingPrecisionPolicy.RoundReport(returnPercent)
+            };
+            LastSnapshot = snapshot;
+
             return Task.FromResult(new BacktestDayResult
             {
                 CurrentDate = request.CurrentDate.Date,
-                Portfolio = request.Portfolio,
-                Snapshot = new BacktestSnapshot
-                {
-                    BacktestRunId = request.BacktestRunId,
-                    Date = request.CurrentDate.Date,
-                    PortfolioValue = _snapshotPortfolioValue,
-                    Cash = request.Portfolio.Cash
-                },
+                Portfolio = portfolio,
+                Snapshot = snapshot,
                 Recommendations = []
             });
         }

@@ -246,18 +246,24 @@ public sealed class TradingEngineTests
         Assert.Empty(portfolio.Trades);
     }
 
-    [Fact]
-    public void Execute_Buy_PreservesSupportedLargeValues()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(6)]
+    public void Execute_Buy_PreservesSupportedLargeValues(decimal price)
     {
         const decimal cash = 99_999_999_999_999_999_999.99999999m;
         var portfolio = new Portfolio { Cash = cash };
         var decision = new TradingDecision { Symbol = "TEST", Action = TradeActionType.Buy, Amount = cash };
 
-        _engine.Execute(portfolio, decision, currentPrice: 1m);
+        _engine.Execute(portfolio, decision, currentPrice: price);
 
         var trade = Assert.Single(portfolio.Trades);
-        Assert.Equal(cash, trade.Quantity);
-        Assert.Equal(0m, portfolio.Cash);
+        Assert.Equal(price == 1m ? cash : 16_666_666_666_666_666_666.66666666m, trade.Quantity);
+        Assert.True(portfolio.Cash >= 0m);
+        Assert.Equal(cash, portfolio.Cash + Math.Round(
+            trade.Quantity * trade.Price,
+            TradingPrecisionPolicy.CashScale,
+            MidpointRounding.AwayFromZero));
     }
 
     [Fact]
@@ -314,6 +320,43 @@ public sealed class TradingEngineTests
         Assert.Equal(1.23m, portfolio.Trades.Sum(trade =>
             trade.Action == TradeActionType.Sell ? trade.Quantity : 0m));
         Assert.Equal(3.69m, portfolio.Cash);
+    }
+
+    [Fact]
+    public void Execute_Sell_DerivesPartialQuantityFromOriginalAmount()
+    {
+        var portfolio = new Portfolio
+        {
+            Positions = [new Position { Symbol = "TEST", Quantity = 20_000m, AveragePrice = 0.000000000001m }]
+        };
+
+        _engine.Execute(portfolio,
+            new TradingDecision { Symbol = "TEST", Action = TradeActionType.Sell, Amount = 0.000000005m },
+            currentPrice: 0.000000000001m);
+
+        var remainingPosition = Assert.Single(portfolio.Positions);
+        var trade = Assert.Single(portfolio.Trades);
+        Assert.Equal(5_000m, trade.Quantity);
+        Assert.Equal(15_000m, remainingPosition.Quantity);
+        Assert.Equal(0.00000001m, portfolio.Cash);
+    }
+
+    [Fact]
+    public void Execute_Sell_DoesNotLiquidateWhenOnlyRoundedRequestMatchesFullNotional()
+    {
+        var portfolio = new Portfolio
+        {
+            Positions = [new Position { Symbol = "TEST", Quantity = 1m, AveragePrice = 1.000000004m }]
+        };
+
+        _engine.Execute(portfolio,
+            new TradingDecision { Symbol = "TEST", Action = TradeActionType.Sell, Amount = 1.000000001m },
+            currentPrice: 1.000000004m);
+
+        var remainingPosition = Assert.Single(portfolio.Positions);
+        var trade = Assert.Single(portfolio.Trades);
+        Assert.Equal(0.99999999m, trade.Quantity);
+        Assert.Equal(0.00000001m, remainingPosition.Quantity);
     }
 
     [Fact]

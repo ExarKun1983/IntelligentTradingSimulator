@@ -61,13 +61,14 @@ public sealed class TradingEngine
         decimal notional;
         try
         {
-            if (!TradingPrecisionPolicy.TryNormalizeQuantity(allocation / price, out quantity)
-                || !TradingPrecisionPolicy.TryNormalizeNotional(quantity * price, out notional))
+            if (!TradingPrecisionPolicy.TryNormalizeQuantity(allocation / price, out quantity))
             {
                 return;
             }
 
-            if (notional > portfolio.Cash)
+            var hasSupportedNotional =
+                TradingPrecisionPolicy.TryNormalizeNotional(quantity * price, out notional);
+            if (!hasSupportedNotional || notional > portfolio.Cash)
             {
                 if (allocation - portfolio.Cash > price * 0.00000001m)
                 {
@@ -172,7 +173,7 @@ public sealed class TradingEngine
         DateTime? simulatedTimestamp)
     {
         var hasNormalizedAllocation =
-            TradingPrecisionPolicy.TryNormalizeCash(decision.Amount, out var allocation);
+            TradingPrecisionPolicy.TryNormalizeCash(decision.Amount, out _);
         if (!TradingPrecisionPolicy.TryNormalizePrice(currentPrice, out var price)
             || decision.Amount <= 0m
             || (!hasNormalizedAllocation
@@ -195,13 +196,14 @@ public sealed class TradingEngine
         decimal receivedCash;
         try
         {
-            var requestedQuantity = allocation / price;
+            var requestedQuantity = decision.Amount / price;
             var rawFullLiquidationNotional = position.Quantity * price;
             var hasRoundedFullLiquidationNotional = TradingPrecisionPolicy.TryNormalizeNotional(
                 rawFullLiquidationNotional, out var roundedFullLiquidationNotional);
             var isFullLiquidation = requestedQuantity >= position.Quantity
                 || decision.Amount >= rawFullLiquidationNotional
-                || (hasRoundedFullLiquidationNotional && allocation >= roundedFullLiquidationNotional);
+                || (hasRoundedFullLiquidationNotional
+                    && decision.Amount == roundedFullLiquidationNotional);
             quantityToSell = isFullLiquidation
                 ? position.Quantity
                 : TradingPrecisionPolicy.FloorQuantity(requestedQuantity);
