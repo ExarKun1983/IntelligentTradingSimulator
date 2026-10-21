@@ -226,6 +226,26 @@ public sealed class TradingEngineTests
         Assert.Empty(portfolio.Trades);
     }
 
+    [Theory]
+    [InlineData(0, 100)]
+    [InlineData(-1, 100)]
+    [InlineData(1, 0)]
+    [InlineData(1, -1)]
+    [InlineData(0.000000001, 100)]
+    public void Execute_Sell_RejectsInvalidOrUnexecutableInputsWithoutMutation(decimal amount, decimal price)
+    {
+        var position = new Position { Symbol = "TEST", Quantity = 10m, AveragePrice = 10m };
+        var portfolio = new Portfolio { Cash = 5m, Positions = [position] };
+        var decision = new TradingDecision { Symbol = "TEST", Action = TradeActionType.Sell, Amount = amount };
+
+        _engine.Execute(portfolio, decision, price);
+
+        Assert.Equal(5m, portfolio.Cash);
+        Assert.Same(position, Assert.Single(portfolio.Positions));
+        Assert.Equal(10m, position.Quantity);
+        Assert.Empty(portfolio.Trades);
+    }
+
     [Fact]
     public void Execute_Buy_PreservesSupportedLargeValues()
     {

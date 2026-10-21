@@ -68,9 +68,10 @@ public sealed class PortfolioWorkflow
 
         foreach (var position in portfolio.Positions)
         {
-            if (prices.TryGetValue(position.Symbol, out var currentPrice))
+            if (prices.TryGetValue(position.Symbol, out var currentPrice)
+                && TradingPrecisionPolicy.TryNormalizePrice(currentPrice, out var normalizedPrice))
             {
-                position.CurrentPrice = currentPrice;
+                position.CurrentPrice = normalizedPrice;
             }
         }
 

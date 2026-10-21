@@ -36,11 +36,12 @@ public sealed class PortfolioRebalancingService
         {
             if (position.Quantity <= 0m ||
                 !prices.TryGetValue(position.Symbol, out var currentPrice) ||
-                currentPrice <= 0m)
+                !TradingPrecisionPolicy.TryNormalizePrice(currentPrice, out var normalizedPrice))
             {
                 continue;
             }
 
+            currentPrice = normalizedPrice;
             position.HighestPriceSinceEntry = Math.Max(position.HighestPriceSinceEntry, currentPrice);
             ExitReason? exitReason = null;
             if (stopLossPercent is decimal lossPercent && position.AveragePrice > 0m &&
