@@ -29,11 +29,11 @@ public sealed class TradingPrecisionPersistenceTests
         AssertPrecision<PortfolioSnapshot>(context, nameof(PortfolioSnapshot.PortfolioValue), 28, 8);
         AssertPrecision<PortfolioSnapshot>(context, nameof(PortfolioSnapshot.Cash), 28, 8);
         AssertPrecision<PortfolioSnapshot>(context, nameof(PortfolioSnapshot.ProfitLoss), 28, 8);
-        AssertPrecision<PortfolioSnapshot>(context, nameof(PortfolioSnapshot.ReturnPercent), 18, 8);
+        AssertPrecision<PortfolioSnapshot>(context, nameof(PortfolioSnapshot.ReturnPercent), 28, 8);
         AssertPrecision<PositionSnapshot>(context, nameof(PositionSnapshot.Quantity), 28, 8);
         AssertPrecision<PositionSnapshot>(context, nameof(PositionSnapshot.CurrentPrice), 28, 12);
         AssertPrecision<PositionSnapshot>(context, nameof(PositionSnapshot.PositionValue), 28, 8);
-        AssertPrecision<PositionSnapshot>(context, nameof(PositionSnapshot.Weight), 18, 8);
+        AssertPrecision<PositionSnapshot>(context, nameof(PositionSnapshot.Weight), 28, 8);
     }
 
     [Fact]
@@ -57,6 +57,14 @@ public sealed class TradingPrecisionPersistenceTests
         Assert.Contains("ALTER TABLE [Portfolios] ALTER COLUMN [Cash] decimal(28,8) NOT NULL", sql);
         Assert.Contains("ALTER TABLE [Positions] ALTER COLUMN [Quantity] decimal(28,8) NOT NULL", sql);
         Assert.Contains("ALTER TABLE [PositionSnapshots] ALTER COLUMN [CurrentPrice] decimal(28,12) NOT NULL", sql);
+        Assert.Contains("ALTER TABLE [PositionSnapshots] ALTER COLUMN [Weight] decimal(28,8) NOT NULL", sql);
+
+        var rollbackAlterations = migration.DownOperations.OfType<AlterColumnOperation>().ToArray();
+        Assert.Equal(16, rollbackAlterations.Length);
+        Assert.All(rollbackAlterations,
+            alteration => Assert.Equal("decimal(18,2)", alteration.ColumnType));
+        Assert.DoesNotContain(migration.DownOperations,
+            operation => operation is DropColumnOperation or DropTableOperation);
     }
 
     [Fact]

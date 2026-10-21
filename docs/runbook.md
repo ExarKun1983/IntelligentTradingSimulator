@@ -84,7 +84,9 @@ Execution normalizes market prices to 12 decimal places and share quantities to
 `AwayFromZero`; partial-sale quantities round toward zero so they cannot exceed
 the requested amount or holdings. A full liquidation uses the exact remaining
 holding, including legacy quantities. Average entry prices round to 12 places
-with midpoint `AwayFromZero`.
+with midpoint `AwayFromZero`; each weighted-average update introduces at most
+`0.0000000000005` of absolute rounding error, and prior error is weighted by the
+prior quantity rather than amplified.
 
 Cash and each executed trade's notional use 8 decimal places, rounding to nearest
 with midpoint `AwayFromZero`. Cash is debited or credited by that rounded
@@ -99,7 +101,7 @@ more; no tolerance permits negative cash.
 
 Portfolio, position, trade, and normal portfolio/position snapshot state uses
 the above scales. Their SQL types are `decimal(28,8)` for cash, quantities, and
-notionals, `decimal(28,12)` for prices and average cost, and `decimal(18,8)` for
+notionals, `decimal(28,12)` for prices and average cost, and `decimal(28,8)` for
 percentages. This preserves and increases the previous integer ranges: the
 28-digit types support values below `10^20` at scale 8 or below `10^16` at
 scale 12. Execution rejects values outside these ranges. Market candle prices

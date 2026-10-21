@@ -33,8 +33,8 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
             migrationBuilder.AlterColumn<decimal>(
                 name: "Weight",
                 table: "PositionSnapshots",
-                type: "decimal(18,8)",
-                precision: 18,
+                type: "decimal(28,8)",
+                precision: 28,
                 scale: 8,
                 nullable: false,
                 oldClrType: typeof(decimal),
@@ -113,8 +113,8 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
             migrationBuilder.AlterColumn<decimal>(
                 name: "ReturnPercent",
                 table: "PortfolioSnapshots",
-                type: "decimal(18,8)",
-                precision: 18,
+                type: "decimal(28,8)",
+                precision: 28,
                 scale: 8,
                 nullable: false,
                 oldClrType: typeof(decimal),
@@ -200,8 +200,8 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                 type: "decimal(18,2)",
                 nullable: false,
                 oldClrType: typeof(decimal),
-                oldType: "decimal(18,8)",
-                oldPrecision: 18,
+                oldType: "decimal(28,8)",
+                oldPrecision: 28,
                 oldScale: 8);
 
             migrationBuilder.AlterColumn<decimal>(
@@ -280,8 +280,8 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                 type: "decimal(18,2)",
                 nullable: false,
                 oldClrType: typeof(decimal),
-                oldType: "decimal(18,8)",
-                oldPrecision: 18,
+                oldType: "decimal(28,8)",
+                oldPrecision: 28,
                 oldScale: 8);
 
             migrationBuilder.AlterColumn<decimal>(

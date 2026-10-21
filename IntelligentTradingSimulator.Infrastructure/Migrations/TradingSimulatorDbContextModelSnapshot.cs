@@ -434,8 +434,8 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                         .HasColumnType("decimal(28,8)");
 
                     b.Property<decimal>("ReturnPercent")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("decimal(18,8)");
+                        .HasPrecision(28, 8)
+                        .HasColumnType("decimal(28,8)");
 
                     b.Property<DateTime>("Timestamp")
                         .HasColumnType("datetime2");
@@ -514,8 +514,8 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                         .HasColumnType("datetime2");
 
                     b.Property<decimal>("Weight")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("decimal(18,8)");
+                        .HasPrecision(28, 8)
+                        .HasColumnType("decimal(28,8)");
 
                     b.HasKey("Id");
 

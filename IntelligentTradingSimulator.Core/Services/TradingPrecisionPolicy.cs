@@ -12,7 +12,7 @@ public static class TradingPrecisionPolicy
     public const int AveragePriceScale = 12;
     public const int SnapshotPrecision = 28;
     public const int SnapshotScale = 8;
-    public const int PercentagePrecision = 18;
+    public const int PercentagePrecision = 28;
     public const int PercentageScale = 8;
     public const int ReportScale = 4;
 
