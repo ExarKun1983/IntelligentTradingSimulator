@@ -135,10 +135,11 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 {
                     opens[symbol] = open;
                 }
-                if (TradingPrecisionPolicy.TryNormalizePrice(currentCandle.Close, out var close))
+                if (!TradingPrecisionPolicy.TryNormalizePrice(currentCandle.Close, out var close))
                 {
-                    prices[symbol] = close;
+                    throw new InvalidOperationException("The current candle has no valid closing price.");
                 }
+                prices[symbol] = close;
 
                 if (usableCandles.Count < 5)
                 {
@@ -182,6 +183,8 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
         }
 
         var portfolio = request.Portfolio;
+        var previousPrices = portfolio.Positions.ToDictionary(
+            x => x.Symbol, x => x.CurrentPrice, StringComparer.OrdinalIgnoreCase);
         var tradesBeforeOpen = portfolio.Trades.Count;
         using (_progress.BeginOperation("Executing pending opening intents"))
         {
@@ -196,6 +199,10 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 if (prices.TryGetValue(position.Symbol, out var close))
                 {
                     position.CurrentPrice = close;
+                }
+                else if (previousPrices.TryGetValue(position.Symbol, out var previousPrice))
+                {
+                    position.CurrentPrice = previousPrice;
                 }
             }
         }
@@ -224,7 +231,8 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 .ThenBy(x => x.Symbol, StringComparer.Ordinal)
                 .ToList();
 
-            recommendations = request.ExecutionState.BuildRecommendations(rankedResults, recommendationService);
+            recommendations = request.ExecutionState.BuildRecommendations(
+                rankedResults, request.Symbols, recommendationService);
             request.ExecutionState.GenerateAfterClose(
                 portfolio, request.CurrentDate, prices, recommendations, rankedResults, request.StrategyConfiguration);
         }

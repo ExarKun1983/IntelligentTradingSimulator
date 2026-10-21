@@ -974,15 +974,19 @@ simulation behavior. Each fresh run starts with isolated pending state.
   Opening allocation valuation uses eligible opening prices and prior known
   values only, never that date's closing candle fields.
 - **Closing phase:** only after opening trades may closing candle fields be
-  used for analysis, closing-price marks, and stop evaluation. If today's close
-  is invalid, today's valid open may value holdings; an absent candle retains
-  the prior valuation. An invalid close generates no signal or stop. Trailing highs
+  used for analysis, closing-price marks, and stop evaluation. Existing holdings
+  with an invalid or missing current close restore their prior pre-open valuation.
+  A newly opened position without a prior mark retains its entry execution `Open`
+  if the close is invalid. An invalid close generates no signal or stop. Trailing highs
   use completed closes and entry execution prices, not daily `High` or an
   assumed intraday price path. Signals and feature snapshots retain the signal
   day's date, not the later execution date.
 - **Gaps and recommendations:** signals/features require a fresh candle.
-  Rankings may retain latest known observations across gaps, but only fresh
-  symbols can enqueue ordinary targets. When a positive recommendation set
+  Rankings retain latest known observations across gaps only for symbols still
+  in the current requested universe; symbols removed from that universe are
+  pruned from the cache. Gaps may leave stale ranks/slots until refreshed, not
+  future information. Only fresh symbols can enqueue ordinary targets.
+  When a positive recommendation set
   exists, excluded held symbols with fresh closes receive liquidation targets
   subject to the pending-intent rules. With no positive recommendations,
   ordinary holdings are preserved; stops are still evaluated on fresh closes.

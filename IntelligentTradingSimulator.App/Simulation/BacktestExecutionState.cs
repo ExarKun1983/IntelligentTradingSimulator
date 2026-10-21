@@ -22,8 +22,14 @@ public sealed class BacktestExecutionState
 
     public IReadOnlyList<StockRecommendation> BuildRecommendations(
         IReadOnlyList<ObservationResult> observations,
+        IReadOnlyList<string> symbols,
         PortfolioRecommendationService recommendationService)
     {
+        var universe = symbols.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var symbol in _observations.Keys.Where(x => !universe.Contains(x)).ToList())
+        {
+            _observations.Remove(symbol);
+        }
         foreach (var observation in observations)
         {
             _observations[observation.Symbol] = observation;

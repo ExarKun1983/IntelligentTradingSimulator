@@ -6,6 +6,7 @@ using IntelligentTradingSimulator.Core.Services;
 
 namespace IntelligentTradingSimulator.Tests;
 
+[Collection("Console output")]
 public sealed class BacktestExecutionTimingTests
 {
     private static readonly DateTime Friday = new(2024, 5, 24);
@@ -177,6 +178,93 @@ public sealed class BacktestExecutionTimingTests
             new Dictionary<string, decimal> { ["AAA"] = 50m }, [], [], configuration);
 
         Assert.Empty(state.Pending);
+    }
+
+    [Theory]
+    [InlineData("0", false)]
+    [InlineData("-1", false)]
+    [InlineData("10000000000000000", false)]
+    [InlineData("0", true)]
+    [InlineData("-1", true)]
+    [InlineData("10000000000000000", true)]
+    public async Task ValidOpenInvalidClose_PreservesOpeningTradesAndPriorMark_OrNewEntryOpen(
+        string invalidCloseText, bool newEntry)
+    {
+        async Task<(Portfolio Portfolio, BacktestDayResult Result, BacktestExecutionState State, int FeatureCount)> Run(decimal close)
+        {
+            var fixture = new Fixture();
+            fixture.Provider.Data["AAA"] = History(Friday)
+                .Append(Candle(Friday.AddDays(4), 200m, close)).ToList();
+            var portfolio = CashPortfolio();
+            if (!newEntry)
+            {
+                portfolio.StartingCash = 2_000m;
+                portfolio.Positions.Add(Holding("AAA", 10m, 100m));
+            }
+            var configuration = Configuration();
+            configuration.StopLossPercent = 10m;
+            configuration.TrailingStopPercent = 10m;
+            var state = new BacktestExecutionState();
+            Seed(state, portfolio, Friday, [("AAA", newEntry ? 100m : 25m)], configuration);
+
+            var result = await fixture.Day(Friday.AddDays(4), portfolio, state, ["AAA"], configuration);
+
+            return (portfolio, result, state, fixture.Features.Rows.Count);
+        }
+
+        var baseline = await Run(150m);
+        var invalid = await Run(decimal.Parse(invalidCloseText, System.Globalization.CultureInfo.InvariantCulture));
+
+        Assert.Single(invalid.Portfolio.Trades);
+        Assert.Equal(TradeRows(baseline.Portfolio), TradeRows(invalid.Portfolio));
+        Assert.Equal(baseline.Portfolio.Cash, invalid.Portfolio.Cash);
+        var holding = Assert.Single(invalid.Portfolio.Positions);
+        Assert.Equal(newEntry ? 200m : 100m, holding.CurrentPrice);
+        Assert.Equal(newEntry ? 200m : 100m, holding.HighestPriceSinceEntry);
+        Assert.Empty(invalid.State.Pending);
+        Assert.Empty(invalid.Result.Observations);
+        Assert.Empty(invalid.Result.Recommendations);
+        Assert.Equal(0, invalid.FeatureCount);
+        Assert.Single(baseline.Result.Observations);
+        Assert.Equal(1, baseline.FeatureCount);
+        Assert.Equal(1, invalid.Result.Snapshot.TradesExecuted);
+        Assert.True(invalid.Result.Snapshot.RebalanceExecuted);
+        Assert.Equal(newEntry ? 1_000m : 2_625m, invalid.Result.Snapshot.PortfolioValue);
+        Assert.Equal(TradingPrecisionPolicy.RoundReport(invalid.Portfolio.Cash), invalid.Result.Snapshot.Cash);
+        AssertReconciles(invalid.Portfolio, 1_000m,
+            newEntry ? [] : [("AAA", 10m)]);
+    }
+
+    [Fact]
+    public async Task RemovedUniverseMember_CachedHighRankCannotDisplaceFreshCurrentMember()
+    {
+        var fixture = new Fixture();
+        fixture.Provider.Data["AAA"] = History(Friday)
+            .Append(Candle(Friday.AddDays(4), 120m, 121m)).ToList();
+        fixture.Provider.Data["BBB"] = Enumerable.Range(0, 5)
+            .Select(i => Candle(Friday.AddDays(i - 4), 100m + i / 10m, 100.1m + i / 10m))
+            .Append(Candle(Friday.AddDays(4), 101m, 101.1m)).ToList();
+        var configuration = Configuration();
+        configuration.MaxPositions = 1;
+        var portfolio = CashPortfolio();
+        var state = new BacktestExecutionState();
+
+        var first = await fixture.Day(Friday, portfolio, state, ["AAA", "BBB"], configuration);
+        Assert.Equal("AAA", Assert.Single(first.Recommendations).Symbol);
+        Assert.True(first.Observations.Single(x => x.Symbol == "AAA").Score >
+            first.Observations.Single(x => x.Symbol == "BBB").Score);
+
+        var next = await fixture.Day(Friday.AddDays(4), portfolio, state, ["BBB"], configuration);
+
+        Assert.Equal("BBB", Assert.Single(next.Observations).Symbol);
+        Assert.Equal("BBB", Assert.Single(next.Recommendations).Symbol);
+        Assert.Equal(Friday.AddDays(4), state.Pending["BBB"].SignalDate);
+        Assert.Equal(100m, state.Pending["BBB"].AllocationPercent);
+        Assert.Equal(0m, state.Pending["AAA"].AllocationPercent);
+        Assert.Equal("AAA", Assert.Single(portfolio.Trades).Symbol);
+        Assert.Equal(Friday.AddDays(4), portfolio.Trades[0].Timestamp);
+        Assert.Equal(new[] { "AAA", "BBB", "BBB" }, fixture.Features.Rows.Select(x => x.Features.Symbol));
+        AssertReconciles(portfolio, 1_000m);
     }
 
     [Fact]
