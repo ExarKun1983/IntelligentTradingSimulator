@@ -101,6 +101,59 @@ public sealed class PortfolioRebalancingServiceTests
         Assert.Single(portfolio.Positions);
     }
 
+    [Fact]
+    public void Execute_StopLossLiquidatesPositionWhenRequestedNotionalRoundsToZero()
+    {
+        var portfolio = new Portfolio
+        {
+            Positions = [new Position
+            {
+                Symbol = "AAPL", Quantity = 0.00000001m, AveragePrice = 1m, CurrentPrice = 1m
+            }]
+        };
+
+        new PortfolioRebalancingService().Execute(
+            portfolio, [], new Dictionary<string, decimal> { ["AAPL"] = 0.1m },
+            new PortfolioAllocationEngine(new PortfolioAllocationService()),
+            new TradingEngine(), 10m);
+
+        Assert.Empty(portfolio.Positions);
+        var trade = Assert.Single(portfolio.Trades);
+        Assert.Equal(ExitReason.StopLoss, trade.ExitReason);
+        Assert.Equal(0.00000001m, trade.Quantity);
+        Assert.Equal(0m, portfolio.Cash);
+    }
+
+    [Fact]
+    public void Execute_BuysAllPlannedPositionsWhenRoundingUsesSlightlyMoreThanBudgetedCash()
+    {
+        var portfolio = new Portfolio { Cash = 400m };
+        var recommendations = new List<StockRecommendation>
+        {
+            new() { Symbol = "A", AllocationPercent = 25m },
+            new() { Symbol = "B", AllocationPercent = 25m },
+            new() { Symbol = "C", AllocationPercent = 25m },
+            new() { Symbol = "D", AllocationPercent = 25m }
+        };
+        var prices = new Dictionary<string, decimal>
+        {
+            ["A"] = 6m,
+            ["B"] = 6m,
+            ["C"] = 6m,
+            ["D"] = 6m
+        };
+
+        new PortfolioRebalancingService().Execute(
+            portfolio, recommendations, prices,
+            new PortfolioAllocationEngine(new PortfolioAllocationService()),
+            new TradingEngine());
+
+        Assert.Equal(4, portfolio.Positions.Count);
+        Assert.Equal(4, portfolio.Trades.Count);
+        Assert.Equal(16.66666665m, portfolio.Positions.Single(x => x.Symbol == "D").Quantity);
+        Assert.Equal(0.00000004m, portfolio.Cash);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
