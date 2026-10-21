@@ -196,17 +196,21 @@ public sealed class TradingEngine
         decimal receivedCash;
         try
         {
-            var requestedQuantity = decision.Amount / price;
             var rawFullLiquidationNotional = position.Quantity * price;
             var hasRoundedFullLiquidationNotional = TradingPrecisionPolicy.TryNormalizeNotional(
                 rawFullLiquidationNotional, out var roundedFullLiquidationNotional);
-            var isFullLiquidation = requestedQuantity >= position.Quantity
-                || decision.Amount >= rawFullLiquidationNotional
+            var isFullLiquidation = decision.Amount >= rawFullLiquidationNotional
                 || (hasRoundedFullLiquidationNotional
                     && decision.Amount == roundedFullLiquidationNotional);
-            quantityToSell = isFullLiquidation
-                ? position.Quantity
-                : TradingPrecisionPolicy.FloorQuantity(requestedQuantity);
+            if (isFullLiquidation)
+            {
+                quantityToSell = position.Quantity;
+            }
+            else
+            {
+                var requestedQuantity = decision.Amount / price;
+                quantityToSell = TradingPrecisionPolicy.FloorQuantity(requestedQuantity);
+            }
 
             if (quantityToSell <= 0m
                 || quantityToSell > position.Quantity)

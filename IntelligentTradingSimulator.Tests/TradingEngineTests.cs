@@ -399,21 +399,66 @@ public sealed class TradingEngineTests
     }
 
     [Fact]
+    public void Execute_Sell_OversizedRequestFullyLiquidatesBeforeQuantityDivision()
+    {
+        var simulatedTimestamp = new DateTime(2025, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+        var portfolio = new Portfolio
+        {
+            Cash = 0m,
+            Positions = [new Position { Symbol = "TEST", Quantity = 10_000m, AveragePrice = 0.000000000001m }]
+        };
+
+        _engine.Execute(portfolio,
+            new TradingDecision
+            {
+                Symbol = "TEST",
+                Action = TradeActionType.Sell,
+                Amount = 100_000_000_000_000_000m,
+                ExitReason = ExitReason.StopLoss
+            },
+            currentPrice: 0.000000000001m,
+            simulatedTimestamp);
+
+        Assert.Empty(portfolio.Positions);
+        Assert.Equal(0.00000001m, portfolio.Cash);
+        var trade = Assert.Single(portfolio.Trades);
+        Assert.Equal(TradeActionType.Sell, trade.Action);
+        Assert.Equal(10_000m, trade.Quantity);
+        Assert.Equal(0.000000000001m, trade.Price);
+        Assert.Equal(simulatedTimestamp, trade.Timestamp);
+        Assert.Equal(DateTimeKind.Utc, trade.Timestamp.Kind);
+        Assert.Equal(ExitReason.StopLoss, trade.ExitReason);
+    }
+
+    [Fact]
     public void Execute_RepeatedBuys_UsesBoundedWeightedAverageCostAndUnroundedPrice()
     {
-        const decimal price = 3.123456789123m;
+        const decimal firstPrice = 3m;
+        const decimal secondPrice = 7m;
         var portfolio = new Portfolio { Cash = 100m };
 
         _engine.Execute(portfolio,
-            new TradingDecision { Symbol = "TEST", Action = TradeActionType.Buy, Amount = 10m }, price);
+            new TradingDecision { Symbol = "TEST", Action = TradeActionType.Buy, Amount = 10m }, firstPrice);
         _engine.Execute(portfolio,
-            new TradingDecision { Symbol = "TEST", Action = TradeActionType.Buy, Amount = 10m }, price);
+            new TradingDecision { Symbol = "TEST", Action = TradeActionType.Buy, Amount = 20m }, secondPrice);
 
         var position = Assert.Single(portfolio.Positions);
-        Assert.Equal(price, position.CurrentPrice);
-        Assert.Equal(price, position.AveragePrice);
+        Assert.Equal(6.19047619m, position.Quantity);
+        Assert.Equal(4.846153848142m, position.AveragePrice);
+        Assert.Equal(12, GetScale(position.AveragePrice));
+        Assert.Equal(secondPrice, position.CurrentPrice);
         Assert.Equal(TradingPrecisionPolicy.QuantityScale, GetScale(position.Quantity));
-        Assert.All(portfolio.Trades, trade => Assert.Equal(price, trade.Price));
+        Assert.Collection(portfolio.Trades,
+            firstTrade =>
+            {
+                Assert.Equal(3.33333333m, firstTrade.Quantity);
+                Assert.Equal(firstPrice, firstTrade.Price);
+            },
+            secondTrade =>
+            {
+                Assert.Equal(2.85714286m, secondTrade.Quantity);
+                Assert.Equal(secondPrice, secondTrade.Price);
+            });
     }
 
     private static int GetScale(decimal value) =>
