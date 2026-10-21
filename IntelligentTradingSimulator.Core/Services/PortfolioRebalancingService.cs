@@ -128,13 +128,18 @@ public sealed class PortfolioRebalancingService
 
         foreach (var trade in trades)
         {
+            if (portfolio.Cash <= 0m)
+            {
+                break;
+            }
+
             tradingEngine.Execute(
                 portfolio,
                 new TradingDecision
                 {
                     Symbol = trade.Symbol,
                     Action = TradeActionType.Buy,
-                    Amount = trade.Amount
+                    Amount = Math.Min(trade.Amount, portfolio.Cash)
                 },
                 prices[trade.Symbol],
                 simulatedTimestamp);
