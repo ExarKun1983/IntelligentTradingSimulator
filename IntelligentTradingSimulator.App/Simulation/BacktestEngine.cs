@@ -26,6 +26,12 @@ public sealed class BacktestEngine : IBacktestEngine
 
     public async Task<BacktestEngineResult> RunAsync(BacktestEngineRequest request)
     {
+        if (!TradingPrecisionPolicy.CashBalanceIsSupported(request.InitialCapital))
+        {
+            throw new ArgumentOutOfRangeException(nameof(request.InitialCapital),
+                "Initial capital must be within the supported cash range and exactly representable at eight decimal places.");
+        }
+
         _progress.Context = _progress.Context with
         {
             Workflow = "backtest",

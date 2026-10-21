@@ -83,7 +83,10 @@ Execution normalizes market prices to 12 decimal places and share quantities to
 8 decimal places. Prices and buy quantities round to nearest with midpoint
 `AwayFromZero`; partial-sale quantities round toward zero so they cannot exceed
 the requested amount or holdings. A full liquidation uses the exact remaining
-holding, including legacy quantities. Average entry prices round to 12 places
+holding, including legacy quantities. An exact full-value request at the supplied
+market price retains its liquidation intent even if execution-price normalization
+rounds upward; execution and cash accounting still use the normalized price.
+Average entry prices round to 12 places
 with midpoint `AwayFromZero`; each weighted-average update introduces at most
 `0.0000000000005` of absolute rounding error, and prior error is weighted by the
 prior quantity rather than amplified.
@@ -94,10 +97,20 @@ with midpoint `AwayFromZero`. Cash is debited or credited by that rounded
 must apply the same per-trade rounding to signed notionals. Each cash movement
 differs from the unrounded product by at most `0.000000005`; after N trades, the
 absolute cumulative rounding difference is bounded by `N × 0.000000005`.
-Buy quantity rounding may exceed the normalized allocation by at most
+Buy quantities are sized from the original requested allocation, without first
+rounding it to cash precision. Executed notional may exceed that original allocation by at most
 `price × 0.000000005 + 0.000000005`. A purchase is reduced to the greatest
 8-place quantity affordable from available cash if nearest rounding would spend
 more; no tolerance permits negative cash.
+
+Opening cash and its `StartingCash` reconciliation baseline must already be
+exactly representable at 8 decimal places and within the supported cash range.
+Execution rejects unsupported balances without mutating cash, holdings, or trades;
+it never rewrites historical `StartingCash` or silently normalizes existing balances.
+Backtest initialization and portfolio saving throw `ArgumentOutOfRangeException`
+for unsupported precision or range before creating a run or tracking a portfolio.
+Accepted initial capital is copied unchanged to both execution balances. This
+opening-balance policy is independent of 4-place report rounding.
 
 Portfolio, position, trade, and normal portfolio/position snapshot state uses
 the above scales. Their SQL types are `decimal(28,8)` for cash, quantities, and

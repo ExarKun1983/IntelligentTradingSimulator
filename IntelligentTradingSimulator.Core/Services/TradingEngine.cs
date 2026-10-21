@@ -16,6 +16,12 @@ public sealed class TradingEngine
     decimal currentPrice,
     DateTime? simulatedTimestamp = null)
     {
+        if (!TradingPrecisionPolicy.CashBalanceIsSupported(portfolio.Cash)
+            || !TradingPrecisionPolicy.CashBalanceIsSupported(portfolio.StartingCash))
+        {
+            return;
+        }
+
         if (decision.Action == TradeActionType.Buy)
         {
             ExecuteBuy(
@@ -52,7 +58,7 @@ public sealed class TradingEngine
     {
         if (portfolio.Cash < 0m
             || !TradingPrecisionPolicy.TryNormalizePrice(currentPrice, out var price)
-            || !TradingPrecisionPolicy.TryNormalizeCash(decision.Amount, out var allocation))
+            || !TradingPrecisionPolicy.TryNormalizeCash(decision.Amount, out _))
         {
             return;
         }
@@ -61,7 +67,7 @@ public sealed class TradingEngine
         decimal notional;
         try
         {
-            if (!TradingPrecisionPolicy.TryNormalizeQuantity(allocation / price, out quantity))
+            if (!TradingPrecisionPolicy.TryNormalizeQuantity(decision.Amount / price, out quantity))
             {
                 return;
             }
@@ -70,7 +76,7 @@ public sealed class TradingEngine
                 TradingPrecisionPolicy.TryNormalizeNotional(quantity * price, out notional);
             if (!hasSupportedNotional || notional > portfolio.Cash)
             {
-                if (allocation - portfolio.Cash > price * 0.00000001m)
+                if (decision.Amount - portfolio.Cash > price * 0.00000001m)
                 {
                     return;
                 }
@@ -201,7 +207,8 @@ public sealed class TradingEngine
                 rawFullLiquidationNotional, out var roundedFullLiquidationNotional);
             var isFullLiquidation = decision.Amount >= rawFullLiquidationNotional
                 || (hasRoundedFullLiquidationNotional
-                    && decision.Amount == roundedFullLiquidationNotional);
+                    && decision.Amount == roundedFullLiquidationNotional)
+                || (currentPrice < price && decision.Amount == position.Quantity * currentPrice);
             if (isFullLiquidation)
             {
                 quantityToSell = position.Quantity;

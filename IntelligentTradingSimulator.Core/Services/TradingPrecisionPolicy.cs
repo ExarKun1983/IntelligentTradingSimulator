@@ -55,6 +55,10 @@ public static class TradingPrecisionPolicy
     public static bool CashIsInRange(decimal value) =>
         value > -MaximumQuantityOrCash && value < MaximumQuantityOrCash;
 
+    public static bool CashBalanceIsSupported(decimal value) =>
+        CashIsInRange(value)
+        && value == Math.Round(value, CashScale, MidpointRounding.AwayFromZero);
+
     public static bool PriceIsInRange(decimal value) =>
         value >= 0m && value < MaximumPrice;
 }

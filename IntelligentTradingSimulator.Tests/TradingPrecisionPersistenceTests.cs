@@ -68,6 +68,52 @@ public sealed class TradingPrecisionPersistenceTests
     }
 
     [Fact]
+    public async Task SaveAsync_RejectsUnsupportedOpeningPrecisionBeforeTracking()
+    {
+        var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new TradingSimulatorDbContext(options);
+        var portfolio = new Portfolio { StartingCash = 100.000000005m, Cash = 100.000000005m };
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => new PortfolioRepository(context).SaveAsync(portfolio));
+
+        Assert.Equal(0, portfolio.Id);
+        Assert.Equal(100.000000005m, portfolio.StartingCash);
+        Assert.Equal(100.000000005m, portfolio.Cash);
+        Assert.Empty(context.ChangeTracker.Entries());
+        Assert.Empty(await context.Portfolios.ToListAsync());
+    }
+
+    [Fact]
+    public async Task FreshContext_AcceptedOpeningPrecisionReconcilesBuyAndSell()
+    {
+        const decimal opening = 100.00000001m;
+        var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        var portfolio = new Portfolio { StartingCash = opening, Cash = opening };
+        var engine = new TradingEngine();
+        engine.Execute(portfolio,
+            new TradingDecision { Symbol = "TEST", Action = TradeActionType.Buy, Amount = 1m }, 1m);
+        engine.Execute(portfolio,
+            new TradingDecision { Symbol = "TEST", Action = TradeActionType.Sell, Amount = 1m }, 1.1m);
+
+        await using (var context = new TradingSimulatorDbContext(options))
+        {
+            await new PortfolioRepository(context).SaveAsync(portfolio);
+        }
+
+        await using var readContext = new TradingSimulatorDbContext(options);
+        var reloaded = await new PortfolioRepository(readContext).GetLatestAsync();
+        Assert.NotNull(reloaded);
+        Assert.Equal(opening, reloaded.StartingCash);
+        Assert.Equal(portfolio.Cash, reloaded.Cash);
+        Assert.Equal(2, reloaded.Trades.Count);
+        Assert.Equal(opening + reloaded.Trades.Sum(SignedExecutedNotional), reloaded.Cash);
+        Assert.Equal(Math.Round(reloaded.Cash, 8, MidpointRounding.AwayFromZero), reloaded.Cash);
+    }
+
+    [Fact]
     public async Task FreshContext_ReloadAndContinuedExecution_ReconcileAtExecutionPrecision()
     {
         var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()

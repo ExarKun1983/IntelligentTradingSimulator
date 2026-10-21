@@ -193,6 +193,82 @@ public sealed class TradingEngineTests
     }
 
     [Fact]
+    public void Execute_Buy_SizesFromOriginalAllocationWithinRoundingBound()
+    {
+        const decimal amount = 100.000000035m;
+        const decimal price = 1.1m;
+        var portfolio = new Portfolio { StartingCash = 200m, Cash = 200m };
+
+        _engine.Execute(portfolio,
+            new TradingDecision { Symbol = "TEST", Action = TradeActionType.Buy, Amount = amount },
+            price);
+
+        var trade = Assert.Single(portfolio.Trades);
+        Assert.Equal(90.90909094m, trade.Quantity);
+        Assert.Equal(trade.Quantity, Assert.Single(portfolio.Positions).Quantity);
+        var debit = portfolio.StartingCash - portfolio.Cash;
+        Assert.Equal(100.00000003m, debit);
+        Assert.Equal(Math.Round(trade.Quantity * trade.Price, 8, MidpointRounding.AwayFromZero), debit);
+        Assert.InRange(Math.Abs(debit - amount), 0m, price * 0.000000005m + 0.000000005m);
+    }
+
+    [Theory]
+    [InlineData(TradeActionType.Buy, false)]
+    [InlineData(TradeActionType.Sell, false)]
+    [InlineData(TradeActionType.Buy, true)]
+    [InlineData(TradeActionType.Sell, true)]
+    public void Execute_RejectsUnsupportedOpeningPrecisionWithoutMutation(
+        TradeActionType action, bool unsupportedBaselineOnly)
+    {
+        const decimal opening = 100.000000005m;
+        var position = new Position
+        {
+            Symbol = "TEST", Quantity = 10m, AveragePrice = 1m, CurrentPrice = 1m
+        };
+        var portfolio = new Portfolio
+        {
+            StartingCash = opening,
+            Cash = unsupportedBaselineOnly ? 100m : opening,
+            Positions = [position]
+        };
+        var cash = portfolio.Cash;
+
+        _engine.Execute(portfolio,
+            new TradingDecision { Symbol = "TEST", Action = action, Amount = 1m }, 1m);
+
+        Assert.Equal(opening, portfolio.StartingCash);
+        Assert.Equal(cash, portfolio.Cash);
+        Assert.Same(position, Assert.Single(portfolio.Positions));
+        Assert.Equal(10m, position.Quantity);
+        Assert.Equal(1m, position.AveragePrice);
+        Assert.Equal(1m, position.CurrentPrice);
+        Assert.Empty(portfolio.Trades);
+    }
+
+    [Theory]
+    [InlineData(TradeActionType.Buy)]
+    [InlineData(TradeActionType.Sell)]
+    public void Execute_AcceptedOpeningPrecisionReconcilesWithoutChangingBaseline(TradeActionType action)
+    {
+        const decimal opening = 100.00000001m;
+        var portfolio = new Portfolio
+        {
+            StartingCash = opening,
+            Cash = opening,
+            Positions = [new Position { Symbol = "TEST", Quantity = 10m, AveragePrice = 1m }]
+        };
+
+        _engine.Execute(portfolio,
+            new TradingDecision { Symbol = "TEST", Action = action, Amount = 1m }, 1m);
+
+        var trade = Assert.Single(portfolio.Trades);
+        var signedNotional = (action == TradeActionType.Buy ? -1m : 1m)
+            * Math.Round(trade.Quantity * trade.Price, 8, MidpointRounding.AwayFromZero);
+        Assert.Equal(opening, portfolio.StartingCash);
+        Assert.Equal(opening + signedNotional, portfolio.Cash);
+    }
+
+    [Fact]
     public void Execute_Buy_AtExactAffordabilityFloorsRoundedUpQuantity()
     {
         var portfolio = new Portfolio { Cash = 100m };
@@ -396,6 +472,62 @@ public sealed class TradingEngineTests
         var trade = Assert.Single(portfolio.Trades);
         Assert.Equal(0.00000001m, trade.Quantity);
         Assert.Equal(0m, portfolio.Cash);
+    }
+
+    [Fact]
+    public void Execute_Sell_ExactSuppliedFullValueLiquidatesWhenPriceRoundsUp()
+    {
+        const decimal suppliedPrice = 1.0000000000006m;
+        var timestamp = new DateTime(2025, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+        var portfolio = new Portfolio
+        {
+            Positions = [new Position { Symbol = "TEST", Quantity = 1m, AveragePrice = 1m }]
+        };
+
+        _engine.Execute(portfolio,
+            new TradingDecision
+            {
+                Symbol = "TEST", Action = TradeActionType.Sell,
+                Amount = suppliedPrice, ExitReason = ExitReason.StopLoss
+            },
+            suppliedPrice, timestamp);
+
+        Assert.Empty(portfolio.Positions);
+        var trade = Assert.Single(portfolio.Trades);
+        Assert.Equal(TradeActionType.Sell, trade.Action);
+        Assert.Equal(1m, trade.Quantity);
+        Assert.Equal(1.000000000001m, trade.Price);
+        Assert.Equal(1m, portfolio.Cash);
+        Assert.Equal(Math.Round(trade.Quantity * trade.Price, 8, MidpointRounding.AwayFromZero),
+            portfolio.Cash);
+        Assert.Equal(timestamp, trade.Timestamp);
+        Assert.Equal(ExitReason.StopLoss, trade.ExitReason);
+    }
+
+    [Fact]
+    public void Execute_Sell_NearbyPartialRequestRemainsPartialWhenPriceRoundsUp()
+    {
+        var portfolio = new Portfolio
+        {
+            Positions = [new Position { Symbol = "TEST", Quantity = 1m, AveragePrice = 1m }]
+        };
+        var timestamp = new DateTime(2025, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+
+        _engine.Execute(portfolio,
+            new TradingDecision
+            {
+                Symbol = "TEST", Action = TradeActionType.Sell,
+                Amount = 1.0000000000005m, ExitReason = ExitReason.Rebalance
+            },
+            1.0000000000006m, timestamp);
+
+        Assert.Equal(0.00000001m, Assert.Single(portfolio.Positions).Quantity);
+        var trade = Assert.Single(portfolio.Trades);
+        Assert.Equal(0.99999999m, trade.Quantity);
+        Assert.Equal(1.000000000001m, trade.Price);
+        Assert.Equal(0.99999999m, portfolio.Cash);
+        Assert.Equal(timestamp, trade.Timestamp);
+        Assert.Equal(ExitReason.Rebalance, trade.ExitReason);
     }
 
     [Fact]

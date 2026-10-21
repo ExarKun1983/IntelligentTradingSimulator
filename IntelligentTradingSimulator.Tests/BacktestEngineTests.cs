@@ -75,6 +75,38 @@ public sealed class BacktestEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_RejectsUnsupportedOpeningPrecisionBeforePersistenceOrProcessing()
+    {
+        var date = new DateTime(2024, 1, 1);
+        var processor = new StubDayProcessor();
+        var request = BuildRequest(date, date, initialCapital: 100.000000005m);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => BuildEngine(processor).RunAsync(request));
+
+        Assert.Equal(0, processor.CallCount);
+        Assert.Empty(await _dbContext.BacktestRuns.ToListAsync());
+        Assert.Empty(await _dbContext.Portfolios.ToListAsync());
+        Assert.Empty(_dbContext.ChangeTracker.Entries());
+        Assert.Equal(100.000000005m, request.InitialCapital);
+    }
+
+    [Fact]
+    public async Task RunAsync_AcceptedOpeningPrecisionPreservesExecutionBaselineOnReload()
+    {
+        const decimal opening = 100.00000001m;
+        var date = new DateTime(2024, 1, 1);
+        var result = await BuildEngine(new StubDayProcessor()).RunAsync(BuildRequest(date, date, opening));
+
+        Assert.Equal(BacktestRunStatus.Completed, result.Status);
+        _dbContext.ChangeTracker.Clear();
+        var portfolio = await _dbContext.Portfolios.SingleAsync();
+        Assert.Equal(opening, portfolio.StartingCash);
+        Assert.Equal(opening, portfolio.Cash);
+        Assert.Empty(portfolio.Trades);
+        Assert.Equal(0m, result.TotalProfit);
+    }
+
+    [Fact]
     public async Task RunAsync_CreatesRunAndCompletesOverDateRange()
     {
         var startDate = new DateTime(2024, 1, 1);

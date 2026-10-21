@@ -1,4 +1,5 @@
 ﻿using IntelligentTradingSimulator.Core.Models;
+using IntelligentTradingSimulator.Core.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace IntelligentTradingSimulator.Infrastructure.Persistence;
@@ -34,6 +35,13 @@ public sealed class PortfolioRepository
     public async Task SaveAsync(
     Portfolio portfolio)
     {
+        if (!TradingPrecisionPolicy.CashBalanceIsSupported(portfolio.Cash)
+            || !TradingPrecisionPolicy.CashBalanceIsSupported(portfolio.StartingCash))
+        {
+            throw new ArgumentOutOfRangeException(nameof(portfolio),
+                "Cash and starting cash must be within the supported cash range and exactly representable at eight decimal places.");
+        }
+
         if (portfolio.Id == 0)
         {
             _dbContext.Portfolios.Add(portfolio);
