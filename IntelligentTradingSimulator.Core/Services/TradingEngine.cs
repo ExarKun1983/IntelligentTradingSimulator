@@ -50,29 +50,86 @@ public sealed class TradingEngine
         decimal currentPrice,
         DateTime? simulatedTimestamp)
     {
-        if (portfolio.Cash < decision.Amount)
+        if (portfolio.Cash < 0m
+            || !TradingPrecisionPolicy.TryNormalizePrice(currentPrice, out var price)
+            || !TradingPrecisionPolicy.TryNormalizeCash(decision.Amount, out var allocation))
         {
             return;
         }
 
-        var quantity =
-            decision.Amount / currentPrice;
+        decimal quantity;
+        decimal notional;
+        try
+        {
+            if (!TradingPrecisionPolicy.TryNormalizeQuantity(allocation / price, out quantity)
+                || !TradingPrecisionPolicy.TryNormalizeNotional(quantity * price, out notional))
+            {
+                return;
+            }
 
-        quantity = Math.Round(
-            quantity,
-            4,
-            MidpointRounding.AwayFromZero);
-
-        if (quantity <= 0)
+            if (notional > portfolio.Cash)
+            {
+                quantity = TradingPrecisionPolicy.FloorQuantity(allocation / price);
+                if (quantity <= 0m
+                    || !TradingPrecisionPolicy.TryNormalizeNotional(quantity * price, out notional)
+                    || notional > portfolio.Cash)
+                {
+                    return;
+                }
+            }
+        }
+        catch (OverflowException)
         {
             return;
         }
-
-        portfolio.Cash -= decision.Amount;
 
         var existingPosition =
             portfolio.Positions.FirstOrDefault(
                 x => x.Symbol == decision.Symbol);
+
+        decimal newQuantity;
+        decimal averagePrice;
+        try
+        {
+            if (existingPosition is not null
+                && (existingPosition.Quantity <= 0m
+                    || existingPosition.AveragePrice < 0m
+                    || !TradingPrecisionPolicy.PriceIsInRange(existingPosition.AveragePrice)))
+            {
+                return;
+            }
+
+            if (!TradingPrecisionPolicy.TryNormalizeQuantity(
+                existingPosition is null ? quantity : existingPosition.Quantity + quantity,
+                out newQuantity))
+            {
+                return;
+            }
+
+            var previousCost = existingPosition is null
+                ? 0m
+                : existingPosition.Quantity * existingPosition.AveragePrice;
+            averagePrice = TradingPrecisionPolicy.RoundAveragePrice(
+                (previousCost + quantity * price) / newQuantity);
+
+            if (newQuantity <= 0m || averagePrice <= 0m)
+            {
+                return;
+            }
+        }
+        catch (OverflowException)
+        {
+            return;
+        }
+
+        var newCash = Math.Round(portfolio.Cash - notional,
+            TradingPrecisionPolicy.CashScale, MidpointRounding.AwayFromZero);
+        if (newCash < 0m || !TradingPrecisionPolicy.CashIsInRange(newCash))
+        {
+            return;
+        }
+
+        portfolio.Cash = newCash;
 
         if (existingPosition is null)
         {
@@ -80,28 +137,16 @@ public sealed class TradingEngine
                 new Position
                 {
                     Symbol = decision.Symbol,
-                    Quantity = quantity,
-                    AveragePrice = currentPrice,
-                    CurrentPrice = currentPrice
+                    Quantity = newQuantity,
+                    AveragePrice = averagePrice,
+                    CurrentPrice = price
                 });
         }
         else
         {
-            var totalCost =
-                existingPosition.Quantity *
-                existingPosition.AveragePrice;
-
-            var newCost =
-                quantity * currentPrice;
-
-            existingPosition.Quantity += quantity;
-
-            existingPosition.AveragePrice =
-                (totalCost + newCost)
-                / existingPosition.Quantity;
-
-            existingPosition.CurrentPrice =
-                currentPrice;
+            existingPosition.Quantity = newQuantity;
+            existingPosition.AveragePrice = averagePrice;
+            existingPosition.CurrentPrice = price;
         }
 
         portfolio.Trades.Add(
@@ -111,7 +156,7 @@ public sealed class TradingEngine
                 Symbol = decision.Symbol,
                 Action = TradeActionType.Buy,
                 Quantity = quantity,
-                Price = currentPrice
+                Price = price
             });
     }
 
@@ -121,31 +166,82 @@ public sealed class TradingEngine
         decimal currentPrice,
         DateTime? simulatedTimestamp)
     {
-        var position =
-            portfolio.Positions.FirstOrDefault(
-                x => x.Symbol == decision.Symbol);
-
-        if (position is null)
+        if (!TradingPrecisionPolicy.TryNormalizePrice(currentPrice, out var price)
+            || !TradingPrecisionPolicy.TryNormalizeCash(decision.Amount, out var allocation))
         {
             return;
         }
 
-        var quantityToSell =
-            decision.Amount / currentPrice;
+        var position =
+            portfolio.Positions.FirstOrDefault(
+                x => x.Symbol == decision.Symbol);
 
-        if (quantityToSell > position.Quantity)
+        if (position is null || position.Quantity <= 0m)
         {
-            quantityToSell = position.Quantity;
+            return;
         }
 
-        var receivedCash =
-            quantityToSell * currentPrice;
+        decimal quantityToSell;
+        decimal receivedCash;
+        try
+        {
+            var requestedQuantity = allocation / price;
+            var fullLiquidationNotional = TradingPrecisionPolicy.TryNormalizeNotional(
+                position.Quantity * price, out var roundedFullLiquidationNotional)
+                ? roundedFullLiquidationNotional
+                : decimal.MaxValue;
+            var isFullLiquidation = requestedQuantity >= position.Quantity
+                || allocation >= fullLiquidationNotional;
+            quantityToSell = isFullLiquidation
+                ? position.Quantity
+                : TradingPrecisionPolicy.FloorQuantity(requestedQuantity);
 
-        portfolio.Cash += receivedCash;
+            if (quantityToSell <= 0m
+                || quantityToSell > position.Quantity)
+            {
+                return;
+            }
 
-        position.Quantity -= quantityToSell;
+            receivedCash = Math.Round(quantityToSell * price,
+                TradingPrecisionPolicy.CashScale, MidpointRounding.AwayFromZero);
+            if (receivedCash < 0m
+                || !TradingPrecisionPolicy.CashIsInRange(receivedCash)
+                || (receivedCash == 0m && !isFullLiquidation))
+            {
+                return;
+            }
+        }
+        catch (OverflowException)
+        {
+            return;
+        }
 
-        position.CurrentPrice = currentPrice;
+        decimal newCash;
+        try
+        {
+            newCash = Math.Round(portfolio.Cash + receivedCash,
+                TradingPrecisionPolicy.CashScale, MidpointRounding.AwayFromZero);
+        }
+        catch (OverflowException)
+        {
+            return;
+        }
+
+        if (!TradingPrecisionPolicy.CashIsInRange(newCash))
+        {
+            return;
+        }
+
+        portfolio.Cash = newCash;
+        if (quantityToSell == position.Quantity)
+        {
+            portfolio.Positions.Remove(position);
+        }
+        else
+        {
+            position.Quantity -= quantityToSell;
+            position.CurrentPrice = price;
+        }
 
         portfolio.Trades.Add(
             new Trade
@@ -155,12 +251,7 @@ public sealed class TradingEngine
                 Action = TradeActionType.Sell,
                 ExitReason = decision.ExitReason ?? ExitReason.Manual,
                 Quantity = quantityToSell,
-                Price = currentPrice
+                Price = price
             });
-
-        if (position.Quantity <= 0)
-        {
-            portfolio.Positions.Remove(position);
-        }
     }
 }

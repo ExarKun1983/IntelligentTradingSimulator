@@ -394,14 +394,16 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
                     b.Property<decimal>("Cash")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(28, 8)
+                        .HasColumnType("decimal(28,8)");
 
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
                     b.Property<decimal>("StartingCash")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(28, 8)
+                        .HasColumnType("decimal(28,8)");
 
                     b.HasKey("Id");
 
@@ -417,19 +419,23 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
                     b.Property<decimal>("Cash")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(28, 8)
+                        .HasColumnType("decimal(28,8)");
 
                     b.Property<int>("PortfolioId")
                         .HasColumnType("int");
 
                     b.Property<decimal>("PortfolioValue")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(28, 8)
+                        .HasColumnType("decimal(28,8)");
 
                     b.Property<decimal>("ProfitLoss")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(28, 8)
+                        .HasColumnType("decimal(28,8)");
 
                     b.Property<decimal>("ReturnPercent")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(18, 8)
+                        .HasColumnType("decimal(18,8)");
 
                     b.Property<DateTime>("Timestamp")
                         .HasColumnType("datetime2");
@@ -448,19 +454,23 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
                     b.Property<decimal>("AveragePrice")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(28, 12)
+                        .HasColumnType("decimal(28,12)");
 
                     b.Property<decimal>("CurrentPrice")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(28, 12)
+                        .HasColumnType("decimal(28,12)");
 
                     b.Property<decimal>("HighestPriceSinceEntry")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(28, 12)
+                        .HasColumnType("decimal(28,12)");
 
                     b.Property<int>("PortfolioId")
                         .HasColumnType("int");
 
                     b.Property<decimal>("Quantity")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(28, 8)
+                        .HasColumnType("decimal(28,8)");
 
                     b.Property<string>("Symbol")
                         .IsRequired()
@@ -482,16 +492,19 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
                     b.Property<decimal>("CurrentPrice")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(28, 12)
+                        .HasColumnType("decimal(28,12)");
 
                     b.Property<int>("PortfolioId")
                         .HasColumnType("int");
 
                     b.Property<decimal>("PositionValue")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(28, 8)
+                        .HasColumnType("decimal(28,8)");
 
                     b.Property<decimal>("Quantity")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(28, 8)
+                        .HasColumnType("decimal(28,8)");
 
                     b.Property<string>("Symbol")
                         .IsRequired()
@@ -501,7 +514,8 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                         .HasColumnType("datetime2");
 
                     b.Property<decimal>("Weight")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(18, 8)
+                        .HasColumnType("decimal(18,8)");
 
                     b.HasKey("Id");
 
@@ -526,10 +540,12 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                         .HasColumnType("int");
 
                     b.Property<decimal>("Price")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(28, 12)
+                        .HasColumnType("decimal(28,12)");
 
                     b.Property<decimal>("Quantity")
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(28, 8)
+                        .HasColumnType("decimal(28,8)");
 
                     b.Property<string>("Symbol")
                         .IsRequired()

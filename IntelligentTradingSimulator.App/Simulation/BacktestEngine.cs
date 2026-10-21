@@ -4,13 +4,12 @@ using System.Threading.Tasks;
 using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
+using IntelligentTradingSimulator.Core.Services;
 
 namespace IntelligentTradingSimulator.App.Simulation;
 
 public sealed class BacktestEngine : IBacktestEngine
 {
-    private const int FinancialPrecision = 4;
-
     private readonly IBacktestRunRepository _runRepository;
     private readonly IBacktestDayProcessor _dayProcessor;
     private readonly IWorkflowProgress _progress;
@@ -109,10 +108,11 @@ public sealed class BacktestEngine : IBacktestEngine
             }
 
             var finalValue = lastDayResult?.Snapshot.PortfolioValue ?? portfolio.TotalValue;
-            run.FinalCapital = Math.Round(finalValue, FinancialPrecision);
-            run.TotalProfit = Math.Round(finalValue - request.InitialCapital, FinancialPrecision);
+            run.FinalCapital = TradingPrecisionPolicy.RoundReport(finalValue);
+            run.TotalProfit = TradingPrecisionPolicy.RoundReport(finalValue - request.InitialCapital);
             run.TotalReturnPercent = request.InitialCapital > 0m
-                ? Math.Round((finalValue - request.InitialCapital) / request.InitialCapital * 100m, FinancialPrecision)
+                ? TradingPrecisionPolicy.RoundReport(
+                    (finalValue - request.InitialCapital) / request.InitialCapital * 100m)
                 : 0m;
             run.Status = BacktestRunStatus.Completed;
             run.Portfolio = portfolio;

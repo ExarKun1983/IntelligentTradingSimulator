@@ -97,10 +97,14 @@ public sealed class PortfolioWorkflow
                 {
                     PortfolioId = portfolio.Id,
                     Timestamp = DateTime.UtcNow,
-                    PortfolioValue = Math.Round(performance.PortfolioValue, 2),
-                    Cash = Math.Round(portfolio.Cash, 2),
-                    ProfitLoss = Math.Round(performance.ProfitLoss, 2),
-                    ReturnPercent = Math.Round(performance.ReturnPercent, 2)
+                    PortfolioValue = Math.Round(performance.PortfolioValue,
+                        TradingPrecisionPolicy.SnapshotScale, MidpointRounding.AwayFromZero),
+                    Cash = Math.Round(portfolio.Cash,
+                        TradingPrecisionPolicy.CashScale, MidpointRounding.AwayFromZero),
+                    ProfitLoss = Math.Round(performance.ProfitLoss,
+                        TradingPrecisionPolicy.SnapshotScale, MidpointRounding.AwayFromZero),
+                    ReturnPercent = Math.Round(performance.ReturnPercent,
+                        TradingPrecisionPolicy.PercentageScale, MidpointRounding.AwayFromZero)
                 });
 
         var totalValue =
@@ -116,8 +120,10 @@ public sealed class PortfolioWorkflow
                     Symbol = x.Symbol,
                     Quantity = x.Quantity,
                     CurrentPrice = x.CurrentPrice,
-                    PositionValue = x.Quantity * x.CurrentPrice,
-                    Weight = x.Quantity * x.CurrentPrice / totalValue * 100m
+                    PositionValue = Math.Round(x.Quantity * x.CurrentPrice,
+                        TradingPrecisionPolicy.SnapshotScale, MidpointRounding.AwayFromZero),
+                    Weight = Math.Round(x.Quantity * x.CurrentPrice / totalValue * 100m,
+                        TradingPrecisionPolicy.PercentageScale, MidpointRounding.AwayFromZero)
                 })
                 .ToList();
 
