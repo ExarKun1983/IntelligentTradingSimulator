@@ -18,7 +18,8 @@ public sealed class PortfolioRebalancingService
         PortfolioAllocationEngine allocationEngine,
         TradingEngine tradingEngine,
         decimal? stopLossPercent = null,
-        decimal? trailingStopPercent = null)
+        decimal? trailingStopPercent = null,
+        DateTime? simulatedTimestamp = null)
     {
         if (stopLossPercent is <= 0m or > 100m)
         {
@@ -68,7 +69,8 @@ public sealed class PortfolioRebalancingService
                     ExitReason = exitReason,
                     Amount = position.Quantity * currentPrice
                 },
-                currentPrice);
+                currentPrice,
+                simulatedTimestamp);
             stoppedSymbols.Add(position.Symbol);
         }
 
@@ -109,7 +111,8 @@ public sealed class PortfolioRebalancingService
                     Amount = Math.Abs(
                         instruction.Difference)
                 },
-                position.CurrentPrice);
+                position.CurrentPrice,
+                simulatedTimestamp);
         }
 
         allocationInstructions =
@@ -132,7 +135,8 @@ public sealed class PortfolioRebalancingService
                     Action = TradeActionType.Buy,
                     Amount = trade.Amount
                 },
-                prices[trade.Symbol]);
+                prices[trade.Symbol],
+                simulatedTimestamp);
         }
     }
 }
