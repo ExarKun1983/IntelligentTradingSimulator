@@ -77,6 +77,66 @@ In `IntelligentTradingSimulator.App/appsettings.json`, set `ConnectionStrings:Tr
 
 Use a SQL Server login with permission to create and update the application's database schema. The app project copies `appsettings.json` to its output directory. Keep real credentials local; do not commit them.
 
+## Financial precision and reconciliation
+
+Execution normalizes market prices to 12 decimal places and share quantities to
+8 decimal places. Prices and buy quantities round to nearest with midpoint
+`AwayFromZero`; partial-sale quantities round toward zero so they cannot exceed
+the requested amount or holdings. A full liquidation uses the exact remaining
+holding, including legacy quantities. An exact full-value request at the supplied
+market price retains its liquidation intent even if execution-price normalization
+rounds upward; execution and cash accounting still use the normalized price.
+Average entry prices round to 12 places
+with midpoint `AwayFromZero`; each weighted-average update introduces at most
+`0.0000000000005` of absolute rounding error, and prior error is weighted by the
+prior quantity rather than amplified.
+
+Cash and each executed trade's notional use 8 decimal places, rounding to nearest
+with midpoint `AwayFromZero`. Cash is debited or credited by that rounded
+`quantity × normalized price`, never by the requested allocation. Reconciliation
+must apply the same per-trade rounding to signed notionals. Each cash movement
+differs from the unrounded product by at most `0.000000005`; after N trades, the
+absolute cumulative rounding difference is bounded by `N × 0.000000005`.
+Buy quantities are sized from the original requested allocation, without first
+rounding it to cash precision. Executed notional may exceed that original allocation by at most
+`price × 0.000000005 + 0.000000005`. A purchase is reduced to the greatest
+8-place quantity affordable from available cash if nearest rounding would spend
+more; no tolerance permits negative cash.
+
+Opening cash and its `StartingCash` reconciliation baseline must already be
+exactly representable at 8 decimal places and within the supported cash range.
+Execution rejects unsupported balances without mutating cash, holdings, or trades;
+it never rewrites historical `StartingCash` or silently normalizes existing balances.
+Backtest initialization and portfolio saving throw `ArgumentOutOfRangeException`
+for unsupported precision or range before creating a run or tracking a portfolio.
+Accepted initial capital is copied unchanged to both execution balances. This
+opening-balance policy is independent of 4-place report rounding.
+
+Portfolio, position, trade, and normal portfolio/position snapshot state uses
+the above scales. Their SQL types are `decimal(28,8)` for cash, quantities, and
+notionals, `decimal(28,12)` for prices and average cost, and `decimal(28,8)` for
+percentages. This preserves and increases the previous integer ranges: the
+28-digit types support values below `10^20` at scale 8 or below `10^16` at
+scale 12. Execution rejects values outside these ranges. Market candle prices
+remain at 12 places and are not truncated to cents.
+
+Backtest daily snapshots and final capital/profit/return remain report-boundary
+values rounded to 4 places with midpoint `AwayFromZero`; their existing
+`decimal(18,4)` storage is not the execution ledger. Reconcile their daily cash
+and final-result values against execution state only after applying this
+documented reporting rounding. Normal portfolio/position snapshots retain state
+precision.
+
+Before applying `AlignTradeExecutionPrecision`, back up the database, inspect
+the generated migration SQL, and preferably apply it to a database copy first.
+The upgrade only alters decimal columns; existing rows and identifiers remain,
+and widening scale cannot restore fractional digits already lost by the prior
+schema. Rolling back narrows the columns to `decimal(18,2)`, which rounds
+fractional values and can fail for values outside the old integer range. Keep a
+pre-upgrade backup if rollback may be needed. SQL Server save/reload validation
+must be performed against the user's database; EF InMemory tests do not enforce
+SQL decimal precision.
+
 ## Backtest portfolio limits
 
 Standalone and batch backtests use each request's strategy configuration for
@@ -86,13 +146,12 @@ feature snapshots; `ActiveStrategy` only supplies the normal workflow's limits
 and the default standalone backtest configuration. Capped allocations are not
 renormalized, so unallocated cash remains in the portfolio.
 
-The allocation target is capped before execution. Existing buy execution rounds
-quantity to four decimal places, away from zero at midpoints. An initial purchase's
-executed notional can therefore exceed its target by at most
-`price × 0.00005` (half a share-quantity rounding unit), or
-`price × 0.00005 / initial capital × 100` percentage points of initial capital.
-This is a rounding tolerance only, not permission to exceed the allocation cap
-by a fixed percentage. Cash accounting and subsequent price appreciation are unchanged.
+The allocation target is capped before execution. Its bounded rounding tolerance
+is `price × 0.000000005 + 0.000000005` for each buy; this is not permission to
+exceed the allocation cap by a fixed percentage. Any unspent requested amount,
+including the difference between requested and executed notional, remains as
+cash. Subsequent price appreciation changes portfolio value, not trade cash
+accounting.
 
 ## Persistent historical market data
 

@@ -1,4 +1,5 @@
 ﻿using IntelligentTradingSimulator.Core.Models;
+using IntelligentTradingSimulator.Core.Services;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 
@@ -47,6 +48,7 @@ public sealed class TradingSimulatorDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        ConfigureTradingPrecision(modelBuilder);
         ConfigureObservationRun(modelBuilder);
         ConfigureObservationResult(modelBuilder);
         ConfigureBacktestRun(modelBuilder);
@@ -54,6 +56,51 @@ public sealed class TradingSimulatorDbContext : DbContext
         ConfigureFeatureSnapshot(modelBuilder);
         ConfigureFutureOutcomeLabel(modelBuilder);
         ConfigureMarketData(modelBuilder);
+    }
+
+    private static void ConfigureTradingPrecision(ModelBuilder modelBuilder)
+    {
+        var portfolio = modelBuilder.Entity<Portfolio>();
+        portfolio.Property(x => x.Cash)
+            .HasPrecision(TradingPrecisionPolicy.CashPrecision, TradingPrecisionPolicy.CashScale);
+        portfolio.Property(x => x.StartingCash)
+            .HasPrecision(TradingPrecisionPolicy.CashPrecision, TradingPrecisionPolicy.CashScale);
+
+        var position = modelBuilder.Entity<Position>();
+        position.Property(x => x.Quantity)
+            .HasPrecision(TradingPrecisionPolicy.QuantityPrecision, TradingPrecisionPolicy.QuantityScale);
+        position.Property(x => x.AveragePrice)
+            .HasPrecision(TradingPrecisionPolicy.AveragePricePrecision, TradingPrecisionPolicy.AveragePriceScale);
+        position.Property(x => x.CurrentPrice)
+            .HasPrecision(TradingPrecisionPolicy.PricePrecision, TradingPrecisionPolicy.PriceScale);
+        position.Property(x => x.HighestPriceSinceEntry)
+            .HasPrecision(TradingPrecisionPolicy.PricePrecision, TradingPrecisionPolicy.PriceScale);
+
+        var trade = modelBuilder.Entity<Trade>();
+        trade.Property(x => x.Quantity)
+            .HasPrecision(TradingPrecisionPolicy.QuantityPrecision, TradingPrecisionPolicy.QuantityScale);
+        trade.Property(x => x.Price)
+            .HasPrecision(TradingPrecisionPolicy.PricePrecision, TradingPrecisionPolicy.PriceScale);
+
+        var portfolioSnapshot = modelBuilder.Entity<PortfolioSnapshot>();
+        portfolioSnapshot.Property(x => x.PortfolioValue)
+            .HasPrecision(TradingPrecisionPolicy.SnapshotPrecision, TradingPrecisionPolicy.SnapshotScale);
+        portfolioSnapshot.Property(x => x.Cash)
+            .HasPrecision(TradingPrecisionPolicy.CashPrecision, TradingPrecisionPolicy.CashScale);
+        portfolioSnapshot.Property(x => x.ProfitLoss)
+            .HasPrecision(TradingPrecisionPolicy.SnapshotPrecision, TradingPrecisionPolicy.SnapshotScale);
+        portfolioSnapshot.Property(x => x.ReturnPercent)
+            .HasPrecision(TradingPrecisionPolicy.PercentagePrecision, TradingPrecisionPolicy.PercentageScale);
+
+        var positionSnapshot = modelBuilder.Entity<PositionSnapshot>();
+        positionSnapshot.Property(x => x.Quantity)
+            .HasPrecision(TradingPrecisionPolicy.QuantityPrecision, TradingPrecisionPolicy.QuantityScale);
+        positionSnapshot.Property(x => x.CurrentPrice)
+            .HasPrecision(TradingPrecisionPolicy.PricePrecision, TradingPrecisionPolicy.PriceScale);
+        positionSnapshot.Property(x => x.PositionValue)
+            .HasPrecision(TradingPrecisionPolicy.SnapshotPrecision, TradingPrecisionPolicy.SnapshotScale);
+        positionSnapshot.Property(x => x.Weight)
+            .HasPrecision(TradingPrecisionPolicy.PercentagePrecision, TradingPrecisionPolicy.PercentageScale);
     }
 
     private static void ConfigureMarketData(ModelBuilder modelBuilder)

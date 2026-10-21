@@ -4,13 +4,12 @@ using System.Threading.Tasks;
 using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
+using IntelligentTradingSimulator.Core.Services;
 
 namespace IntelligentTradingSimulator.App.Simulation;
 
 public sealed class BacktestEngine : IBacktestEngine
 {
-    private const int FinancialPrecision = 4;
-
     private readonly IBacktestRunRepository _runRepository;
     private readonly IBacktestDayProcessor _dayProcessor;
     private readonly IWorkflowProgress _progress;
@@ -27,6 +26,12 @@ public sealed class BacktestEngine : IBacktestEngine
 
     public async Task<BacktestEngineResult> RunAsync(BacktestEngineRequest request)
     {
+        if (!TradingPrecisionPolicy.CashBalanceIsSupported(request.InitialCapital))
+        {
+            throw new ArgumentOutOfRangeException(nameof(request.InitialCapital),
+                "Initial capital must be within the supported cash range and exactly representable at eight decimal places.");
+        }
+
         _progress.Context = _progress.Context with
         {
             Workflow = "backtest",
@@ -71,7 +76,6 @@ public sealed class BacktestEngine : IBacktestEngine
         {
             var currentDate = request.StartDate.Date;
             var endDate = request.EndDate.Date;
-            BacktestDayResult? lastDayResult = null;
 
             while (currentDate <= endDate)
             {
@@ -97,8 +101,6 @@ public sealed class BacktestEngine : IBacktestEngine
                 {
                     dayResult = await _dayProcessor.ProcessAsync(dayRequest);
                 }
-                lastDayResult = dayResult;
-
                 portfolio = dayResult.Portfolio;
                 _progress.Context = _progress.Context with
                 {
@@ -108,11 +110,12 @@ public sealed class BacktestEngine : IBacktestEngine
                 currentDate = currentDate.AddDays(1);
             }
 
-            var finalValue = lastDayResult?.Snapshot.PortfolioValue ?? portfolio.TotalValue;
-            run.FinalCapital = Math.Round(finalValue, FinancialPrecision);
-            run.TotalProfit = Math.Round(finalValue - request.InitialCapital, FinancialPrecision);
+            var finalValue = portfolio.TotalValue;
+            run.FinalCapital = TradingPrecisionPolicy.RoundReport(finalValue);
+            run.TotalProfit = TradingPrecisionPolicy.RoundReport(finalValue - request.InitialCapital);
             run.TotalReturnPercent = request.InitialCapital > 0m
-                ? Math.Round((finalValue - request.InitialCapital) / request.InitialCapital * 100m, FinancialPrecision)
+                ? TradingPrecisionPolicy.RoundReport(
+                    (finalValue - request.InitialCapital) / request.InitialCapital * 100m)
                 : 0m;
             run.Status = BacktestRunStatus.Completed;
             run.Portfolio = portfolio;

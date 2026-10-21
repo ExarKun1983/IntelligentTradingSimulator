@@ -46,8 +46,7 @@ public sealed class VariantPortfolioLimitsTests
                 Assert.Equal(TradeActionType.Buy, trade.Action);
                 var recommendation = first.Recommendations.Single(x => x.Symbol == trade.Symbol);
                 var target = InitialCapital * Math.Min(recommendation.AllocationPercent, variant.MaxPositionWeight) / 100m;
-                // Buy quantities round to 0.0001 shares; half a unit bounds the notional error.
-                var tolerance = trade.Price * 0.00005m;
+                var tolerance = trade.Price * 0.000000005m + 0.000000005m;
                 Assert.InRange(trade.Quantity * trade.Price, target - tolerance, target + tolerance);
                 Assert.True(trade.Quantity * trade.Price <= InitialCapital * variant.MaxPositionWeight / 100m + tolerance);
                 var holding = first.Holdings.Single(x => x.Symbol == trade.Symbol);
@@ -55,10 +54,12 @@ public sealed class VariantPortfolioLimitsTests
             });
             var cappedBuy = first.Trades.Single(x => x.Symbol == "AAPL");
             Assert.Equal(Math.Round(InitialCapital * variant.MaxPositionWeight / 100m / cappedBuy.Price,
-                4, MidpointRounding.AwayFromZero), cappedBuy.Quantity);
-            var expectedInvestment = first.Recommendations.Sum(x =>
-                InitialCapital * Math.Min(x.AllocationPercent, variant.MaxPositionWeight) / 100m);
-            Assert.Equal(InitialCapital - expectedInvestment, first.Cash);
+                TradingPrecisionPolicy.QuantityScale, MidpointRounding.AwayFromZero), cappedBuy.Quantity);
+            var executedNotional = first.Trades.Sum(trade =>
+                Math.Round(trade.Quantity * trade.Price, TradingPrecisionPolicy.CashScale,
+                    MidpointRounding.AwayFromZero));
+            Assert.Equal(Math.Round(InitialCapital - executedNotional, TradingPrecisionPolicy.CashScale,
+                MidpointRounding.AwayFromZero), first.Cash);
             Assert.True(first.Cash > 0m);
 
             var features = await fixture.Features.QueryAsync(
@@ -128,7 +129,8 @@ public sealed class VariantPortfolioLimitsTests
 
         var firstBuy = state.Portfolio.Trades.First();
         var target = 10_000m * 0.80m * Math.Min(marketData.Recommendations[0].AllocationPercent, cap) / 100m;
-        Assert.Equal(Math.Round(target / firstBuy.Price, 4, MidpointRounding.AwayFromZero), firstBuy.Quantity);
+        Assert.Equal(Math.Round(target / firstBuy.Price, TradingPrecisionPolicy.QuantityScale,
+            MidpointRounding.AwayFromZero), firstBuy.Quantity);
         var instructions = fixture.Services.GetRequiredService<PortfolioAllocationEngine>().Calculate(
             new Portfolio { StartingCash = InitialCapital, Cash = InitialCapital }, marketData.Recommendations);
         Assert.Equal(InitialCapital * Math.Min(marketData.Recommendations[0].AllocationPercent, cap) / 100m,

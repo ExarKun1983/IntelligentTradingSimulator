@@ -568,7 +568,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.Single(await readContext.Trades.AsNoTracking()
             .Where(x => x.PortfolioId == savedRun.PortfolioId && x.ExitReason == ExitReason.TrailingStop)
             .ToListAsync());
-        Assert.Equal(savedRun.FinalCapital, Math.Round(savedRun.Portfolio.Cash, 4));
+        Assert.Equal(savedRun.FinalCapital, TradingPrecisionPolicy.RoundReport(savedRun.Portfolio.Cash));
     }
 
     [Fact]
@@ -686,12 +686,14 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.Equal(ExitReason.StopLoss, sell.ExitReason);
         Assert.Equal(new[] { TradeActionType.Buy, TradeActionType.Sell },
             savedRun.Portfolio.Trades.Select(trade => trade.Action));
-        var expectedQuantity = Math.Round(10_000m / 109m, 4, MidpointRounding.AwayFromZero);
+        var expectedQuantity = Math.Round(10_000m / 109m,
+            TradingPrecisionPolicy.QuantityScale, MidpointRounding.ToZero);
         Assert.Equal(expectedQuantity, buy.Quantity);
-        var expectedFinalCapital = Math.Round(expectedQuantity * 90m, 4);
+        var expectedFinalCapital = TradingPrecisionPolicy.RoundReport(
+            Math.Round(expectedQuantity * 90m, TradingPrecisionPolicy.CashScale, MidpointRounding.AwayFromZero));
         Assert.Equal(expectedFinalCapital, result.FinalCapital);
         Assert.Equal(expectedFinalCapital - 10_000m, result.TotalProfit);
-        Assert.Equal(savedRun.FinalCapital, Math.Round(savedRun.Portfolio.Cash, 4));
+        Assert.Equal(savedRun.FinalCapital, TradingPrecisionPolicy.RoundReport(savedRun.Portfolio.Cash));
         Assert.Single(await readContext.Trades.AsNoTracking()
             .Where(x => x.PortfolioId == savedRun.PortfolioId && x.ExitReason == ExitReason.StopLoss)
             .ToListAsync());

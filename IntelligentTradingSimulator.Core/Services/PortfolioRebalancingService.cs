@@ -36,11 +36,12 @@ public sealed class PortfolioRebalancingService
         {
             if (position.Quantity <= 0m ||
                 !prices.TryGetValue(position.Symbol, out var currentPrice) ||
-                currentPrice <= 0m)
+                !TradingPrecisionPolicy.TryNormalizePrice(currentPrice, out var normalizedPrice))
             {
                 continue;
             }
 
+            currentPrice = normalizedPrice;
             position.HighestPriceSinceEntry = Math.Max(position.HighestPriceSinceEntry, currentPrice);
             ExitReason? exitReason = null;
             if (stopLossPercent is decimal lossPercent && position.AveragePrice > 0m &&
@@ -127,13 +128,18 @@ public sealed class PortfolioRebalancingService
 
         foreach (var trade in trades)
         {
+            if (portfolio.Cash <= 0m)
+            {
+                break;
+            }
+
             tradingEngine.Execute(
                 portfolio,
                 new TradingDecision
                 {
                     Symbol = trade.Symbol,
                     Action = TradeActionType.Buy,
-                    Amount = trade.Amount
+                    Amount = Math.Min(trade.Amount, portfolio.Cash)
                 },
                 prices[trade.Symbol],
                 simulatedTimestamp);

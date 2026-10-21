@@ -206,9 +206,10 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
         {
             foreach (var position in portfolio.Positions)
             {
-                if (prices.TryGetValue(position.Symbol, out var currentPrice))
+                if (prices.TryGetValue(position.Symbol, out var currentPrice)
+                    && TradingPrecisionPolicy.TryNormalizePrice(currentPrice, out var normalizedPrice))
                 {
-                    position.CurrentPrice = currentPrice;
+                    position.CurrentPrice = normalizedPrice;
                 }
             }
 
@@ -238,10 +239,10 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             {
                 BacktestRunId = request.BacktestRunId,
                 Date = request.CurrentDate.Date,
-                PortfolioValue = Math.Round(performance.PortfolioValue, 4),
-                Cash = Math.Round(portfolio.Cash, 4),
-                ProfitLoss = Math.Round(performance.ProfitLoss, 4),
-                ReturnPercent = Math.Round(performance.ReturnPercent, 4),
+                PortfolioValue = TradingPrecisionPolicy.RoundReport(performance.PortfolioValue),
+                Cash = TradingPrecisionPolicy.RoundReport(portfolio.Cash),
+                ProfitLoss = TradingPrecisionPolicy.RoundReport(performance.ProfitLoss),
+                ReturnPercent = TradingPrecisionPolicy.RoundReport(performance.ReturnPercent),
                 TradesExecuted = tradesExecutedToday,
                 RebalanceExecuted = rebalanceExecuted
             };
