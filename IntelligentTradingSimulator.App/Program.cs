@@ -108,21 +108,7 @@ services.AddSingleton(
     sp => new MarketObservationAnalyzer(
         sp.GetRequiredService<IScoringEngine>()));
 services.AddSingleton<MarketObservationAnalyzerFactory>();
-services.AddSingleton(
-    _ => new PortfolioRecommendationService(
-        selectedStrategyConfiguration.MaxPositions));
-services.AddSingleton(
-    _ => new PortfolioExecutionService(
-        selectedStrategyConfiguration.MaxPositionWeight));
-services.AddSingleton<TradingEngine>();
-services.AddSingleton<PortfolioPerformanceService>();
-services.AddSingleton<PortfolioAllocationService>();
-services.AddSingleton(
-    sp => new PortfolioAllocationEngine(
-        sp.GetRequiredService<PortfolioAllocationService>(),
-        selectedStrategyConfiguration.MaxPositionWeight));
-services.AddSingleton<PortfolioContributionService>();
-services.AddSingleton<PortfolioRebalancingService>();
+services.AddPortfolioServices(selectedStrategyConfiguration);
 
 services.AddSingleton<ConsoleReporter>();
 services.AddSingleton<IResultExplanationService, ResultExplanationService>();

@@ -12,9 +12,8 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
 {
     private readonly BacktestHistoricalMarketDataService _historicalDataService;
     private readonly MarketObservationAnalyzerFactory _analyzerFactory;
-    private readonly PortfolioRecommendationService _recommendationService;
     private readonly PortfolioRebalancingService _rebalancingService;
-    private readonly PortfolioAllocationEngine _allocationEngine;
+    private readonly PortfolioAllocationService _allocationService;
     private readonly TradingEngine _tradingEngine;
     private readonly PortfolioPerformanceService _performanceService;
     private readonly IBacktestSnapshotRepository _snapshotRepository;
@@ -26,9 +25,8 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
     public BacktestDayProcessor(
         BacktestHistoricalMarketDataService historicalDataService,
         MarketObservationAnalyzerFactory analyzerFactory,
-        PortfolioRecommendationService recommendationService,
         PortfolioRebalancingService rebalancingService,
-        PortfolioAllocationEngine allocationEngine,
+        PortfolioAllocationService allocationService,
         TradingEngine tradingEngine,
         PortfolioPerformanceService performanceService,
         IBacktestSnapshotRepository snapshotRepository,
@@ -37,9 +35,8 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
     {
         _historicalDataService = historicalDataService;
         _analyzerFactory = analyzerFactory;
-        _recommendationService = recommendationService;
         _rebalancingService = rebalancingService;
-        _allocationEngine = allocationEngine;
+        _allocationService = allocationService;
         _tradingEngine = tradingEngine;
         _performanceService = performanceService;
         _snapshotRepository = snapshotRepository;
@@ -57,6 +54,10 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
         };
         var analyzer =
             _analyzerFactory.Create(request.StrategyConfiguration);
+        var recommendationService =
+            new PortfolioRecommendationService(request.StrategyConfiguration.MaxPositions);
+        var allocationEngine =
+            new PortfolioAllocationEngine(_allocationService, request.StrategyConfiguration.MaxPositionWeight);
         var observationResults = new List<ObservationResult>();
         var prices = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
         IReadOnlyList<MarketCandle> benchmarkCandles = [];
@@ -189,7 +190,7 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 .ThenBy(x => x.Symbol, StringComparer.Ordinal)
                 .ToList();
 
-            recommendations = _recommendationService.Build(rankedResults);
+            recommendations = recommendationService.Build(rankedResults);
         }
 
         using (_progress.BeginOperation("Saving feature snapshots"))
@@ -220,7 +221,7 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                     portfolio,
                     recommendations,
                     prices,
-                    _allocationEngine,
+                    allocationEngine,
                     _tradingEngine,
                     request.StrategyConfiguration.StopLossPercent,
                     request.StrategyConfiguration.TrailingStopPercent,
