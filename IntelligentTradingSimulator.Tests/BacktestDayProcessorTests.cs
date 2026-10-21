@@ -33,8 +33,6 @@ public sealed class BacktestDayProcessorTests : IDisposable
 
     private BacktestDayProcessor BuildProcessor(
         FakeMarketDataProvider provider,
-        int maxPositions = 10,
-        decimal maxPositionWeight = 100m,
         IWorkflowProgress? progress = null,
         IBacktestSnapshotRepository? snapshotRepository = null,
         IFeatureSnapshotRepository? featureSnapshotRepository = null,
@@ -42,12 +40,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
     {
         var historicalService = new BacktestHistoricalMarketDataService(provider, marketCandleRepository);
         var analyzerFactory = new MarketObservationAnalyzerFactory();
-        var recommendationService =
-            new PortfolioRecommendationService(maxPositions);
         var allocationService = new PortfolioAllocationService();
-        var allocationEngine = new PortfolioAllocationEngine(
-            allocationService,
-            maxPositionWeight);
         var tradingEngine = new TradingEngine();
         var rebalancingService = new PortfolioRebalancingService();
         var performanceService = new PortfolioPerformanceService();
@@ -55,9 +48,8 @@ public sealed class BacktestDayProcessorTests : IDisposable
         return new BacktestDayProcessor(
             historicalService,
             analyzerFactory,
-            recommendationService,
             rebalancingService,
-            allocationEngine,
+            allocationService,
             tradingEngine,
             performanceService,
             snapshotRepository ?? _snapshotRepository,
@@ -149,12 +141,12 @@ public sealed class BacktestDayProcessorTests : IDisposable
             });
         }
 
-        var result = await BuildProcessor(provider, maxPositionWeight: 50m).ProcessAsync(new BacktestDayRequest
+        var result = await BuildProcessor(provider).ProcessAsync(new BacktestDayRequest
         {
             CurrentDate = simulatedDate,
             HistoricalStartDate = startDate,
             Portfolio = portfolio,
-            StrategyConfiguration = new StrategyConfiguration { UseRelativeStrength = false },
+            StrategyConfiguration = new StrategyConfiguration { UseRelativeStrength = false, MaxPositionWeight = 50m },
             Symbols = ["AAPL"]
         });
 
@@ -384,11 +376,11 @@ public sealed class BacktestDayProcessorTests : IDisposable
         provider.SetData("SHORT", BuildCandles(date, 1));
         var strategy = new StrategyConfiguration
         {
-            Id = "historical", UseRelativeStrength = false, ScoringEngine = scoringEngine
+            Id = "historical", UseRelativeStrength = false, ScoringEngine = scoringEngine, MaxPositions = 1
         };
         var repositories = new CountingBacktestRepositories(_dbContext);
 
-        var result = await BuildProcessor(provider, maxPositions: 1, progress: progress,
+        var result = await BuildProcessor(provider, progress: progress,
             snapshotRepository: repositories, featureSnapshotRepository: repositories).ProcessAsync(new BacktestDayRequest
         {
             BacktestRunId = 10, CurrentDate = date, HistoricalStartDate = date.AddDays(-4),
@@ -725,13 +717,16 @@ public sealed class BacktestDayProcessorTests : IDisposable
         }
         var engine = new BacktestEngine(
             new BacktestRunRepository(_dbContext),
-            BuildProcessor(provider, maxPositions: 1, maxPositionWeight: 50m));
+            BuildProcessor(provider));
 
         var result = await engine.RunAsync(new BacktestEngineRequest
         {
             Name = "Exit reason persistence",
             StrategyId = "test",
-            StrategyConfiguration = new StrategyConfiguration { Id = "test", UseRelativeStrength = false },
+            StrategyConfiguration = new StrategyConfiguration
+            {
+                Id = "test", UseRelativeStrength = false, MaxPositions = 1, MaxPositionWeight = 50m
+            },
             StartDate = startDate.AddDays(9),
             EndDate = startDate.AddDays(10),
             HistoricalStartDate = startDate,
@@ -831,6 +826,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
         var strategy = new StrategyConfiguration
         {
             UseRelativeStrength = false,
+            MaxPositions = 2,
             MomentumScoreWeight = volumeWeighted ? 1m : StrategyConfiguration.DefaultMomentumScoreWeight,
             VolumeTrendScoreWeight = volumeWeighted ? 1m : StrategyConfiguration.DefaultVolumeTrendScoreWeight,
             VolatilityScoreWeight = volumeWeighted ? 0m : StrategyConfiguration.DefaultVolatilityScoreWeight
@@ -844,7 +840,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
             ? ["A_VOLUME", "Z_VOLUME", "MOMENTUM", "DISQUALIFIED"]
             : ["MOMENTUM", "A_VOLUME", "Z_VOLUME", "DISQUALIFIED"];
 
-        var backtest = await BuildProcessor(provider, maxPositions: 2).ProcessAsync(new BacktestDayRequest
+        var backtest = await BuildProcessor(provider).ProcessAsync(new BacktestDayRequest
         {
             CurrentDate = startDate.AddDays(9),
             HistoricalStartDate = startDate,
@@ -1248,11 +1244,12 @@ public sealed class BacktestDayProcessorTests : IDisposable
         provider.SetData("MSFT", BuildCandles(startDate, 10, 200m));
         provider.SetData("GOOG", BuildCandles(startDate, 10, 300m));
 
-        var processor = BuildProcessor(provider, maxPositions: 1);
+        var processor = BuildProcessor(provider);
 
         var request = new BacktestDayRequest
         {
             BacktestRunId = 9,
+            StrategyConfiguration = new StrategyConfiguration { MaxPositions = 1 },
             CurrentDate = startDate.AddDays(9),
             HistoricalStartDate = startDate,
             Portfolio = new Portfolio { Name = "Backtest", StartingCash = 10_000m, Cash = 10_000m },
@@ -1278,13 +1275,12 @@ public sealed class BacktestDayProcessorTests : IDisposable
 
         const decimal maxPositionWeight = 25m;
 
-        var processor = BuildProcessor(
-            provider,
-            maxPositionWeight: maxPositionWeight);
+        var processor = BuildProcessor(provider);
 
         var request = new BacktestDayRequest
         {
             BacktestRunId = 10,
+            StrategyConfiguration = new StrategyConfiguration { MaxPositionWeight = maxPositionWeight },
             CurrentDate = startDate.AddDays(9),
             HistoricalStartDate = startDate,
             Portfolio = new Portfolio { Name = "Backtest", StartingCash = 10_000m, Cash = 10_000m },
@@ -1325,7 +1321,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
         provider.SetData("MSFT", BuildCandles(startDate, 10, 200m));
         provider.SetData("GOOG", BuildCandles(startDate, 10, 250m));
 
-        var processor = BuildProcessor(provider, maxPositionWeight: 100m);
+        var processor = BuildProcessor(provider);
 
         var request = new BacktestDayRequest
         {

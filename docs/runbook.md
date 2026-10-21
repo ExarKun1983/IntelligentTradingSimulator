@@ -77,6 +77,23 @@ In `IntelligentTradingSimulator.App/appsettings.json`, set `ConnectionStrings:Tr
 
 Use a SQL Server login with permission to create and update the application's database schema. The app project copies `appsettings.json` to its output directory. Keep real credentials local; do not commit them.
 
+## Backtest portfolio limits
+
+Standalone and batch backtests use each request's strategy configuration for
+`MaxPositions` (recommendation count, not total retained holdings) and
+`MaxPositionWeight` (allocation cap). These are the same settings recorded in
+feature snapshots; `ActiveStrategy` only supplies the normal workflow's limits
+and the default standalone backtest configuration. Capped allocations are not
+renormalized, so unallocated cash remains in the portfolio.
+
+The allocation target is capped before execution. Existing buy execution rounds
+quantity to four decimal places, away from zero at midpoints. An initial purchase's
+executed notional can therefore exceed its target by at most
+`price × 0.00005` (half a share-quantity rounding unit), or
+`price × 0.00005 / initial capital × 100` percentage points of initial capital.
+This is a rounding tolerance only, not permission to exceed the allocation cap
+by a fixed percentage. Cash accounting and subsequent price appreciation are unchanged.
+
 ## Persistent historical market data
 
 Apply the `AddMarketCandles` migration before running backtests or synchronization.
