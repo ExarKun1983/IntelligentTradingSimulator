@@ -1,6 +1,8 @@
 using IntelligentTradingSimulator.App.Simulation;
+using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
+using IntelligentTradingSimulator.Core.Services;
 using IntelligentTradingSimulator.Infrastructure.Migrations;
 using IntelligentTradingSimulator.Infrastructure.MarketData;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
@@ -723,12 +725,133 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
         var invalid = Candle(0);
         invalid.Volume = -1;
         provider.Candles = [invalid];
-        await Assert.ThrowsAsync<ArgumentException>(() =>
-            service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
+        Assert.Empty(await service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
         Assert.Empty(await context.MarketDataCoverage.ToListAsync());
+        Assert.Empty(await context.MarketCandles.ToListAsync());
         provider.Candles = [Candle(0)];
         Assert.Single(await service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2)));
         Assert.Equal(4, provider.Requests.Count);
+    }
+
+    [Fact]
+    public async Task Processor_ValidOpenSurvivesRejectedCloseWithoutPersistingOrValuingRejectedCandle()
+    {
+        var simulatedDate = Start.AddDays(8);
+        var effectiveStart = MarketHistoryRequirements.GetEffectiveStartDate(Start, simulatedDate);
+        await using var context = NewContext();
+        foreach (var runId in new[] { 41 })
+        {
+            context.BacktestRuns.Add(new BacktestRun
+            {
+                Id = runId,
+                Name = $"SQLite regression {runId}",
+                StrategyId = "test",
+                StartDate = simulatedDate,
+                EndDate = simulatedDate,
+                InitialCapital = 1_000m,
+                Status = BacktestRunStatus.Running,
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+        await context.SaveChangesAsync();
+        var repository = new MarketCandleRepository(context);
+        var priorCandles = Enumerable.Range(0, 5).Select(day => Candle(day)).ToList();
+        foreach (var symbol in new[] { "BUY", "HELD" })
+        {
+            await repository.UpsertAsync(
+                symbol, Source, Mode, effectiveStart, simulatedDate.AddDays(-1), priorCandles);
+        }
+
+        var invalidBuyCandle = Candle(8);
+        invalidBuyCandle.Open = 200m;
+        invalidBuyCandle.High = 201m;
+        invalidBuyCandle.Low = 199m;
+        invalidBuyCandle.Close = 0m;
+        var invalidHeldCandle = Candle(8);
+        invalidHeldCandle.Open = 130m;
+        invalidHeldCandle.High = 131m;
+        invalidHeldCandle.Low = 129m;
+        invalidHeldCandle.Close = 0m;
+        var provider = new FakeProvider();
+        provider.SymbolCandles["BUY"] = [invalidBuyCandle];
+        provider.SymbolCandles["HELD"] = [invalidHeldCandle];
+        var historicalData = new BacktestHistoricalMarketDataService(provider, repository);
+        var processor = new BacktestDayProcessor(
+            historicalData,
+            new MarketObservationAnalyzerFactory(),
+            new PortfolioRebalancingService(),
+            new PortfolioAllocationService(),
+            new TradingEngine(),
+            new PortfolioPerformanceService(),
+            new BacktestSnapshotRepository(context),
+            new FeatureSnapshotRepository(context));
+        var portfolio = new Portfolio
+        {
+            StartingCash = 1_000m,
+            Cash = 1_000m,
+            Positions = [new Position
+            {
+                Symbol = "HELD", Quantity = 1m, AveragePrice = 100m, CurrentPrice = 120m
+            }]
+        };
+        var executionState = new BacktestExecutionState();
+        executionState.GenerateAfterClose(
+            portfolio,
+            simulatedDate.AddDays(-1),
+            new Dictionary<string, decimal> { ["BUY"] = 100m },
+            [new StockRecommendation { Symbol = "BUY", AllocationPercent = 50m }],
+            [new ObservationResult { Symbol = "BUY", Score = 1m }],
+            new StrategyConfiguration { UseRelativeStrength = false });
+        var request = new BacktestDayRequest
+        {
+            BacktestRunId = 41,
+            CurrentDate = simulatedDate,
+            HistoricalStartDate = Start,
+            ExecutionState = executionState,
+            Portfolio = portfolio,
+            StrategyConfiguration = new StrategyConfiguration
+            {
+                UseRelativeStrength = false, MaxPositionWeight = 100m
+            },
+            Symbols = ["BUY"]
+        };
+
+        var firstAttempt = await processor.ProcessAsync(request);
+
+        var buy = Assert.Single(portfolio.Trades);
+        Assert.Equal(TradeActionType.Buy, buy.Action);
+        Assert.Equal(simulatedDate, buy.Timestamp);
+        Assert.Equal(200m, buy.Price);
+        Assert.Empty(executionState.Pending);
+        Assert.Empty(firstAttempt.Observations);
+        Assert.Equal(120m, Assert.Single(portfolio.Positions, x => x.Symbol == "HELD").CurrentPrice);
+        Assert.Empty(await context.MarketCandles.AsNoTracking()
+            .Where(x => x.Date == simulatedDate && (x.Symbol == "BUY" || x.Symbol == "HELD"))
+            .ToListAsync());
+        var rejectedDateCoverage = await context.MarketDataCoverage.AsNoTracking()
+            .Where(x => (x.Symbol == "BUY" || x.Symbol == "HELD") &&
+                x.From <= simulatedDate && x.To >= simulatedDate)
+            .ToListAsync();
+        Assert.Empty(rejectedDateCoverage);
+        Assert.Empty(await context.FeatureSnapshots.AsNoTracking().ToListAsync());
+
+        var repairedCandle = Candle(8, 200m);
+        repairedCandle.High = 206m;
+        repairedCandle.Low = 199m;
+        repairedCandle.Close = 205m;
+        provider.SymbolCandles["BUY"] = [repairedCandle];
+
+        await processor.ProcessAsync(request);
+
+        Assert.Single(portfolio.Trades);
+        Assert.Equal(2, provider.RequestedSymbols.Count(x => x == "BUY"));
+        Assert.Single(await context.MarketCandles.AsNoTracking()
+            .Where(x => x.Symbol == "BUY" && x.Date == simulatedDate)
+            .ToListAsync());
+        Assert.Contains(await context.MarketDataCoverage.AsNoTracking()
+                .Where(x => x.Symbol == "BUY" && x.From <= simulatedDate && x.To >= simulatedDate)
+                .ToListAsync(),
+            x => x.From == simulatedDate && x.To == simulatedDate);
     }
 
     private sealed class FailedConfirmationHandler(HttpStatusCode status, string json) : HttpMessageHandler
@@ -810,6 +933,9 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
     {
         public IReadOnlyList<MarketCandle> Candles { get; set; } = [];
         public List<(DateTime From, DateTime To)> Requests { get; } = [];
+        public List<string> RequestedSymbols { get; } = [];
+        public Dictionary<string, IReadOnlyList<MarketCandle>> SymbolCandles { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
         public bool Fail { get; set; }
         public Func<Task>? BeforeReturn { get; init; }
         public Task<IReadOnlyList<MarketCandle>> GetHistoricalDailyAsync(string symbol, DateTime from) =>
@@ -817,10 +943,12 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
         public async Task<IReadOnlyList<MarketCandle>> GetHistoricalDailyAsync(string symbol, DateTime from, DateTime to)
         {
             Requests.Add((from, to));
+            RequestedSymbols.Add(symbol);
             await Task.Yield();
             if (Fail) throw new InvalidOperationException("Provider unavailable");
             if (BeforeReturn is not null) await BeforeReturn();
-            return Candles;
+            var candles = SymbolCandles.TryGetValue(symbol, out var symbolCandles) ? symbolCandles : Candles;
+            return candles.Where(x => x.Date.Date >= from.Date && x.Date.Date <= to.Date).ToList();
         }
     }
 

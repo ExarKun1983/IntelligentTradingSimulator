@@ -365,12 +365,82 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.Equal("backtest-strategy", progress.Context.StrategyId);
         Assert.Equal(3, progress.Context.TotalSymbols);
         Assert.Equal(3, progress.Context.CompletedSymbols);
-        Assert.Equal(new int?[] { 1, 2, 3, 1, 2, 3 },
-            progress.Reports.Where(x => x.Message.StartsWith("Symbols processed:"))
+        Assert.Equal(new int?[] { 0, 1, 2, 3, 0, 1, 2, 3 },
+            progress.Reports.Where(x =>
+                    x.Message.StartsWith("Histories fetched:") ||
+                    x.Message.StartsWith("Analysis completed:"))
                 .Select(x => x.Context.CompletedSymbols));
+        Assert.Equal(6, progress.Reports.Count(x => x.Message.StartsWith("Histories fetched:")));
+        Assert.Equal(2, progress.Reports.Count(x => x.Message.StartsWith("Analysis completed:")));
         Assert.Equal("Symbols processed: 1 analyzed, 1 skipped, 1 failed", progress.Reports.Last().Message);
         Assert.Equal(0, progress.ActiveOperations);
         Assert.Equal(2, await _dbContext.BacktestSnapshots.CountAsync());
+    }
+
+    [Fact]
+    public async Task ProcessAsync_AnalysisFailuresCountOnceAndWarnAfterAnalysisOnlyOncePerRun()
+    {
+        var date = new DateTime(2024, 1, 10);
+        var progress = new SimulationProgressRecorder();
+        var provider = new FakeMarketDataProvider
+        {
+            OnFetch = symbol =>
+            {
+                if (symbol == "FAIL")
+                {
+                    throw new InvalidOperationException("Price unavailable.");
+                }
+            }
+        };
+        var broken = BuildCandles(date.AddDays(-4), 5);
+        broken[0].Volume = 0m;
+        provider.SetData("BROKEN", broken);
+        var processor = BuildProcessor(provider, progress: progress);
+        var request = new BacktestDayRequest
+        {
+            BacktestRunId = 31, CurrentDate = date, HistoricalStartDate = date.AddDays(-4),
+            ExecutionState = new BacktestExecutionState(),
+            Portfolio = new Portfolio { StartingCash = 10_000m, Cash = 10_000m },
+            StrategyConfiguration = new StrategyConfiguration { UseRelativeStrength = false },
+            Symbols = ["BROKEN"]
+        };
+
+        var failedAnalysis = await processor.ProcessAsync(request);
+
+        Assert.Empty(failedAnalysis.Observations);
+        Assert.Equal("Symbols processed: 0 analyzed, 0 skipped, 1 failed", progress.Reports.Last().Message);
+        Assert.Equal(1, progress.Context.CompletedSymbols);
+        Assert.Equal(1, progress.Context.TotalSymbols);
+        var firstWarning = Assert.Single(progress.Reports,
+            x => x.Message.StartsWith("Partial market data:"));
+        Assert.Contains("0 analyzed", firstWarning.Message);
+        Assert.Contains("1 failed", firstWarning.Message);
+        Assert.True(firstWarning.Force);
+        Assert.True(progress.Reports.IndexOf(firstWarning) >
+            progress.Reports.FindIndex(x => x.Message.StartsWith("Analysis completed:")));
+
+        var extendedBroken = BuildCandles(date.AddDays(-4), 6);
+        extendedBroken[0].Volume = 0m;
+        provider.SetData("BROKEN", extendedBroken);
+        provider.SetData("PASS", BuildCandles(date.AddDays(-4), 6));
+        provider.SetData("SHORT", BuildCandles(date.AddDays(1), 1));
+        provider.SetData("NOSESSION", []);
+        request.CurrentDate = date.AddDays(1);
+        request.Symbols = ["BROKEN", "PASS", "SHORT", "FAIL", "NOSESSION"];
+
+        var mixedOutcomes = await processor.ProcessAsync(request);
+
+        Assert.Single(mixedOutcomes.Observations);
+        Assert.Equal("PASS", mixedOutcomes.Observations[0].Symbol);
+        Assert.Equal("Symbols processed: 1 analyzed, 2 skipped, 2 failed", progress.Reports.Last().Message);
+        Assert.Equal(5, progress.Context.CompletedSymbols);
+        Assert.Equal(5, progress.Context.TotalSymbols);
+        Assert.Single(progress.Reports, x => x.Message.StartsWith("Partial market data:"));
+
+        request.BacktestRunId = 32;
+        await processor.ProcessAsync(request);
+
+        Assert.Equal(2, progress.Reports.Count(x => x.Message.StartsWith("Partial market data:")));
     }
 
     [Theory]

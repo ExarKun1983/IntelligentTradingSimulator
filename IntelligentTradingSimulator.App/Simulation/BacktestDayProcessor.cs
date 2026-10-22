@@ -95,6 +95,8 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
         var skipped = 0;
         var insufficientHistorySkipped = 0;
         var failed = 0;
+        var fetched = 0;
+        var rejectedCandleData = false;
         _progress.Context = _progress.Context with { CompletedSymbols = 0, TotalSymbols = symbols.Count };
 
         foreach (var symbol in symbols)
@@ -103,10 +105,10 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             {
                 // Pass CurrentDate as both the fetch end-date and the look-ahead cutoff
                 // so that no data beyond the simulated day is ever returned.
-                IReadOnlyList<MarketCandle> candles;
+                BacktestHistoricalMarketDataResult marketData;
                 using (_progress.BeginOperation("Fetching price data", symbol))
                 {
-                    candles = await _historicalDataService.GetHistoricalDailyUpToAsync(
+                    marketData = await _historicalDataService.GetHistoricalDailyUpToWithOpeningPricesAsync(
                         symbol,
                         MarketHistoryRequirements.GetEffectiveStartDate(
                             request.HistoricalStartDate,
@@ -115,8 +117,8 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                         request.CurrentDate);
                 }
 
-                var historicalCandles =
-                    candles.OrderBy(x => x.Date).ToList();
+                rejectedCandleData |= marketData.InvalidCandleDates.Count > 0;
+                var historicalCandles = marketData.Candles.OrderBy(x => x.Date).ToList();
                 var usableCandles =
                     historicalCandles
                         .Where(x =>
@@ -124,17 +126,26 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                             request.HistoricalStartDate.Date)
                         .ToList();
 
-                var currentCandle = historicalCandles.LastOrDefault(x => x.Date.Date == request.CurrentDate.Date);
-                if (currentCandle is null)
-                {
-                    skipped++;
-                    continue;
-                }
-
-                if (TradingPrecisionPolicy.TryNormalizePrice(currentCandle.Open, out var open))
+                if (marketData.OpeningPrices.TryGetValue(request.CurrentDate.Date, out var rawOpen) &&
+                    TradingPrecisionPolicy.TryNormalizePrice(rawOpen, out var open))
                 {
                     opens[symbol] = open;
                 }
+
+                var currentCandle = historicalCandles.LastOrDefault(x => x.Date.Date == request.CurrentDate.Date);
+                if (currentCandle is null)
+                {
+                    if (marketData.InvalidCandleDates.Contains(request.CurrentDate.Date))
+                    {
+                        failed++;
+                    }
+                    else
+                    {
+                        skipped++;
+                    }
+                    continue;
+                }
+
                 if (!TradingPrecisionPolicy.TryNormalizePrice(currentCandle.Close, out var close))
                 {
                     throw new InvalidOperationException("The current candle has no valid closing price.");
@@ -155,7 +166,6 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 }
 
                 histories[symbol] = (usableCandles, historicalCandles);
-                succeeded++;
             }
             catch (Exception ex)
             {
@@ -165,21 +175,13 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             }
             finally
             {
+                fetched++;
                 _progress.Context = _progress.Context with
                 {
                     CompletedSymbols = succeeded + skipped + failed
                 };
-                _progress.Report($"Symbols processed: {succeeded} analyzed, {skipped} skipped, {failed} failed");
+                _progress.Report($"Histories fetched: {fetched} of {symbols.Count}");
             }
-        }
-
-        if ((insufficientHistorySkipped > 0 || failed > 0) &&
-            _partialDataWarningRunId != request.BacktestRunId)
-        {
-            _partialDataWarningRunId = request.BacktestRunId;
-            _progress.Report(
-                $"Partial market data: {succeeded} analyzed, {insufficientHistorySkipped} skipped, {failed} failed",
-                force: true);
         }
 
         var portfolio = request.Portfolio;
@@ -214,13 +216,34 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 observationResults.Add(analyzer.Analyze(
                     symbol, history.Usable, history.Historical,
                     benchmarkCandles, benchmarkSymbol, request.CurrentDate));
+                succeeded++;
             }
             catch (Exception ex)
             {
                 Console.WriteLine(
                     $"Backtest: skipping {symbol} on {request.CurrentDate:yyyy-MM-dd} — {ex.Message}");
+                failed++;
+            }
+            finally
+            {
+                _progress.Context = _progress.Context with
+                {
+                    CompletedSymbols = succeeded + skipped + failed
+                };
+                _progress.Report($"Analysis completed: {_progress.Context.CompletedSymbols} of {symbols.Count}");
             }
         }
+
+        if ((insufficientHistorySkipped > 0 || failed > 0 || rejectedCandleData) &&
+            _partialDataWarningRunId != request.BacktestRunId)
+        {
+            _partialDataWarningRunId = request.BacktestRunId;
+            _progress.Report(
+                $"Partial market data: {succeeded} analyzed, {insufficientHistorySkipped} skipped, {failed} failed",
+                force: true);
+        }
+        _progress.Context = _progress.Context with { CompletedSymbols = symbols.Count };
+        _progress.Report($"Symbols processed: {succeeded} analyzed, {skipped} skipped, {failed} failed");
 
         List<ObservationResult> rankedResults;
         IReadOnlyList<StockRecommendation> recommendations;

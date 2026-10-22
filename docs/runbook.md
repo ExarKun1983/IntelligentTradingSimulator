@@ -981,6 +981,11 @@ simulation behavior. Each fresh run starts with isolated pending state.
   use completed closes and entry execution prices, not daily `High` or an
   assumed intraday price path. Signals and feature snapshots retain the signal
   day's date, not the later execution date.
+- **Rejected candles:** a positive, normalizable `Open` remains available for
+  an eligible pending intent even when another OHLCV field makes the full candle
+  invalid. The rejected candle is not persisted, does not certify data coverage,
+  and is excluded from analysis and closing-price marks; the missing range can be
+  fetched again later. Existing committed snapshots remain authoritative.
 - **Gaps and recommendations:** signals/features require a fresh candle.
   Rankings retain latest known observations across gaps only for symbols still
   in the current requested universe; symbols removed from that universe are

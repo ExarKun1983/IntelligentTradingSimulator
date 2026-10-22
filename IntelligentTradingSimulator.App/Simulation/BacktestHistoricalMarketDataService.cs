@@ -9,6 +9,11 @@ using IntelligentTradingSimulator.Core.Models;
 
 namespace IntelligentTradingSimulator.App.Simulation;
 
+public sealed record BacktestHistoricalMarketDataResult(
+    IReadOnlyList<MarketCandle> Candles,
+    IReadOnlyDictionary<DateTime, decimal> OpeningPrices,
+    IReadOnlySet<DateTime> InvalidCandleDates);
+
 public sealed class BacktestHistoricalMarketDataService
 {
     private readonly IMarketDataProvider _marketDataProvider;
@@ -16,7 +21,7 @@ public sealed class BacktestHistoricalMarketDataService
     private readonly IWorkflowProgress _progress;
     private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _loadLock = new(1, 1);
-    private readonly ConcurrentDictionary<string, Lazy<Task<IReadOnlyList<MarketCandle>>>> _cachedRanges = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Lazy<Task<BacktestHistoricalMarketDataResult>>> _cachedRanges = new(StringComparer.OrdinalIgnoreCase);
 
     public BacktestHistoricalMarketDataService(
         IMarketDataProvider marketDataProvider,
@@ -35,12 +40,20 @@ public sealed class BacktestHistoricalMarketDataService
         DateTime from,
         DateTime to)
     {
+        return (await GetHistoricalDailyRangeResultAsync(symbol, from, to)).Candles;
+    }
+
+    private async Task<BacktestHistoricalMarketDataResult> GetHistoricalDailyRangeResultAsync(
+        string symbol,
+        DateTime from,
+        DateTime to)
+    {
         var fromDate = from.Date;
         var toDate = to.Date;
 
         if (string.IsNullOrWhiteSpace(symbol) || toDate < fromDate)
         {
-            return [];
+            return new([], new Dictionary<DateTime, decimal>(), new HashSet<DateTime>());
         }
 
         symbol = symbol.Trim().ToUpperInvariant();
@@ -49,15 +62,23 @@ public sealed class BacktestHistoricalMarketDataService
         var load =
             _cachedRanges.GetOrAdd(
                 cacheKey,
-                _ => new Lazy<Task<IReadOnlyList<MarketCandle>>>(() => LoadRangeAsync(symbol, fromDate, toDate)));
+                _ => new Lazy<Task<BacktestHistoricalMarketDataResult>>(
+                    () => LoadRangeAsync(symbol, fromDate, toDate)));
 
         try
         {
-            return await load.Value;
+            var result = await load.Value;
+            if (result.InvalidCandleDates.Count > 0)
+            {
+                _cachedRanges.TryRemove(
+                    new KeyValuePair<string, Lazy<Task<BacktestHistoricalMarketDataResult>>>(cacheKey, load));
+            }
+            return result;
         }
         catch
         {
-            _cachedRanges.TryRemove(new KeyValuePair<string, Lazy<Task<IReadOnlyList<MarketCandle>>>>(cacheKey, load));
+            _cachedRanges.TryRemove(
+                new KeyValuePair<string, Lazy<Task<BacktestHistoricalMarketDataResult>>>(cacheKey, load));
             throw;
         }
     }
@@ -68,17 +89,34 @@ public sealed class BacktestHistoricalMarketDataService
         DateTime to,
         DateTime simulatedDate)
     {
-        var candles =
-            await GetHistoricalDailyRangeAsync(
+        return (await GetHistoricalDailyUpToWithOpeningPricesAsync(
+            symbol, from, to, simulatedDate)).Candles;
+    }
+
+    public async Task<BacktestHistoricalMarketDataResult> GetHistoricalDailyUpToWithOpeningPricesAsync(
+        string symbol,
+        DateTime from,
+        DateTime to,
+        DateTime simulatedDate)
+    {
+        var result =
+            await GetHistoricalDailyRangeResultAsync(
                 symbol,
                 from,
                 to);
 
         var simulatedDay = simulatedDate.Date;
 
-        return candles
-            .Where(x => x.Date.Date <= simulatedDay)
-            .ToList();
+        return result with
+        {
+            Candles = result.Candles.Where(x => x.Date.Date <= simulatedDay).ToList(),
+            OpeningPrices = result.OpeningPrices
+                .Where(x => x.Key.Date <= simulatedDay)
+                .ToDictionary(x => x.Key, x => x.Value),
+            InvalidCandleDates = result.InvalidCandleDates
+                .Where(x => x.Date <= simulatedDay)
+                .ToHashSet()
+        };
     }
 
     private static string BuildCacheKey(
@@ -89,7 +127,7 @@ public sealed class BacktestHistoricalMarketDataService
         return $"{symbol.ToUpperInvariant()}|{from:yyyyMMdd}|{to:yyyyMMdd}";
     }
 
-    private async Task<IReadOnlyList<MarketCandle>> LoadRangeAsync(
+    private async Task<BacktestHistoricalMarketDataResult> LoadRangeAsync(
         string symbol,
         DateTime fromDate,
         DateTime toDate)
@@ -110,6 +148,8 @@ public sealed class BacktestHistoricalMarketDataService
                 .Concat(stored.Select(x => (From: x.Date.Date, To: x.Date.Date)));
             var missing = FindMissingRanges(fromDate, toDate, covered);
             var fetched = new List<MarketCandle>();
+            var openingPrices = new Dictionary<DateTime, decimal>();
+            var invalidCandleDates = new HashSet<DateTime>();
             var upserted = false;
             foreach (var range in missing)
             {
@@ -117,12 +157,41 @@ public sealed class BacktestHistoricalMarketDataService
                 var loaded = await _marketDataProvider.GetHistoricalDailyAsync(symbol, range.From, range.To)
                     ?? throw new InvalidOperationException("The market-data provider returned no response.");
                 var bounded = loaded.Where(x => x.Date.Date >= range.From && x.Date.Date <= range.To).ToList();
-                if (_repository is not null)
+                ThrowIfConflictingCandles(bounded);
+                foreach (var candle in bounded)
                 {
-                    await _repository.UpsertAsync(symbol, source, mode, range.From, range.To, bounded);
-                    upserted = true;
+                    if (candle.Open > 0m)
+                    {
+                        openingPrices.TryAdd(candle.Date.Date, candle.Open);
+                    }
+                    if (_repository is not null && !IsValidCandle(candle))
+                    {
+                        invalidCandleDates.Add(candle.Date.Date);
+                    }
                 }
-                fetched.AddRange(bounded);
+
+                var validCandles = bounded.Where(IsValidCandle).ToList();
+                if (_repository is null)
+                {
+                    fetched.AddRange(bounded);
+                }
+                else
+                {
+                    if (validCandles.Count == bounded.Count)
+                    {
+                        await _repository.UpsertAsync(symbol, source, mode, range.From, range.To, bounded);
+                    }
+                    else
+                    {
+                        foreach (var candle in validCandles.DistinctBy(x => x.Date.Date))
+                        {
+                            await _repository.UpsertAsync(
+                                symbol, source, mode, candle.Date.Date, candle.Date.Date, [candle]);
+                        }
+                    }
+                    upserted = true;
+                    fetched.AddRange(validCandles);
+                }
             }
             if (_repository is not null && upserted)
                 stored = await _repository.GetRangeAsync(symbol, source, mode, fromDate, toDate);
@@ -132,11 +201,40 @@ public sealed class BacktestHistoricalMarketDataService
             // A competing download may have certified an empty interval first.
             // Only the committed snapshot is authoritative for completed days.
             var nonPersisted = _repository is null ? fetched : fetched.Where(x => x.Date.Date >= currentDay);
-            return stored.Concat(nonPersisted).DistinctBy(x => x.Date.Date).OrderBy(x => x.Date).ToList();
+            var storedDates = stored.Select(x => x.Date.Date).ToHashSet();
+            var candles = stored.Concat(nonPersisted).DistinctBy(x => x.Date.Date)
+                .OrderBy(x => x.Date).ToList();
+            var openings = stored.ToDictionary(x => x.Date.Date, x => x.Open);
+            foreach (var (date, open) in openingPrices)
+            {
+                if (!storedDates.Contains(date))
+                {
+                    openings.TryAdd(date, open);
+                }
+            }
+
+            invalidCandleDates.ExceptWith(storedDates);
+            return new(candles, openings, invalidCandleDates);
         }
         finally
         {
             _loadLock.Release();
+        }
+    }
+
+    private static bool IsValidCandle(MarketCandle candle) =>
+        candle.Open > 0m && candle.High > 0m && candle.Low > 0m && candle.Close > 0m &&
+        candle.Volume >= 0m && candle.High >= Math.Max(candle.Open, candle.Close) &&
+        candle.Low <= Math.Min(candle.Open, candle.Close) && candle.Low <= candle.High;
+
+    private static void ThrowIfConflictingCandles(IReadOnlyList<MarketCandle> candles)
+    {
+        if (candles.GroupBy(x => x.Date.Date).Any(group => group.Skip(1).Any(x =>
+                x.Open != group.First().Open || x.High != group.First().High ||
+                x.Low != group.First().Low || x.Close != group.First().Close ||
+                x.Volume != group.First().Volume)))
+        {
+            throw new ArgumentException("Conflicting candles were returned for the same date.");
         }
     }
 
