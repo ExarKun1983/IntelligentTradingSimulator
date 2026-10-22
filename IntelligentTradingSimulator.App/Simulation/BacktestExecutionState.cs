@@ -69,7 +69,7 @@ public sealed class BacktestExecutionState
             _pending.Remove(intent.Symbol);
         }
 
-        foreach (var intent in eligible.Where(x => x.ExitReason.HasValue || x.AllocationPercent == 0m))
+        foreach (var intent in eligible.Where(x => x.ExitReason.HasValue))
         {
             var position = portfolio.Positions.FirstOrDefault(
                 x => string.Equals(x.Symbol, intent.Symbol, StringComparison.OrdinalIgnoreCase));
@@ -86,7 +86,7 @@ public sealed class BacktestExecutionState
         }
 
         var targets = eligible
-            .Where(x => !x.ExitReason.HasValue && x.AllocationPercent > 0m)
+            .Where(x => !x.ExitReason.HasValue)
             .Select(x => new StockRecommendation { Symbol = x.Symbol, AllocationPercent = x.AllocationPercent })
             .ToList();
         var instructions = allocationEngine.Calculate(portfolio, targets);

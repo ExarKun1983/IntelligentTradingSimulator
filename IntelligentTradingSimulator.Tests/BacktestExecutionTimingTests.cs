@@ -479,6 +479,68 @@ public sealed class BacktestExecutionTimingTests
         Assert.True(portfolio.Cash >= 0m);
     }
 
+    [Theory]
+    [InlineData("99", false)]
+    [InlineData("100", true)]
+    [InlineData("101", true)]
+    public void OrdinaryZeroAllocation_UsesMinimumTradeThreshold_AndConsumesEligibleIntent(
+        string positionValueText, bool shouldLiquidate)
+    {
+        var positionValue = decimal.Parse(positionValueText, System.Globalization.CultureInfo.InvariantCulture);
+        var portfolio = CashPortfolio();
+        portfolio.Positions.Add(Holding("AAA", positionValue / 100m, 100m));
+        var state = new BacktestExecutionState();
+        Seed(state, portfolio, Friday, [("AAA", 0m)]);
+
+        Execute(state, portfolio, Friday.AddDays(1), ("AAA", 100m));
+
+        Assert.Empty(state.Pending);
+        Assert.Equal(shouldLiquidate ? 1 : 0, portfolio.Trades.Count);
+        Assert.Equal(shouldLiquidate ? 1_000m + positionValue : 1_000m, portfolio.Cash);
+        if (shouldLiquidate)
+        {
+            var trade = Assert.Single(portfolio.Trades);
+            Assert.Equal(TradeActionType.Sell, trade.Action);
+            Assert.Equal(ExitReason.Rebalance, trade.ExitReason);
+            Assert.Equal(positionValue / 100m, trade.Quantity);
+            Assert.Equal(100m, trade.Price);
+            Assert.Empty(portfolio.Positions);
+        }
+        else
+        {
+            Assert.Equal(positionValue / 100m, Assert.Single(portfolio.Positions).Quantity);
+        }
+    }
+
+    [Fact]
+    public void BelowThresholdRiskExit_RemainsExemptFromOrdinaryRebalanceThreshold()
+    {
+        var portfolio = CashPortfolio();
+        portfolio.Positions.Add(Holding("AAA", 0.99m, 100m));
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.StopLossPercent = 10m;
+        state.GenerateAfterClose(
+            portfolio,
+            Friday,
+            new Dictionary<string, decimal> { ["AAA"] = 80m },
+            [],
+            [],
+            configuration);
+
+        Assert.Equal(ExitReason.StopLoss, state.Pending["AAA"].ExitReason);
+        Execute(state, portfolio, Friday.AddDays(1), ("AAA", 100m));
+
+        var trade = Assert.Single(portfolio.Trades);
+        Assert.Equal(TradeActionType.Sell, trade.Action);
+        Assert.Equal(ExitReason.StopLoss, trade.ExitReason);
+        Assert.Equal(0.99m, trade.Quantity);
+        Assert.Equal(100m, trade.Price);
+        Assert.Equal(1_099m, portfolio.Cash);
+        Assert.Empty(portfolio.Positions);
+        Assert.Empty(state.Pending);
+    }
+
     [Fact]
     public void GappedOpeningValuation_SellsBeforeCompetingBuys_WithDeterministicCashAndQuantityPrecision()
     {
