@@ -16,6 +16,11 @@ public sealed record BacktestHistoricalMarketDataResult(
 
 public sealed class BacktestHistoricalMarketDataService
 {
+    private const int MarketDataPriceScale = 12;
+    private const int MarketDataVolumeScale = 4;
+    private const decimal MaximumStoredMarketDataPrice = 9_999_999_999_999_999.999999999999m;
+    private const decimal MaximumStoredMarketDataVolume = 999_999_999_999_999_999_999_999.9999m;
+
     private readonly IMarketDataProvider _marketDataProvider;
     private readonly IMarketCandleRepository? _repository;
     private readonly IWorkflowProgress _progress;
@@ -160,17 +165,20 @@ public sealed class BacktestHistoricalMarketDataService
                 ThrowIfConflictingCandles(bounded);
                 foreach (var candle in bounded)
                 {
-                    if (candle.Open > 0m)
+                    if (candle.Open > 0m &&
+                        (_repository is null || IsStoredPrice(candle.Open)))
                     {
                         openingPrices.TryAdd(candle.Date.Date, candle.Open);
                     }
-                    if (_repository is not null && !IsValidCandle(candle))
+                    if (_repository is not null &&
+                        (!IsValidCandle(candle) || !IsStorageCompatible(candle)))
                     {
                         invalidCandleDates.Add(candle.Date.Date);
                     }
                 }
 
-                var validCandles = bounded.Where(IsValidCandle).ToList();
+                var validCandles = bounded.Where(c =>
+                    IsValidCandle(c) && (_repository is null || IsStorageCompatible(c))).ToList();
                 if (_repository is null)
                 {
                     fetched.AddRange(bounded);
@@ -230,6 +238,18 @@ public sealed class BacktestHistoricalMarketDataService
         candle.Open > 0m && candle.High > 0m && candle.Low > 0m && candle.Close > 0m &&
         candle.Volume >= 0m && candle.High >= Math.Max(candle.Open, candle.Close) &&
         candle.Low <= Math.Min(candle.Open, candle.Close) && candle.Low <= candle.High;
+
+    private static bool IsStorageCompatible(MarketCandle candle) =>
+        IsStoredPrice(candle.Open) && IsStoredPrice(candle.High) &&
+        IsStoredPrice(candle.Low) && IsStoredPrice(candle.Close) &&
+        decimal.Round(candle.Volume, MarketDataVolumeScale, MidpointRounding.AwayFromZero)
+            <= MaximumStoredMarketDataVolume;
+
+    private static bool IsStoredPrice(decimal value)
+    {
+        var storedValue = decimal.Round(value, MarketDataPriceScale, MidpointRounding.AwayFromZero);
+        return storedValue > 0m && storedValue <= MaximumStoredMarketDataPrice;
+    }
 
     private static void ThrowIfConflictingCandles(IReadOnlyList<MarketCandle> candles)
     {
