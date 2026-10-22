@@ -168,7 +168,6 @@ public sealed class BacktestExecutionState
 
         var analyzed = observations.Select(x => x.Symbol).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var symbols = recommendations.Select(x => x.Symbol)
-            .Concat(portfolio.Positions.Select(x => x.Symbol))
             .Distinct(StringComparer.OrdinalIgnoreCase);
         foreach (var symbol in symbols)
         {

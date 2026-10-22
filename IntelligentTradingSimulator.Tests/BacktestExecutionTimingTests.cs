@@ -260,7 +260,7 @@ public sealed class BacktestExecutionTimingTests
         Assert.Equal("BBB", Assert.Single(next.Recommendations).Symbol);
         Assert.Equal(Friday.AddDays(4), state.Pending["BBB"].SignalDate);
         Assert.Equal(100m, state.Pending["BBB"].AllocationPercent);
-        Assert.Equal(0m, state.Pending["AAA"].AllocationPercent);
+        Assert.False(state.Pending.ContainsKey("AAA"));
         Assert.Equal("AAA", Assert.Single(portfolio.Trades).Symbol);
         Assert.Equal(Friday.AddDays(4), portfolio.Trades[0].Timestamp);
         Assert.Equal(new[] { "AAA", "BBB", "BBB" }, fixture.Features.Rows.Select(x => x.Features.Symbol));
@@ -349,10 +349,9 @@ public sealed class BacktestExecutionTimingTests
     }
 
     [Theory]
-    [InlineData(null)]
     [InlineData(ExitReason.StopLoss)]
     [InlineData(ExitReason.TrailingStop)]
-    public async Task HeldSymbolAbsentFromUniverse_LiquidationRequiresFreshCloseAndLaterActualOpen(ExitReason? reason)
+    public async Task HeldSymbolAbsentFromUniverse_RiskExitRequiresFreshCloseAndLaterActualOpen(ExitReason reason)
     {
         var fixture = new Fixture();
         var close = reason == ExitReason.StopLoss ? 80m : 100m;
@@ -392,7 +391,7 @@ public sealed class BacktestExecutionTimingTests
         var execution = await fixture.Day(Friday.AddDays(3), portfolio, state, ["BBB"], configuration);
         var sale = Assert.Single(portfolio.Trades, x => x.Symbol == "AAA");
         Assert.Equal(TradeActionType.Sell, sale.Action);
-        Assert.Equal(reason ?? ExitReason.Rebalance, sale.ExitReason);
+        Assert.Equal(reason, sale.ExitReason);
         Assert.Equal(60m, sale.Price);
         Assert.Equal(10m, sale.Quantity);
         Assert.Equal(Friday.AddDays(3), sale.Timestamp);
@@ -400,6 +399,39 @@ public sealed class BacktestExecutionTimingTests
         Assert.Equal(portfolio.Trades.Count(x => x.Timestamp == Friday.AddDays(3)),
             execution.Snapshot.TradesExecuted);
         AssertReconciles(portfolio, 0m, ("AAA", 10m));
+    }
+
+    [Fact]
+    public async Task HeldSymbolOmittedFromRecommendations_IsNotLiquidatedOrUsedToFundBuys()
+    {
+        var fixture = new Fixture();
+        fixture.Provider.Data["AAA"] = History(Friday)
+            .Append(Candle(Friday.AddDays(4), 60m, 60m)).ToList();
+        fixture.Provider.Data["BBB"] = History(Friday)
+            .Append(Candle(Friday.AddDays(4), 100m, 101m)).ToList();
+        var portfolio = new Portfolio { StartingCash = 1_000m, Cash = 0m };
+        var position = Holding("AAA", 10m, 100m);
+        portfolio.Positions.Add(position);
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.StopLossPercent = null;
+        configuration.TrailingStopPercent = null;
+
+        var signal = await fixture.Day(Friday, portfolio, state, ["BBB"], configuration);
+
+        Assert.Equal("BBB", Assert.Single(signal.Recommendations).Symbol);
+        Assert.False(state.Pending.ContainsKey("AAA"));
+        Assert.Empty(portfolio.Trades);
+
+        var execution = await fixture.Day(Friday.AddDays(4), portfolio, state, ["BBB"], configuration);
+
+        Assert.Empty(portfolio.Trades);
+        Assert.Same(position, Assert.Single(portfolio.Positions));
+        Assert.Equal(10m, position.Quantity);
+        Assert.Equal(0m, portfolio.Cash);
+        Assert.DoesNotContain(portfolio.Positions, x => x.Symbol == "BBB");
+        Assert.Equal(0, execution.Snapshot.TradesExecuted);
+        Assert.False(execution.Snapshot.RebalanceExecuted);
     }
 
     [Fact]

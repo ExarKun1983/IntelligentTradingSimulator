@@ -990,10 +990,10 @@ simulation behavior. Each fresh run starts with isolated pending state.
   Rankings retain latest known observations across gaps only for symbols still
   in the current requested universe; symbols removed from that universe are
   pruned from the cache. Gaps may leave stale ranks/slots until refreshed, not
-  future information. Only fresh symbols can enqueue ordinary targets.
-  When a positive recommendation set
-  exists, excluded held symbols with fresh closes receive liquidation targets
-  subject to the pending-intent rules. With no positive recommendations,
+  future information. Only symbols with fresh recommendations can enqueue
+  ordinary targets. Omitting a held symbol from recommendations does not create
+  a liquidation target; an explicit zero-allocation recommendation still does,
+  subject to the ordinary minimum-trade threshold. With no recommendations,
   ordinary holdings are preserved; stops are still evaluated on fresh closes.
 - **End and reporting:** pending intents remaining after `EndDate` are discarded;
   there are no fills beyond the requested period. Daily snapshots cover every
