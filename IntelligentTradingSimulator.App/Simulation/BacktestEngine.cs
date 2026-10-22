@@ -76,6 +76,7 @@ public sealed class BacktestEngine : IBacktestEngine
         {
             var currentDate = request.StartDate.Date;
             var endDate = request.EndDate.Date;
+            var executionState = new BacktestExecutionState();
 
             while (currentDate <= endDate)
             {
@@ -93,6 +94,7 @@ public sealed class BacktestEngine : IBacktestEngine
                     HistoricalStartDate = request.HistoricalStartDate,
                     StrategyConfiguration = request.StrategyConfiguration,
                     Portfolio = portfolio,
+                    ExecutionState = executionState,
                     Symbols = request.Symbols
                 };
 

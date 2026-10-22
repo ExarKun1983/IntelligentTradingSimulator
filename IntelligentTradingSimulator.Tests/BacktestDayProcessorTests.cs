@@ -73,6 +73,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
         }
         var provider = new FakeMarketDataProvider();
         var processor = BuildProcessor(provider, marketCandleRepository: repository);
+        var executionState = new BacktestExecutionState();
         using var output = new System.IO.StringWriter();
         var originalOut = Console.Out;
         try
@@ -83,6 +84,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
                 var result = await processor.ProcessAsync(new BacktestDayRequest
                 {
                     CurrentDate = saturday.AddDays(day), HistoricalStartDate = monday,
+                    ExecutionState = executionState,
                     Portfolio = new Portfolio { StartingCash = 1000m, Cash = 1000m },
                     StrategyConfiguration = new StrategyConfiguration
                     {
@@ -90,9 +92,11 @@ public sealed class BacktestDayProcessorTests : IDisposable
                     },
                     Symbols = ["AAPL"]
                 });
-                var observation = Assert.Single(result.Observations);
-                Assert.Equal("AAPL", observation.Symbol);
-                Assert.Equal(0m, observation.RelativeStrengthPercent);
+                Assert.Empty(result.Observations);
+                Assert.Empty(result.Recommendations);
+                Assert.Empty(result.Portfolio.Trades);
+                Assert.Equal(0, result.Snapshot.TradesExecuted);
+                Assert.False(result.Snapshot.RebalanceExecuted);
             }
         }
         finally
@@ -102,6 +106,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.DoesNotContain("skipping", output.ToString());
         Assert.DoesNotContain("benchmark data unavailable", output.ToString());
         Assert.Equal(10, await _dbContext.MarketCandles.CountAsync());
+        Assert.Empty(await _dbContext.FeatureSnapshots.ToListAsync());
     }
 
     private static List<MarketCandle> BuildCandles(
@@ -141,18 +146,27 @@ public sealed class BacktestDayProcessorTests : IDisposable
             });
         }
 
-        var result = await BuildProcessor(provider).ProcessAsync(new BacktestDayRequest
+        var processor = BuildProcessor(provider);
+        var request = new BacktestDayRequest
         {
-            CurrentDate = simulatedDate,
+            CurrentDate = simulatedDate.AddDays(-1),
+            ExecutionState = new BacktestExecutionState(),
             HistoricalStartDate = startDate,
             Portfolio = portfolio,
             StrategyConfiguration = new StrategyConfiguration { UseRelativeStrength = false, MaxPositionWeight = 50m },
             Symbols = ["AAPL"]
-        });
+        };
+
+        var signal = await processor.ProcessAsync(request);
+        Assert.Empty(signal.Portfolio.Trades);
+        Assert.Equal(0, signal.Snapshot.TradesExecuted);
+        request.CurrentDate = simulatedDate;
+        var result = await processor.ProcessAsync(request);
 
         var trade = Assert.Single(result.Portfolio.Trades);
         Assert.Equal(action, trade.Action);
         Assert.Equal(simulatedDate, trade.Timestamp);
+        Assert.Equal(109m, trade.Price);
         Assert.Equal(1, result.Snapshot.TradesExecuted);
     }
 
@@ -210,11 +224,13 @@ public sealed class BacktestDayProcessorTests : IDisposable
 
         foreach (var runId in new[] { 7, 8 })
         {
+            var executionState = new BacktestExecutionState();
             for (var day = 0; day < 2; day++)
             {
                 await processor.ProcessAsync(new BacktestDayRequest
                 {
                     BacktestRunId = runId, CurrentDate = date.AddDays(day),
+                    ExecutionState = executionState,
                     HistoricalStartDate = date.AddDays(-4),
                     Portfolio = new Portfolio { StartingCash = 1000m, Cash = 1000m },
                     StrategyConfiguration = new StrategyConfiguration
@@ -251,17 +267,19 @@ public sealed class BacktestDayProcessorTests : IDisposable
         var provider = new FakeMarketDataProvider();
         provider.SetData("PASS", BuildCandles(date.AddDays(-5), 6));
         provider.SetData("HELD", BuildCandles(date.AddDays(-5), 6));
-        provider.SetData("SHORT", BuildCandles(date, 1));
+        provider.SetData("SHORT", BuildCandles(date, 2));
         var processor = BuildProcessor(provider, progress: progress);
         var strategy = new StrategyConfiguration
         {
             UseRelativeStrength = false,
             StopLossPercent = 10m
         };
+        var executionState = new BacktestExecutionState();
 
         await processor.ProcessAsync(new BacktestDayRequest
         {
             BacktestRunId = 17,
+            ExecutionState = executionState,
             CurrentDate = date,
             HistoricalStartDate = date.AddDays(-5),
             Portfolio = new Portfolio
@@ -282,6 +300,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
         await processor.ProcessAsync(new BacktestDayRequest
         {
             BacktestRunId = 17,
+            ExecutionState = executionState,
             CurrentDate = date.AddDays(1),
             HistoricalStartDate = date.AddDays(-5),
             Portfolio = new Portfolio
@@ -320,6 +339,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
         var request = new BacktestDayRequest
         {
             BacktestRunId = 7, CurrentDate = date, HistoricalStartDate = date.AddDays(-4),
+            ExecutionState = new BacktestExecutionState(),
             Portfolio = new Portfolio { StartingCash = 10_000m, Cash = 10_000m },
             StrategyConfiguration = new StrategyConfiguration
             {
@@ -345,12 +365,82 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.Equal("backtest-strategy", progress.Context.StrategyId);
         Assert.Equal(3, progress.Context.TotalSymbols);
         Assert.Equal(3, progress.Context.CompletedSymbols);
-        Assert.Equal(new int?[] { 1, 2, 3, 1, 2, 3 },
-            progress.Reports.Where(x => x.Message.StartsWith("Symbols processed:"))
+        Assert.Equal(new int?[] { 0, 1, 2, 3, 0, 1, 2, 3 },
+            progress.Reports.Where(x =>
+                    x.Message.StartsWith("Histories fetched:") ||
+                    x.Message.StartsWith("Analysis completed:"))
                 .Select(x => x.Context.CompletedSymbols));
+        Assert.Equal(6, progress.Reports.Count(x => x.Message.StartsWith("Histories fetched:")));
+        Assert.Equal(2, progress.Reports.Count(x => x.Message.StartsWith("Analysis completed:")));
         Assert.Equal("Symbols processed: 1 analyzed, 1 skipped, 1 failed", progress.Reports.Last().Message);
         Assert.Equal(0, progress.ActiveOperations);
         Assert.Equal(2, await _dbContext.BacktestSnapshots.CountAsync());
+    }
+
+    [Fact]
+    public async Task ProcessAsync_AnalysisFailuresCountOnceAndWarnAfterAnalysisOnlyOncePerRun()
+    {
+        var date = new DateTime(2024, 1, 10);
+        var progress = new SimulationProgressRecorder();
+        var provider = new FakeMarketDataProvider
+        {
+            OnFetch = symbol =>
+            {
+                if (symbol == "FAIL")
+                {
+                    throw new InvalidOperationException("Price unavailable.");
+                }
+            }
+        };
+        var broken = BuildCandles(date.AddDays(-4), 5);
+        broken[0].Volume = 0m;
+        provider.SetData("BROKEN", broken);
+        var processor = BuildProcessor(provider, progress: progress);
+        var request = new BacktestDayRequest
+        {
+            BacktestRunId = 31, CurrentDate = date, HistoricalStartDate = date.AddDays(-4),
+            ExecutionState = new BacktestExecutionState(),
+            Portfolio = new Portfolio { StartingCash = 10_000m, Cash = 10_000m },
+            StrategyConfiguration = new StrategyConfiguration { UseRelativeStrength = false },
+            Symbols = ["BROKEN"]
+        };
+
+        var failedAnalysis = await processor.ProcessAsync(request);
+
+        Assert.Empty(failedAnalysis.Observations);
+        Assert.Equal("Symbols processed: 0 analyzed, 0 skipped, 1 failed", progress.Reports.Last().Message);
+        Assert.Equal(1, progress.Context.CompletedSymbols);
+        Assert.Equal(1, progress.Context.TotalSymbols);
+        var firstWarning = Assert.Single(progress.Reports,
+            x => x.Message.StartsWith("Partial market data:"));
+        Assert.Contains("0 analyzed", firstWarning.Message);
+        Assert.Contains("1 failed", firstWarning.Message);
+        Assert.True(firstWarning.Force);
+        Assert.True(progress.Reports.IndexOf(firstWarning) >
+            progress.Reports.FindIndex(x => x.Message.StartsWith("Analysis completed:")));
+
+        var extendedBroken = BuildCandles(date.AddDays(-4), 6);
+        extendedBroken[0].Volume = 0m;
+        provider.SetData("BROKEN", extendedBroken);
+        provider.SetData("PASS", BuildCandles(date.AddDays(-4), 6));
+        provider.SetData("SHORT", BuildCandles(date.AddDays(1), 1));
+        provider.SetData("NOSESSION", []);
+        request.CurrentDate = date.AddDays(1);
+        request.Symbols = ["BROKEN", "PASS", "SHORT", "FAIL", "NOSESSION"];
+
+        var mixedOutcomes = await processor.ProcessAsync(request);
+
+        Assert.Single(mixedOutcomes.Observations);
+        Assert.Equal("PASS", mixedOutcomes.Observations[0].Symbol);
+        Assert.Equal("Symbols processed: 1 analyzed, 2 skipped, 2 failed", progress.Reports.Last().Message);
+        Assert.Equal(5, progress.Context.CompletedSymbols);
+        Assert.Equal(5, progress.Context.TotalSymbols);
+        Assert.Single(progress.Reports, x => x.Message.StartsWith("Partial market data:"));
+
+        request.BacktestRunId = 32;
+        await processor.ProcessAsync(request);
+
+        Assert.Equal(2, progress.Reports.Count(x => x.Message.StartsWith("Partial market data:")));
     }
 
     [Theory]
@@ -431,8 +521,15 @@ public sealed class BacktestDayProcessorTests : IDisposable
         var provider = new FakeMarketDataProvider();
         provider.SetData("HELD",
         [
-            new MarketCandle { Date = date, Close = currentPrice },
-            new MarketCandle { Date = date.AddDays(1), Close = 1m }
+            new MarketCandle
+            {
+                Date = date, Open = currentPrice, High = currentPrice, Low = currentPrice,
+                Close = currentPrice, Volume = 1_000m
+            },
+            new MarketCandle
+            {
+                Date = date.AddDays(1), Open = 95m, High = 95m, Low = 1m, Close = 1m, Volume = 1_000m
+            }
         ]);
         var portfolio = new Portfolio
         {
@@ -443,9 +540,11 @@ public sealed class BacktestDayProcessorTests : IDisposable
             }]
         };
 
-        var result = await BuildProcessor(provider).ProcessAsync(new BacktestDayRequest
+        var processor = BuildProcessor(provider);
+        var request = new BacktestDayRequest
         {
             CurrentDate = date,
+            ExecutionState = new BacktestExecutionState(),
             HistoricalStartDate = date.AddDays(-10),
             Portfolio = portfolio,
             Symbols = [],
@@ -453,25 +552,33 @@ public sealed class BacktestDayProcessorTests : IDisposable
             {
                 UseRelativeStrength = false, StopLossPercent = 10m
             }
-        });
+        };
+        var result = await processor.ProcessAsync(request);
 
         Assert.Empty(result.Recommendations);
-        Assert.Equal(shouldSell ? 1 : 0, result.Snapshot.TradesExecuted);
+        Assert.Equal(0, result.Snapshot.TradesExecuted);
         Assert.False(result.Snapshot.RebalanceExecuted);
         Assert.Equal(currentPrice * 10m, result.Snapshot.PortfolioValue);
+        Assert.Empty(portfolio.Trades);
+        Assert.Equal(currentPrice, Assert.Single(portfolio.Positions).CurrentPrice);
+
+        request.CurrentDate = date.AddDays(1);
+        var execution = await processor.ProcessAsync(request);
+        Assert.Equal(shouldSell ? 1 : 0, execution.Snapshot.TradesExecuted);
+        Assert.False(execution.Snapshot.RebalanceExecuted);
         if (shouldSell)
         {
             Assert.Empty(portfolio.Positions);
             var sell = Assert.Single(portfolio.Trades);
-            Assert.Equal(currentPrice, sell.Price);
+            Assert.Equal(95m, sell.Price);
             Assert.Equal(10m, sell.Quantity);
             Assert.Equal(ExitReason.StopLoss, sell.ExitReason);
-            Assert.Equal(date, sell.Timestamp);
+            Assert.Equal(date.AddDays(1), sell.Timestamp);
         }
         else
         {
             Assert.Empty(portfolio.Trades);
-            Assert.Equal(currentPrice, Assert.Single(portfolio.Positions).CurrentPrice);
+            Assert.Equal(1m, Assert.Single(portfolio.Positions).CurrentPrice);
         }
     }
 
@@ -485,18 +592,31 @@ public sealed class BacktestDayProcessorTests : IDisposable
         var provider = new FakeMarketDataProvider();
         provider.SetData("HELD",
         [
-            new MarketCandle { Date = date.AddDays(-1), Close = 1000m },
-            new MarketCandle { Date = date, Close = price },
-            new MarketCandle { Date = date.AddDays(1), Close = 2000m }
+            new MarketCandle
+            {
+                Date = date.AddDays(-1), Open = 1000m, High = 1000m, Low = 1000m,
+                Close = 1000m, Volume = 1_000m
+            },
+            new MarketCandle
+            {
+                Date = date, Open = price, High = price, Low = price, Close = price, Volume = 1_000m
+            },
+            new MarketCandle
+            {
+                Date = date.AddDays(1), Open = 115m, High = 2000m, Low = 115m,
+                Close = 2000m, Volume = 1_000m
+            }
         ]);
         var position = new Position
         {
             Symbol = "HELD", Quantity = 10m, AveragePrice = 100m, CurrentPrice = 120m
         };
         var portfolio = new Portfolio { StartingCash = 1000m, Positions = [position] };
-        var result = await BuildProcessor(provider).ProcessAsync(new BacktestDayRequest
+        var processor = BuildProcessor(provider);
+        var request = new BacktestDayRequest
         {
             CurrentDate = date,
+            ExecutionState = new BacktestExecutionState(),
             HistoricalStartDate = date.AddDays(-10),
             Portfolio = portfolio,
             Symbols = [],
@@ -504,27 +624,35 @@ public sealed class BacktestDayProcessorTests : IDisposable
             {
                 UseRelativeStrength = false, TrailingStopPercent = 10m
             }
-        });
+        };
+        var result = await processor.ProcessAsync(request);
 
         Assert.Empty(result.Observations);
         Assert.Empty(result.Recommendations);
         Assert.Equal(120m, position.HighestPriceSinceEntry);
-        Assert.Equal(shouldSell ? 1 : 0, result.Snapshot.TradesExecuted);
+        Assert.Equal(0, result.Snapshot.TradesExecuted);
         Assert.False(result.Snapshot.RebalanceExecuted);
         Assert.Equal(price * 10m, result.Snapshot.PortfolioValue);
+        Assert.Empty(portfolio.Trades);
+        Assert.Equal(price, Assert.Single(portfolio.Positions).CurrentPrice);
+
+        request.CurrentDate = date.AddDays(1);
+        var execution = await processor.ProcessAsync(request);
+        Assert.Equal(shouldSell ? 1 : 0, execution.Snapshot.TradesExecuted);
+        Assert.False(execution.Snapshot.RebalanceExecuted);
         if (shouldSell)
         {
             Assert.Empty(portfolio.Positions);
             var sell = Assert.Single(portfolio.Trades);
             Assert.Equal(ExitReason.TrailingStop, sell.ExitReason);
-            Assert.Equal(date, sell.Timestamp);
-            Assert.Equal(price, sell.Price);
+            Assert.Equal(date.AddDays(1), sell.Timestamp);
+            Assert.Equal(115m, sell.Price);
             Assert.Equal(10m, sell.Quantity);
         }
         else
         {
             Assert.Empty(portfolio.Trades);
-            Assert.Equal(price, Assert.Single(portfolio.Positions).CurrentPrice);
+            Assert.Equal(2000m, Assert.Single(portfolio.Positions).CurrentPrice);
         }
     }
 
@@ -533,9 +661,13 @@ public sealed class BacktestDayProcessorTests : IDisposable
     {
         var startDate = new DateTime(2024, 1, 1);
         var provider = new FakeMarketDataProvider();
-        var candles = BuildCandles(startDate, 12);
-        candles[^2].Close = 150m;
-        candles[^1].Close = 135m;
+        var candles = BuildCandles(startDate, 13);
+        candles[^3].Close = 150m;
+        candles[^3].High = 150m;
+        candles[^2].Close = 135m;
+        candles[^2].High = 135m;
+        candles[^1].Open = 140m;
+        candles[^1].High = 140m;
         provider.SetData("AAPL", candles);
         var engine = new BacktestEngine(
             new BacktestRunRepository(_dbContext), BuildProcessor(provider));
@@ -549,7 +681,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
                 Id = "test", UseRelativeStrength = false, TrailingStopPercent = 10m
             },
             StartDate = startDate.AddDays(9),
-            EndDate = startDate.AddDays(11),
+            EndDate = startDate.AddDays(12),
             HistoricalStartDate = startDate,
             InitialCapital = 10_000m,
             Symbols = ["AAPL"]
@@ -563,7 +695,8 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.Empty(savedRun.Portfolio.Positions);
         var sell = Assert.Single(savedRun.Portfolio.Trades,
             x => x.ExitReason == ExitReason.TrailingStop);
-        Assert.Equal(135m, sell.Price);
+        Assert.Equal(startDate.AddDays(12), sell.Timestamp);
+        Assert.Equal(140m, sell.Price);
         Assert.True(sell.Price > savedRun.Portfolio.Trades.First(x => x.Action == TradeActionType.Buy).Price);
         Assert.Single(await readContext.Trades.AsNoTracking()
             .Where(x => x.PortfolioId == savedRun.PortfolioId && x.ExitReason == ExitReason.TrailingStop)
@@ -622,8 +755,12 @@ public sealed class BacktestDayProcessorTests : IDisposable
             ? new ConsoleWorkflowProgress(output, interval: TimeSpan.FromDays(1))
             : null;
         var provider = new FakeMarketDataProvider();
-        var candles = BuildCandles(startDate, 11);
+        var candles = BuildCandles(startDate, 12);
+        candles[^2].Close = 90m;
+        candles[^2].Low = 90m;
+        candles[^1].Open = 95m;
         candles[^1].Close = 90m;
+        candles[^1].Low = 90m;
         provider.SetData("AAPL", candles);
         var repositories = new CountingBacktestRepositories(_dbContext);
         var engine = new BacktestEngine(
@@ -641,16 +778,17 @@ public sealed class BacktestDayProcessorTests : IDisposable
                 Id = "test", UseRelativeStrength = false, StopLossPercent = 10m
             },
             StartDate = startDate.AddDays(9),
-            EndDate = startDate.AddDays(10),
+            EndDate = startDate.AddDays(11),
             HistoricalStartDate = startDate,
             InitialCapital = 10_000m,
             Symbols = ["AAPL"]
         });
 
         Assert.Equal(BacktestRunStatus.Completed, result.Status);
-        Assert.Equal(new[] { "AAPL", "AAPL" }, provider.Calls);
+        Assert.Equal(new[] { "AAPL", "AAPL", "AAPL" }, provider.Calls);
         Assert.Equal(
-            new[] { "AddRun", "SaveFeatures", "AddSnapshot", "SaveFeatures", "AddSnapshot", "UpdateRun" },
+            new[] { "AddRun", "SaveFeatures", "AddSnapshot", "SaveFeatures", "AddSnapshot",
+                "SaveFeatures", "AddSnapshot", "UpdateRun" },
             repositories.Calls);
         if (output is FailOnceProgressWriter failingOutput)
         {
@@ -660,7 +798,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
         {
             Assert.Contains("Starting Fetching price data", output.ToString());
             Assert.Contains("Simulation complete", output.ToString());
-            Assert.Contains("Completed calendar dates: 2/2", output.ToString());
+            Assert.Contains("Completed calendar dates: 3/3", output.ToString());
             Assert.DoesNotContain("Workflow complete", output.ToString());
         }
         else
@@ -678,19 +816,21 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.Empty(savedRun.Portfolio.Positions);
         var buy = Assert.Single(savedRun.Portfolio.Trades, x => x.Action == TradeActionType.Buy);
         var sell = Assert.Single(savedRun.Portfolio.Trades, x => x.Action == TradeActionType.Sell);
-        Assert.Equal(startDate.AddDays(9), buy.Timestamp);
-        Assert.Equal(startDate.AddDays(10), sell.Timestamp);
-        Assert.Equal(109m, buy.Price);
-        Assert.Equal(90m, sell.Price);
+        Assert.Equal(startDate.AddDays(10), buy.Timestamp);
+        Assert.Equal(startDate.AddDays(11), sell.Timestamp);
+        Assert.Equal(110m, buy.Price);
+        Assert.Equal(95m, sell.Price);
         Assert.Equal(buy.Quantity, sell.Quantity);
         Assert.Equal(ExitReason.StopLoss, sell.ExitReason);
         Assert.Equal(new[] { TradeActionType.Buy, TradeActionType.Sell },
             savedRun.Portfolio.Trades.Select(trade => trade.Action));
-        var expectedQuantity = Math.Round(10_000m / 109m,
+        var expectedQuantity = Math.Round(10_000m / 110m,
             TradingPrecisionPolicy.QuantityScale, MidpointRounding.ToZero);
         Assert.Equal(expectedQuantity, buy.Quantity);
         var expectedFinalCapital = TradingPrecisionPolicy.RoundReport(
-            Math.Round(expectedQuantity * 90m, TradingPrecisionPolicy.CashScale, MidpointRounding.AwayFromZero));
+            10_000m - Math.Round(expectedQuantity * 110m,
+                TradingPrecisionPolicy.CashScale, MidpointRounding.AwayFromZero) +
+            Math.Round(expectedQuantity * 95m, TradingPrecisionPolicy.CashScale, MidpointRounding.AwayFromZero));
         Assert.Equal(expectedFinalCapital, result.FinalCapital);
         Assert.Equal(expectedFinalCapital - 10_000m, result.TotalProfit);
         Assert.Equal(savedRun.FinalCapital, TradingPrecisionPolicy.RoundReport(savedRun.Portfolio.Cash));
@@ -706,7 +846,9 @@ public sealed class BacktestDayProcessorTests : IDisposable
     {
         var startDate = new DateTime(2024, 1, 1);
         var provider = new FakeMarketDataProvider();
-        var candles = BuildCandles(startDate, 11);
+        var candles = BuildCandles(startDate, 12);
+        candles[^2].Close = 120m;
+        candles[^2].High = 120m;
         candles[^1].Open = 120m;
         candles[^1].High = 121m;
         candles[^1].Low = 119m;
@@ -730,7 +872,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
                 Id = "test", UseRelativeStrength = false, MaxPositions = 1, MaxPositionWeight = 50m
             },
             StartDate = startDate.AddDays(9),
-            EndDate = startDate.AddDays(10),
+            EndDate = startDate.AddDays(11),
             HistoricalStartDate = startDate,
             InitialCapital = 10_000m,
             Symbols = ["AAPL"]
@@ -745,6 +887,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.NotNull(savedRun.Portfolio);
         var sell = Assert.Single(savedRun.Portfolio.Trades, x => x.Action == TradeActionType.Sell);
         Assert.Equal(ExitReason.Rebalance, sell.ExitReason);
+        Assert.Equal(startDate.AddDays(11), sell.Timestamp);
         Assert.Equal(120m, sell.Price);
         Assert.True(sell.Quantity > 0m);
         Assert.All(savedRun.Portfolio.Trades.Where(x => x.Action == TradeActionType.Buy),
@@ -821,6 +964,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
         volumeCandles[^1].Volume = 2_000_000m;
         var disqualifiedCandles = BuildCandles(startDate, 10);
         disqualifiedCandles[^1].Close = 90m;
+        disqualifiedCandles[^1].Low = 90m;
         provider.SetData("MOMENTUM", momentumCandles);
         provider.SetData("Z_VOLUME", volumeCandles);
         provider.SetData("A_VOLUME", volumeCandles);
@@ -842,14 +986,19 @@ public sealed class BacktestDayProcessorTests : IDisposable
             ? ["A_VOLUME", "Z_VOLUME", "MOMENTUM", "DISQUALIFIED"]
             : ["MOMENTUM", "A_VOLUME", "Z_VOLUME", "DISQUALIFIED"];
 
-        var backtest = await BuildProcessor(provider).ProcessAsync(new BacktestDayRequest
+        var processor = BuildProcessor(provider);
+        var request = new BacktestDayRequest
         {
+            ExecutionState = new BacktestExecutionState(),
             CurrentDate = startDate.AddDays(9),
             HistoricalStartDate = startDate,
             StrategyConfiguration = strategy,
             Portfolio = new Portfolio { StartingCash = 10_000m, Cash = 10_000m },
             Symbols = symbols
-        });
+        };
+        var backtest = await processor.ProcessAsync(request);
+        Assert.Empty(backtest.Portfolio.Positions);
+        Assert.Empty(backtest.Portfolio.Trades);
         var repository = new ObservationResultRepository(_dbContext);
 
         // Persist unsorted observations to verify saved rank positions use the same tie-breaker.
@@ -866,6 +1015,19 @@ public sealed class BacktestDayProcessorTests : IDisposable
             new FeatureSnapshotRepository(_dbContext),
             strategy);
         var market = await workflow.CollectAndAnalyzeAsync(symbols, startDate);
+        foreach (var (symbol, candles) in new[]
+        {
+            ("MOMENTUM", momentumCandles), ("Z_VOLUME", volumeCandles),
+            ("A_VOLUME", volumeCandles), ("DISQUALIFIED", disqualifiedCandles)
+        })
+        {
+            var nextDay = BuildCandles(startDate.AddDays(10), 1, candles[^1].Close);
+            provider.SetData(symbol, candles.Concat(nextDay).ToList());
+        }
+        request.CurrentDate = startDate.AddDays(10);
+        var execution = await processor.ProcessAsync(request);
+        Assert.True(execution.Snapshot.RebalanceExecuted);
+        Assert.Equal(2, execution.Snapshot.TradesExecuted);
 
         Assert.Equal(expected, backtest.Observations.Select(x => x.Symbol).ToArray());
         Assert.Equal(expected, market.RankedResults.Select(x => x.Symbol).ToArray());
@@ -1182,12 +1344,12 @@ public sealed class BacktestDayProcessorTests : IDisposable
     }
 
     [Fact]
-    public async Task ProcessAsync_SetsRebalanceExecutedTrue_WhenRecommendationsExist()
+    public async Task ProcessAsync_SetsRebalanceExecutedTrue_WhenPendingRecommendationsExecute()
     {
         var provider = new FakeMarketDataProvider();
         var startDate = new DateTime(2024, 7, 1);
 
-        // Enough candles to produce recommendations and trigger rebalancing.
+        // The first close produces recommendations; the next open executes them.
         provider.SetData("AAPL", BuildCandles(startDate, 10, 100m));
         provider.SetData("MSFT", BuildCandles(startDate, 10, 200m));
 
@@ -1196,16 +1358,23 @@ public sealed class BacktestDayProcessorTests : IDisposable
         var request = new BacktestDayRequest
         {
             BacktestRunId = 7,
-            CurrentDate = startDate.AddDays(9),
+            ExecutionState = new BacktestExecutionState(),
+            CurrentDate = startDate.AddDays(8),
             HistoricalStartDate = startDate,
             Portfolio = new Portfolio { Name = "Backtest", StartingCash = 10_000m, Cash = 10_000m },
             Symbols = ["AAPL", "MSFT"]
         };
 
+        var signal = await processor.ProcessAsync(request);
+        Assert.NotEmpty(signal.Recommendations);
+        Assert.False(signal.Snapshot.RebalanceExecuted);
+        Assert.Equal(0, signal.Snapshot.TradesExecuted);
+        Assert.Empty(signal.Portfolio.Trades);
+        request.CurrentDate = startDate.AddDays(9);
         var result = await processor.ProcessAsync(request);
 
-        // Recommendations were available, so rebalance must have been executed.
         Assert.True(result.Snapshot.RebalanceExecuted);
+        Assert.Equal(2, result.Snapshot.TradesExecuted);
     }
 
     [Fact]
@@ -1224,15 +1393,20 @@ public sealed class BacktestDayProcessorTests : IDisposable
         var request = new BacktestDayRequest
         {
             BacktestRunId = 8,
-            CurrentDate = startDate.AddDays(9),
+            ExecutionState = new BacktestExecutionState(),
+            CurrentDate = startDate.AddDays(8),
             HistoricalStartDate = startDate,
             Portfolio = portfolio,
             Symbols = ["AAPL", "MSFT"]
         };
 
+        var signal = await processor.ProcessAsync(request);
+        Assert.Empty(signal.Portfolio.Trades);
+        request.CurrentDate = startDate.AddDays(9);
         var result = await processor.ProcessAsync(request);
 
         // The snapshot must record exactly as many trades as were added to the portfolio.
+        Assert.Equal(2, result.Snapshot.TradesExecuted);
         Assert.Equal(result.Portfolio.Trades.Count, result.Snapshot.TradesExecuted);
     }
 
@@ -1282,14 +1456,19 @@ public sealed class BacktestDayProcessorTests : IDisposable
         var request = new BacktestDayRequest
         {
             BacktestRunId = 10,
+            ExecutionState = new BacktestExecutionState(),
             StrategyConfiguration = new StrategyConfiguration { MaxPositionWeight = maxPositionWeight },
-            CurrentDate = startDate.AddDays(9),
+            CurrentDate = startDate.AddDays(8),
             HistoricalStartDate = startDate,
             Portfolio = new Portfolio { Name = "Backtest", StartingCash = 10_000m, Cash = 10_000m },
             Symbols = ["AAPL", "MSFT", "GOOG"]
         };
 
+        var signal = await processor.ProcessAsync(request);
+        Assert.Empty(signal.Portfolio.Trades);
+        request.CurrentDate = startDate.AddDays(9);
         var result = await processor.ProcessAsync(request);
+        Assert.NotEmpty(result.Portfolio.Positions);
 
         var totalValue =
             result.Portfolio.Cash +
@@ -1328,12 +1507,16 @@ public sealed class BacktestDayProcessorTests : IDisposable
         var request = new BacktestDayRequest
         {
             BacktestRunId = 11,
-            CurrentDate = startDate.AddDays(9),
+            ExecutionState = new BacktestExecutionState(),
+            CurrentDate = startDate.AddDays(8),
             HistoricalStartDate = startDate,
             Portfolio = new Portfolio { Name = "Backtest", StartingCash = 10_000m, Cash = 10_000m },
             Symbols = ["AAPL", "MSFT", "GOOG"]
         };
 
+        var signal = await processor.ProcessAsync(request);
+        Assert.Empty(signal.Portfolio.Trades);
+        request.CurrentDate = startDate.AddDays(9);
         var result = await processor.ProcessAsync(request);
 
         var totalValue =
