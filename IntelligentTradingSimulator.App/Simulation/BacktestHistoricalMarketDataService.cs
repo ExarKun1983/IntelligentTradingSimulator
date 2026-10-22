@@ -165,23 +165,21 @@ public sealed class BacktestHistoricalMarketDataService
                 ThrowIfConflictingCandles(bounded);
                 foreach (var candle in bounded)
                 {
-                    if (candle.Open > 0m &&
-                        (_repository is null || IsStoredPrice(candle.Open)))
+                    if (candle.Open > 0m && IsStoredPrice(candle.Open))
                     {
                         openingPrices.TryAdd(candle.Date.Date, candle.Open);
                     }
-                    if (_repository is not null &&
-                        (!IsValidCandle(candle) || !IsStorageCompatible(candle)))
+                    if (!IsValidCandle(candle) || !IsStorageCompatible(candle))
                     {
                         invalidCandleDates.Add(candle.Date.Date);
                     }
                 }
 
                 var validCandles = bounded.Where(c =>
-                    IsValidCandle(c) && (_repository is null || IsStorageCompatible(c))).ToList();
+                    IsValidCandle(c) && IsStorageCompatible(c)).ToList();
                 if (_repository is null)
                 {
-                    fetched.AddRange(bounded);
+                    fetched.AddRange(validCandles);
                 }
                 else
                 {
