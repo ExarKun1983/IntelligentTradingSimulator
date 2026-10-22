@@ -521,8 +521,15 @@ public sealed class BacktestDayProcessorTests : IDisposable
         var provider = new FakeMarketDataProvider();
         provider.SetData("HELD",
         [
-            new MarketCandle { Date = date, Close = currentPrice },
-            new MarketCandle { Date = date.AddDays(1), Open = 95m, Close = 1m }
+            new MarketCandle
+            {
+                Date = date, Open = currentPrice, High = currentPrice, Low = currentPrice,
+                Close = currentPrice, Volume = 1_000m
+            },
+            new MarketCandle
+            {
+                Date = date.AddDays(1), Open = 95m, High = 95m, Low = 1m, Close = 1m, Volume = 1_000m
+            }
         ]);
         var portfolio = new Portfolio
         {
@@ -585,9 +592,20 @@ public sealed class BacktestDayProcessorTests : IDisposable
         var provider = new FakeMarketDataProvider();
         provider.SetData("HELD",
         [
-            new MarketCandle { Date = date.AddDays(-1), Close = 1000m },
-            new MarketCandle { Date = date, Close = price },
-            new MarketCandle { Date = date.AddDays(1), Open = 115m, Close = 2000m }
+            new MarketCandle
+            {
+                Date = date.AddDays(-1), Open = 1000m, High = 1000m, Low = 1000m,
+                Close = 1000m, Volume = 1_000m
+            },
+            new MarketCandle
+            {
+                Date = date, Open = price, High = price, Low = price, Close = price, Volume = 1_000m
+            },
+            new MarketCandle
+            {
+                Date = date.AddDays(1), Open = 115m, High = 2000m, Low = 115m,
+                Close = 2000m, Volume = 1_000m
+            }
         ]);
         var position = new Position
         {
@@ -645,8 +663,11 @@ public sealed class BacktestDayProcessorTests : IDisposable
         var provider = new FakeMarketDataProvider();
         var candles = BuildCandles(startDate, 13);
         candles[^3].Close = 150m;
+        candles[^3].High = 150m;
         candles[^2].Close = 135m;
+        candles[^2].High = 135m;
         candles[^1].Open = 140m;
+        candles[^1].High = 140m;
         provider.SetData("AAPL", candles);
         var engine = new BacktestEngine(
             new BacktestRunRepository(_dbContext), BuildProcessor(provider));
@@ -736,8 +757,10 @@ public sealed class BacktestDayProcessorTests : IDisposable
         var provider = new FakeMarketDataProvider();
         var candles = BuildCandles(startDate, 12);
         candles[^2].Close = 90m;
+        candles[^2].Low = 90m;
         candles[^1].Open = 95m;
         candles[^1].Close = 90m;
+        candles[^1].Low = 90m;
         provider.SetData("AAPL", candles);
         var repositories = new CountingBacktestRepositories(_dbContext);
         var engine = new BacktestEngine(
@@ -825,6 +848,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
         var provider = new FakeMarketDataProvider();
         var candles = BuildCandles(startDate, 12);
         candles[^2].Close = 120m;
+        candles[^2].High = 120m;
         candles[^1].Open = 120m;
         candles[^1].High = 121m;
         candles[^1].Low = 119m;
@@ -940,6 +964,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
         volumeCandles[^1].Volume = 2_000_000m;
         var disqualifiedCandles = BuildCandles(startDate, 10);
         disqualifiedCandles[^1].Close = 90m;
+        disqualifiedCandles[^1].Low = 90m;
         provider.SetData("MOMENTUM", momentumCandles);
         provider.SetData("Z_VOLUME", volumeCandles);
         provider.SetData("A_VOLUME", volumeCandles);

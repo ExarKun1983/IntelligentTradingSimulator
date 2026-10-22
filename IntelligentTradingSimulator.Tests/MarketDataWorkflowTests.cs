@@ -556,7 +556,12 @@ public sealed class MarketDataWorkflowTests : IDisposable
         var stock = BuildCandles(start, 5);
         var benchmark = BuildCandles(start, 5);
         benchmark[^1].Close = 110m;
-        stock.Add(new MarketCandle { Date = DateTime.MaxValue, Close = 10_000m });
+        benchmark[^1].High = 110m;
+        stock.Add(new MarketCandle
+        {
+            Date = DateTime.MaxValue, Open = 10_000m, High = 10_001m,
+            Low = 9_999m, Close = 10_000m, Volume = 1_000m
+        });
         var provider = new FakeMarketDataProvider(
             new Dictionary<string, IReadOnlyList<MarketCandle>>
             {
