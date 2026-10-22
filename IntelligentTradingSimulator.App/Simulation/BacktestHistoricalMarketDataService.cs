@@ -194,7 +194,10 @@ public sealed class BacktestHistoricalMarketDataService
                 }
             }
             if (_repository is not null && upserted)
+            {
+                coverage = await _repository.GetCoverageAsync(symbol, source, mode, fromDate, toDate);
                 stored = await _repository.GetRangeAsync(symbol, source, mode, fromDate, toDate);
+            }
             var origin = missing.Count == 0 ? "database" :
                 hasPersistedData ? "database and external provider" : "external provider";
             _progress.Report($"{symbol} | {fromDate:yyyy-MM-dd} to {toDate:yyyy-MM-dd} | {origin}");
@@ -207,7 +210,8 @@ public sealed class BacktestHistoricalMarketDataService
             var openings = stored.ToDictionary(x => x.Date.Date, x => x.Open);
             foreach (var (date, open) in openingPrices)
             {
-                if (!storedDates.Contains(date))
+                var isCovered = coverage.Any(x => x.From.Date <= date && x.To.Date >= date);
+                if (!storedDates.Contains(date) && !isCovered)
                 {
                     openings.TryAdd(date, open);
                 }

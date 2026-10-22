@@ -594,10 +594,13 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
             }
         };
         var service = new BacktestHistoricalMarketDataService(provider, new MarketCandleRepository(context));
-        var result = await service.GetHistoricalDailyRangeAsync("AAPL", Start, Start.AddDays(2));
-        var winner = Assert.Single(result);
+        var result = await service.GetHistoricalDailyUpToWithOpeningPricesAsync(
+            "AAPL", Start, Start.AddDays(2), Start.AddDays(2));
+        var winner = Assert.Single(result.Candles);
         Assert.Equal(Start, winner.Date);
         Assert.Equal(100m, winner.Close);
+        Assert.Equal(100m, Assert.Single(result.OpeningPrices).Value);
+        Assert.Equal(Start, Assert.Single(result.OpeningPrices).Key);
         Assert.Single(await context.MarketCandles.ToListAsync());
     }
 
