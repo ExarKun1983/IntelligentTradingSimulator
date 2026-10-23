@@ -867,6 +867,102 @@ public sealed class BacktestExecutionTimingTests
     }
 
     [Fact]
+    public void AllocationLiquidation_FreesSlotForDelayedPurchaseAtTheSameOpen()
+    {
+        var portfolio = CashPortfolio(0m);
+        portfolio.Positions.Add(Holding("AAA", 10m, 100m));
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 2;
+        Seed(state, portfolio, Friday, [("AAA", 0m), ("BBB", 100m)], configuration);
+
+        Execute(state, portfolio, Friday.AddDays(3), 1, ("AAA", 100m), ("BBB", 100m));
+
+        Assert.Equal([TradeActionType.Sell, TradeActionType.Buy],
+            portfolio.Trades.Select(x => x.Action).ToArray());
+        Assert.Equal(ExitReason.Rebalance, portfolio.Trades[0].ExitReason);
+        Assert.Equal("BBB", Assert.Single(portfolio.Positions).Symbol);
+        Assert.Equal(1_000m, portfolio.Positions[0].MarketValue);
+        Assert.Empty(state.Pending);
+        Assert.DoesNotContain(state.Diagnostics, x => x.Contains("Purchase blocked", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(10, 90, 10, true)]
+    [InlineData(20, 20, 50, true)]
+    [InlineData(10, 10, 50, false)]
+    public void RequalifiedDeferredScores_UpdateAllocationPriorityAndTiming(
+        int aaaScore, int bbbScore, int aaaAllocation, bool changed)
+    {
+        var portfolio = CashPortfolio();
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 2;
+        var closes = new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m };
+        state.GenerateAfterClose(portfolio, Friday, closes,
+            [
+                new StockRecommendation { Symbol = "AAA", Score = 10m },
+                new StockRecommendation { Symbol = "BBB", Score = 10m }
+            ], [], configuration);
+        var monday = Friday.AddDays(3);
+        var observations = new[]
+        {
+            new ObservationResult { Symbol = "AAA", Score = aaaScore, MomentumPercent = 5m, IsAboveSma5 = true },
+            new ObservationResult { Symbol = "BBB", Score = bbbScore, MomentumPercent = 5m, IsAboveSma5 = true }
+        };
+
+        state.GenerateAfterClose(portfolio, monday, closes,
+            new PortfolioRecommendationService(2).BuildCandidates(observations), observations, configuration);
+
+        Assert.Equal(aaaScore, state.Pending["AAA"].Score);
+        Assert.Equal(bbbScore, state.Pending["BBB"].Score);
+        Assert.Equal(aaaAllocation, state.Pending["AAA"].AllocationPercent);
+        Assert.All(state.Pending.Values, intent => Assert.Equal(changed ? monday : Friday, intent.SignalDate));
+
+        Execute(state, portfolio, monday, 1, ("AAA", 100m), ("BBB", 100m));
+        if (changed)
+        {
+            Assert.Empty(portfolio.Trades);
+            Execute(state, portfolio, monday.AddDays(1), 1, ("AAA", 100m), ("BBB", 100m));
+        }
+
+        var purchase = Assert.Single(portfolio.Trades);
+        Assert.Equal(bbbScore > aaaScore ? "BBB" : "AAA", purchase.Symbol);
+        Assert.Equal(changed ? monday.AddDays(1) : monday, purchase.Timestamp);
+        Assert.Single(portfolio.Positions);
+    }
+
+    [Fact]
+    public void MissingDeferredObservation_PreservesScoreAndDateWhileExplicitExitStaysUnchanged()
+    {
+        var portfolio = CashPortfolio();
+        portfolio.Positions.Add(Holding("ZZZ", 1m, 100m));
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 2;
+        configuration.UseHoldingConditionExit = true;
+        state.GenerateAfterClose(portfolio, Friday,
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["ZZZ"] = 100m },
+            [new StockRecommendation { Symbol = "AAA", Score = 10m }],
+            [new ObservationResult { Symbol = "ZZZ", MomentumPercent = 0m }], configuration);
+        var purchase = state.Pending["AAA"];
+        var exit = state.Pending["ZZZ"];
+
+        state.GenerateAfterClose(portfolio, Friday.AddDays(3),
+            new Dictionary<string, decimal> { ["ZZZ"] = 100m },
+            [],
+            [new ObservationResult { Symbol = "ZZZ", MomentumPercent = 5m }], configuration);
+
+        Assert.Same(purchase, state.Pending["AAA"]);
+        Assert.Same(exit, state.Pending["ZZZ"]);
+        Execute(state, portfolio, Friday.AddDays(3), 1, ("AAA", 100m), ("ZZZ", 100m));
+        Assert.Equal([TradeActionType.Sell, TradeActionType.Buy],
+            portfolio.Trades.Select(x => x.Action).ToArray());
+        Assert.Equal(ExitReason.HoldingCondition, portfolio.Trades[0].ExitReason);
+        Assert.Equal("AAA", Assert.Single(portfolio.Positions).Symbol);
+    }
+
+    [Fact]
     public void DeferredPurchaseIsRequalifiedBeforeSlotSelection_ButMissingObservationKeepsReservation()
     {
         var portfolio = CashPortfolio();

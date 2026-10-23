@@ -150,8 +150,13 @@ symbols until normal exits bring it below the limit. Adding to an existing
 positive-quantity holding does not consume another slot.
 
 Each strategy's `MaxPositionWeight` remains an individual target-allocation cap.
-It is applied before execution and is not forced back into balance after
-market-price movements. Unallocated capital may remain cash. The effective
+It is applied to selected targets before execution, not by an independent daily
+drift-enforcement pass. However, fresh closing signals can reissue a held
+symbol's target; executing that target can trim price-driven excess value as
+`Rebalance`, even if its score is unchanged. The current allocation behavior
+therefore does not guarantee the absence of drift-related sales and remains a
+design-review limitation against issue #191's no-forced-drift requirement.
+Unallocated capital may remain cash. The effective
 strategy configuration is stored as JSON on each new backtest run and in its
 feature snapshots. Existing historical runs retain their old behavior and are
 not rewritten; their results must not be interpreted as if generated under the
@@ -180,7 +185,11 @@ free, the purchase intent is rejected once; a subsequent fresh qualifying close
 may create a new intent. If no valid opening exists, the intent remains
 deferred and reserves its slot. At a later fresh close, it remains eligible
 only if it still satisfies entry rules and available capacity; otherwise it is
-canceled. Exit and blocked-purchase diagnostics include the triggering rule
+canceled. Fresh qualifying targets refresh deferred scores before allocation
+normalization. A changed score or allocation advances the intent's signal date
+to that close, requiring a strictly later opening; unchanged targets retain
+their original eligibility. Missing observations preserve the previous score
+and reservation. Exit and blocked-purchase diagnostics include the triggering rule
 and symbol. Falling out of the recommendation list or a better candidate
 appearing does not itself signal liquidation.
 

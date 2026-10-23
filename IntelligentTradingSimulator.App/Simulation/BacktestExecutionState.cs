@@ -107,25 +107,7 @@ public sealed class BacktestExecutionState
             })
             .Where(x => x.Score <= 0m || x.AllocationPercent > 0m)
             .ToList();
-        var heldSymbols = portfolio.Positions
-            .Where(x => x.Quantity > 0m)
-            .Select(x => x.Symbol)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var availableSlots = Math.Max(0, maxPositions - heldSymbols.Count);
-        var targets = new PortfolioRecommendationService(maxPositions)
-            .SelectExecutionTargets(targetIntents, heldSymbols, availableSlots, reweightAllocations: false);
-        var selectedNewTargets = targets
-            .Where(x => !heldSymbols.Contains(x.Symbol))
-            .Select(x => x.Symbol)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var blocked in targetIntents.Where(x =>
-                     !heldSymbols.Contains(x.Symbol) && !selectedNewTargets.Contains(x.Symbol)))
-        {
-            _diagnostics.Add(
-                $"Purchase blocked for {blocked.Symbol} on {date:yyyy-MM-dd}: the {maxPositions}-position limit is full.");
-        }
-
-        var instructions = allocationEngine.Calculate(portfolio, targets);
+        var instructions = allocationEngine.Calculate(portfolio, targetIntents);
         foreach (var instruction in instructions.Where(x => !x.IsBuy))
         {
             tradingEngine.Execute(portfolio, new TradingDecision
@@ -135,6 +117,27 @@ public sealed class BacktestExecutionState
                 Amount = Math.Abs(instruction.Difference),
                 ExitReason = ExitReason.Rebalance
             }, opens[instruction.Symbol], date);
+        }
+
+        var heldSymbols = portfolio.Positions
+            .Where(x => x.Quantity > 0m)
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var availableSlots = Math.Max(0, maxPositions - heldSymbols.Count);
+        var targets = new PortfolioRecommendationService(maxPositions)
+            .SelectExecutionTargets(
+                targetIntents.Where(x => x.AllocationPercent > 0m).ToList(),
+                heldSymbols, availableSlots, reweightAllocations: false);
+        var selectedNewTargets = targets
+            .Where(x => !heldSymbols.Contains(x.Symbol))
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var blocked in targetIntents.Where(x =>
+                     x.AllocationPercent > 0m &&
+                     !heldSymbols.Contains(x.Symbol) && !selectedNewTargets.Contains(x.Symbol)))
+        {
+            _diagnostics.Add(
+                $"Purchase blocked for {blocked.Symbol} on {date:yyyy-MM-dd}: the {maxPositions}-position limit is full.");
         }
 
         instructions = allocationEngine.Calculate(portfolio, targets);
@@ -253,6 +256,15 @@ public sealed class BacktestExecutionState
             _pending.Remove(pendingBuy.Symbol);
             _diagnostics.Add(
                 $"Purchase intent for {pendingBuy.Symbol} was rejected on {date:yyyy-MM-dd}: it no longer qualifies for an available position slot.");
+        }
+
+        foreach (var target in currentTargets)
+        {
+            if (_pending.TryGetValue(target.Symbol, out var pending) &&
+                !pending.ExitReason.HasValue && pending.Score != target.Score)
+            {
+                _pending[target.Symbol] = pending with { Score = target.Score, SignalDate = date.Date };
+            }
         }
 
         var activePendingBuys = _pending.Values

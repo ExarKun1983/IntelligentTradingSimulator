@@ -7,6 +7,49 @@ namespace IntelligentTradingSimulator.Tests;
 public sealed class PortfolioRebalancingServiceTests
 {
     [Theory]
+    [InlineData(10, true)]
+    [InlineData(0.5, false)]
+    public void Execute_CompletedAllocationSalePermitsReplacementButUnexecutedSaleKeepsSlot(
+        double quantity, bool shouldRefill)
+    {
+        var portfolio = new Portfolio
+        {
+            Positions = [new Position
+            {
+                Symbol = "ZZZ", Quantity = (decimal)quantity, AveragePrice = 100m, CurrentPrice = 100m
+            }]
+        };
+
+        var targets = new PortfolioRebalancingService().Execute(
+            portfolio,
+            [
+                new StockRecommendation { Symbol = "ZZZ", AllocationPercent = 0m },
+                new StockRecommendation { Symbol = "AAA", AllocationPercent = 100m }
+            ],
+            new Dictionary<string, decimal> { ["ZZZ"] = 100m, ["AAA"] = 100m },
+            new PortfolioAllocationEngine(new PortfolioAllocationService(), 60m),
+            new TradingEngine(), maxPositions: 1);
+
+        if (shouldRefill)
+        {
+            Assert.Equal([TradeActionType.Sell, TradeActionType.Buy],
+                portfolio.Trades.Select(x => x.Action).ToArray());
+            Assert.Equal(ExitReason.Rebalance, portfolio.Trades[0].ExitReason);
+            Assert.Equal("AAA", Assert.Single(portfolio.Positions).Symbol);
+            Assert.Equal(600m, portfolio.Positions[0].MarketValue);
+            Assert.Equal(400m, portfolio.Cash);
+            Assert.Equal("AAA", Assert.Single(targets).Symbol);
+            Assert.Equal(60m, targets[0].AllocationPercent);
+        }
+        else
+        {
+            Assert.Empty(portfolio.Trades);
+            Assert.Equal("ZZZ", Assert.Single(portfolio.Positions).Symbol);
+            Assert.DoesNotContain(targets, x => x.Symbol == "AAA");
+        }
+    }
+
+    [Theory]
     [InlineData(90, 10, true)]
     [InlineData(89, 10, true)]
     [InlineData(90.01, 10, false)]

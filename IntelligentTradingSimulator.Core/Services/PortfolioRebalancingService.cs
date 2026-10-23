@@ -86,6 +86,15 @@ public sealed class PortfolioRebalancingService
             .Where(x => !stoppedSymbols.Contains(x.Symbol))
             .ToList();
 
+        ExecuteAllocationSales(recommendations
+            .Where(x => x.Score <= 0m && x.AllocationPercent == 0m)
+            .ToList());
+        recommendations = recommendations
+            .Where(x => x.AllocationPercent > 0m || portfolio.Positions.Any(
+                position => position.Quantity > 0m &&
+                            string.Equals(position.Symbol, x.Symbol, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
         var heldSymbols = portfolio.Positions
             .Where(x => x.Quantity > 0m)
             .Select(x => x.Symbol)
@@ -110,44 +119,33 @@ public sealed class PortfolioRebalancingService
             })
             .ToList();
 
-        var allocationInstructions =
-            allocationEngine.Calculate(
-                portfolio,
-                effectiveTargets);
-
-        var sellInstructions =
-            allocationInstructions
-                .Where(x => !x.IsBuy)
-                .ToList();
-
-        foreach (var instruction in sellInstructions)
+        void ExecuteAllocationSales(IReadOnlyList<StockRecommendation> targets)
         {
-            var position =
-                portfolio.Positions
-                    .FirstOrDefault(
-                        x => x.Symbol ==
-                             instruction.Symbol);
-
-            if (position is null)
+            foreach (var instruction in allocationEngine.Calculate(portfolio, targets).Where(x => !x.IsBuy))
             {
-                continue;
-            }
-
-            tradingEngine.Execute(
-                portfolio,
-                new TradingDecision
+                var position = portfolio.Positions.FirstOrDefault(x => x.Symbol == instruction.Symbol);
+                if (position is null)
                 {
-                    Symbol = instruction.Symbol,
-                    Action = TradeActionType.Sell,
-                    ExitReason = ExitReason.Rebalance,
-                    Amount = Math.Abs(
-                        instruction.Difference)
-                },
-                position.CurrentPrice,
-                simulatedTimestamp);
+                    continue;
+                }
+
+                tradingEngine.Execute(
+                    portfolio,
+                    new TradingDecision
+                    {
+                        Symbol = instruction.Symbol,
+                        Action = TradeActionType.Sell,
+                        ExitReason = ExitReason.Rebalance,
+                        Amount = Math.Abs(instruction.Difference)
+                    },
+                    position.CurrentPrice,
+                    simulatedTimestamp);
+            }
         }
 
-        allocationInstructions =
+        ExecuteAllocationSales(effectiveTargets);
+
+        var allocationInstructions =
             allocationEngine.Calculate(
                 portfolio,
                 effectiveTargets);
@@ -162,6 +160,16 @@ public sealed class PortfolioRebalancingService
             if (portfolio.Cash <= 0m)
             {
                 break;
+            }
+
+            var isExistingPosition = portfolio.Positions.Any(
+                x => x.Quantity > 0m && string.Equals(x.Symbol, trade.Symbol, StringComparison.OrdinalIgnoreCase));
+            if (!isExistingPosition && portfolio.Positions
+                    .Where(x => x.Quantity > 0m)
+                    .Select(x => x.Symbol)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Count() >= positionLimit)
+            {
+                continue;
             }
 
             tradingEngine.Execute(
