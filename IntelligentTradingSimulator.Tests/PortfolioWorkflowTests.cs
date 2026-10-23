@@ -205,4 +205,64 @@ public sealed class PortfolioWorkflowTests
         Assert.Equal(ExitReason.StopLoss, afterSecondExit.Portfolio.Trades[1].ExitReason);
         Assert.Equal("CCC", afterSecondExit.Portfolio.Trades[2].Symbol);
     }
+
+    [Fact]
+    public async Task RunAsync_StopAndRefillRetainsEligibleCandidateWhosePreliminaryAllocationRoundsToZero()
+    {
+        var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new TradingSimulatorDbContext(options);
+        await new PortfolioRepository(context).SaveAsync(new Portfolio
+        {
+            Name = "Stop-and-refill portfolio",
+            StartingCash = 1_000m,
+            Positions =
+            [
+                new Position { Symbol = "AAA", Quantity = 10m, AveragePrice = 100m, CurrentPrice = 100m }
+            ]
+        });
+        var recommendationService = new PortfolioRecommendationService(1);
+        var candidates = recommendationService.BuildCandidates(
+        [
+            new ObservationResult { Symbol = "AAA", Score = 100m, MomentumPercent = 1m, IsAboveSma5 = true },
+            new ObservationResult { Symbol = "BBB", Score = 0.001m, MomentumPercent = 1m, IsAboveSma5 = true }
+        ]);
+        var allocationService = new PortfolioAllocationService();
+        var configuration = new StrategyConfiguration
+        {
+            MaxPositions = 1,
+            MaxPositionWeight = 60m,
+            StopLossPercent = 10m
+        };
+        var workflow = new PortfolioWorkflow(
+            new PortfolioRepository(context),
+            new PortfolioSnapshotRepository(context),
+            new PositionSnapshotRepository(context),
+            new PortfolioExecutionService(configuration.MaxPositionWeight, configuration.MaxPositions),
+            new TradingEngine(),
+            new PortfolioAllocationEngine(allocationService, configuration.MaxPositionWeight),
+            new PortfolioRebalancingService(),
+            new PortfolioPerformanceService(),
+            new ConsoleReporter(allocationService, new PortfolioContributionService()),
+            configuration);
+
+        Assert.Equal(0m, candidates.Single(x => x.Symbol == "BBB").AllocationPercent);
+
+        var result = await workflow.RunAsync(
+            candidates,
+            new Dictionary<string, decimal> { ["AAA"] = 80m, ["BBB"] = 100m });
+
+        Assert.Equal([TradeActionType.Sell, TradeActionType.Buy],
+            result.Portfolio.Trades.Select(x => x.Action).ToArray());
+        Assert.Equal(ExitReason.StopLoss, result.Portfolio.Trades[0].ExitReason);
+        Assert.Equal("AAA", result.Portfolio.Trades[0].Symbol);
+        Assert.Equal("BBB", result.Portfolio.Trades[1].Symbol);
+        Assert.Equal(320m, result.Portfolio.Cash);
+        Assert.Equal("BBB", Assert.Single(result.Portfolio.Positions).Symbol);
+        Assert.Equal(4.8m, result.Portfolio.Positions[0].Quantity);
+        var target = Assert.Single(result.ExecutionTargets);
+        Assert.Equal("BBB", target.Symbol);
+        Assert.Equal(0.001m, target.Score);
+        Assert.Equal(60m, target.AllocationPercent);
+    }
 }

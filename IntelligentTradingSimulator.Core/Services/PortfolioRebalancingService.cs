@@ -90,9 +90,11 @@ public sealed class PortfolioRebalancingService
             .Where(x => x.Score <= 0m && x.AllocationPercent == 0m)
             .ToList());
         recommendations = recommendations
-            .Where(x => x.AllocationPercent > 0m || portfolio.Positions.Any(
-                position => position.Quantity > 0m &&
-                            string.Equals(position.Symbol, x.Symbol, StringComparison.OrdinalIgnoreCase)))
+            .Where(x => x.Score > 0m ||
+                        x.AllocationPercent > 0m ||
+                        portfolio.Positions.Any(
+                            position => position.Quantity > 0m &&
+                                        string.Equals(position.Symbol, x.Symbol, StringComparison.OrdinalIgnoreCase)))
             .ToList();
 
         var heldSymbols = portfolio.Positions

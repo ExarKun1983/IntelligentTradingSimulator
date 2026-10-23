@@ -49,6 +49,50 @@ public sealed class PortfolioRebalancingServiceTests
         }
     }
 
+    [Fact]
+    public void Execute_StopAndRefillRetainsEligibleCandidateWhosePreliminaryAllocationRoundsToZero()
+    {
+        var portfolio = new Portfolio
+        {
+            StartingCash = 1_000m,
+            Positions =
+            [
+                new Position { Symbol = "AAA", Quantity = 10m, AveragePrice = 100m, CurrentPrice = 100m }
+            ]
+        };
+        var candidates = new PortfolioRecommendationService(1).BuildCandidates(
+        [
+            new ObservationResult { Symbol = "AAA", Score = 100m, MomentumPercent = 1m, IsAboveSma5 = true },
+            new ObservationResult { Symbol = "BBB", Score = 0.001m, MomentumPercent = 1m, IsAboveSma5 = true }
+        ]);
+        var allocationEngine = new PortfolioAllocationEngine(new PortfolioAllocationService(), 60m);
+
+        Assert.Equal(0m, candidates.Single(x => x.Symbol == "BBB").AllocationPercent);
+
+        var targets = new PortfolioRebalancingService().Execute(
+            portfolio,
+            candidates,
+            new Dictionary<string, decimal> { ["AAA"] = 80m, ["BBB"] = 100m },
+            allocationEngine,
+            new TradingEngine(),
+            stopLossPercent: 10m,
+            maxPositions: 1);
+
+        Assert.Equal([TradeActionType.Sell, TradeActionType.Buy],
+            portfolio.Trades.Select(x => x.Action).ToArray());
+        Assert.Equal(ExitReason.StopLoss, portfolio.Trades[0].ExitReason);
+        Assert.Equal("AAA", portfolio.Trades[0].Symbol);
+        Assert.Equal("BBB", portfolio.Trades[1].Symbol);
+        Assert.Equal(10m, portfolio.Trades[0].Quantity);
+        Assert.Equal(4.8m, portfolio.Trades[1].Quantity);
+        Assert.Equal(320m, portfolio.Cash);
+        Assert.Equal("BBB", Assert.Single(portfolio.Positions).Symbol);
+        var target = Assert.Single(targets);
+        Assert.Equal("BBB", target.Symbol);
+        Assert.Equal(0.001m, target.Score);
+        Assert.Equal(60m, target.AllocationPercent);
+    }
+
     [Theory]
     [InlineData(90, 10, true)]
     [InlineData(89, 10, true)]

@@ -542,6 +542,54 @@ public sealed class BacktestExecutionTimingTests
     }
 
     [Fact]
+    public async Task DisabledHoldingConditionExit_DoesNotSignalOnFreshNonpositiveMomentum()
+    {
+        var fixture = new Fixture();
+        var history = History(Friday);
+        history[^1].Open = 80m;
+        history[^1].High = 80m;
+        history[^1].Low = 80m;
+        history[^1].Close = 80m;
+        fixture.Provider.Data["AAA"] = history;
+        var portfolio = CashPortfolio();
+        portfolio.Positions.Add(Holding("AAA", 10m, 100m));
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+
+        var result = await fixture.Day(Friday, portfolio, state, [], configuration);
+
+        Assert.Empty(state.Pending);
+        Assert.DoesNotContain(result.Diagnostics, x => x.Contains("Exit signaled", StringComparison.Ordinal));
+        Assert.Empty(portfolio.Trades);
+        Assert.Equal(10m, Assert.Single(portfolio.Positions).Quantity);
+    }
+
+    [Fact]
+    public async Task StopLossTakesPrecedenceOverHoldingConditionExit()
+    {
+        var fixture = new Fixture();
+        var history = History(Friday);
+        history[^1].Open = 80m;
+        history[^1].High = 80m;
+        history[^1].Low = 80m;
+        history[^1].Close = 80m;
+        fixture.Provider.Data["AAA"] = history;
+        var portfolio = CashPortfolio();
+        portfolio.Positions.Add(Holding("AAA", 10m, 100m));
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.UseHoldingConditionExit = true;
+        configuration.StopLossPercent = 10m;
+
+        var result = await fixture.Day(Friday, portfolio, state, [], configuration);
+
+        Assert.Equal(ExitReason.StopLoss, state.Pending["AAA"].ExitReason);
+        Assert.Contains(result.Diagnostics, x => x.Contains("StopLoss", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Diagnostics, x => x.Contains("momentum", StringComparison.Ordinal));
+        Assert.Empty(portfolio.Trades);
+    }
+
+    [Fact]
     public void UnexecutedExitKeepsItsSlotOccupied_ThenCompletedSalePermitsFreshReplacement()
     {
         var portfolio = CashPortfolio(0m);
