@@ -316,7 +316,11 @@ public sealed class BacktestExecutionState
                 _lastSelectedTargets[pending.Symbol] = target;
                 if (pending.AllocationPercent != target.AllocationPercent)
                 {
-                    _pending[pending.Symbol] = pending with { AllocationPercent = target.AllocationPercent };
+                    _pending[pending.Symbol] = pending with
+                    {
+                        SignalDate = date.Date,
+                        AllocationPercent = target.AllocationPercent
+                    };
                 }
             }
         }

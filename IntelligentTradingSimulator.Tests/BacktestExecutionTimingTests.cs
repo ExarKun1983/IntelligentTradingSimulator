@@ -639,6 +639,53 @@ public sealed class BacktestExecutionTimingTests
     }
 
     [Fact]
+    public void ChangedDeferredAllocation_RefreshesSignalDateAndWaitsForLaterOpen()
+    {
+        var portfolio = CashPortfolio();
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 2;
+        var monday = Friday.AddDays(3);
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday,
+            new Dictionary<string, decimal> { ["AAA"] = 100m },
+            [new StockRecommendation { Symbol = "AAA", Score = 10m }],
+            [],
+            configuration);
+        Assert.Equal(100m, state.Pending["AAA"].AllocationPercent);
+        Assert.Equal(Friday, state.Pending["AAA"].SignalDate);
+
+        Execute(state, portfolio, monday);
+        state.GenerateAfterClose(
+            portfolio,
+            monday,
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m },
+            [
+                new StockRecommendation { Symbol = "AAA", Score = 10m },
+                new StockRecommendation { Symbol = "BBB", Score = 10m }
+            ],
+            [],
+            configuration);
+
+        Assert.Equal(50m, state.Pending["AAA"].AllocationPercent);
+        Assert.Equal(monday, state.Pending["AAA"].SignalDate);
+
+        Execute(state, portfolio, monday, ("AAA", 100m), ("BBB", 100m));
+        Assert.Empty(portfolio.Trades);
+        Assert.Equal(monday, state.Pending["AAA"].SignalDate);
+
+        Execute(state, portfolio, monday.AddDays(1), ("AAA", 100m), ("BBB", 100m));
+
+        Assert.Equal(2, portfolio.Trades.Count);
+        Assert.All(portfolio.Trades, trade => Assert.Equal(TradeActionType.Buy, trade.Action));
+        Assert.Equal(monday.AddDays(1), Assert.Single(portfolio.Trades, x => x.Symbol == "AAA").Timestamp);
+        Assert.Equal(500m, portfolio.Positions.Single(x => x.Symbol == "AAA").MarketValue);
+        Assert.Equal(500m, portfolio.Positions.Single(x => x.Symbol == "BBB").MarketValue);
+    }
+
+    [Fact]
     public void SelectedRetainedAndNewTargets_AreReweightedTogether()
     {
         var portfolio = CashPortfolio(500m);
@@ -685,6 +732,7 @@ public sealed class BacktestExecutionTimingTests
         state.GenerateAfterClose(portfolio, Friday, closes, recommendations, [], configuration);
         Assert.Equal(50m, state.Pending["AAA"].AllocationPercent);
         Assert.Equal(50m, state.Pending["BBB"].AllocationPercent);
+        Assert.Equal(Friday, state.Pending["BBB"].SignalDate);
 
         Execute(state, portfolio, Friday.AddDays(1), 2, ("AAA", 100m));
         Assert.Equal(500m, portfolio.Positions.Single().MarketValue);
@@ -695,6 +743,7 @@ public sealed class BacktestExecutionTimingTests
 
         Assert.Equal(50m, state.Pending["AAA"].AllocationPercent);
         Assert.Equal(50m, state.Pending["BBB"].AllocationPercent);
+        Assert.Equal(Friday, state.Pending["BBB"].SignalDate);
 
         Execute(state, portfolio, Friday.AddDays(2), 2, ("AAA", 100m), ("BBB", 100m));
 
