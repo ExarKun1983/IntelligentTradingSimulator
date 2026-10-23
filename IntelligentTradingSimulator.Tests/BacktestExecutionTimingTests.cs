@@ -298,14 +298,14 @@ public sealed class BacktestExecutionTimingTests
         Assert.Equal("AAA", Assert.Single(portfolio.Trades).Symbol);
         Assert.Single(tuesday.Observations);
         Assert.Equal(2, tuesday.Recommendations.Count);
-        Assert.Equal(Friday, state.Pending["BBB"].SignalDate);
+        Assert.Equal(Friday.AddDays(4), state.Pending["BBB"].SignalDate);
 
         var wednesday = await fixture.Day(Friday.AddDays(5), portfolio, state, ["AAA", "BBB"]);
         Assert.Equal(2, portfolio.Trades.Count);
         Assert.Equal("BBB", portfolio.Trades[1].Symbol);
         Assert.Equal(Friday.AddDays(5), portfolio.Trades[1].Timestamp);
         Assert.Equal(130m, portfolio.Trades[1].Price);
-        Assert.Equal(Friday.AddDays(4), state.Pending["AAA"].SignalDate);
+        Assert.Equal(Friday.AddDays(5), state.Pending["AAA"].SignalDate);
         Assert.Single(wednesday.Observations);
         Assert.Equal(4, fixture.Features.Rows.Count);
         AssertReconciles(portfolio, 1_000m);
