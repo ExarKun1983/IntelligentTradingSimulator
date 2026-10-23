@@ -409,7 +409,8 @@ public sealed class BacktestExecutionState
         decimal maxPositionWeight) =>
         target.Score <= 0m && target.AllocationPercent == 0m ||
         baselineAllocationPercent is decimal baseline &&
-        Math.Min(target.AllocationPercent, maxPositionWeight) < baseline;
+        Math.Min(target.AllocationPercent, maxPositionWeight) <
+        Math.Min(baseline, maxPositionWeight);
 
     private decimal? GetAllocationBaseline(
         string symbol,

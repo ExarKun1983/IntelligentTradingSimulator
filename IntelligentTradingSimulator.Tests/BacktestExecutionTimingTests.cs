@@ -765,6 +765,94 @@ public sealed class BacktestExecutionTimingTests
     }
 
     [Fact]
+    public void UnchangedTargetAbovePositionWeightCap_DoesNotSellHoldingAfterPriceDrift()
+    {
+        var portfolio = CashPortfolio();
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 1;
+        configuration.MaxPositionWeight = 25m;
+        var recommendation = new[] { new StockRecommendation { Symbol = "AAA", Score = 10m } };
+        void ExecuteAt(DateTime date, decimal open) =>
+            state.ExecuteOpen(
+                portfolio,
+                date,
+                new Dictionary<string, decimal> { ["AAA"] = open },
+                new PortfolioAllocationEngine(new PortfolioAllocationService(), configuration.MaxPositionWeight),
+                new TradingEngine(),
+                configuration.MaxPositions);
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday,
+            new Dictionary<string, decimal> { ["AAA"] = 100m },
+            recommendation,
+            [],
+            configuration);
+        ExecuteAt(Friday.AddDays(1), 100m);
+
+        Assert.Equal(250m, portfolio.Positions.Single().MarketValue);
+        Assert.Equal(750m, portfolio.Cash);
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday.AddDays(1),
+            new Dictionary<string, decimal> { ["AAA"] = 100m },
+            recommendation,
+            [],
+            configuration);
+        ExecuteAt(Friday.AddDays(2), 200m);
+
+        Assert.Single(portfolio.Trades);
+        Assert.Equal(TradeActionType.Buy, portfolio.Trades[0].Action);
+        Assert.Equal(2.5m, portfolio.Positions.Single().Quantity);
+        Assert.Equal(750m, portfolio.Cash);
+    }
+
+    [Fact]
+    public void DeferredTargetReducedAbovePositionWeightCap_DoesNotEnableAllocationSale()
+    {
+        var portfolio = CashPortfolio(0m);
+        portfolio.Positions.Add(Holding("AAA", 10m, 100m));
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 2;
+        configuration.MaxPositionWeight = 25m;
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday,
+            new Dictionary<string, decimal> { ["AAA"] = 100m },
+            [new StockRecommendation { Symbol = "AAA", Score = 4m }],
+            [],
+            configuration);
+        Assert.Equal(100m, state.Pending["AAA"].AllocationPercent);
+        Assert.Equal(100m, state.Pending["AAA"].BaselineAllocationPercent);
+
+        Execute(state, portfolio, Friday.AddDays(1));
+        var monday = Friday.AddDays(3);
+        state.GenerateAfterClose(
+            portfolio,
+            monday,
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m },
+            [
+                new StockRecommendation { Symbol = "AAA", Score = 4m },
+                new StockRecommendation { Symbol = "BBB", Score = 1m }
+            ],
+            [],
+            configuration);
+
+        Assert.Equal(80m, state.Pending["AAA"].AllocationPercent);
+        Assert.Equal(100m, state.Pending["AAA"].BaselineAllocationPercent);
+        Assert.False(state.Pending["AAA"].AllowAllocationSale);
+        Execute(state, portfolio, monday.AddDays(1), ("AAA", 200m));
+
+        Assert.Empty(portfolio.Trades);
+        Assert.Equal(10m, portfolio.Positions.Single().Quantity);
+        Assert.Equal(0m, portfolio.Cash);
+    }
+
+    [Fact]
     public void LoweredHoldingTarget_AllowsIntentionalAllocationSale()
     {
         var portfolio = CashPortfolio();

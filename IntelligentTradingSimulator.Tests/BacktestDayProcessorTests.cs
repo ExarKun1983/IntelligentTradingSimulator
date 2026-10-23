@@ -135,16 +135,20 @@ public sealed class BacktestDayProcessorTests : IDisposable
         var startDate = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var simulatedDate = startDate.AddDays(9);
         var provider = new FakeMarketDataProvider();
-        provider.SetData("AAPL", BuildCandles(startDate, 10));
+        var candles = BuildCandles(startDate, 10);
         var portfolio = new Portfolio { StartingCash = 10_000m, Cash = 10_000m };
         if (action == TradeActionType.Sell)
         {
+            candles[^2].Close = 80m;
+            candles[^2].High = 109m;
+            candles[^2].Low = 79m;
             portfolio.Cash = 0m;
             portfolio.Positions.Add(new Position
             {
                 Symbol = "AAPL", Quantity = 100m, AveragePrice = 100m, CurrentPrice = 109m
             });
         }
+        provider.SetData("AAPL", candles);
 
         var processor = BuildProcessor(provider);
         var request = new BacktestDayRequest
@@ -153,7 +157,11 @@ public sealed class BacktestDayProcessorTests : IDisposable
             ExecutionState = new BacktestExecutionState(),
             HistoricalStartDate = startDate,
             Portfolio = portfolio,
-            StrategyConfiguration = new StrategyConfiguration { UseRelativeStrength = false, MaxPositionWeight = 50m },
+            StrategyConfiguration = new StrategyConfiguration
+            {
+                UseRelativeStrength = false, MaxPositionWeight = 50m,
+                StopLossPercent = action == TradeActionType.Sell ? 10m : null
+            },
             Symbols = ["AAPL"]
         };
 
@@ -842,7 +850,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task RunAsync_PersistsRebalanceExitReason_InFreshContext(bool hasNormalPortfolio)
+    public async Task RunAsync_DoesNotPersistRebalanceSaleForUnchangedCappedTarget(bool hasNormalPortfolio)
     {
         var startDate = new DateTime(2024, 1, 1);
         var provider = new FakeMarketDataProvider();
@@ -885,18 +893,12 @@ public sealed class BacktestDayProcessorTests : IDisposable
 
         Assert.NotNull(savedRun);
         Assert.NotNull(savedRun.Portfolio);
-        var sell = Assert.Single(savedRun.Portfolio.Trades, x => x.Action == TradeActionType.Sell);
-        Assert.Equal(ExitReason.Rebalance, sell.ExitReason);
-        Assert.Equal(startDate.AddDays(11), sell.Timestamp);
-        Assert.Equal(120m, sell.Price);
-        Assert.True(sell.Quantity > 0m);
-        Assert.All(savedRun.Portfolio.Trades.Where(x => x.Action == TradeActionType.Buy),
-            trade => Assert.Null(trade.ExitReason));
-        var persistedSell = Assert.Single(await readContext.Trades
+        Assert.Single(savedRun.Portfolio.Trades, x => x.Action == TradeActionType.Buy);
+        Assert.DoesNotContain(savedRun.Portfolio.Trades, x => x.Action == TradeActionType.Sell);
+        Assert.Empty(await readContext.Trades
             .AsNoTracking()
             .Where(x => x.PortfolioId == savedRun.PortfolioId && x.ExitReason == ExitReason.Rebalance)
             .ToListAsync());
-        Assert.Equal(sell.Id, persistedSell.Id);
 
         var portfolioRepository = new PortfolioRepository(readContext);
         if (hasNormalPortfolio)
