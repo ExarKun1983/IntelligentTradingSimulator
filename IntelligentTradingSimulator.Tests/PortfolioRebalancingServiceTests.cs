@@ -324,6 +324,36 @@ public sealed class PortfolioRebalancingServiceTests
     }
 
     [Fact]
+    public void Execute_PreservesHeldPositionWhoseSelectedWeightRoundsToZero()
+    {
+        var holding = new Position
+        {
+            Symbol = "AAA", Quantity = 10m, AveragePrice = 100m, CurrentPrice = 100m
+        };
+        var portfolio = new Portfolio
+        {
+            Cash = 0m,
+            Positions = [holding]
+        };
+
+        new PortfolioRebalancingService().Execute(
+            portfolio,
+            [
+                new StockRecommendation { Symbol = "AAA", AllocationPercent = 0m, Score = 0.001m },
+                new StockRecommendation { Symbol = "BBB", AllocationPercent = 100m, Score = 100m }
+            ],
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m },
+            new PortfolioAllocationEngine(new PortfolioAllocationService()),
+            new TradingEngine(),
+            maxPositions: 2);
+
+        Assert.Same(holding, Assert.Single(portfolio.Positions));
+        Assert.Equal(10m, holding.Quantity);
+        Assert.Empty(portfolio.Trades);
+        Assert.Equal(0m, portfolio.Cash);
+    }
+
+    [Fact]
     public void Execute_ReweightsSelectedHoldingAndNewCandidateTogether()
     {
         var portfolio = new Portfolio
