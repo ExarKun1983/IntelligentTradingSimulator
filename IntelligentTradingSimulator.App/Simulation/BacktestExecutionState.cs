@@ -18,6 +18,7 @@ public sealed class BacktestExecutionState
 {
     private readonly Dictionary<string, BacktestPendingIntent> _pending = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ObservationResult> _observations = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, StockRecommendation> _lastSelectedTargets = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> _diagnostics = [];
 
     public IReadOnlyDictionary<string, BacktestPendingIntent> Pending => _pending;
@@ -235,10 +236,10 @@ public sealed class BacktestExecutionState
             .Where(x => x.ExitReason.HasValue && heldSymbols.Contains(x.Symbol))
             .Select(x => x.Symbol)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var deferredPendingBuys = _pending.Values.Count(
-            x => !x.ExitReason.HasValue &&
-                 !heldSymbols.Contains(x.Symbol) &&
-                 !observedSymbols.Contains(x.Symbol));
+        var activePendingBuys = _pending.Values
+            .Where(x => !x.ExitReason.HasValue)
+            .ToList();
+        var deferredPendingBuys = activePendingBuys.Count(x => !heldSymbols.Contains(x.Symbol));
         var availableSlots = Math.Max(
             0,
             configuration.MaxPositions - heldSymbols.Count + exitingSymbols.Count - deferredPendingBuys);
@@ -248,12 +249,32 @@ public sealed class BacktestExecutionState
             .OrderByDescending(x => x.Score)
             .ThenBy(x => x.Symbol, StringComparer.Ordinal)
             .ToList();
-        var candidates = currentTargets.Where(x => !heldSymbols.Contains(x.Symbol)).ToList();
+        var activePendingSymbols = activePendingBuys
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var freshTargets = currentTargets
+            .Where(x => !activePendingSymbols.Contains(x.Symbol))
+            .ToList();
+        var candidates = freshTargets.Where(x => !heldSymbols.Contains(x.Symbol)).ToList();
         var selectedCandidates = new PortfolioRecommendationService(configuration.MaxPositions)
-            .SelectExecutionTargets(currentTargets, heldSymbols, availableSlots);
+            .SelectExecutionTargets(freshTargets, heldSymbols, availableSlots, reweightAllocations: false);
+        var staleHeldTargets = _lastSelectedTargets.Values
+            .Where(x => heldSymbols.Contains(x.Symbol) &&
+                        !currentTargets.Any(target => string.Equals(
+                            target.Symbol, x.Symbol, StringComparison.OrdinalIgnoreCase)) &&
+                        !_pending.ContainsKey(x.Symbol))
+            .ToList();
         var selectedSymbols = selectedCandidates
             .Select(x => x.Symbol)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var pending in activePendingBuys)
+        {
+            if (!observedSymbols.Contains(pending.Symbol) ||
+                currentTargets.Any(x => string.Equals(x.Symbol, pending.Symbol, StringComparison.OrdinalIgnoreCase)))
+            {
+                selectedSymbols.Add(pending.Symbol);
+            }
+        }
 
         foreach (var pendingBuy in _pending.Values
                      .Where(x => !x.ExitReason.HasValue && !selectedSymbols.Contains(x.Symbol))
@@ -275,7 +296,54 @@ public sealed class BacktestExecutionState
                 $"Purchase blocked for {blocked.Symbol} on {date:yyyy-MM-dd}: the {configuration.MaxPositions}-position limit leaves no available slot.");
         }
 
-        foreach (var recommendation in selectedCandidates)
+        var remainingPendingBuys = _pending.Values
+            .Where(x => !x.ExitReason.HasValue)
+            .ToList();
+        var allocationPlan = selectedCandidates
+            .Concat(staleHeldTargets)
+            .Concat(remainingPendingBuys.Select(x => new StockRecommendation
+            {
+                Symbol = x.Symbol,
+                Score = x.Score,
+                AllocationPercent = x.AllocationPercent
+            }))
+            .ToList();
+        var planScore = allocationPlan.Sum(x => x.Score);
+        var normalizedPlan = allocationPlan
+            .Select(x => new StockRecommendation
+            {
+                Symbol = x.Symbol,
+                Score = x.Score,
+                AllocationPercent = planScore > 0m
+                    ? Math.Round(100m * x.Score / planScore, 2)
+                    : x.AllocationPercent
+            })
+            .ToList();
+        var normalizedBySymbol = normalizedPlan.ToDictionary(
+            x => x.Symbol, StringComparer.OrdinalIgnoreCase);
+        foreach (var pending in remainingPendingBuys)
+        {
+            if (normalizedBySymbol.TryGetValue(pending.Symbol, out var target))
+            {
+                _lastSelectedTargets[pending.Symbol] = target;
+                if (pending.AllocationPercent != target.AllocationPercent)
+                {
+                    _pending[pending.Symbol] = pending with { AllocationPercent = target.AllocationPercent };
+                }
+            }
+        }
+        foreach (var retained in staleHeldTargets)
+        {
+            if (normalizedBySymbol.TryGetValue(retained.Symbol, out var target))
+            {
+                _lastSelectedTargets[retained.Symbol] = target;
+            }
+        }
+        var allocatedCandidates = selectedCandidates
+            .Select(x => normalizedBySymbol[x.Symbol])
+            .ToList();
+
+        foreach (var recommendation in allocatedCandidates)
         {
             var symbol = recommendation.Symbol;
             if (_pending.TryGetValue(symbol, out var existing) && existing.ExitReason.HasValue)
@@ -292,6 +360,7 @@ public sealed class BacktestExecutionState
 
             _pending[symbol] = new(
                 symbol, date.Date, recommendation.AllocationPercent, Score: recommendation.Score);
+            _lastSelectedTargets[symbol] = recommendation;
         }
     }
 

@@ -57,11 +57,11 @@ public sealed class SimulationRunner
 
         _reporter.PrintTargetAllocation(
             portfolioState.Portfolio,
-            marketData.Recommendations);
+            portfolioState.ExecutionTargets);
 
         _reporter.PrintRebalanceByWeight(
             portfolioState.Portfolio,
-            marketData.Recommendations);
+            portfolioState.ExecutionTargets);
 
         _reporter.PrintPositionContributions(portfolioState.Portfolio);
 

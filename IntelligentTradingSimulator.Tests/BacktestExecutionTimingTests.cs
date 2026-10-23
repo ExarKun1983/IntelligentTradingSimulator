@@ -669,9 +669,86 @@ public sealed class BacktestExecutionTimingTests
     }
 
     [Fact]
+    public void StaggeredOpenings_PreserveDeferredAllocationWhenFreshTargetIsRecalculated()
+    {
+        var portfolio = CashPortfolio();
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 2;
+        var recommendations = new[]
+        {
+            new StockRecommendation { Symbol = "AAA", Score = 10m },
+            new StockRecommendation { Symbol = "BBB", Score = 10m }
+        };
+        var closes = new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m };
+
+        state.GenerateAfterClose(portfolio, Friday, closes, recommendations, [], configuration);
+        Assert.Equal(50m, state.Pending["AAA"].AllocationPercent);
+        Assert.Equal(50m, state.Pending["BBB"].AllocationPercent);
+
+        Execute(state, portfolio, Friday.AddDays(1), 2, ("AAA", 100m));
+        Assert.Equal(500m, portfolio.Positions.Single().MarketValue);
+        Assert.Equal(500m, portfolio.Cash);
+        Assert.Equal(50m, state.Pending["BBB"].AllocationPercent);
+
+        state.GenerateAfterClose(portfolio, Friday.AddDays(1), closes, recommendations, [], configuration);
+
+        Assert.Equal(50m, state.Pending["AAA"].AllocationPercent);
+        Assert.Equal(50m, state.Pending["BBB"].AllocationPercent);
+
+        Execute(state, portfolio, Friday.AddDays(2), 2, ("AAA", 100m), ("BBB", 100m));
+
+        Assert.Equal(2, portfolio.Positions.Count);
+        Assert.Equal(500m, portfolio.Positions.Single(x => x.Symbol == "AAA").MarketValue);
+        Assert.Equal(500m, portfolio.Positions.Single(x => x.Symbol == "BBB").MarketValue);
+        Assert.Empty(portfolio.Trades.Where(x => x.Action == TradeActionType.Sell));
+        Assert.Equal(0m, portfolio.Cash);
+    }
+
+    [Fact]
+    public void MissingHeldObservation_PreservesItsAllocationWhenNormalizingFreshTargets()
+    {
+        var portfolio = new Portfolio { StartingCash = 1_000m, Cash = 200m };
+        portfolio.Positions.Add(Holding("AAA", 6m, 100m));
+        portfolio.Positions.Add(Holding("BBB", 2m, 100m));
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 2;
+        configuration.MaxPositionWeight = 60m;
+        var firstTargets = new[]
+        {
+            new StockRecommendation { Symbol = "AAA", Score = 80m },
+            new StockRecommendation { Symbol = "BBB", Score = 20m }
+        };
+        var bothCloses = new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m };
+
+        state.GenerateAfterClose(portfolio, Friday, bothCloses, firstTargets, [], configuration);
+        state.ExecuteOpen(
+            portfolio,
+            Friday.AddDays(1),
+            bothCloses,
+            new PortfolioAllocationEngine(new PortfolioAllocationService(), 60m),
+            new TradingEngine(),
+            2);
+        Assert.Empty(state.Pending);
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday.AddDays(1),
+            new Dictionary<string, decimal> { ["BBB"] = 100m },
+            [new StockRecommendation { Symbol = "BBB", Score = 20m }],
+            [new ObservationResult { Symbol = "BBB", Score = 20m, MomentumPercent = 5m, IsAboveSma5 = true }],
+            configuration);
+
+        Assert.Equal(20m, state.Pending["BBB"].AllocationPercent);
+        Assert.False(state.Pending.ContainsKey("AAA"));
+        Assert.Empty(portfolio.Trades);
+    }
+
+    [Fact]
     public void DelayedPurchases_UseSignalScoreWhenAnUnexecutedExitLeavesFewerSlots()
     {
-        var portfolio = CashPortfolio(980m);
+        var portfolio = CashPortfolio(1_980m);
         portfolio.Positions.Add(Holding("AAA", 0.1m, 100m));
         portfolio.Positions.Add(Holding("ZZZ", 0.1m, 100m));
         var state = new BacktestExecutionState();
@@ -705,7 +782,7 @@ public sealed class BacktestExecutionTimingTests
                 new ObservationResult { Symbol = "CCC", Score = 100m, MomentumPercent = 5m, IsAboveSma5 = true }
             ],
             configuration);
-        Assert.Equal(10m, state.Pending["CCC"].AllocationPercent);
+        Assert.Equal(9.9m, state.Pending["CCC"].AllocationPercent);
         Assert.Equal(100m, state.Pending["CCC"].Score);
         Assert.Equal(10m, state.Pending["BBB"].Score);
 

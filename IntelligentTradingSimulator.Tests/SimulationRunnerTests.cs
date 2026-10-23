@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IntelligentTradingSimulator.Tests;
 
+[Collection("Console output")]
 public sealed class SimulationRunnerTests : IDisposable
 {
     private readonly TradingSimulatorDbContext _dbContext;
@@ -78,6 +79,63 @@ public sealed class SimulationRunnerTests : IDisposable
             "StrategyConfiguration.LookbackDays, not a hardcoded 14-day window.");
     }
 
+    [Fact]
+    public async Task RunAsync_ReportsOnlySelectedTargetsWhenCandidatesExceedPositionLimit()
+    {
+        var strategy = new StrategyConfiguration
+        {
+            UseRelativeStrength = false,
+            MaxPositions = 1
+        };
+        var allocationService = new PortfolioAllocationService();
+        var workflowReporter = new ConsoleReporter(
+            allocationService, new PortfolioContributionService());
+        var marketDataWorkflow = new MarketDataWorkflow(
+            new CandidateMarketDataProvider(),
+            new MarketObservationAnalyzer(strategy),
+            new PortfolioRecommendationService(strategy.MaxPositions),
+            new ObservationResultRepository(_dbContext),
+            new FeatureSnapshotRepository(_dbContext),
+            strategy);
+        var portfolioWorkflow = new PortfolioWorkflow(
+            new PortfolioRepository(_dbContext),
+            new PortfolioSnapshotRepository(_dbContext),
+            new PositionSnapshotRepository(_dbContext),
+            new PortfolioExecutionService(strategy.MaxPositionWeight, strategy.MaxPositions),
+            new TradingEngine(),
+            new PortfolioAllocationEngine(allocationService, strategy.MaxPositionWeight),
+            new PortfolioRebalancingService(),
+            new PortfolioPerformanceService(),
+            workflowReporter,
+            strategy);
+        var runner = new SimulationRunner(
+            marketDataWorkflow,
+            portfolioWorkflow,
+            new ConsoleReporter(allocationService, new PortfolioContributionService()),
+            strategy);
+        var originalOutput = Console.Out;
+        using var output = new StringWriter();
+        try
+        {
+            Console.SetOut(output);
+            await runner.RunAsync();
+        }
+        finally
+        {
+            Console.SetOut(originalOutput);
+        }
+
+        var report = output.ToString();
+        var recommendationSection = report.Split("===== PORTFOLIO RECOMMENDATION =====")[1]
+            .Split("===== CREATE INITIAL PORTFOLIO =====")[0];
+        var targetSection = report.Split("===== TARGET ALLOCATION =====")[1]
+            .Split("===== REBALANCE BY WEIGHT =====")[0];
+        Assert.True(recommendationSection.Split(Environment.NewLine)
+            .Count(line => line.Contains("| Allocation=", StringComparison.Ordinal)) > 1);
+        Assert.Single(targetSection.Split(Environment.NewLine),
+            line => line.Contains("| Current=", StringComparison.Ordinal));
+    }
+
     private SimulationRunner BuildRunner(
         StrategyConfiguration strategy,
         IMarketDataProvider provider)
@@ -140,5 +198,33 @@ public sealed class SimulationRunnerTests : IDisposable
             return Task.FromResult<IReadOnlyList<MarketCandle>>(
                 Array.Empty<MarketCandle>());
         }
+    }
+
+    private sealed class CandidateMarketDataProvider : IMarketDataProvider
+    {
+        public Task<IReadOnlyList<MarketCandle>> GetHistoricalDailyAsync(
+            string symbol,
+            DateTime from) =>
+            Task.FromResult<IReadOnlyList<MarketCandle>>(Enumerable.Range(0, 5)
+                .Select(index =>
+                {
+                    var close = 101m + index;
+                    return new MarketCandle
+                    {
+                        Date = DateTime.Today.AddDays(index - 4),
+                        Open = 100m + index,
+                        Close = close,
+                        High = close + 1m,
+                        Low = 99m + index,
+                        Volume = 1_000_000m
+                    };
+                })
+                .ToList());
+
+        public Task<IReadOnlyList<MarketCandle>> GetHistoricalDailyAsync(
+            string symbol,
+            DateTime from,
+            DateTime to) =>
+            GetHistoricalDailyAsync(symbol, from);
     }
 }

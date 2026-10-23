@@ -11,7 +11,7 @@ namespace IntelligentTradingSimulator.Core.Services;
 
 public sealed class PortfolioRebalancingService
 {
-    public void Execute(
+    public IReadOnlyList<StockRecommendation> Execute(
         Portfolio portfolio,
         IReadOnlyList<StockRecommendation> recommendations,
         IReadOnlyDictionary<string, decimal> prices,
@@ -101,11 +101,19 @@ public sealed class PortfolioRebalancingService
             .ToList();
         recommendations = new PortfolioRecommendationService(positionLimit)
             .SelectExecutionTargets(recommendations, heldSymbols);
+        var effectiveTargets = recommendations
+            .Select(x => new StockRecommendation
+            {
+                Symbol = x.Symbol,
+                Score = x.Score,
+                AllocationPercent = Math.Min(x.AllocationPercent, allocationEngine.MaxPositionWeight)
+            })
+            .ToList();
 
         var allocationInstructions =
             allocationEngine.Calculate(
                 portfolio,
-                recommendations);
+                effectiveTargets);
 
         var sellInstructions =
             allocationInstructions
@@ -142,7 +150,7 @@ public sealed class PortfolioRebalancingService
         allocationInstructions =
             allocationEngine.Calculate(
                 portfolio,
-                recommendations);
+                effectiveTargets);
 
         var trades =
             allocationEngine.BuildTrades(
@@ -167,5 +175,7 @@ public sealed class PortfolioRebalancingService
                 prices[trade.Symbol],
                 simulatedTimestamp);
         }
+
+        return effectiveTargets;
     }
 }
