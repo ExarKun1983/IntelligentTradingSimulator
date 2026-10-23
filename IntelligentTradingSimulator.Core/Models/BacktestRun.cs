@@ -12,6 +12,8 @@ public sealed class BacktestRun
 
     public string StrategyId { get; set; } = string.Empty;
 
+    public string? StrategyConfigurationJson { get; set; }
+
     public DateTime StartDate { get; set; }
 
     public DateTime EndDate { get; set; }

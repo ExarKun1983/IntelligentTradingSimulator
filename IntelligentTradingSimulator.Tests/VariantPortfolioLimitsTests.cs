@@ -79,6 +79,7 @@ public sealed class VariantPortfolioLimitsTests
                 Assert.Equal(variant.Id, recorded.Id);
                 Assert.Equal(variant.MaxPositions, recorded.MaxPositions);
                 Assert.Equal(variant.MaxPositionWeight, recorded.MaxPositionWeight);
+                Assert.Equal(variant.UseHoldingConditionExit, recorded.UseHoldingConditionExit);
             });
         }
     }
@@ -129,7 +130,7 @@ public sealed class VariantPortfolioLimitsTests
         using var fixture = new Fixture(activeId);
         var marketData = await fixture.Services.GetRequiredService<MarketDataWorkflow>()
             .CollectAndAnalyzeAsync(Symbols, Start.AddDays(-4));
-        Assert.Equal(maxPositions, marketData.Recommendations.Count);
+        Assert.Equal(Symbols.Length, marketData.Recommendations.Count);
         Assert.True(marketData.Recommendations[0].AllocationPercent > 60m);
 
         var state = await fixture.Services.GetRequiredService<PortfolioWorkflow>()

@@ -12,9 +12,11 @@ namespace IntelligentTradingSimulator.Core.Services;
 public sealed class PortfolioExecutionService
 {
     private readonly decimal _maxPositionWeight;
+    private readonly int _maxPositions;
 
     public PortfolioExecutionService(
-        decimal maxPositionWeight = 100m)
+        decimal maxPositionWeight = 100m,
+        int maxPositions = StrategyConfiguration.DefaultMaxPositions)
     {
         if (maxPositionWeight <= 0m ||
             maxPositionWeight > 100m)
@@ -25,8 +27,14 @@ public sealed class PortfolioExecutionService
                 "Max position weight must be greater than zero and less than or equal to 100.");
         }
 
+        if (maxPositions <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxPositions));
+        }
+
         _maxPositionWeight =
             maxPositionWeight;
+        _maxPositions = maxPositions;
     }
 
     public void ExecuteRecommendations(
@@ -35,11 +43,30 @@ public sealed class PortfolioExecutionService
         IReadOnlyDictionary<string, decimal> prices,
         TradingEngine tradingEngine)
     {
+        var heldSymbols = portfolio.Positions
+            .Where(x => x.Quantity > 0m)
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        recommendations = new PortfolioRecommendationService(_maxPositions)
+            .SelectExecutionTargets(recommendations, heldSymbols);
         var capitalToInvest =
             portfolio.StartingCash * 0.80m;
 
         foreach (var recommendation in recommendations)
         {
+            var isExistingPosition = portfolio.Positions.Any(
+                x => x.Quantity > 0m &&
+                     string.Equals(x.Symbol, recommendation.Symbol, StringComparison.OrdinalIgnoreCase));
+            var openPositionCount = portfolio.Positions
+                .Where(x => x.Quantity > 0m)
+                .Select(x => x.Symbol)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+            if (!isExistingPosition && openPositionCount >= _maxPositions)
+            {
+                continue;
+            }
+
             var allocationPercent =
                 Math.Min(
                     recommendation.AllocationPercent,

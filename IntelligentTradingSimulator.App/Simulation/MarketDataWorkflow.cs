@@ -205,7 +205,7 @@ public sealed class MarketDataWorkflow
                 .ThenBy(x => x.Symbol, StringComparer.Ordinal)
                 .ToList();
 
-            recommendations = _recommendationService.Build(rankedResults);
+            recommendations = _recommendationService.BuildCandidates(rankedResults);
         }
 
         using (_progress.BeginOperation("Saving observations"))

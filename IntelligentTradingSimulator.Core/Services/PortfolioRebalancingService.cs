@@ -11,7 +11,7 @@ namespace IntelligentTradingSimulator.Core.Services;
 
 public sealed class PortfolioRebalancingService
 {
-    public void Execute(
+    public IReadOnlyList<StockRecommendation> Execute(
         Portfolio portfolio,
         IReadOnlyList<StockRecommendation> recommendations,
         IReadOnlyDictionary<string, decimal> prices,
@@ -19,8 +19,15 @@ public sealed class PortfolioRebalancingService
         TradingEngine tradingEngine,
         decimal? stopLossPercent = null,
         decimal? trailingStopPercent = null,
-        DateTime? simulatedTimestamp = null)
+        DateTime? simulatedTimestamp = null,
+        int? maxPositions = null)
     {
+        var positionLimit = maxPositions ?? StrategyConfiguration.DefaultMaxPositions;
+        if (positionLimit <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxPositions));
+        }
+
         if (stopLossPercent is <= 0m or > 100m)
         {
             throw new ArgumentOutOfRangeException(nameof(stopLossPercent));
@@ -79,47 +86,71 @@ public sealed class PortfolioRebalancingService
             .Where(x => !stoppedSymbols.Contains(x.Symbol))
             .ToList();
 
+        ExecuteAllocationSales(recommendations
+            .Where(x => x.Score <= 0m && x.AllocationPercent == 0m)
+            .ToList());
+        recommendations = recommendations
+            .Where(x => x.Score > 0m ||
+                        x.AllocationPercent > 0m ||
+                        portfolio.Positions.Any(
+                            position => position.Quantity > 0m &&
+                                        string.Equals(position.Symbol, x.Symbol, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        var heldSymbols = portfolio.Positions
+            .Where(x => x.Quantity > 0m)
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var topRecommendationSymbols = recommendations
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Symbol, StringComparer.Ordinal)
+            .Take(positionLimit)
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        recommendations = recommendations
+            .Where(x => !heldSymbols.Contains(x.Symbol) || topRecommendationSymbols.Contains(x.Symbol))
+            .ToList();
+        recommendations = new PortfolioRecommendationService(positionLimit)
+            .SelectExecutionTargets(recommendations, heldSymbols);
+        var effectiveTargets = recommendations
+            .Select(x => new StockRecommendation
+            {
+                Symbol = x.Symbol,
+                Score = x.Score,
+                AllocationPercent = Math.Min(x.AllocationPercent, allocationEngine.MaxPositionWeight)
+            })
+            .ToList();
+
+        void ExecuteAllocationSales(IReadOnlyList<StockRecommendation> targets)
+        {
+            foreach (var instruction in allocationEngine.Calculate(portfolio, targets).Where(x => !x.IsBuy))
+            {
+                var position = portfolio.Positions.FirstOrDefault(x => x.Symbol == instruction.Symbol);
+                if (position is null)
+                {
+                    continue;
+                }
+
+                tradingEngine.Execute(
+                    portfolio,
+                    new TradingDecision
+                    {
+                        Symbol = instruction.Symbol,
+                        Action = TradeActionType.Sell,
+                        ExitReason = ExitReason.Rebalance,
+                        Amount = Math.Abs(instruction.Difference)
+                    },
+                    position.CurrentPrice,
+                    simulatedTimestamp);
+            }
+        }
+
+        ExecuteAllocationSales(effectiveTargets);
+
         var allocationInstructions =
             allocationEngine.Calculate(
                 portfolio,
-                recommendations);
-
-        var sellInstructions =
-            allocationInstructions
-                .Where(x => !x.IsBuy)
-                .ToList();
-
-        foreach (var instruction in sellInstructions)
-        {
-            var position =
-                portfolio.Positions
-                    .FirstOrDefault(
-                        x => x.Symbol ==
-                             instruction.Symbol);
-
-            if (position is null)
-            {
-                continue;
-            }
-
-            tradingEngine.Execute(
-                portfolio,
-                new TradingDecision
-                {
-                    Symbol = instruction.Symbol,
-                    Action = TradeActionType.Sell,
-                    ExitReason = ExitReason.Rebalance,
-                    Amount = Math.Abs(
-                        instruction.Difference)
-                },
-                position.CurrentPrice,
-                simulatedTimestamp);
-        }
-
-        allocationInstructions =
-            allocationEngine.Calculate(
-                portfolio,
-                recommendations);
+                effectiveTargets);
 
         var trades =
             allocationEngine.BuildTrades(
@@ -133,6 +164,16 @@ public sealed class PortfolioRebalancingService
                 break;
             }
 
+            var isExistingPosition = portfolio.Positions.Any(
+                x => x.Quantity > 0m && string.Equals(x.Symbol, trade.Symbol, StringComparison.OrdinalIgnoreCase));
+            if (!isExistingPosition && portfolio.Positions
+                    .Where(x => x.Quantity > 0m)
+                    .Select(x => x.Symbol)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Count() >= positionLimit)
+            {
+                continue;
+            }
+
             tradingEngine.Execute(
                 portfolio,
                 new TradingDecision
@@ -144,5 +185,7 @@ public sealed class PortfolioRebalancingService
                 prices[trade.Symbol],
                 simulatedTimestamp);
         }
+
+        return effectiveTargets;
     }
 }

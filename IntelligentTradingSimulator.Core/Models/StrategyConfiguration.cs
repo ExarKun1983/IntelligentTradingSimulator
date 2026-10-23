@@ -35,6 +35,8 @@ public sealed class StrategyConfiguration
     /// <summary>Percentage drawdown from the highest observed price since entry; null disables Trailing Stop.</summary>
     public decimal? TrailingStopPercent { get; set; }
 
+    public bool UseHoldingConditionExit { get; set; } = true;
+
     public int LookbackDays { get; set; } = DefaultLookbackDays;
 
     /// <summary>Score points per percentage point of momentum; zero disables the contribution.</summary>

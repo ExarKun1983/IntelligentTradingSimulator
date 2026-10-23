@@ -15,6 +15,8 @@ public sealed class PortfolioAllocationEngine
 
     private readonly decimal _maxPositionWeight;
 
+    public decimal MaxPositionWeight => _maxPositionWeight;
+
     public IReadOnlyList<AllocationTrade>
     BuildTrades(
         Portfolio portfolio,

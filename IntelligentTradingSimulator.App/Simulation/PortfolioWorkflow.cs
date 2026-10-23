@@ -78,14 +78,15 @@ public sealed class PortfolioWorkflow
         using (_progress.BeginOperation("Saving portfolio prices"))
             await _portfolioRepository.SaveAsync(portfolio);
 
-        _rebalancingService.Execute(
+        var executionTargets = _rebalancingService.Execute(
             portfolio,
             recommendations,
             prices,
             _allocationEngine,
             _tradingEngine,
             _strategyConfiguration.StopLossPercent,
-            _strategyConfiguration.TrailingStopPercent);
+            _strategyConfiguration.TrailingStopPercent,
+            maxPositions: _strategyConfiguration.MaxPositions);
 
         using (_progress.BeginOperation("Saving rebalanced portfolio"))
             await _portfolioRepository.SaveAsync(portfolio);
@@ -131,7 +132,10 @@ public sealed class PortfolioWorkflow
         using (_progress.BeginOperation("Saving position snapshots"))
             await _positionSnapshotRepository.SaveAsync(positionSnapshots);
 
-        return new PortfolioState(portfolio, performance, totalValue);
+        return new PortfolioState(portfolio, performance, totalValue)
+        {
+            ExecutionTargets = executionTargets
+        };
     }
 
     private async Task<Portfolio> CreateInitialPortfolioAsync(

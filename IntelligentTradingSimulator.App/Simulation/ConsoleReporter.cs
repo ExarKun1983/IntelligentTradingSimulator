@@ -188,6 +188,7 @@ public sealed class ConsoleReporter
                 $"{recommendation.Symbol}" +
                 $" | Current={currentValue:N2}" +
                 $" | Target={targetValue:N2}" +
+                $" | TargetWeight={recommendation.AllocationPercent:N2}%" +
                 $" | Diff={difference:N2}");
         }
     }

@@ -15,4 +15,6 @@ public sealed class BacktestDayResult
     public IReadOnlyList<StockRecommendation> Recommendations { get; set; } = [];
 
     public IReadOnlyList<ObservationResult> Observations { get; set; } = [];
+
+    public IReadOnlyList<string> Diagnostics { get; set; } = [];
 }
