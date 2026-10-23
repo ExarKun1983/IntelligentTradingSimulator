@@ -130,10 +130,21 @@ public sealed class SimulationRunnerTests : IDisposable
             .Split("===== CREATE INITIAL PORTFOLIO =====")[0];
         var targetSection = report.Split("===== TARGET ALLOCATION =====")[1]
             .Split("===== REBALANCE BY WEIGHT =====")[0];
-        Assert.True(recommendationSection.Split(Environment.NewLine)
-            .Count(line => line.Contains("| Allocation=", StringComparison.Ordinal)) > 1);
-        Assert.Single(targetSection.Split(Environment.NewLine),
+        var rebalanceSection = report.Split("===== REBALANCE BY WEIGHT =====")[1]
+            .Split("===== POSITION CONTRIBUTION =====")[0];
+        var rankedSymbols = recommendationSection.Split(Environment.NewLine)
+            .Where(line => line.Contains("| Allocation=", StringComparison.Ordinal))
+            .Select(line => line.Split(" |", StringSplitOptions.None)[0])
+            .ToList();
+        Assert.True(rankedSymbols.Count > 1);
+        var targetLine = Assert.Single(targetSection.Split(Environment.NewLine),
             line => line.Contains("| Current=", StringComparison.Ordinal));
+        Assert.Equal(rankedSymbols[0], targetLine.Split(" |", StringSplitOptions.None)[0]);
+        Assert.Contains("| TargetWeight=100.00%", targetLine);
+        Assert.Contains($"| Target={10_000m:N2} |", targetLine);
+        Assert.Contains($"| Diff={0m:N2}", targetLine);
+        Assert.DoesNotContain("BUY ", rebalanceSection, StringComparison.Ordinal);
+        Assert.DoesNotContain("SELL ", rebalanceSection, StringComparison.Ordinal);
     }
 
     private SimulationRunner BuildRunner(

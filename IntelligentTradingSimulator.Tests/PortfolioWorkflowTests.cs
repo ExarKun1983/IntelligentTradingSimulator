@@ -141,4 +141,68 @@ public sealed class PortfolioWorkflowTests
             Assert.Equal(0m, saved.Cash);
         }
     }
+
+    [Fact]
+    public async Task RunAsync_OverLimitPersistedPortfolioBlocksNewSymbolUntilExitsReduceCountBelowLimit()
+    {
+        var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using (var context = new TradingSimulatorDbContext(options))
+        {
+            await new PortfolioRepository(context).SaveAsync(new Portfolio
+            {
+                Name = "Over-limit portfolio",
+                StartingCash = 1_000m,
+                Cash = 0m,
+                Positions =
+                [
+                    new Position { Symbol = "AAA", Quantity = 5m, AveragePrice = 100m, CurrentPrice = 100m },
+                    new Position { Symbol = "BBB", Quantity = 5m, AveragePrice = 100m, CurrentPrice = 100m }
+                ]
+            });
+        }
+
+        async Task<PortfolioState> Run(Dictionary<string, decimal> prices)
+        {
+            await using var context = new TradingSimulatorDbContext(options);
+            var allocationService = new PortfolioAllocationService();
+            var workflow = new PortfolioWorkflow(
+                new PortfolioRepository(context),
+                new PortfolioSnapshotRepository(context),
+                new PositionSnapshotRepository(context),
+                new PortfolioExecutionService(maxPositions: 1),
+                new TradingEngine(),
+                new PortfolioAllocationEngine(allocationService),
+                new PortfolioRebalancingService(),
+                new PortfolioPerformanceService(),
+                new ConsoleReporter(allocationService, new PortfolioContributionService()),
+                new StrategyConfiguration { MaxPositions = 1, StopLossPercent = 10m });
+            return await workflow.RunAsync(
+                [new StockRecommendation { Symbol = "CCC", Score = 10m, AllocationPercent = 100m }],
+                prices);
+        }
+
+        var afterFirstExit = await Run(new Dictionary<string, decimal>
+        {
+            ["AAA"] = 80m, ["BBB"] = 100m, ["CCC"] = 100m
+        });
+
+        Assert.Equal("BBB", Assert.Single(afterFirstExit.Portfolio.Positions).Symbol);
+        Assert.Single(afterFirstExit.Portfolio.Trades);
+        Assert.Equal(TradeActionType.Sell, afterFirstExit.Portfolio.Trades[0].Action);
+        Assert.Equal(ExitReason.StopLoss, afterFirstExit.Portfolio.Trades[0].ExitReason);
+        Assert.DoesNotContain(afterFirstExit.Portfolio.Trades, x => x.Symbol == "CCC");
+
+        var afterSecondExit = await Run(new Dictionary<string, decimal>
+        {
+            ["BBB"] = 80m, ["CCC"] = 100m
+        });
+
+        Assert.Equal("CCC", Assert.Single(afterSecondExit.Portfolio.Positions).Symbol);
+        Assert.Equal(
+            [TradeActionType.Sell, TradeActionType.Sell, TradeActionType.Buy],
+            afterSecondExit.Portfolio.Trades.Select(x => x.Action).ToArray());
+        Assert.Equal(ExitReason.StopLoss, afterSecondExit.Portfolio.Trades[1].ExitReason);
+        Assert.Equal("CCC", afterSecondExit.Portfolio.Trades[2].Symbol);
+    }
 }

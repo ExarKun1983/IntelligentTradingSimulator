@@ -606,6 +606,94 @@ public sealed class BacktestExecutionTimingTests
     }
 
     [Fact]
+    public void InitiallyOverLimitPortfolio_PreservesHoldingsAndWaitsForExplicitExitsBeforeReplacement()
+    {
+        var portfolio = CashPortfolio(0m);
+        portfolio.Positions.Add(Holding("AAA", 5m, 100m));
+        portfolio.Positions.Add(Holding("ZZZ", 5m, 100m));
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 1;
+        configuration.UseHoldingConditionExit = true;
+        var recommendations = new[]
+        {
+            new StockRecommendation { Symbol = "BBB", Score = 10m }
+        };
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday,
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["ZZZ"] = 100m, ["BBB"] = 100m },
+            recommendations,
+            [
+                new ObservationResult { Symbol = "AAA", MomentumPercent = 5m },
+                new ObservationResult { Symbol = "ZZZ", MomentumPercent = 0m },
+                new ObservationResult { Symbol = "BBB", Score = 10m, MomentumPercent = 5m, IsAboveSma5 = true }
+            ],
+            configuration);
+
+        Assert.Equal(ExitReason.HoldingCondition, state.Pending["ZZZ"].ExitReason);
+        Assert.False(state.Pending.ContainsKey("BBB"));
+        Execute(state, portfolio, Friday.AddDays(1), 1, ("ZZZ", 100m));
+
+        Assert.Equal("AAA", Assert.Single(portfolio.Positions).Symbol);
+        Assert.DoesNotContain(portfolio.Trades, x => x.Symbol == "BBB");
+        Assert.Equal(ExitReason.HoldingCondition, Assert.Single(portfolio.Trades).ExitReason);
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday.AddDays(1),
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m },
+            recommendations,
+            [
+                new ObservationResult { Symbol = "AAA", MomentumPercent = 0m },
+                new ObservationResult { Symbol = "BBB", Score = 10m, MomentumPercent = 5m, IsAboveSma5 = true }
+            ],
+            configuration);
+        Assert.Equal(Friday.AddDays(1), state.Pending["BBB"].SignalDate);
+
+        Execute(state, portfolio, Friday.AddDays(2), 1, ("AAA", 100m), ("BBB", 100m));
+
+        Assert.Equal([TradeActionType.Sell, TradeActionType.Sell, TradeActionType.Buy],
+            portfolio.Trades.Select(x => x.Action).ToArray());
+        Assert.Equal(["ZZZ", "AAA", "BBB"], portfolio.Trades.Select(x => x.Symbol).ToArray());
+        Assert.Equal("BBB", Assert.Single(portfolio.Positions).Symbol);
+    }
+
+    [Fact]
+    public void FullCapacityPortfolio_AllowsCappedTopUpOfAnExistingSymbol()
+    {
+        var portfolio = CashPortfolio(500m);
+        portfolio.Positions.Add(Holding("AAA", 5m, 100m));
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 1;
+        configuration.MaxPositionWeight = 60m;
+        state.GenerateAfterClose(
+            portfolio,
+            Friday,
+            new Dictionary<string, decimal> { ["AAA"] = 100m },
+            [new StockRecommendation { Symbol = "AAA", Score = 10m }],
+            [],
+            configuration);
+
+        state.ExecuteOpen(
+            portfolio,
+            Friday.AddDays(1),
+            new Dictionary<string, decimal> { ["AAA"] = 100m },
+            new PortfolioAllocationEngine(new PortfolioAllocationService(), 60m),
+            new TradingEngine(),
+            configuration.MaxPositions);
+
+        var buy = Assert.Single(portfolio.Trades);
+        Assert.Equal(TradeActionType.Buy, buy.Action);
+        Assert.Equal(1m, buy.Quantity);
+        Assert.Equal(100m, buy.Price);
+        Assert.Equal(6m, Assert.Single(portfolio.Positions).Quantity);
+        Assert.Equal(400m, portfolio.Cash);
+    }
+
+    [Fact]
     public void UnchangedRankingsAndPrices_DoNotRebalanceSelectedPositionsAcrossDays()
     {
         var portfolio = CashPortfolio();
@@ -636,6 +724,82 @@ public sealed class BacktestExecutionTimingTests
         Assert.Equal(500m, portfolio.Positions.Single(x => x.Symbol == "AAA").MarketValue);
         Assert.Equal(500m, portfolio.Positions.Single(x => x.Symbol == "BBB").MarketValue);
         Assert.Equal(0m, portfolio.Cash);
+    }
+
+    [Fact]
+    public void UnchangedHoldingTargets_DoNotSellSolelyBecausePricesDrift()
+    {
+        var portfolio = CashPortfolio();
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 2;
+        var recommendations = new[]
+        {
+            new StockRecommendation { Symbol = "AAA", Score = 10m },
+            new StockRecommendation { Symbol = "BBB", Score = 10m }
+        };
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday,
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m },
+            recommendations,
+            [],
+            configuration);
+        Execute(state, portfolio, Friday.AddDays(1), 2, ("AAA", 100m), ("BBB", 100m));
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday.AddDays(1),
+            new Dictionary<string, decimal> { ["AAA"] = 200m, ["BBB"] = 100m },
+            recommendations,
+            [],
+            configuration);
+        Execute(state, portfolio, Friday.AddDays(2), 2, ("AAA", 200m), ("BBB", 100m));
+
+        Assert.Equal(2, portfolio.Trades.Count);
+        Assert.All(portfolio.Trades, trade => Assert.Equal(TradeActionType.Buy, trade.Action));
+        Assert.Equal(5m, portfolio.Positions.Single(x => x.Symbol == "AAA").Quantity);
+        Assert.Equal(5m, portfolio.Positions.Single(x => x.Symbol == "BBB").Quantity);
+        Assert.Equal(0m, portfolio.Cash);
+    }
+
+    [Fact]
+    public void LoweredHoldingTarget_AllowsIntentionalAllocationSale()
+    {
+        var portfolio = CashPortfolio();
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 2;
+        var closes = new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m };
+        state.GenerateAfterClose(
+            portfolio,
+            Friday,
+            closes,
+            [
+                new StockRecommendation { Symbol = "AAA", Score = 1m },
+                new StockRecommendation { Symbol = "BBB", Score = 1m }
+            ],
+            [],
+            configuration);
+        Execute(state, portfolio, Friday.AddDays(1), 2, ("AAA", 100m), ("BBB", 100m));
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday.AddDays(1),
+            closes,
+            [
+                new StockRecommendation { Symbol = "AAA", Score = 1m },
+                new StockRecommendation { Symbol = "BBB", Score = 3m }
+            ],
+            [],
+            configuration);
+        Execute(state, portfolio, Friday.AddDays(2), 2, ("AAA", 100m), ("BBB", 100m));
+
+        Assert.Equal([TradeActionType.Buy, TradeActionType.Buy, TradeActionType.Sell, TradeActionType.Buy],
+            portfolio.Trades.Select(x => x.Action).ToArray());
+        Assert.Equal("AAA", portfolio.Trades[2].Symbol);
+        Assert.Equal(2.5m, portfolio.Trades[2].Quantity);
     }
 
     [Fact]

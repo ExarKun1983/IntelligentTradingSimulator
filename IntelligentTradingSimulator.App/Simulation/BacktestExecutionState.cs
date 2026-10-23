@@ -12,7 +12,9 @@ public sealed record BacktestPendingIntent(
     DateTime SignalDate,
     decimal AllocationPercent,
     ExitReason? ExitReason = null,
-    decimal Score = 0m);
+    decimal Score = 0m,
+    bool AllowAllocationSale = false,
+    decimal? BaselineAllocationPercent = null);
 
 public sealed class BacktestExecutionState
 {
@@ -107,7 +109,20 @@ public sealed class BacktestExecutionState
             })
             .Where(x => x.Score <= 0m || x.AllocationPercent > 0m)
             .ToList();
-        var instructions = allocationEngine.Calculate(portfolio, targetIntents);
+        var saleTargets = eligible
+            .Where(x => !x.ExitReason.HasValue &&
+                        (x.AllowAllocationSale ||
+                         x.BaselineAllocationPercent is null &&
+                         IsBelowCurrentAllocation(x, portfolio)) &&
+                        (x.Score <= 0m || x.AllocationPercent > 0m))
+            .Select(x => new StockRecommendation
+            {
+                Symbol = x.Symbol,
+                AllocationPercent = x.AllocationPercent,
+                Score = x.Score
+            })
+            .ToList();
+        var instructions = allocationEngine.Calculate(portfolio, saleTargets);
         foreach (var instruction in instructions.Where(x => !x.IsBuy))
         {
             tradingEngine.Execute(portfolio, new TradingDecision
@@ -325,14 +340,26 @@ public sealed class BacktestExecutionState
         {
             if (normalizedBySymbol.TryGetValue(pending.Symbol, out var target))
             {
-                _lastSelectedTargets[pending.Symbol] = target;
-                if (pending.AllocationPercent != target.AllocationPercent)
+                var baseline = pending.BaselineAllocationPercent;
+                var allocationChanged = pending.AllocationPercent != target.AllocationPercent;
+                if (baseline is null && allocationChanged && heldSymbols.Contains(pending.Symbol))
                 {
-                    _pending[pending.Symbol] = pending with
-                    {
-                        SignalDate = date.Date,
-                        AllocationPercent = target.AllocationPercent
-                    };
+                    baseline = GetAllocationBaseline(pending.Symbol, portfolio, closes);
+                }
+
+                _lastSelectedTargets[pending.Symbol] = target;
+                var updated = pending with
+                {
+                    SignalDate = allocationChanged ? date.Date : pending.SignalDate,
+                    AllocationPercent = target.AllocationPercent,
+                    AllowAllocationSale = allocationChanged
+                        ? IsIntentionalAllocationReduction(target, baseline)
+                        : pending.AllowAllocationSale,
+                    BaselineAllocationPercent = baseline
+                };
+                if (updated != pending)
+                {
+                    _pending[pending.Symbol] = updated;
                 }
             }
         }
@@ -362,10 +389,70 @@ public sealed class BacktestExecutionState
                 continue;
             }
 
+            var baseline = GetAllocationBaseline(symbol, portfolio, closes);
             _pending[symbol] = new(
-                symbol, date.Date, recommendation.AllocationPercent, Score: recommendation.Score);
+                symbol,
+                date.Date,
+                recommendation.AllocationPercent,
+                Score: recommendation.Score,
+                AllowAllocationSale: IsIntentionalAllocationReduction(recommendation, baseline),
+                BaselineAllocationPercent: baseline);
             _lastSelectedTargets[symbol] = recommendation;
         }
+    }
+
+    private static bool IsIntentionalAllocationReduction(
+        StockRecommendation target,
+        decimal? baselineAllocationPercent) =>
+        target.Score <= 0m && target.AllocationPercent == 0m ||
+        baselineAllocationPercent is decimal baseline &&
+        target.AllocationPercent < baseline;
+
+    private decimal? GetAllocationBaseline(
+        string symbol,
+        Portfolio portfolio,
+        IReadOnlyDictionary<string, decimal> closes)
+    {
+        if (_lastSelectedTargets.TryGetValue(symbol, out var previousTarget))
+        {
+            return previousTarget.AllocationPercent;
+        }
+
+        var position = portfolio.Positions.FirstOrDefault(x =>
+            string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase));
+        if (position is null || position.Quantity <= 0m)
+        {
+            return null;
+        }
+
+        var totalValue = portfolio.Cash + portfolio.Positions.Sum(x =>
+            x.Quantity * (closes.TryGetValue(x.Symbol, out var close) && close > 0m
+                ? close
+                : x.CurrentPrice));
+        if (totalValue <= 0m)
+        {
+            return null;
+        }
+
+        var currentPrice = closes.TryGetValue(position.Symbol, out var positionClose) && positionClose > 0m
+            ? positionClose
+            : position.CurrentPrice;
+        return Math.Round(position.Quantity * currentPrice / totalValue * 100m, 2);
+    }
+
+    private static bool IsBelowCurrentAllocation(
+        BacktestPendingIntent intent,
+        Portfolio portfolio)
+    {
+        var position = portfolio.Positions.FirstOrDefault(x =>
+            string.Equals(x.Symbol, intent.Symbol, StringComparison.OrdinalIgnoreCase));
+        var totalValue = portfolio.Cash +
+                         portfolio.Positions.Sum(x => x.Quantity * x.CurrentPrice);
+        return position is not null &&
+               position.Quantity > 0m &&
+               totalValue > 0m &&
+               intent.AllocationPercent <
+               Math.Round(position.Quantity * position.CurrentPrice / totalValue * 100m, 2);
     }
 
     private static int CountOpenPositions(Portfolio portfolio) =>
