@@ -113,7 +113,7 @@ public sealed class BacktestExecutionState
             .Where(x => !x.ExitReason.HasValue &&
                         (x.AllowAllocationSale ||
                          x.BaselineAllocationPercent is null &&
-                         IsBelowCurrentAllocation(x, portfolio)) &&
+                         IsBelowCurrentAllocation(x, portfolio, allocationEngine.MaxPositionWeight)) &&
                         (x.Score <= 0m || x.AllocationPercent > 0m))
             .Select(x => new StockRecommendation
             {
@@ -353,7 +353,8 @@ public sealed class BacktestExecutionState
                     SignalDate = allocationChanged ? date.Date : pending.SignalDate,
                     AllocationPercent = target.AllocationPercent,
                     AllowAllocationSale = allocationChanged
-                        ? IsIntentionalAllocationReduction(target, baseline)
+                        ? IsIntentionalAllocationReduction(
+                            target, baseline, configuration.MaxPositionWeight)
                         : pending.AllowAllocationSale,
                     BaselineAllocationPercent = baseline
                 };
@@ -395,7 +396,8 @@ public sealed class BacktestExecutionState
                 date.Date,
                 recommendation.AllocationPercent,
                 Score: recommendation.Score,
-                AllowAllocationSale: IsIntentionalAllocationReduction(recommendation, baseline),
+                AllowAllocationSale: IsIntentionalAllocationReduction(
+                    recommendation, baseline, configuration.MaxPositionWeight),
                 BaselineAllocationPercent: baseline);
             _lastSelectedTargets[symbol] = recommendation;
         }
@@ -403,10 +405,11 @@ public sealed class BacktestExecutionState
 
     private static bool IsIntentionalAllocationReduction(
         StockRecommendation target,
-        decimal? baselineAllocationPercent) =>
+        decimal? baselineAllocationPercent,
+        decimal maxPositionWeight) =>
         target.Score <= 0m && target.AllocationPercent == 0m ||
         baselineAllocationPercent is decimal baseline &&
-        target.AllocationPercent < baseline;
+        Math.Min(target.AllocationPercent, maxPositionWeight) < baseline;
 
     private decimal? GetAllocationBaseline(
         string symbol,
@@ -442,7 +445,8 @@ public sealed class BacktestExecutionState
 
     private static bool IsBelowCurrentAllocation(
         BacktestPendingIntent intent,
-        Portfolio portfolio)
+        Portfolio portfolio,
+        decimal maxPositionWeight)
     {
         var position = portfolio.Positions.FirstOrDefault(x =>
             string.Equals(x.Symbol, intent.Symbol, StringComparison.OrdinalIgnoreCase));
@@ -451,7 +455,7 @@ public sealed class BacktestExecutionState
         return position is not null &&
                position.Quantity > 0m &&
                totalValue > 0m &&
-               intent.AllocationPercent <
+               Math.Min(intent.AllocationPercent, maxPositionWeight) <
                Math.Round(position.Quantity * position.CurrentPrice / totalValue * 100m, 2);
     }
 
