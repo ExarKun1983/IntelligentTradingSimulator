@@ -58,6 +58,9 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     b.Property<int>("Status")
                         .HasColumnType("int");
 
+                    b.Property<string>("StrategyConfigurationJson")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("StrategyId")
                         .IsRequired()
                         .HasMaxLength(100)

@@ -731,7 +731,7 @@ public sealed class BacktestDayProcessorTests : IDisposable
             }
         });
 
-        Assert.Empty(result.Observations);
+        Assert.Equal("HELD", Assert.Single(result.Observations).Symbol);
         Assert.Empty(result.Recommendations);
         Assert.Empty(portfolio.Trades);
         Assert.Equal(109m, Assert.Single(portfolio.Positions).CurrentPrice);
@@ -1032,9 +1032,11 @@ public sealed class BacktestDayProcessorTests : IDisposable
         Assert.Equal(expected, backtest.Observations.Select(x => x.Symbol).ToArray());
         Assert.Equal(expected, market.RankedResults.Select(x => x.Symbol).ToArray());
         Assert.Equal(expected.Take(2), backtest.Recommendations.Select(x => x.Symbol));
-        Assert.Equal(expected.Take(2), market.Recommendations.Select(x => x.Symbol));
+        Assert.Equal(expected.Where(x => x != "DISQUALIFIED"), market.Recommendations.Select(x => x.Symbol));
+        Assert.Equal(expected.Take(2), market.Recommendations.Take(2).Select(x => x.Symbol));
         Assert.Equal(
-            market.Recommendations.Select(x => (x.Score, x.AllocationPercent)),
+            new PortfolioRecommendationService(maxPositions: 2).Build(backtest.Observations)
+                .Select(x => (x.Score, x.AllocationPercent)),
             backtest.Recommendations.Select(x => (x.Score, x.AllocationPercent)));
         Assert.Equal(
             expected.Take(2).OrderBy(x => x, StringComparer.Ordinal),

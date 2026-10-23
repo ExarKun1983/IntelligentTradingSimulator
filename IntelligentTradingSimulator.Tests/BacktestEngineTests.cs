@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using IntelligentTradingSimulator.App.Configuration;
 using IntelligentTradingSimulator.App.Simulation;
@@ -124,6 +125,11 @@ public sealed class BacktestEngineTests : IDisposable
         Assert.NotNull(saved);
         Assert.Equal("Test Run", saved.Name);
         Assert.Equal("momentum-default", saved.StrategyId);
+        var persistedConfigurationJson = Assert.IsType<string>(saved.StrategyConfigurationJson);
+        var persistedConfiguration =
+            JsonSerializer.Deserialize<StrategyConfiguration>(persistedConfigurationJson);
+        Assert.NotNull(persistedConfiguration);
+        Assert.True(persistedConfiguration.UseHoldingConditionExit);
         Assert.Equal(startDate.Date, saved.StartDate);
         Assert.Equal(endDate.Date, saved.EndDate);
     }

@@ -163,7 +163,8 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 if (!request.Symbols.Contains(symbol, StringComparer.OrdinalIgnoreCase) &&
                     !request.Portfolio.Positions.Any(x =>
                         x.Quantity > 0m &&
-                        string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase)))
+                        string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase)) &&
+                    !request.ExecutionState.Pending.ContainsKey(symbol))
                 {
                     skipped++;
                     continue;
@@ -263,7 +264,15 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             var universeResults = rankedResults.Where(x => universe.Contains(x.Symbol)).ToList();
             recommendations = request.ExecutionState.BuildRecommendations(
                 universeResults, request.Symbols, recommendationService);
+            var topRecommendationSymbols = recommendations
+                .Select(x => x.Symbol)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var heldSymbols = portfolio.Positions
+                .Where(x => x.Quantity > 0m)
+                .Select(x => x.Symbol)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var candidates = recommendationService.BuildCandidates(universeResults)
+                .Where(x => !heldSymbols.Contains(x.Symbol) || topRecommendationSymbols.Contains(x.Symbol))
                 .ToList();
             request.ExecutionState.GenerateAfterClose(
                 portfolio, request.CurrentDate, prices, candidates, rankedResults, request.StrategyConfiguration);

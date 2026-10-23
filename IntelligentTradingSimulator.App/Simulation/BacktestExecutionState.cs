@@ -16,6 +16,7 @@ public sealed record BacktestPendingIntent(
 public sealed class BacktestExecutionState
 {
     private readonly Dictionary<string, BacktestPendingIntent> _pending = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ObservationResult> _observations = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> _diagnostics = [];
 
     public IReadOnlyDictionary<string, BacktestPendingIntent> Pending => _pending;
@@ -29,8 +30,16 @@ public sealed class BacktestExecutionState
         PortfolioRecommendationService recommendationService)
     {
         var universe = symbols.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return recommendationService.Build(
-            observations.Where(x => universe.Contains(x.Symbol)).ToList());
+        foreach (var symbol in _observations.Keys.Where(x => !universe.Contains(x)).ToList())
+        {
+            _observations.Remove(symbol);
+        }
+        foreach (var observation in observations)
+        {
+            _observations[observation.Symbol] = observation;
+        }
+
+        return recommendationService.Build(_observations.Values.ToList());
     }
 
     public void ExecuteOpen(
@@ -101,6 +110,28 @@ public sealed class BacktestExecutionState
                 ExitReason = ExitReason.Rebalance
             }, opens[instruction.Symbol], date);
         }
+
+        var heldSymbols = portfolio.Positions
+            .Where(x => x.Quantity > 0m)
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var availableSlots = Math.Max(0, maxPositions - heldSymbols.Count);
+        var permittedNewTargets = targets
+            .Where(x => !heldSymbols.Contains(x.Symbol))
+            .OrderByDescending(x => x.AllocationPercent)
+            .ThenBy(x => x.Symbol, StringComparer.Ordinal)
+            .Take(availableSlots)
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var blocked in targets.Where(x =>
+                     !heldSymbols.Contains(x.Symbol) && !permittedNewTargets.Contains(x.Symbol)))
+        {
+            _diagnostics.Add(
+                $"Purchase blocked for {blocked.Symbol} on {date:yyyy-MM-dd}: the {maxPositions}-position limit is full.");
+        }
+        targets = targets
+            .Where(x => heldSymbols.Contains(x.Symbol) || permittedNewTargets.Contains(x.Symbol))
+            .ToList();
 
         instructions = allocationEngine.Calculate(portfolio, targets);
         foreach (var trade in allocationEngine.BuildTrades(portfolio, instructions))
@@ -228,7 +259,7 @@ public sealed class BacktestExecutionState
                      .Where(x => !x.ExitReason.HasValue && !selectedSymbols.Contains(x.Symbol))
                      .ToList())
         {
-            if (!heldSymbols.Contains(pendingBuy.Symbol) && !observedSymbols.Contains(pendingBuy.Symbol))
+            if (!observedSymbols.Contains(pendingBuy.Symbol))
             {
                 continue;
             }
@@ -251,6 +282,11 @@ public sealed class BacktestExecutionState
             {
                 _diagnostics.Add(
                     $"Purchase intent for {symbol} was rejected on {date:yyyy-MM-dd}: an exit signal is active.");
+                continue;
+            }
+
+            if (_pending.ContainsKey(symbol))
+            {
                 continue;
             }
 

@@ -484,6 +484,7 @@ public sealed class StrategyConfigurationLoaderTests
         Assert.Equal(StrategyConfiguration.DefaultMaxPositions, result.MaxPositions);
         Assert.Equal(StrategyConfiguration.DefaultMaxPositionWeight, result.MaxPositionWeight);
         Assert.Equal(StrategyConfiguration.DefaultLookbackDays, result.LookbackDays);
+        Assert.True(result.UseHoldingConditionExit);
         Assert.False(result.UseRsi);
         Assert.Equal(StrategyConfiguration.DefaultRsiPreferredMinimum, result.RsiPreferredMinimum);
         Assert.Equal(StrategyConfiguration.DefaultRsiPreferredMaximum, result.RsiPreferredMaximum);

@@ -88,6 +88,25 @@ public sealed class PortfolioExecutionServiceTests
         Assert.Equal(3_200m, aapl.MarketValue);
     }
 
+    [Fact]
+    public void ExecuteRecommendations_DoesNotExceedConfiguredOpenPositionLimit()
+    {
+        var service = new PortfolioExecutionService(maxPositionWeight: 100m, maxPositions: 1);
+        var portfolio = new Portfolio { StartingCash = 10_000m, Cash = 10_000m };
+
+        service.ExecuteRecommendations(
+            portfolio,
+            [
+                new StockRecommendation { Symbol = "AAA", AllocationPercent = 60m, Score = 60m },
+                new StockRecommendation { Symbol = "BBB", AllocationPercent = 40m, Score = 40m }
+            ],
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m },
+            new TradingEngine());
+
+        Assert.Equal("AAA", Assert.Single(portfolio.Positions).Symbol);
+        Assert.Single(portfolio.Trades);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]

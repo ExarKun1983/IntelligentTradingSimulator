@@ -237,6 +237,9 @@ public sealed class TradingSimulatorDbContext : DbContext
             .HasMaxLength(100)
             .IsRequired();
 
+        entity.Property(x => x.StrategyConfigurationJson)
+            .IsRequired(false);
+
         entity.Property(x => x.StartDate)
             .IsRequired();
 

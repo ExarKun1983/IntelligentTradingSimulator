@@ -256,14 +256,17 @@ public sealed class BacktestExecutionTimingTests
 
         var next = await fixture.Day(Friday.AddDays(4), portfolio, state, ["BBB"], configuration);
 
-        Assert.Equal("BBB", Assert.Single(next.Observations).Symbol);
+        Assert.Contains(next.Observations, x => x.Symbol == "BBB");
+        Assert.Contains(next.Observations, x => x.Symbol == "AAA");
         Assert.Equal("BBB", Assert.Single(next.Recommendations).Symbol);
-        Assert.Equal(Friday.AddDays(4), state.Pending["BBB"].SignalDate);
-        Assert.Equal(100m, state.Pending["BBB"].AllocationPercent);
+        Assert.False(state.Pending.ContainsKey("BBB"));
+        Assert.Contains(next.Diagnostics, x => x.Contains("BBB", StringComparison.Ordinal));
         Assert.False(state.Pending.ContainsKey("AAA"));
         Assert.Equal("AAA", Assert.Single(portfolio.Trades).Symbol);
         Assert.Equal(Friday.AddDays(4), portfolio.Trades[0].Timestamp);
-        Assert.Equal(new[] { "AAA", "BBB", "BBB" }, fixture.Features.Rows.Select(x => x.Features.Symbol));
+        Assert.Equal(4, fixture.Features.Rows.Count);
+        Assert.Equal(2, fixture.Features.Rows.Count(x => x.Features.Symbol == "AAA"));
+        Assert.Equal(2, fixture.Features.Rows.Count(x => x.Features.Symbol == "BBB"));
         AssertReconciles(portfolio, 1_000m);
     }
 
@@ -466,6 +469,30 @@ public sealed class BacktestExecutionTimingTests
     }
 
     [Fact]
+    public async Task HeldSymbolFallingOutsideTopN_IsRetainedAndDoesNotCreateAReplacementPurchase()
+    {
+        var fixture = new Fixture();
+        fixture.Provider.Data["AAA"] = Enumerable.Range(0, 5)
+            .Select(i => Candle(Friday.AddDays(i - 4), 100m + i * 0.1m, 100m + i * 0.1m))
+            .ToList();
+        fixture.Provider.Data["BBB"] = History(Friday);
+        var portfolio = new Portfolio { StartingCash = 1_000m, Cash = 0m };
+        var holding = Holding("AAA", 10m, 100m);
+        portfolio.Positions.Add(holding);
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 1;
+
+        var result = await fixture.Day(Friday, portfolio, state, ["AAA", "BBB"], configuration);
+
+        Assert.Equal("BBB", Assert.Single(result.Recommendations).Symbol);
+        Assert.Empty(portfolio.Trades);
+        Assert.Same(holding, Assert.Single(portfolio.Positions));
+        Assert.Empty(state.Pending);
+        Assert.Contains(result.Diagnostics, x => x.Contains("BBB", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task HoldingConditionExit_UsesFreshMomentumAndFillsAtALaterOpenWithoutAReplacement()
     {
         var fixture = new Fixture();
@@ -501,7 +528,7 @@ public sealed class BacktestExecutionTimingTests
     public async Task MissingHeldObservation_DoesNotGenerateAHoldingExit()
     {
         var fixture = new Fixture();
-        var portfolio = CashPortfolio(0m);
+        var portfolio = CashPortfolio();
         portfolio.Positions.Add(Holding("AAA", 10m, 100m));
         var state = new BacktestExecutionState();
         var configuration = Configuration();
@@ -536,14 +563,14 @@ public sealed class BacktestExecutionTimingTests
         Assert.Equal(ExitReason.HoldingCondition, state.Pending["AAA"].ExitReason);
         Assert.Equal(Friday, state.Pending["BBB"].SignalDate);
 
-        Execute(state, portfolio, Friday.AddDays(1), ("BBB", 50m));
+        Execute(state, portfolio, Friday.AddDays(1), 1, ("BBB", 50m));
         Assert.Empty(portfolio.Trades);
         Assert.Contains("AAA", portfolio.Positions.Select(x => x.Symbol));
         Assert.False(state.Pending.ContainsKey("BBB"));
         Assert.Contains(state.Diagnostics, x => x.Contains("BBB", StringComparison.Ordinal));
 
         state.GenerateAfterClose(portfolio, Friday.AddDays(1), closes, candidates, observations, configuration);
-        Execute(state, portfolio, Friday.AddDays(2), ("AAA", 80m), ("BBB", 25m));
+        Execute(state, portfolio, Friday.AddDays(2), 1, ("AAA", 80m), ("BBB", 25m));
 
         Assert.Equal([TradeActionType.Sell, TradeActionType.Buy], portfolio.Trades.Select(x => x.Action).ToArray());
         Assert.Equal([ExitReason.HoldingCondition, null], portfolio.Trades.Select(x => x.ExitReason).ToArray());
