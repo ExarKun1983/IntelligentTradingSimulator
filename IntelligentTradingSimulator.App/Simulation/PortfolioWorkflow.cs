@@ -151,7 +151,7 @@ public sealed class PortfolioWorkflow
 
         _executionService.ExecuteRecommendations(
             portfolio,
-            recommendations.Take(_strategyConfiguration.MaxPositions).ToList(),
+            recommendations,
             prices,
             _tradingEngine);
 

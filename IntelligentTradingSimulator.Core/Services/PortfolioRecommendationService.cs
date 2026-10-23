@@ -45,6 +45,44 @@ public sealed class PortfolioRecommendationService
                 .ThenBy(x => x.Symbol, StringComparer.Ordinal));
     }
 
+    public IReadOnlyList<StockRecommendation> SelectExecutionTargets(
+        IReadOnlyList<StockRecommendation> recommendations,
+        IEnumerable<string> heldSymbols,
+        int? availableSlots = null,
+        bool reweightAllocations = true)
+    {
+        var held = heldSymbols.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var ordered = recommendations
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Symbol, StringComparer.Ordinal)
+            .ToList();
+        var selected = ordered.Where(x => held.Contains(x.Symbol))
+            .Concat(ordered
+                .Where(x => !held.Contains(x.Symbol))
+                .Take(Math.Max(0, availableSlots ?? _maxPositions - held.Count)))
+            .ToList();
+        if (!reweightAllocations)
+        {
+            return selected;
+        }
+
+        var totalScore = selected.Sum(x => x.Score);
+        if (totalScore <= 0m)
+        {
+            return selected;
+        }
+
+        return selected
+            .Select(x => new StockRecommendation
+            {
+                Symbol = x.Symbol,
+                Score = x.Score,
+                AllocationPercent = Math.Round(x.Score / totalScore * 100m, 2)
+            })
+            .Where(x => x.AllocationPercent > 0m)
+            .ToList();
+    }
+
     private static IReadOnlyList<StockRecommendation> BuildRecommendations(
         IEnumerable<ObservationResult> stocks)
     {

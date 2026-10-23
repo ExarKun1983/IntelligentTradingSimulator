@@ -606,6 +606,122 @@ public sealed class BacktestExecutionTimingTests
     }
 
     [Fact]
+    public void UnchangedRankingsAndPrices_DoNotRebalanceSelectedPositionsAcrossDays()
+    {
+        var portfolio = CashPortfolio();
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 2;
+        var recommendations = new[]
+        {
+            new StockRecommendation { Symbol = "AAA", Score = 10m },
+            new StockRecommendation { Symbol = "BBB", Score = 10m },
+            new StockRecommendation { Symbol = "CCC", Score = 1m }
+        };
+        var closes = new Dictionary<string, decimal>
+        {
+            ["AAA"] = 100m, ["BBB"] = 100m, ["CCC"] = 100m
+        };
+
+        state.GenerateAfterClose(portfolio, Friday, closes, recommendations, [], configuration);
+        Assert.Equal(50m, state.Pending["AAA"].AllocationPercent);
+        Assert.Equal(50m, state.Pending["BBB"].AllocationPercent);
+        Execute(state, portfolio, Friday.AddDays(1), 2, ("AAA", 100m), ("BBB", 100m));
+        Assert.Equal(2, portfolio.Trades.Count);
+
+        state.GenerateAfterClose(portfolio, Friday.AddDays(1), closes, recommendations, [], configuration);
+        Execute(state, portfolio, Friday.AddDays(2), 2, ("AAA", 100m), ("BBB", 100m));
+
+        Assert.Equal(2, portfolio.Trades.Count);
+        Assert.Equal(500m, portfolio.Positions.Single(x => x.Symbol == "AAA").MarketValue);
+        Assert.Equal(500m, portfolio.Positions.Single(x => x.Symbol == "BBB").MarketValue);
+        Assert.Equal(0m, portfolio.Cash);
+    }
+
+    [Fact]
+    public void SelectedRetainedAndNewTargets_AreReweightedTogether()
+    {
+        var portfolio = CashPortfolio(500m);
+        portfolio.Positions.Add(Holding("AAA", 5m, 100m));
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 2;
+        var recommendations = new[]
+        {
+            new StockRecommendation { Symbol = "AAA", Score = 3m },
+            new StockRecommendation { Symbol = "BBB", Score = 2m },
+            new StockRecommendation { Symbol = "CCC", Score = 1m }
+        };
+        var closes = new Dictionary<string, decimal>
+        {
+            ["AAA"] = 100m, ["BBB"] = 100m, ["CCC"] = 100m
+        };
+
+        state.GenerateAfterClose(portfolio, Friday, closes, recommendations, [], configuration);
+
+        Assert.Equal(60m, state.Pending["AAA"].AllocationPercent);
+        Assert.Equal(40m, state.Pending["BBB"].AllocationPercent);
+        Execute(state, portfolio, Friday.AddDays(1), 2, ("AAA", 100m), ("BBB", 100m));
+
+        Assert.Equal(600m, portfolio.Positions.Single(x => x.Symbol == "AAA").MarketValue);
+        Assert.Equal(400m, portfolio.Positions.Single(x => x.Symbol == "BBB").MarketValue);
+        Assert.Equal(0m, portfolio.Cash);
+    }
+
+    [Fact]
+    public void DelayedPurchases_UseSignalScoreWhenAnUnexecutedExitLeavesFewerSlots()
+    {
+        var portfolio = CashPortfolio(980m);
+        portfolio.Positions.Add(Holding("AAA", 0.1m, 100m));
+        portfolio.Positions.Add(Holding("ZZZ", 0.1m, 100m));
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 3;
+        configuration.UseHoldingConditionExit = true;
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday,
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m },
+            [new StockRecommendation { Symbol = "BBB", AllocationPercent = 100m, Score = 10m }],
+            [new ObservationResult { Symbol = "AAA", MomentumPercent = 0m }],
+            configuration);
+        Assert.Equal(100m, state.Pending["BBB"].AllocationPercent);
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday.AddDays(1),
+            new Dictionary<string, decimal>
+            {
+                ["AAA"] = 100m, ["ZZZ"] = 100m, ["CCC"] = 100m
+            },
+            [
+                new StockRecommendation { Symbol = "ZZZ", Score = 900m },
+                new StockRecommendation { Symbol = "CCC", Score = 100m }
+            ],
+            [
+                new ObservationResult { Symbol = "AAA", MomentumPercent = 0m },
+                new ObservationResult { Symbol = "ZZZ", Score = 900m, MomentumPercent = 5m, IsAboveSma5 = true },
+                new ObservationResult { Symbol = "CCC", Score = 100m, MomentumPercent = 5m, IsAboveSma5 = true }
+            ],
+            configuration);
+        Assert.Equal(10m, state.Pending["CCC"].AllocationPercent);
+        Assert.Equal(100m, state.Pending["CCC"].Score);
+        Assert.Equal(10m, state.Pending["BBB"].Score);
+
+        Execute(state, portfolio, Friday.AddDays(2), 3,
+            ("BBB", 100m), ("CCC", 100m), ("ZZZ", 100m));
+
+        Assert.DoesNotContain(portfolio.Trades, x => x.Symbol == "BBB");
+        Assert.Contains(portfolio.Trades, x => x.Symbol == "CCC" && x.Action == TradeActionType.Buy);
+        Assert.Contains("AAA", portfolio.Positions.Select(x => x.Symbol));
+        Assert.Contains("CCC", portfolio.Positions.Select(x => x.Symbol));
+        Assert.DoesNotContain(portfolio.Positions, x => x.Symbol == "BBB");
+        Assert.Contains(state.Diagnostics, x => x.Contains("BBB", StringComparison.Ordinal));
+        Assert.Equal(Friday, state.Pending["AAA"].SignalDate);
+    }
+
+    [Fact]
     public async Task RiskOnlyOpeningExit_IsCountedAsTradeButNotRebalance()
     {
         var fixture = new Fixture();

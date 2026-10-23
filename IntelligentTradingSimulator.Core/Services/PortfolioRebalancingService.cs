@@ -90,17 +90,17 @@ public sealed class PortfolioRebalancingService
             .Where(x => x.Quantity > 0m)
             .Select(x => x.Symbol)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var availableSlots = Math.Max(0, positionLimit - heldSymbols.Count);
-        var permittedNewSymbols = recommendations
-            .Where(x => !heldSymbols.Contains(x.Symbol))
+        var topRecommendationSymbols = recommendations
             .OrderByDescending(x => x.Score)
             .ThenBy(x => x.Symbol, StringComparer.Ordinal)
-            .Take(availableSlots)
+            .Take(positionLimit)
             .Select(x => x.Symbol)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         recommendations = recommendations
-            .Where(x => heldSymbols.Contains(x.Symbol) || permittedNewSymbols.Contains(x.Symbol))
+            .Where(x => !heldSymbols.Contains(x.Symbol) || topRecommendationSymbols.Contains(x.Symbol))
             .ToList();
+        recommendations = new PortfolioRecommendationService(positionLimit)
+            .SelectExecutionTargets(recommendations, heldSymbols);
 
         var allocationInstructions =
             allocationEngine.Calculate(

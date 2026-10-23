@@ -290,4 +290,68 @@ public sealed class PortfolioRebalancingServiceTests
         Assert.Equal(0m, portfolio.Cash);
         Assert.All(portfolio.Positions, x => Assert.Equal(500m, x.MarketValue));
     }
+
+    [Fact]
+    public void Execute_PreservesHeldPositionOutsideTopNWithoutAnExitSignal()
+    {
+        var holding = new Position
+        {
+            Symbol = "AAA", Quantity = 10m, AveragePrice = 100m, CurrentPrice = 100m
+        };
+        var portfolio = new Portfolio
+        {
+            Cash = 0m,
+            Positions = [holding]
+        };
+        var recommendations = new[]
+        {
+            new StockRecommendation { Symbol = "AAA", AllocationPercent = 0m, Score = 0.001m },
+            new StockRecommendation { Symbol = "BBB", AllocationPercent = 100m, Score = 100m }
+        };
+
+        new PortfolioRebalancingService().Execute(
+            portfolio,
+            recommendations,
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m },
+            new PortfolioAllocationEngine(new PortfolioAllocationService()),
+            new TradingEngine(),
+            maxPositions: 1);
+
+        Assert.Same(holding, Assert.Single(portfolio.Positions));
+        Assert.Equal(10m, holding.Quantity);
+        Assert.Empty(portfolio.Trades);
+        Assert.Equal(0m, portfolio.Cash);
+    }
+
+    [Fact]
+    public void Execute_ReweightsSelectedHoldingAndNewCandidateTogether()
+    {
+        var portfolio = new Portfolio
+        {
+            Cash = 500m,
+            Positions =
+            [
+                new Position { Symbol = "AAA", Quantity = 5m, AveragePrice = 100m, CurrentPrice = 100m }
+            ]
+        };
+        var recommendations = new[]
+        {
+            new StockRecommendation { Symbol = "AAA", AllocationPercent = 50m, Score = 3m },
+            new StockRecommendation { Symbol = "BBB", AllocationPercent = 33.33m, Score = 2m },
+            new StockRecommendation { Symbol = "CCC", AllocationPercent = 16.67m, Score = 1m }
+        };
+
+        new PortfolioRebalancingService().Execute(
+            portfolio,
+            recommendations,
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m, ["CCC"] = 100m },
+            new PortfolioAllocationEngine(new PortfolioAllocationService()),
+            new TradingEngine(),
+            maxPositions: 2);
+
+        Assert.Equal(600m, portfolio.Positions.Single(x => x.Symbol == "AAA").MarketValue);
+        Assert.Equal(400m, portfolio.Positions.Single(x => x.Symbol == "BBB").MarketValue);
+        Assert.DoesNotContain(portfolio.Positions, x => x.Symbol == "CCC");
+        Assert.Equal(0m, portfolio.Cash);
+    }
 }

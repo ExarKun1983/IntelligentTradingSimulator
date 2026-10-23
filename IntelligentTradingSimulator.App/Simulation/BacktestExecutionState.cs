@@ -11,7 +11,8 @@ public sealed record BacktestPendingIntent(
     string Symbol,
     DateTime SignalDate,
     decimal AllocationPercent,
-    ExitReason? ExitReason = null);
+    ExitReason? ExitReason = null,
+    decimal Score = 0m);
 
 public sealed class BacktestExecutionState
 {
@@ -95,10 +96,33 @@ public sealed class BacktestExecutionState
             }
         }
 
-        var targets = eligible
+        var targetIntents = eligible
             .Where(x => !x.ExitReason.HasValue)
-            .Select(x => new StockRecommendation { Symbol = x.Symbol, AllocationPercent = x.AllocationPercent })
+            .Select(x => new StockRecommendation
+            {
+                Symbol = x.Symbol,
+                AllocationPercent = x.AllocationPercent,
+                Score = x.Score
+            })
             .ToList();
+        var heldSymbols = portfolio.Positions
+            .Where(x => x.Quantity > 0m)
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var availableSlots = Math.Max(0, maxPositions - heldSymbols.Count);
+        var targets = new PortfolioRecommendationService(maxPositions)
+            .SelectExecutionTargets(targetIntents, heldSymbols, availableSlots, reweightAllocations: false);
+        var selectedNewTargets = targets
+            .Where(x => !heldSymbols.Contains(x.Symbol))
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var blocked in targetIntents.Where(x =>
+                     !heldSymbols.Contains(x.Symbol) && !selectedNewTargets.Contains(x.Symbol)))
+        {
+            _diagnostics.Add(
+                $"Purchase blocked for {blocked.Symbol} on {date:yyyy-MM-dd}: the {maxPositions}-position limit is full.");
+        }
+
         var instructions = allocationEngine.Calculate(portfolio, targets);
         foreach (var instruction in instructions.Where(x => !x.IsBuy))
         {
@@ -110,28 +134,6 @@ public sealed class BacktestExecutionState
                 ExitReason = ExitReason.Rebalance
             }, opens[instruction.Symbol], date);
         }
-
-        var heldSymbols = portfolio.Positions
-            .Where(x => x.Quantity > 0m)
-            .Select(x => x.Symbol)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var availableSlots = Math.Max(0, maxPositions - heldSymbols.Count);
-        var permittedNewTargets = targets
-            .Where(x => !heldSymbols.Contains(x.Symbol))
-            .OrderByDescending(x => x.AllocationPercent)
-            .ThenBy(x => x.Symbol, StringComparer.Ordinal)
-            .Take(availableSlots)
-            .Select(x => x.Symbol)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var blocked in targets.Where(x =>
-                     !heldSymbols.Contains(x.Symbol) && !permittedNewTargets.Contains(x.Symbol)))
-        {
-            _diagnostics.Add(
-                $"Purchase blocked for {blocked.Symbol} on {date:yyyy-MM-dd}: the {maxPositions}-position limit is full.");
-        }
-        targets = targets
-            .Where(x => heldSymbols.Contains(x.Symbol) || permittedNewTargets.Contains(x.Symbol))
-            .ToList();
 
         instructions = allocationEngine.Calculate(portfolio, targets);
         foreach (var trade in allocationEngine.BuildTrades(portfolio, instructions))
@@ -247,10 +249,8 @@ public sealed class BacktestExecutionState
             .ThenBy(x => x.Symbol, StringComparer.Ordinal)
             .ToList();
         var candidates = currentTargets.Where(x => !heldSymbols.Contains(x.Symbol)).ToList();
-        var selectedCandidates = currentTargets
-            .Where(x => heldSymbols.Contains(x.Symbol))
-            .Concat(Reweight(candidates.Take(availableSlots).ToList()))
-            .ToList();
+        var selectedCandidates = new PortfolioRecommendationService(configuration.MaxPositions)
+            .SelectExecutionTargets(currentTargets, heldSymbols, availableSlots);
         var selectedSymbols = selectedCandidates
             .Select(x => x.Symbol)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -290,7 +290,8 @@ public sealed class BacktestExecutionState
                 continue;
             }
 
-            _pending[symbol] = new(symbol, date.Date, recommendation.AllocationPercent);
+            _pending[symbol] = new(
+                symbol, date.Date, recommendation.AllocationPercent, Score: recommendation.Score);
         }
     }
 
@@ -301,20 +302,4 @@ public sealed class BacktestExecutionState
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Count();
 
-    private static List<StockRecommendation> Reweight(
-        IReadOnlyList<StockRecommendation> recommendations)
-    {
-        var totalScore = recommendations.Sum(x => x.Score);
-        if (totalScore <= 0m)
-        {
-            return recommendations.ToList();
-        }
-
-        return recommendations.Select(x => new StockRecommendation
-        {
-            Symbol = x.Symbol,
-            Score = x.Score,
-            AllocationPercent = Math.Round(x.Score / totalScore * 100m, 2)
-        }).ToList();
-    }
 }

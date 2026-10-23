@@ -43,6 +43,12 @@ public sealed class PortfolioExecutionService
         IReadOnlyDictionary<string, decimal> prices,
         TradingEngine tradingEngine)
     {
+        var heldSymbols = portfolio.Positions
+            .Where(x => x.Quantity > 0m)
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        recommendations = new PortfolioRecommendationService(_maxPositions)
+            .SelectExecutionTargets(recommendations, heldSymbols);
         var capitalToInvest =
             portfolio.StartingCash * 0.80m;
 

@@ -167,6 +167,10 @@ observation is neutral and does not trigger that exit. Stop Loss and Trailing
 Stop remain independently optional and retain their existing precedence over
 the holding-condition exit.
 
+This neutral-momentum exit and its default activation are an explicit proposed
+design decision requiring product review; the threshold is not performance
+validated and must not be represented as an investment recommendation.
+
 Backtest closes only create signals. Exits and purchases execute at a later
 valid instrument opening, with all eligible sales before buys. A pending or
 partial sale does not release a position slot; only a completed full sale

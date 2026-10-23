@@ -44,6 +44,14 @@ Project references point inward: App references Core and Infrastructure; Infrast
 
 Current boundary: the normal ranking workflow supplies optional fundamentals, but the backtest day processor does not fetch or pass fundamental data. Do not assume current provider values are point-in-time historical inputs.
 
+### Holding-exit design decision (review required)
+
+The backtest currently defaults `UseHoldingConditionExit` to `true`: one fresh
+close observation with momentum at or below 0% signals a full exit at the next
+valid opening. This neutral-momentum rule is a proposed lifecycle policy, not a
+validated investment outcome; its threshold and default activation require
+product review.
+
 ### Benchmark flow
 
 1. App's [BacktestBenchmarkService](IntelligentTradingSimulator.App/Simulation/BacktestBenchmarkService.cs) loads a persisted run's dates and uses `BenchmarkUniverse` defaults unless symbols are supplied explicitly.
