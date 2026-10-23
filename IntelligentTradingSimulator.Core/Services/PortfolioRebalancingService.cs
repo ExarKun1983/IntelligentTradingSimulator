@@ -19,8 +19,15 @@ public sealed class PortfolioRebalancingService
         TradingEngine tradingEngine,
         decimal? stopLossPercent = null,
         decimal? trailingStopPercent = null,
-        DateTime? simulatedTimestamp = null)
+        DateTime? simulatedTimestamp = null,
+        int? maxPositions = null)
     {
+        var positionLimit = maxPositions ?? StrategyConfiguration.DefaultMaxPositions;
+        if (positionLimit <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxPositions));
+        }
+
         if (stopLossPercent is <= 0m or > 100m)
         {
             throw new ArgumentOutOfRangeException(nameof(stopLossPercent));
@@ -77,6 +84,22 @@ public sealed class PortfolioRebalancingService
 
         recommendations = recommendations
             .Where(x => !stoppedSymbols.Contains(x.Symbol))
+            .ToList();
+
+        var heldSymbols = portfolio.Positions
+            .Where(x => x.Quantity > 0m)
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var availableSlots = Math.Max(0, positionLimit - heldSymbols.Count);
+        var permittedNewSymbols = recommendations
+            .Where(x => !heldSymbols.Contains(x.Symbol))
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Symbol, StringComparer.Ordinal)
+            .Take(availableSlots)
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        recommendations = recommendations
+            .Where(x => heldSymbols.Contains(x.Symbol) || permittedNewSymbols.Contains(x.Symbol))
             .ToList();
 
         var allocationInstructions =

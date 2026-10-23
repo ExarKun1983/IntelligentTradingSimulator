@@ -44,6 +44,7 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
 
     public async Task<BacktestDayResult> ProcessAsync(BacktestDayRequest request)
     {
+        request.ExecutionState.ClearDiagnostics();
         _progress.Context = _progress.Context with
         {
             Date = request.CurrentDate.Date,
@@ -159,7 +160,10 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                     continue;
                 }
 
-                if (!request.Symbols.Contains(symbol, StringComparer.OrdinalIgnoreCase))
+                if (!request.Symbols.Contains(symbol, StringComparer.OrdinalIgnoreCase) &&
+                    !request.Portfolio.Positions.Any(x =>
+                        x.Quantity > 0m &&
+                        string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase)))
                 {
                     skipped++;
                     continue;
@@ -191,7 +195,8 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
         using (_progress.BeginOperation("Executing pending opening intents"))
         {
             request.ExecutionState.ExecuteOpen(
-                portfolio, request.CurrentDate, opens, allocationEngine, _tradingEngine);
+                portfolio, request.CurrentDate, opens, allocationEngine, _tradingEngine,
+                request.StrategyConfiguration.MaxPositions);
         }
 
         using (_progress.BeginOperation("Marking closing prices"))
@@ -254,10 +259,19 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 .ThenBy(x => x.Symbol, StringComparer.Ordinal)
                 .ToList();
 
+            var universe = request.Symbols.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var universeResults = rankedResults.Where(x => universe.Contains(x.Symbol)).ToList();
             recommendations = request.ExecutionState.BuildRecommendations(
-                rankedResults, request.Symbols, recommendationService);
+                universeResults, request.Symbols, recommendationService);
+            var candidates = recommendationService.BuildCandidates(universeResults)
+                .ToList();
             request.ExecutionState.GenerateAfterClose(
-                portfolio, request.CurrentDate, prices, recommendations, rankedResults, request.StrategyConfiguration);
+                portfolio, request.CurrentDate, prices, candidates, rankedResults, request.StrategyConfiguration);
+        }
+
+        foreach (var diagnostic in request.ExecutionState.Diagnostics)
+        {
+            _progress.Report(diagnostic, force: true);
         }
 
         using (_progress.BeginOperation("Saving feature snapshots"))
@@ -301,7 +315,8 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             Portfolio = portfolio,
             Snapshot = snapshot,
             Recommendations = recommendations,
-            Observations = rankedResults
+            Observations = rankedResults,
+            Diagnostics = request.ExecutionState.Diagnostics.ToList()
         };
     }
 

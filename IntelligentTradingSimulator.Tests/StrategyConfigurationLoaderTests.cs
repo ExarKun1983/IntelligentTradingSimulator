@@ -442,6 +442,7 @@ public sealed class StrategyConfigurationLoaderTests
                         [$"Strategies:{strategyId}:RsiPreferredRangeBonus"] = "2.5",
                         [$"Strategies:{strategyId}:RsiOverboughtPenalty"] = "3.5",
                         [$"Strategies:{strategyId}:UseRelativeStrength"] = "false",
+                        [$"Strategies:{strategyId}:UseHoldingConditionExit"] = "false",
                         [$"Strategies:{strategyId}:Use52WeekHigh"] = "true",
                         [$"Strategies:{strategyId}:Week52HighScoreWeight"] = "4.5",
                         [$"Strategies:{strategyId}:UseQualityFilter"] = "true"
@@ -458,6 +459,7 @@ public sealed class StrategyConfigurationLoaderTests
         Assert.Equal(2.5m, result.RsiPreferredRangeBonus);
         Assert.Equal(3.5m, result.RsiOverboughtPenalty);
         Assert.False(result.UseRelativeStrength);
+        Assert.False(result.UseHoldingConditionExit);
         Assert.True(result.Use52WeekHigh);
         Assert.Equal(4.5m, result.Week52HighScoreWeight);
         Assert.True(result.UseQualityFilter);

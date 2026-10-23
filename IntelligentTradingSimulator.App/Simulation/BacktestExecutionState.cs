@@ -16,9 +16,12 @@ public sealed record BacktestPendingIntent(
 public sealed class BacktestExecutionState
 {
     private readonly Dictionary<string, BacktestPendingIntent> _pending = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, ObservationResult> _observations = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<string> _diagnostics = [];
 
     public IReadOnlyDictionary<string, BacktestPendingIntent> Pending => _pending;
+    public IReadOnlyList<string> Diagnostics => _diagnostics;
+
+    public void ClearDiagnostics() => _diagnostics.Clear();
 
     public IReadOnlyList<StockRecommendation> BuildRecommendations(
         IReadOnlyList<ObservationResult> observations,
@@ -26,16 +29,8 @@ public sealed class BacktestExecutionState
         PortfolioRecommendationService recommendationService)
     {
         var universe = symbols.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var symbol in _observations.Keys.Where(x => !universe.Contains(x)).ToList())
-        {
-            _observations.Remove(symbol);
-        }
-        foreach (var observation in observations)
-        {
-            _observations[observation.Symbol] = observation;
-        }
-
-        return recommendationService.Build(_observations.Values.ToList());
+        return recommendationService.Build(
+            observations.Where(x => universe.Contains(x.Symbol)).ToList());
     }
 
     public void ExecuteOpen(
@@ -43,8 +38,14 @@ public sealed class BacktestExecutionState
         DateTime date,
         IReadOnlyDictionary<string, decimal> opens,
         PortfolioAllocationEngine allocationEngine,
-        TradingEngine tradingEngine)
+        TradingEngine tradingEngine,
+        int maxPositions = StrategyConfiguration.DefaultMaxPositions)
     {
+        if (maxPositions <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxPositions));
+        }
+
         var previousHighs = portfolio.Positions.ToDictionary(
             x => x.Symbol, x => x.HighestPriceSinceEntry, StringComparer.OrdinalIgnoreCase);
         var tradesBeforeOpen = portfolio.Trades.Count;
@@ -104,6 +105,16 @@ public sealed class BacktestExecutionState
         instructions = allocationEngine.Calculate(portfolio, targets);
         foreach (var trade in allocationEngine.BuildTrades(portfolio, instructions))
         {
+            var isExistingPosition = portfolio.Positions.Any(
+                x => x.Quantity > 0m &&
+                     string.Equals(x.Symbol, trade.Symbol, StringComparison.OrdinalIgnoreCase));
+            if (!isExistingPosition && CountOpenPositions(portfolio) >= maxPositions)
+            {
+                _diagnostics.Add(
+                    $"Purchase blocked for {trade.Symbol} on {date:yyyy-MM-dd}: the {maxPositions}-position limit is full.");
+                continue;
+            }
+
             tradingEngine.Execute(portfolio, new TradingDecision
             {
                 Symbol = trade.Symbol,
@@ -134,6 +145,16 @@ public sealed class BacktestExecutionState
         IReadOnlyList<ObservationResult> observations,
         StrategyConfiguration configuration)
     {
+        if (configuration.MaxPositions <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(configuration.MaxPositions));
+        }
+
+        var observationsBySymbol = observations
+            .GroupBy(x => x.Symbol, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.Last(), StringComparer.OrdinalIgnoreCase);
+        var observedSymbols = observationsBySymbol.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         foreach (var position in portfolio.Positions)
         {
             if (position.Quantity <= 0m || !closes.TryGetValue(position.Symbol, out var close))
@@ -153,37 +174,111 @@ public sealed class BacktestExecutionState
             {
                 reason = ExitReason.TrailingStop;
             }
+            else if (configuration.UseHoldingConditionExit &&
+                     observationsBySymbol.TryGetValue(position.Symbol, out var observation) &&
+                     observation.MomentumPercent <= 0m)
+            {
+                reason = ExitReason.HoldingCondition;
+            }
 
             if (reason.HasValue &&
                 (!_pending.TryGetValue(position.Symbol, out var existing) || !existing.ExitReason.HasValue))
             {
                 _pending[position.Symbol] = new(position.Symbol, date.Date, 0m, reason);
+                var detail = reason == ExitReason.HoldingCondition &&
+                             observationsBySymbol.TryGetValue(position.Symbol, out var holdingObservation)
+                    ? $"momentum {holdingObservation.MomentumPercent}% <= 0%"
+                    : reason.Value.ToString();
+                _diagnostics.Add(
+                    $"Exit signaled for {position.Symbol} on {date:yyyy-MM-dd}: {reason} ({detail}).");
             }
         }
 
-        if (recommendations.Count == 0)
-        {
-            return;
-        }
+        var heldSymbols = portfolio.Positions
+            .Where(x => x.Quantity > 0m)
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var exitingSymbols = _pending.Values
+            .Where(x => x.ExitReason.HasValue && heldSymbols.Contains(x.Symbol))
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var deferredPendingBuys = _pending.Values.Count(
+            x => !x.ExitReason.HasValue &&
+                 !heldSymbols.Contains(x.Symbol) &&
+                 !observedSymbols.Contains(x.Symbol));
+        var availableSlots = Math.Max(
+            0,
+            configuration.MaxPositions - heldSymbols.Count + exitingSymbols.Count - deferredPendingBuys);
+        var currentTargets = recommendations
+            .Where(x => closes.ContainsKey(x.Symbol))
+            .Where(x => !_pending.TryGetValue(x.Symbol, out var existing) || !existing.ExitReason.HasValue)
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Symbol, StringComparer.Ordinal)
+            .ToList();
+        var candidates = currentTargets.Where(x => !heldSymbols.Contains(x.Symbol)).ToList();
+        var selectedCandidates = currentTargets
+            .Where(x => heldSymbols.Contains(x.Symbol))
+            .Concat(Reweight(candidates.Take(availableSlots).ToList()))
+            .ToList();
+        var selectedSymbols = selectedCandidates
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var analyzed = observations.Select(x => x.Symbol).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var symbols = recommendations.Select(x => x.Symbol)
-            .Distinct(StringComparer.OrdinalIgnoreCase);
-        foreach (var symbol in symbols)
+        foreach (var pendingBuy in _pending.Values
+                     .Where(x => !x.ExitReason.HasValue && !selectedSymbols.Contains(x.Symbol))
+                     .ToList())
         {
-            if (!closes.ContainsKey(symbol) || _pending.ContainsKey(symbol))
+            if (!heldSymbols.Contains(pendingBuy.Symbol) && !observedSymbols.Contains(pendingBuy.Symbol))
             {
                 continue;
             }
 
-            var recommendation = recommendations.FirstOrDefault(
-                x => string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase));
-            if (recommendation is not null && !analyzed.Contains(symbol))
+            _pending.Remove(pendingBuy.Symbol);
+            _diagnostics.Add(
+                $"Purchase intent for {pendingBuy.Symbol} was rejected on {date:yyyy-MM-dd}: it no longer qualifies for an available position slot.");
+        }
+
+        foreach (var blocked in candidates.Skip(availableSlots))
+        {
+            _diagnostics.Add(
+                $"Purchase blocked for {blocked.Symbol} on {date:yyyy-MM-dd}: the {configuration.MaxPositions}-position limit leaves no available slot.");
+        }
+
+        foreach (var recommendation in selectedCandidates)
+        {
+            var symbol = recommendation.Symbol;
+            if (_pending.TryGetValue(symbol, out var existing) && existing.ExitReason.HasValue)
             {
+                _diagnostics.Add(
+                    $"Purchase intent for {symbol} was rejected on {date:yyyy-MM-dd}: an exit signal is active.");
                 continue;
             }
 
-            _pending[symbol] = new(symbol, date.Date, recommendation?.AllocationPercent ?? 0m);
+            _pending[symbol] = new(symbol, date.Date, recommendation.AllocationPercent);
         }
+    }
+
+    private static int CountOpenPositions(Portfolio portfolio) =>
+        portfolio.Positions
+            .Where(x => x.Quantity > 0m)
+            .Select(x => x.Symbol)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+
+    private static List<StockRecommendation> Reweight(
+        IReadOnlyList<StockRecommendation> recommendations)
+    {
+        var totalScore = recommendations.Sum(x => x.Score);
+        if (totalScore <= 0m)
+        {
+            return recommendations.ToList();
+        }
+
+        return recommendations.Select(x => new StockRecommendation
+        {
+            Symbol = x.Symbol,
+            Score = x.Score,
+            AllocationPercent = Math.Round(x.Score / totalScore * 100m, 2)
+        }).ToList();
     }
 }

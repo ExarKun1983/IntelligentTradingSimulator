@@ -435,6 +435,150 @@ public sealed class BacktestExecutionTimingTests
     }
 
     [Fact]
+    public async Task DayProcessor_UsesTheFullCandidateRankingButOpensOnlyAvailableSlots()
+    {
+        var fixture = new Fixture();
+        foreach (var symbol in new[] { "AAA", "BBB", "CCC" })
+        {
+            fixture.Provider.Data[symbol] = History(Friday)
+                .Append(Candle(Friday.AddDays(4), 110m, 111m)).ToList();
+        }
+
+        var portfolio = CashPortfolio();
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 2;
+        configuration.MaxPositionWeight = 25m;
+
+        var signal = await fixture.Day(Friday, portfolio, state, ["AAA", "BBB", "CCC"], configuration);
+
+        Assert.Equal(2, signal.Recommendations.Count);
+        Assert.Equal(["AAA", "BBB"], state.Pending.Keys.OrderBy(x => x, StringComparer.Ordinal).ToArray());
+        Assert.Contains(signal.Diagnostics, x => x.Contains("CCC", StringComparison.Ordinal));
+
+        var execution = await fixture.Day(Friday.AddDays(4), portfolio, state, ["AAA", "BBB", "CCC"], configuration);
+
+        Assert.Equal(2, portfolio.Trades.Count(x => x.Action == TradeActionType.Buy));
+        Assert.Equal(2, portfolio.Positions.Count(x => x.Quantity > 0m));
+        Assert.True(portfolio.Cash > 0m);
+        Assert.Contains(execution.Diagnostics, x => x.Contains("CCC", StringComparison.Ordinal));
+        AssertReconciles(portfolio, 1_000m);
+    }
+
+    [Fact]
+    public async Task HoldingConditionExit_UsesFreshMomentumAndFillsAtALaterOpenWithoutAReplacement()
+    {
+        var fixture = new Fixture();
+        fixture.Provider.Data["AAA"] = Enumerable.Range(0, 5)
+            .Select(i => Candle(Friday.AddDays(i - 4), 100m - i, 100m - i))
+            .ToList();
+        var portfolio = new Portfolio { StartingCash = 1_000m };
+        portfolio.Positions.Add(Holding("AAA", 10m, 100m));
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 1;
+        configuration.UseHoldingConditionExit = true;
+
+        var signal = await fixture.Day(Friday, portfolio, state, [], configuration);
+
+        Assert.Empty(signal.Recommendations);
+        Assert.Equal(ExitReason.HoldingCondition, state.Pending["AAA"].ExitReason);
+        Assert.Contains(signal.Diagnostics, x => x.Contains("momentum", StringComparison.Ordinal));
+        Assert.Empty(portfolio.Trades);
+
+        fixture.Provider.Data["AAA"].Add(Candle(Friday.AddDays(1), 75m, 70m));
+        await fixture.Day(Friday.AddDays(1), portfolio, state, [], configuration);
+
+        var sale = Assert.Single(portfolio.Trades);
+        Assert.Equal(TradeActionType.Sell, sale.Action);
+        Assert.Equal(ExitReason.HoldingCondition, sale.ExitReason);
+        Assert.Equal(Friday.AddDays(1), sale.Timestamp);
+        Assert.Equal(75m, sale.Price);
+        Assert.Empty(portfolio.Positions);
+    }
+
+    [Fact]
+    public async Task MissingHeldObservation_DoesNotGenerateAHoldingExit()
+    {
+        var fixture = new Fixture();
+        var portfolio = CashPortfolio(0m);
+        portfolio.Positions.Add(Holding("AAA", 10m, 100m));
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.UseHoldingConditionExit = true;
+
+        var result = await fixture.Day(Friday, portfolio, state, [], configuration);
+
+        Assert.Empty(state.Pending);
+        Assert.DoesNotContain(result.Diagnostics, x => x.Contains("Exit signaled", StringComparison.Ordinal));
+        Assert.Empty(portfolio.Trades);
+    }
+
+    [Fact]
+    public void UnexecutedExitKeepsItsSlotOccupied_ThenCompletedSalePermitsFreshReplacement()
+    {
+        var portfolio = CashPortfolio(0m);
+        portfolio.Positions.Add(Holding("AAA", 10m, 100m));
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 1;
+        configuration.UseHoldingConditionExit = true;
+        var service = new PortfolioRecommendationService(1);
+        var observations = new[]
+        {
+            new ObservationResult { Symbol = "AAA", MomentumPercent = 0m },
+            new ObservationResult { Symbol = "BBB", Score = 10m, MomentumPercent = 5m, IsAboveSma5 = true }
+        };
+        var candidates = service.BuildCandidates(observations);
+        var closes = new Dictionary<string, decimal> { ["AAA"] = 90m, ["BBB"] = 50m };
+
+        state.GenerateAfterClose(portfolio, Friday, closes, candidates, observations, configuration);
+        Assert.Equal(ExitReason.HoldingCondition, state.Pending["AAA"].ExitReason);
+        Assert.Equal(Friday, state.Pending["BBB"].SignalDate);
+
+        Execute(state, portfolio, Friday.AddDays(1), ("BBB", 50m));
+        Assert.Empty(portfolio.Trades);
+        Assert.Contains("AAA", portfolio.Positions.Select(x => x.Symbol));
+        Assert.False(state.Pending.ContainsKey("BBB"));
+        Assert.Contains(state.Diagnostics, x => x.Contains("BBB", StringComparison.Ordinal));
+
+        state.GenerateAfterClose(portfolio, Friday.AddDays(1), closes, candidates, observations, configuration);
+        Execute(state, portfolio, Friday.AddDays(2), ("AAA", 80m), ("BBB", 25m));
+
+        Assert.Equal([TradeActionType.Sell, TradeActionType.Buy], portfolio.Trades.Select(x => x.Action).ToArray());
+        Assert.Equal([ExitReason.HoldingCondition, null], portfolio.Trades.Select(x => x.ExitReason).ToArray());
+        Assert.All(portfolio.Trades, x => Assert.Equal(Friday.AddDays(2), x.Timestamp));
+        Assert.Equal("BBB", Assert.Single(portfolio.Positions).Symbol);
+        Assert.True(portfolio.Cash >= 0m);
+    }
+
+    [Fact]
+    public void PartialSaleDoesNotFreeASlotForAStalePurchaseIntent()
+    {
+        var portfolio = CashPortfolio(0m);
+        var state = new BacktestExecutionState();
+        var signalConfiguration = Configuration();
+        signalConfiguration.MaxPositions = 2;
+        state.GenerateAfterClose(portfolio, Friday,
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m },
+            [
+                new StockRecommendation { Symbol = "AAA", AllocationPercent = 25m, Score = 25m },
+                new StockRecommendation { Symbol = "BBB", AllocationPercent = 75m, Score = 75m }
+            ],
+            [], signalConfiguration);
+        portfolio.Positions.Add(Holding("AAA", 10m, 100m));
+
+        Execute(state, portfolio, Friday.AddDays(1), 1, ("AAA", 100m), ("BBB", 100m));
+
+        Assert.Equal(TradeActionType.Sell, Assert.Single(portfolio.Trades).Action);
+        Assert.Equal(7.5m, portfolio.Trades[0].Quantity);
+        Assert.Equal(2.5m, Assert.Single(portfolio.Positions).Quantity);
+        Assert.DoesNotContain(portfolio.Trades, x => x.Symbol == "BBB");
+        Assert.Equal(750m, portfolio.Cash);
+        Assert.Contains(state.Diagnostics, x => x.Contains("BBB", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task RiskOnlyOpeningExit_IsCountedAsTradeButNotRebalance()
     {
         var fixture = new Fixture();
@@ -669,7 +813,8 @@ public sealed class BacktestExecutionTimingTests
 
     private static StrategyConfiguration Configuration() => new()
     {
-        Id = "timing-regression", UseRelativeStrength = false, MaxPositionWeight = 100m
+        Id = "timing-regression", UseRelativeStrength = false, MaxPositionWeight = 100m,
+        UseHoldingConditionExit = false
     };
 
     private static Portfolio CashPortfolio(decimal cash = 1_000m) => new()
@@ -708,6 +853,12 @@ public sealed class BacktestExecutionTimingTests
         params (string Symbol, decimal Open)[] opens) =>
         state.ExecuteOpen(portfolio, date, opens.ToDictionary(x => x.Symbol, x => x.Open),
             new PortfolioAllocationEngine(new PortfolioAllocationService()), new TradingEngine());
+
+    private static void Execute(
+        BacktestExecutionState state, Portfolio portfolio, DateTime date, int maxPositions,
+        params (string Symbol, decimal Open)[] opens) =>
+        state.ExecuteOpen(portfolio, date, opens.ToDictionary(x => x.Symbol, x => x.Open),
+            new PortfolioAllocationEngine(new PortfolioAllocationService()), new TradingEngine(), maxPositions);
 
     private static (DateTime, string, TradeActionType, decimal, decimal, ExitReason?)[] TradeRows(Portfolio portfolio) =>
         portfolio.Trades.Select(x => (x.Timestamp, x.Symbol, x.Action, x.Quantity, x.Price, x.ExitReason)).ToArray();

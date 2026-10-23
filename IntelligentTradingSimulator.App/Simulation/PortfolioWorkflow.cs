@@ -85,7 +85,8 @@ public sealed class PortfolioWorkflow
             _allocationEngine,
             _tradingEngine,
             _strategyConfiguration.StopLossPercent,
-            _strategyConfiguration.TrailingStopPercent);
+            _strategyConfiguration.TrailingStopPercent,
+            maxPositions: _strategyConfiguration.MaxPositions);
 
         using (_progress.BeginOperation("Saving rebalanced portfolio"))
             await _portfolioRepository.SaveAsync(portfolio);
