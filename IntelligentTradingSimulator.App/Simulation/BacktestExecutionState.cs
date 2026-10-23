@@ -105,6 +105,7 @@ public sealed class BacktestExecutionState
                 AllocationPercent = x.AllocationPercent,
                 Score = x.Score
             })
+            .Where(x => x.Score <= 0m || x.AllocationPercent > 0m)
             .ToList();
         var heldSymbols = portfolio.Positions
             .Where(x => x.Quantity > 0m)
@@ -236,6 +237,24 @@ public sealed class BacktestExecutionState
             .Where(x => x.ExitReason.HasValue && heldSymbols.Contains(x.Symbol))
             .Select(x => x.Symbol)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var currentTargets = recommendations
+            .Where(x => closes.ContainsKey(x.Symbol))
+            .Where(x => !_pending.TryGetValue(x.Symbol, out var existing) || !existing.ExitReason.HasValue)
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Symbol, StringComparer.Ordinal)
+            .ToList();
+        foreach (var pendingBuy in _pending.Values
+                     .Where(x => !x.ExitReason.HasValue &&
+                                 observedSymbols.Contains(x.Symbol) &&
+                                 !currentTargets.Any(target => string.Equals(
+                                     target.Symbol, x.Symbol, StringComparison.OrdinalIgnoreCase)))
+                     .ToList())
+        {
+            _pending.Remove(pendingBuy.Symbol);
+            _diagnostics.Add(
+                $"Purchase intent for {pendingBuy.Symbol} was rejected on {date:yyyy-MM-dd}: it no longer qualifies for an available position slot.");
+        }
+
         var activePendingBuys = _pending.Values
             .Where(x => !x.ExitReason.HasValue)
             .ToList();
@@ -243,12 +262,6 @@ public sealed class BacktestExecutionState
         var availableSlots = Math.Max(
             0,
             configuration.MaxPositions - heldSymbols.Count + exitingSymbols.Count - deferredPendingBuys);
-        var currentTargets = recommendations
-            .Where(x => closes.ContainsKey(x.Symbol))
-            .Where(x => !_pending.TryGetValue(x.Symbol, out var existing) || !existing.ExitReason.HasValue)
-            .OrderByDescending(x => x.Score)
-            .ThenBy(x => x.Symbol, StringComparer.Ordinal)
-            .ToList();
         var activePendingSymbols = activePendingBuys
             .Select(x => x.Symbol)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -264,31 +277,6 @@ public sealed class BacktestExecutionState
                             target.Symbol, x.Symbol, StringComparison.OrdinalIgnoreCase)) &&
                         !_pending.ContainsKey(x.Symbol))
             .ToList();
-        var selectedSymbols = selectedCandidates
-            .Select(x => x.Symbol)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var pending in activePendingBuys)
-        {
-            if (!observedSymbols.Contains(pending.Symbol) ||
-                currentTargets.Any(x => string.Equals(x.Symbol, pending.Symbol, StringComparison.OrdinalIgnoreCase)))
-            {
-                selectedSymbols.Add(pending.Symbol);
-            }
-        }
-
-        foreach (var pendingBuy in _pending.Values
-                     .Where(x => !x.ExitReason.HasValue && !selectedSymbols.Contains(x.Symbol))
-                     .ToList())
-        {
-            if (!observedSymbols.Contains(pendingBuy.Symbol))
-            {
-                continue;
-            }
-
-            _pending.Remove(pendingBuy.Symbol);
-            _diagnostics.Add(
-                $"Purchase intent for {pendingBuy.Symbol} was rejected on {date:yyyy-MM-dd}: it no longer qualifies for an available position slot.");
-        }
 
         foreach (var blocked in candidates.Skip(availableSlots))
         {

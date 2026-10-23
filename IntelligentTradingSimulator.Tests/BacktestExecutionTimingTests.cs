@@ -746,6 +746,120 @@ public sealed class BacktestExecutionTimingTests
     }
 
     [Fact]
+    public void PositiveScoreTargetsRoundedToZero_DoNotLiquidateFreshOrDeferredHoldings()
+    {
+        static (Portfolio Portfolio, BacktestExecutionState State, StrategyConfiguration Configuration) Create()
+        {
+            var portfolio = CashPortfolio(0m);
+            portfolio.Positions.Add(Holding("AAA", 10m, 100m));
+            var configuration = Configuration();
+            configuration.MaxPositions = 2;
+            return (portfolio, new BacktestExecutionState(), configuration);
+        }
+
+        var (freshPortfolio, freshState, freshConfiguration) = Create();
+        freshState.GenerateAfterClose(
+            freshPortfolio,
+            Friday,
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m },
+            [
+                new StockRecommendation { Symbol = "AAA", Score = 0.001m },
+                new StockRecommendation { Symbol = "BBB", Score = 100m }
+            ],
+            [],
+            freshConfiguration);
+        Assert.Equal(0m, freshState.Pending["AAA"].AllocationPercent);
+
+        Execute(freshState, freshPortfolio, Friday.AddDays(1), 2, ("AAA", 100m), ("BBB", 100m));
+
+        Assert.Empty(freshPortfolio.Trades.Where(x => x.Symbol == "AAA"));
+        Assert.Equal(10m, Assert.Single(freshPortfolio.Positions).Quantity);
+
+        var (deferredPortfolio, deferredState, deferredConfiguration) = Create();
+        deferredState.GenerateAfterClose(
+            deferredPortfolio,
+            Friday,
+            new Dictionary<string, decimal> { ["AAA"] = 100m },
+            [new StockRecommendation { Symbol = "AAA", Score = 0.001m }],
+            [],
+            deferredConfiguration);
+        deferredState.GenerateAfterClose(
+            deferredPortfolio,
+            Friday.AddDays(1),
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m },
+            [
+                new StockRecommendation { Symbol = "AAA", Score = 0.001m },
+                new StockRecommendation { Symbol = "BBB", Score = 100m }
+            ],
+            [],
+            deferredConfiguration);
+        Assert.Equal(0m, deferredState.Pending["AAA"].AllocationPercent);
+
+        Execute(deferredState, deferredPortfolio, Friday.AddDays(2), 2, ("AAA", 100m), ("BBB", 100m));
+
+        Assert.Empty(deferredPortfolio.Trades.Where(x => x.Symbol == "AAA"));
+        Assert.Equal(10m, Assert.Single(deferredPortfolio.Positions).Quantity);
+    }
+
+    [Fact]
+    public void UnscoredZeroAllocationIntent_StillLiquidatesItsHeldPosition()
+    {
+        var portfolio = CashPortfolio(0m);
+        portfolio.Positions.Add(Holding("AAA", 10m, 100m));
+        var state = new BacktestExecutionState();
+
+        Seed(state, portfolio, Friday, [("AAA", 0m)]);
+        Execute(state, portfolio, Friday.AddDays(1), ("AAA", 100m));
+
+        var sale = Assert.Single(portfolio.Trades);
+        Assert.Equal(TradeActionType.Sell, sale.Action);
+        Assert.Equal(ExitReason.Rebalance, sale.ExitReason);
+        Assert.Empty(portfolio.Positions);
+    }
+
+    [Fact]
+    public void DeferredPurchaseIsRequalifiedBeforeSlotSelection_ButMissingObservationKeepsReservation()
+    {
+        var portfolio = CashPortfolio();
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 1;
+        state.GenerateAfterClose(
+            portfolio,
+            Friday,
+            new Dictionary<string, decimal> { ["AAA"] = 100m },
+            [new StockRecommendation { Symbol = "AAA", Score = 10m }],
+            [],
+            configuration);
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday.AddDays(1),
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m },
+            [new StockRecommendation { Symbol = "BBB", Score = 5m }],
+            [new ObservationResult { Symbol = "BBB", Score = 5m, MomentumPercent = 5m, IsAboveSma5 = true }],
+            configuration);
+
+        Assert.Equal(100m, state.Pending["AAA"].AllocationPercent);
+        Assert.False(state.Pending.ContainsKey("BBB"));
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday.AddDays(2),
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m },
+            [new StockRecommendation { Symbol = "BBB", Score = 5m }],
+            [
+                new ObservationResult { Symbol = "AAA", Score = 0m, MomentumPercent = 0m },
+                new ObservationResult { Symbol = "BBB", Score = 5m, MomentumPercent = 5m, IsAboveSma5 = true }
+            ],
+            configuration);
+
+        Assert.False(state.Pending.ContainsKey("AAA"));
+        Assert.Equal(5m, state.Pending["BBB"].Score);
+        Assert.Equal(Friday.AddDays(2), state.Pending["BBB"].SignalDate);
+    }
+
+    [Fact]
     public void DelayedPurchases_UseSignalScoreWhenAnUnexecutedExitLeavesFewerSlots()
     {
         var portfolio = CashPortfolio(1_980m);
