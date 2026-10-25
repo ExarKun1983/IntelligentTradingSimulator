@@ -59,7 +59,7 @@ supplied historical window. Thus `MomentumPercent <= 0` means the latest close
 is no higher than the first close in that window—not that the stock fell on
 one day or is below its purchase price. Strategy effectiveness is unvalidated;
 passing software tests does not establish investment performance. See the
-[runbook's opt-in A/B evaluation plan](docs/runbook.md#opt-in-holding-exits)
+[runbook's opt-in A/B evaluation plan](docs/runbook.md#backtest-portfolio-limits)
 before using the feature in controlled experiments.
 
 ### Benchmark flow
