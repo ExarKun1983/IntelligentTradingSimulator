@@ -1095,6 +1095,58 @@ public sealed class BacktestExecutionTimingTests
     }
 
     [Fact]
+    public void MissingHeldObservation_DoesNotChangeBaselineAndCauseDriftSaleWhenPeerScoreChanges()
+    {
+        var portfolio = CashPortfolio();
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.MaxPositions = 2;
+        var bothCloses = new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m };
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday,
+            bothCloses,
+            [
+                new StockRecommendation { Symbol = "AAA", Score = 10m },
+                new StockRecommendation { Symbol = "BBB", Score = 10m }
+            ],
+            [],
+            configuration);
+        Execute(state, portfolio, Friday.AddDays(1), 2, ("AAA", 100m), ("BBB", 100m));
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday.AddDays(1),
+            new Dictionary<string, decimal> { ["BBB"] = 100m },
+            [new StockRecommendation { Symbol = "BBB", Score = 1m }],
+            [],
+            configuration);
+        Execute(state, portfolio, Friday.AddDays(2), 2, ("AAA", 200m), ("BBB", 100m));
+
+        state.GenerateAfterClose(
+            portfolio,
+            Friday.AddDays(2),
+            new Dictionary<string, decimal> { ["AAA"] = 200m, ["BBB"] = 100m },
+            [
+                new StockRecommendation { Symbol = "AAA", Score = 10m },
+                new StockRecommendation { Symbol = "BBB", Score = 10m }
+            ],
+            [],
+            configuration);
+
+        Assert.Equal(50m, state.Pending["AAA"].AllocationPercent);
+        Assert.Equal(50m, state.Pending["AAA"].BaselineAllocationPercent);
+        Assert.False(state.Pending["AAA"].AllowAllocationSale);
+        Execute(state, portfolio, Friday.AddDays(3), 2, ("AAA", 200m), ("BBB", 100m));
+
+        Assert.Equal(5m, portfolio.Positions.Single(x => x.Symbol == "AAA").Quantity);
+        Assert.DoesNotContain(
+            portfolio.Trades,
+            trade => trade.Symbol == "AAA" && trade.Action == TradeActionType.Sell);
+    }
+
+    [Fact]
     public void PositiveScoreTargetsRoundedToZero_DoNotLiquidateFreshOrDeferredHoldings()
     {
         static (Portfolio Portfolio, BacktestExecutionState State, StrategyConfiguration Configuration) Create()

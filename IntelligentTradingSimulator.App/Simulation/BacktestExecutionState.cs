@@ -364,13 +364,6 @@ public sealed class BacktestExecutionState
                 }
             }
         }
-        foreach (var retained in staleHeldTargets)
-        {
-            if (normalizedBySymbol.TryGetValue(retained.Symbol, out var target))
-            {
-                _lastSelectedTargets[retained.Symbol] = target;
-            }
-        }
         var allocatedCandidates = selectedCandidates
             .Select(x => normalizedBySymbol[x.Symbol])
             .ToList();
