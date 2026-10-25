@@ -54,6 +54,14 @@ Missing observations do not signal an exit; configured stop-loss and
 trailing-stop behavior retains precedence. The threshold and execution scope
 are unchanged.
 
+Momentum is measured from the first close to the latest close in the analyzer's
+supplied historical window. Thus `MomentumPercent <= 0` means the latest close
+is no higher than the first close in that window—not that the stock fell on
+one day or is below its purchase price. Strategy effectiveness is unvalidated;
+passing software tests does not establish investment performance. See the
+[runbook's opt-in A/B evaluation plan](docs/runbook.md#opt-in-holding-exits)
+before using the feature in controlled experiments.
+
 ### Benchmark flow
 
 1. App's [BacktestBenchmarkService](IntelligentTradingSimulator.App/Simulation/BacktestBenchmarkService.cs) loads a persisted run's dates and uses `BenchmarkUniverse` defaults unless symbols are supplied explicitly.

@@ -174,6 +174,24 @@ precedence over the holding-condition exit. The feature is backtest-only and
 intended for controlled strategy experiments, not as a validated universal
 liquidation policy.
 
+Momentum is calculated as `(latest close - first close) / first close` over the
+analyzer's supplied historical window. Therefore `MomentumPercent <= 0` means
+the latest close is no higher than the first close in that window; it does not
+mean one negative day or a loss relative to purchase price. Software tests
+verify implementation behavior, not investment effectiveness.
+
+For a controlled comparison, run an A/B evaluation without changing anything
+else:
+
+- **A:** `UseHoldingConditionExit = false`.
+- **B:** `UseHoldingConditionExit = true` (explicit opt-in experiment).
+- Keep strategy settings other than this flag, data, dates, modeled costs, and
+  execution assumptions identical. Compare return after modeled costs,
+  drawdown, trade count, rapid reentries, holding duration, cash exposure, and
+  individual exit reasons.
+- Reserve an untouched period for subsequent validation. Do not interpret
+  results from the comparison period as proof of future performance.
+
 Backtest closes only create signals. Exits and purchases execute at a later
 valid instrument opening, with all eligible sales before buys. A pending or
 partial sale does not release a position slot; only a completed full sale

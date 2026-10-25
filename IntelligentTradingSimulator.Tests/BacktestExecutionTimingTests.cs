@@ -524,6 +524,33 @@ public sealed class BacktestExecutionTimingTests
         Assert.Empty(portfolio.Positions);
     }
 
+    [Theory]
+    [InlineData(99, true)]
+    [InlineData(100, true)]
+    [InlineData(101, false)]
+    public async Task EnabledHoldingConditionExit_SignalsOnlyForNonpositiveMomentum(
+        int latestClose, bool expectedExit)
+    {
+        var fixture = new Fixture();
+        fixture.Provider.Data["AAA"] = Enumerable.Range(0, 5)
+            .Select(i => Candle(Friday.AddDays(i - 4), 100m, i == 4 ? latestClose : 100m))
+            .ToList();
+        var portfolio = CashPortfolio();
+        portfolio.Positions.Add(Holding("AAA", 10m, 100m));
+        var state = new BacktestExecutionState();
+        var configuration = Configuration();
+        configuration.UseHoldingConditionExit = true;
+
+        var result = await fixture.Day(Friday, portfolio, state, [], configuration);
+
+        Assert.Equal(latestClose - 100m, Assert.Single(result.Observations).MomentumPercent);
+        Assert.Equal(expectedExit, state.Pending.TryGetValue("AAA", out var intent) &&
+            intent.ExitReason == ExitReason.HoldingCondition);
+        Assert.Equal(expectedExit,
+            result.Diagnostics.Any(x => x.Contains("Exit signaled", StringComparison.Ordinal)));
+        Assert.Empty(portfolio.Trades);
+    }
+
     [Fact]
     public async Task MissingHeldObservation_DoesNotGenerateAHoldingExit()
     {
@@ -541,23 +568,24 @@ public sealed class BacktestExecutionTimingTests
         Assert.Empty(portfolio.Trades);
     }
 
-    [Fact]
-    public async Task DisabledHoldingConditionExit_DoesNotSignalOnFreshNonpositiveMomentum()
+    [Theory]
+    [InlineData(99)]
+    [InlineData(100)]
+    public async Task DisabledHoldingConditionExit_DoesNotSignalOnFreshNonpositiveMomentum(int latestClose)
     {
         var fixture = new Fixture();
-        var history = History(Friday);
-        history[^1].Open = 80m;
-        history[^1].High = 80m;
-        history[^1].Low = 80m;
-        history[^1].Close = 80m;
-        fixture.Provider.Data["AAA"] = history;
+        fixture.Provider.Data["AAA"] = Enumerable.Range(0, 5)
+            .Select(i => Candle(Friday.AddDays(i - 4), 100m, i == 4 ? latestClose : 100m))
+            .ToList();
         var portfolio = CashPortfolio();
         portfolio.Positions.Add(Holding("AAA", 10m, 100m));
         var state = new BacktestExecutionState();
         var configuration = Configuration();
 
+        Assert.False(configuration.UseHoldingConditionExit);
         var result = await fixture.Day(Friday, portfolio, state, [], configuration);
 
+        Assert.Equal(latestClose - 100m, Assert.Single(result.Observations).MomentumPercent);
         Assert.Empty(state.Pending);
         Assert.DoesNotContain(result.Diagnostics, x => x.Contains("Exit signaled", StringComparison.Ordinal));
         Assert.Empty(portfolio.Trades);
