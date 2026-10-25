@@ -164,17 +164,15 @@ new portfolio lifecycle.
 
 New-entry eligibility keeps the existing rules: score above zero, momentum
 above zero, and price above SMA5 (NVDA remains excluded). Holding eligibility
-uses a separate, less demanding rule. With `UseHoldingConditionExit` enabled
-(default), one fresh close observation with `MomentumPercent <= 0` triggers a
-full exit. This uses the neutral momentum boundary, not a performance-tuned
-threshold; no multi-day confirmation is applied. A missing or insufficient
-observation is neutral and does not trigger that exit. Stop Loss and Trailing
-Stop remain independently optional and retain their existing precedence over
-the holding-condition exit.
-
-This neutral-momentum exit and its default activation are an explicit proposed
-design decision requiring product review; the threshold is not performance
-validated and must not be represented as an investment recommendation.
+uses a separate, less demanding rule. Only when `UseHoldingConditionExit` is
+explicitly enabled, one fresh close observation with `MomentumPercent <= 0`
+triggers a full exit. This uses the neutral momentum boundary, not a
+performance-tuned threshold; no multi-day confirmation is applied. A missing
+or insufficient observation is neutral and does not trigger that exit. Stop
+Loss and Trailing Stop remain independently optional and retain their existing
+precedence over the holding-condition exit. The feature is backtest-only and
+intended for controlled strategy experiments, not as a validated universal
+liquidation policy.
 
 Backtest closes only create signals. Exits and purchases execute at a later
 valid instrument opening, with all eligible sales before buys. A pending or
@@ -654,7 +652,7 @@ Each strategy supports these settings:
 | `MaxPositionWeight` | Maximum position weight, from greater than zero through 100. |
 | `StopLossPercent` | Optional percentage loss from average entry price; greater than zero through 100. Omitted or `null` disables Stop Loss. |
 | `TrailingStopPercent` | Optional percentage drawdown from the highest observed execution price since entry; greater than zero through 100. Omitted or `null` disables Trailing Stop. |
-| `UseHoldingConditionExit` | Enable the backtest holding exit when a fresh observation has momentum at or below 0% (default `true`). |
+| `UseHoldingConditionExit` | Opt in to the backtest holding exit when a fresh observation has momentum at or below 0% (default `false`; controlled experiments only). |
 | `LookbackDays` | Historical lookback used by analysis; must be greater than zero. |
 | `MomentumScoreWeight` | Non-negative score points per percentage point of momentum (default `10`); `0` disables the contribution. |
 | `VolumeTrendScoreWeight` | Non-negative score points per percentage point of volume trend (default `0.05`); `0` disables the contribution. |

@@ -465,6 +465,23 @@ public sealed class StrategyConfigurationLoaderTests
         Assert.True(result.UseQualityFilter);
     }
 
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("false", false)]
+    [InlineData("true", true)]
+    public void LoadAndLoadAll_BindHoldingConditionExitOptIn(string? value, bool expected)
+    {
+        var settings = new Dictionary<string, string?> { ["Strategies:default:MaxPositions"] = "10" };
+        if (value is not null)
+            settings["Strategies:default:UseHoldingConditionExit"] = value;
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+
+        Assert.False(new StrategyConfiguration().UseHoldingConditionExit);
+        Assert.Equal(expected, StrategyConfigurationLoader.Load(configuration).UseHoldingConditionExit);
+        Assert.Equal(expected,
+            Assert.Single(StrategyConfigurationLoader.LoadAll(configuration)).UseHoldingConditionExit);
+    }
+
     [Fact]
     public void Load_UsesStrategyConfigurationDefaults_WhenSelectedStrategyValuesMissing()
     {
@@ -484,7 +501,7 @@ public sealed class StrategyConfigurationLoaderTests
         Assert.Equal(StrategyConfiguration.DefaultMaxPositions, result.MaxPositions);
         Assert.Equal(StrategyConfiguration.DefaultMaxPositionWeight, result.MaxPositionWeight);
         Assert.Equal(StrategyConfiguration.DefaultLookbackDays, result.LookbackDays);
-        Assert.True(result.UseHoldingConditionExit);
+        Assert.False(result.UseHoldingConditionExit);
         Assert.False(result.UseRsi);
         Assert.Equal(StrategyConfiguration.DefaultRsiPreferredMinimum, result.RsiPreferredMinimum);
         Assert.Equal(StrategyConfiguration.DefaultRsiPreferredMaximum, result.RsiPreferredMaximum);

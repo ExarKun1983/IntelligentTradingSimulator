@@ -23,6 +23,7 @@ public sealed class VariantPortfolioLimitsTests
     public async Task Batch_UsesEachVariantsCapsAndRecommendationCounts_InExecutedAllocations()
     {
         using var fixture = new Fixture("uncapped");
+        Assert.Equal(new[] { true, false }, fixture.Variants.Select(x => x.UseHoldingConditionExit));
         var batch = await fixture.RunBatchAsync(fixture.Variants);
 
         foreach (var variant in fixture.Variants)
@@ -217,6 +218,7 @@ public sealed class VariantPortfolioLimitsTests
                 settings[$"Strategies:{id}:MaxPositions"] = count.ToString();
                 settings[$"Strategies:{id}:MaxPositionWeight"] = cap.ToString();
                 settings[$"Strategies:{id}:LookbackDays"] = "4";
+                settings[$"Strategies:{id}:UseHoldingConditionExit"] = id == "twenty" ? "true" : "false";
                 settings[$"Strategies:{id}:UseRelativeStrength"] = "false";
                 settings[$"Strategies:{id}:MomentumScoreWeight"] = "1";
                 settings[$"Strategies:{id}:VolumeTrendScoreWeight"] = "0";

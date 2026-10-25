@@ -89,7 +89,7 @@ public static class StrategyConfigurationLoader
             StopLossPercent = section.GetValue<decimal?>("StopLossPercent"),
             TrailingStopPercent = section.GetValue<decimal?>("TrailingStopPercent"),
             UseHoldingConditionExit = section.GetValue<bool?>("UseHoldingConditionExit")
-                ?? true,
+                ?? false,
             LookbackDays = section.GetValue<int?>("LookbackDays")
                 ?? StrategyConfiguration.DefaultLookbackDays,
             MomentumScoreWeight = section.GetValue<decimal?>("MomentumScoreWeight")

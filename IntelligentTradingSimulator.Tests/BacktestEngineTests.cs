@@ -107,8 +107,10 @@ public sealed class BacktestEngineTests : IDisposable
         Assert.Equal(0m, result.TotalProfit);
     }
 
-    [Fact]
-    public async Task RunAsync_CreatesRunAndCompletesOverDateRange()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_CreatesRunAndPersistsExplicitHoldingExitConfiguration(bool useHoldingConditionExit)
     {
         var startDate = new DateTime(2024, 1, 1);
         var endDate = new DateTime(2024, 1, 3);
@@ -116,7 +118,9 @@ public sealed class BacktestEngineTests : IDisposable
         var processor = new StubDayProcessor();
         var engine = BuildEngine(processor);
 
-        var result = await engine.RunAsync(BuildRequest(startDate, endDate));
+        var request = BuildRequest(startDate, endDate);
+        request.StrategyConfiguration.UseHoldingConditionExit = useHoldingConditionExit;
+        var result = await engine.RunAsync(request);
 
         Assert.True(result.RunId > 0);
         Assert.Equal(BacktestRunStatus.Completed, result.Status);
@@ -129,7 +133,7 @@ public sealed class BacktestEngineTests : IDisposable
         var persistedConfiguration =
             JsonSerializer.Deserialize<StrategyConfiguration>(persistedConfigurationJson);
         Assert.NotNull(persistedConfiguration);
-        Assert.True(persistedConfiguration.UseHoldingConditionExit);
+        Assert.Equal(useHoldingConditionExit, persistedConfiguration.UseHoldingConditionExit);
         Assert.Equal(startDate.Date, saved.StartDate);
         Assert.Equal(endDate.Date, saved.EndDate);
     }

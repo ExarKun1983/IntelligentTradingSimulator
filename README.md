@@ -44,13 +44,15 @@ Project references point inward: App references Core and Infrastructure; Infrast
 
 Current boundary: the normal ranking workflow supplies optional fundamentals, but the backtest day processor does not fetch or pass fundamental data. Do not assume current provider values are point-in-time historical inputs.
 
-### Holding-exit design decision (review required)
+### Opt-in holding exits
 
-The backtest currently defaults `UseHoldingConditionExit` to `true`: one fresh
-close observation with momentum at or below 0% signals a full exit at the next
-valid opening. This neutral-momentum rule is a proposed lifecycle policy, not a
-validated investment outcome; its threshold and default activation require
-product review.
+`UseHoldingConditionExit` defaults to `false`. It is a backtest-only opt-in for
+controlled strategy experiments, not a universally validated liquidation
+policy. When explicitly enabled, one fresh close observation with momentum at
+or below 0% signals a full exit at the next strictly later valid opening.
+Missing observations do not signal an exit; configured stop-loss and
+trailing-stop behavior retains precedence. The threshold and execution scope
+are unchanged.
 
 ### Benchmark flow
 

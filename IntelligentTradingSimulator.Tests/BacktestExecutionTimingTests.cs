@@ -1644,8 +1644,7 @@ public sealed class BacktestExecutionTimingTests
 
     private static StrategyConfiguration Configuration() => new()
     {
-        Id = "timing-regression", UseRelativeStrength = false, MaxPositionWeight = 100m,
-        UseHoldingConditionExit = false
+        Id = "timing-regression", UseRelativeStrength = false, MaxPositionWeight = 100m
     };
 
     private static Portfolio CashPortfolio(decimal cash = 1_000m) => new()
