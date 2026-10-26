@@ -260,6 +260,7 @@ public sealed class BacktestExecutionState
             .Where(x => !_pending.TryGetValue(x.Symbol, out var existing) || !existing.ExitReason.HasValue)
             .OrderByDescending(x => x.Score)
             .ThenBy(x => x.Symbol, StringComparer.Ordinal)
+            .DistinctBy(x => x.Symbol, StringComparer.OrdinalIgnoreCase)
             .ToList();
         foreach (var pendingBuy in _pending.Values
                      .Where(x => !x.ExitReason.HasValue &&
@@ -271,6 +272,31 @@ public sealed class BacktestExecutionState
             _pending.Remove(pendingBuy.Symbol);
             _diagnostics.Add(
                 $"Purchase intent for {pendingBuy.Symbol} was rejected on {date:yyyy-MM-dd}: it no longer qualifies for an available position slot.");
+        }
+
+        var reservedMissingPurchases = _pending.Values.Count(x =>
+            !x.ExitReason.HasValue &&
+            !heldSymbols.Contains(x.Symbol) &&
+            !observedSymbols.Contains(x.Symbol));
+        var competingSlots = Math.Max(
+            0,
+            configuration.MaxPositions - heldSymbols.Count + exitingSymbols.Count - reservedMissingPurchases);
+        var selectedFreshSymbols = currentTargets
+            .Where(x => !heldSymbols.Contains(x.Symbol) &&
+                        (!_pending.ContainsKey(x.Symbol) || observedSymbols.Contains(x.Symbol)))
+            .Take(competingSlots)
+            .Select(x => x.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var pendingBuy in _pending.Values
+                     .Where(x => !x.ExitReason.HasValue &&
+                                 !heldSymbols.Contains(x.Symbol) &&
+                                 observedSymbols.Contains(x.Symbol) &&
+                                 !selectedFreshSymbols.Contains(x.Symbol))
+                     .ToList())
+        {
+            _pending.Remove(pendingBuy.Symbol);
+            _diagnostics.Add(
+                $"Purchase intent for {pendingBuy.Symbol} was rejected on {date:yyyy-MM-dd}: higher-ranked candidates fill the available position slots.");
         }
 
         foreach (var target in currentTargets)

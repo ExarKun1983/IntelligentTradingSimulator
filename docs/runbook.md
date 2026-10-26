@@ -201,9 +201,10 @@ including earlier buys that day. If a valid opening arrives but no slot is
 free, the purchase intent is rejected once; a subsequent fresh qualifying close
 may create a new intent. If no valid opening exists, the intent remains
 deferred and reserves its slot. At a later fresh close, it remains eligible
-only if it still satisfies entry rules and available capacity; otherwise it is
-canceled. Fresh qualifying targets refresh deferred scores before allocation
-normalization. A changed score or allocation advances the intent's signal date
+only if it still satisfies entry rules and wins a slot when ranked together
+with fresh new candidates; otherwise it is canceled. Actual holdings are not
+replaced by that competition. Fresh qualifying targets refresh deferred scores
+before allocation normalization. A changed score or allocation advances the intent's signal date
 to that close, requiring a strictly later opening; unchanged targets retain
 their original eligibility. Missing observations preserve the previous score
 and reservation. Exit and blocked-purchase diagnostics include the triggering rule
