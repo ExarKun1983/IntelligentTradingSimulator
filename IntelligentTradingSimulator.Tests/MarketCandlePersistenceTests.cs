@@ -954,7 +954,7 @@ public sealed class MarketCandlePersistenceTests : IAsyncLifetime
             "BUY", Start, simulatedDate, simulatedDate);
 
         Assert.Single(portfolio.Trades);
-        Assert.Single(retry.Observations);
+        Assert.Equal(["BUY", "HELD"], retry.Observations.Select(x => x.Symbol).OrderBy(x => x).ToArray());
         Assert.Contains(retriedData.Candles, x => x.Date.Date == simulatedDate);
         Assert.DoesNotContain(simulatedDate, retriedData.InvalidCandleDates);
         Assert.Equal(130m, Assert.Single(portfolio.Positions, x => x.Symbol == "HELD").CurrentPrice);

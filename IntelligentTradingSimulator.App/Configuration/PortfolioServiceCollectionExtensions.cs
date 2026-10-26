@@ -13,7 +13,9 @@ public static class PortfolioServiceCollectionExtensions
         services.AddSingleton(
             _ => new PortfolioRecommendationService(activeStrategy.MaxPositions));
         services.AddSingleton(
-            _ => new PortfolioExecutionService(activeStrategy.MaxPositionWeight));
+            _ => new PortfolioExecutionService(
+                activeStrategy.MaxPositionWeight,
+                activeStrategy.MaxPositions));
         services.AddSingleton<TradingEngine>();
         services.AddSingleton<PortfolioPerformanceService>();
         services.AddSingleton<PortfolioAllocationService>();

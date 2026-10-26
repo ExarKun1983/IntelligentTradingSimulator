@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using IntelligentTradingSimulator.App.Configuration;
 using IntelligentTradingSimulator.App.Simulation;
@@ -106,8 +107,10 @@ public sealed class BacktestEngineTests : IDisposable
         Assert.Equal(0m, result.TotalProfit);
     }
 
-    [Fact]
-    public async Task RunAsync_CreatesRunAndCompletesOverDateRange()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_CreatesRunAndPersistsExplicitHoldingExitConfiguration(bool useHoldingConditionExit)
     {
         var startDate = new DateTime(2024, 1, 1);
         var endDate = new DateTime(2024, 1, 3);
@@ -115,7 +118,9 @@ public sealed class BacktestEngineTests : IDisposable
         var processor = new StubDayProcessor();
         var engine = BuildEngine(processor);
 
-        var result = await engine.RunAsync(BuildRequest(startDate, endDate));
+        var request = BuildRequest(startDate, endDate);
+        request.StrategyConfiguration.UseHoldingConditionExit = useHoldingConditionExit;
+        var result = await engine.RunAsync(request);
 
         Assert.True(result.RunId > 0);
         Assert.Equal(BacktestRunStatus.Completed, result.Status);
@@ -124,6 +129,11 @@ public sealed class BacktestEngineTests : IDisposable
         Assert.NotNull(saved);
         Assert.Equal("Test Run", saved.Name);
         Assert.Equal("momentum-default", saved.StrategyId);
+        var persistedConfigurationJson = Assert.IsType<string>(saved.StrategyConfigurationJson);
+        var persistedConfiguration =
+            JsonSerializer.Deserialize<StrategyConfiguration>(persistedConfigurationJson);
+        Assert.NotNull(persistedConfiguration);
+        Assert.Equal(useHoldingConditionExit, persistedConfiguration.UseHoldingConditionExit);
         Assert.Equal(startDate.Date, saved.StartDate);
         Assert.Equal(endDate.Date, saved.EndDate);
     }

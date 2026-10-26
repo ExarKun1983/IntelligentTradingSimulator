@@ -188,6 +188,7 @@ public sealed class ConsoleReporter
                 $"{recommendation.Symbol}" +
                 $" | Current={currentValue:N2}" +
                 $" | Target={targetValue:N2}" +
+                $" | TargetWeight={recommendation.AllocationPercent:N2}%" +
                 $" | Diff={difference:N2}");
         }
     }
@@ -204,7 +205,8 @@ public sealed class ConsoleReporter
             var difference =
                 _allocationService.CalculateDifference(portfolio, recommendation);
 
-            if (difference > -100m)
+            if (difference > -100m ||
+                !_allocationService.AllowsAllocationSale(portfolio, recommendation))
             {
                 continue;
             }

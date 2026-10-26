@@ -442,6 +442,7 @@ public sealed class StrategyConfigurationLoaderTests
                         [$"Strategies:{strategyId}:RsiPreferredRangeBonus"] = "2.5",
                         [$"Strategies:{strategyId}:RsiOverboughtPenalty"] = "3.5",
                         [$"Strategies:{strategyId}:UseRelativeStrength"] = "false",
+                        [$"Strategies:{strategyId}:UseHoldingConditionExit"] = "false",
                         [$"Strategies:{strategyId}:Use52WeekHigh"] = "true",
                         [$"Strategies:{strategyId}:Week52HighScoreWeight"] = "4.5",
                         [$"Strategies:{strategyId}:UseQualityFilter"] = "true"
@@ -458,9 +459,27 @@ public sealed class StrategyConfigurationLoaderTests
         Assert.Equal(2.5m, result.RsiPreferredRangeBonus);
         Assert.Equal(3.5m, result.RsiOverboughtPenalty);
         Assert.False(result.UseRelativeStrength);
+        Assert.False(result.UseHoldingConditionExit);
         Assert.True(result.Use52WeekHigh);
         Assert.Equal(4.5m, result.Week52HighScoreWeight);
         Assert.True(result.UseQualityFilter);
+    }
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("false", false)]
+    [InlineData("true", true)]
+    public void LoadAndLoadAll_BindHoldingConditionExitOptIn(string? value, bool expected)
+    {
+        var settings = new Dictionary<string, string?> { ["Strategies:default:MaxPositions"] = "10" };
+        if (value is not null)
+            settings["Strategies:default:UseHoldingConditionExit"] = value;
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+
+        Assert.False(new StrategyConfiguration().UseHoldingConditionExit);
+        Assert.Equal(expected, StrategyConfigurationLoader.Load(configuration).UseHoldingConditionExit);
+        Assert.Equal(expected,
+            Assert.Single(StrategyConfigurationLoader.LoadAll(configuration)).UseHoldingConditionExit);
     }
 
     [Fact]
@@ -482,6 +501,7 @@ public sealed class StrategyConfigurationLoaderTests
         Assert.Equal(StrategyConfiguration.DefaultMaxPositions, result.MaxPositions);
         Assert.Equal(StrategyConfiguration.DefaultMaxPositionWeight, result.MaxPositionWeight);
         Assert.Equal(StrategyConfiguration.DefaultLookbackDays, result.LookbackDays);
+        Assert.False(result.UseHoldingConditionExit);
         Assert.False(result.UseRsi);
         Assert.Equal(StrategyConfiguration.DefaultRsiPreferredMinimum, result.RsiPreferredMinimum);
         Assert.Equal(StrategyConfiguration.DefaultRsiPreferredMaximum, result.RsiPreferredMaximum);

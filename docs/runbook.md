@@ -139,12 +139,114 @@ SQL decimal precision.
 
 ## Backtest portfolio limits
 
-Standalone and batch backtests use each request's strategy configuration for
-`MaxPositions` (recommendation count, not total retained holdings) and
-`MaxPositionWeight` (allocation cap). These are the same settings recorded in
-feature snapshots; `ActiveStrategy` only supplies the normal workflow's limits
-and the default standalone backtest configuration. Capped allocations are not
-renormalized, so unallocated cash remains in the portfolio.
+`MaxPositions` is the maximum number of distinct symbols with positive
+quantities in the actual portfolio, not just the recommendation-list length.
+The full configured universe is analyzed; entry-eligible candidates are ranked
+deterministically, existing holdings occupy slots even when outside the top-N
+view, and only the best candidates for genuinely available slots can open.
+Fewer eligible candidates do not cause additional investment. An already
+over-limit portfolio is not automatically liquidated; it cannot open new
+symbols until normal exits bring it below the limit. Adding to an existing
+positive-quantity holding does not consume another slot.
+
+Each strategy's `MaxPositionWeight` remains an individual target-allocation cap.
+It is applied to selected targets before execution, not by an independent daily
+drift-enforcement pass. In backtests, unchanged effective targets do not cause
+`Rebalance` sales solely because prices drift. Allocation sales require an
+intentional reduction relative to the saved target baseline, with both targets
+capped by `MaxPositionWeight`; a raw target reduction that leaves the effective
+target unchanged does not qualify. Explicit unscored zero-allocation targets
+still permit full exits.
+Unallocated capital may remain cash. The effective
+strategy configuration is stored as JSON on each new backtest run and in its
+feature snapshots. Existing historical runs retain their old behavior and are
+not rewritten; their results must not be interpreted as if generated under the
+new portfolio lifecycle.
+
+Current-portfolio runs persist `Position.EffectiveTargetPercent` as the last
+initialized or completed selected target, capped by `MaxPositionWeight`.
+`AddPositionEffectiveTarget` adds only a nullable `decimal(28,8)` column;
+existing positions remain null. No market weight, average cost, or actual
+holding snapshot is treated as a historical target. Apply the migration before
+running the updated application. Rolling it back drops these baselines, so a
+later upgrade must initialize them again.
+
+On the first valid priced, positive selected target, initialize that baseline
+without an ordinary allocation sale. Stops and supported explicit unscored
+zero-target exits still execute. Omitted holdings, missing/invalid prices, and
+positive-score targets whose selected weight rounds to zero leave the baseline
+unchanged. New filled positions also receive their selected effective target.
+Unchanged effective targets never authorize price-only allocation sales;
+cash-funded top-ups remain subject to allocation and cash limits.
+
+A genuine reduction below the saved baseline remains eligible for a partial
+`Rebalance` sale (compatibility behavior, not an investment recommendation).
+If no sale is needed because the position is already at or below the new
+target, acknowledge the new target. If a sale is needed but is below the
+minimum trade threshold, rejected, or incomplete, retain the old baseline;
+the same lower target can retry on a later valid selected run. After a
+successful sale fills the instruction's requested quantity rounded down to
+eight decimal places, acknowledge the reduced target. Completion is compared
+to that instruction, not to portfolio revaluation after other fills' cash
+rounding. This accounts for execution precision without repeatedly selling
+later price appreciation.
+The trading engine has no liquidity-based partial-fill model; ordinary partial
+position sales execute a quantized requested quantity or are rejected.
+An increase in the selected target updates the baseline without requiring a
+buy; it does not bypass cash or capacity limits. No additional pending-target
+schema is used: the prior baseline remains until a reduction completes, and
+omitted targets do not autonomously retry. Trades, quantities, cash, and
+baseline changes are saved together by the post-rebalance `SaveChanges`;
+failure of that save does not persist the reduction acknowledgement. Displayed
+allocation sell recommendations use the same baseline guard.
+
+New-entry eligibility keeps the existing rules: score above zero, momentum
+above zero, and price above SMA5 (NVDA remains excluded). Holding eligibility
+uses a separate, less demanding rule. Only when `UseHoldingConditionExit` is
+explicitly enabled, one fresh close observation with `MomentumPercent <= 0`
+triggers a full exit. This uses the neutral momentum boundary, not a
+performance-tuned threshold; no multi-day confirmation is applied. A missing
+or insufficient observation is neutral and does not trigger that exit. Stop
+Loss and Trailing Stop remain independently optional and retain their existing
+precedence over the holding-condition exit. The feature is backtest-only and
+intended for controlled strategy experiments, not as a validated universal
+liquidation policy.
+
+Momentum is calculated as `(latest close - first close) / first close` over the
+analyzer's supplied historical window. Therefore `MomentumPercent <= 0` means
+the latest close is no higher than the first close in that window; it does not
+mean one negative day or a loss relative to purchase price. Software tests
+verify implementation behavior, not investment effectiveness.
+
+For a controlled comparison, run an A/B evaluation without changing anything
+else:
+
+- **A:** `UseHoldingConditionExit = false`.
+- **B:** `UseHoldingConditionExit = true` (explicit opt-in experiment).
+- Keep strategy settings other than this flag, data, dates, modeled costs, and
+  execution assumptions identical. Compare return after modeled costs,
+  drawdown, trade count, rapid reentries, holding duration, cash exposure, and
+  individual exit reasons.
+- Reserve an untouched period for subsequent validation. Do not interpret
+  results from the comparison period as proof of future performance.
+
+Backtest closes only create signals. Exits and purchases execute at a later
+valid instrument opening, with all eligible sales before buys. A pending or
+partial sale does not release a position slot; only a completed full sale
+does. Before each new-symbol buy, the execution phase rechecks actual holdings,
+including earlier buys that day. If a valid opening arrives but no slot is
+free, the purchase intent is rejected once; a subsequent fresh qualifying close
+may create a new intent. If no valid opening exists, the intent remains
+deferred and reserves its slot. At a later fresh close, it remains eligible
+only if it still satisfies entry rules and wins a slot when ranked together
+with fresh new candidates; otherwise it is canceled. Actual holdings are not
+replaced by that competition. Fresh qualifying targets refresh deferred scores
+before allocation normalization. A changed score or allocation advances the intent's signal date
+to that close, requiring a strictly later opening; unchanged targets retain
+their original eligibility. Missing observations preserve the previous score
+and reservation. Exit and blocked-purchase diagnostics include the triggering rule
+and symbol. Falling out of the recommendation list or a better candidate
+appearing does not itself signal liquidation.
 
 The allocation target is capped before execution. Its bounded rounding tolerance
 is `price × 0.000000005 + 0.000000005` for each buy; this is not permission to
@@ -603,10 +705,11 @@ Each strategy supports these settings:
 
 | Setting | Purpose |
 | --- | --- |
-| `MaxPositions` | Maximum number of recommended positions; must be greater than zero. |
+| `MaxPositions` | Maximum number of distinct positive-quantity positions; must be greater than zero. |
 | `MaxPositionWeight` | Maximum position weight, from greater than zero through 100. |
 | `StopLossPercent` | Optional percentage loss from average entry price; greater than zero through 100. Omitted or `null` disables Stop Loss. |
 | `TrailingStopPercent` | Optional percentage drawdown from the highest observed execution price since entry; greater than zero through 100. Omitted or `null` disables Trailing Stop. |
+| `UseHoldingConditionExit` | Opt in to the backtest holding exit when a fresh observation has momentum at or below 0% (default `false`; controlled experiments only). |
 | `LookbackDays` | Historical lookback used by analysis; must be greater than zero. |
 | `MomentumScoreWeight` | Non-negative score points per percentage point of momentum (default `10`); `0` disables the contribution. |
 | `VolumeTrendScoreWeight` | Non-negative score points per percentage point of volume trend (default `0.05`); `0` disables the contribution. |
@@ -955,9 +1058,10 @@ Replace `123` with the database ID reported for a completed run.
 
 ### Backtest causal execution
 
-Backtests use run-local, ephemeral pending intents per symbol. This execution
-model requires no new migration and does not change live/current portfolio
-simulation behavior. Each fresh run starts with isolated pending state.
+Backtests use run-local, ephemeral pending intents per symbol. Each fresh run
+starts with isolated pending state. The run configuration column requires the
+`AddBacktestRunStrategyConfiguration` migration; existing runs remain nullable
+because their effective configuration cannot be reconstructed.
 
 - **First date and warmup:** history before `StartDate` warms indicators only;
   it cannot generate pre-start orders. The first simulated date marks available
@@ -965,14 +1069,17 @@ simulation behavior. Each fresh run starts with isolated pending state.
 - **Opening phase:** an intent can execute only at a valid actual candle `Open`
   for that instrument on a date strictly after its signal date. There is no
   fallback execution price, weekday rule, or inferred trading session. A missing
-  candle or invalid `Open` leaves the original intent pending. Ordinary newer
-  targets cannot replace it while pending; a close-evaluated stop can override a
-  target and remains sticky until its eligible opening attempt.
+  candle or invalid `Open` leaves the original intent pending and reserves its
+  slot. Fresh closing observations requalify pending purchases; loss of entry
+  eligibility or capacity cancels them. A close-evaluated exit overrides a
+  purchase target and remains sticky until its eligible opening attempt.
 - **Attempts and allocation:** an eligible opening attempt consumes the intent
   once, even if cash or the minimum trade threshold prevents a fill. A later
-  fresh close may generate a new target. All eligible sells precede buys.
-  Opening allocation valuation uses eligible opening prices and prior known
-  values only, never that date's closing candle fields.
+  fresh close may generate a new target. Sales execute first; an unexecuted or
+  partial sale does not free a slot. New symbols are checked against actual
+  positive-quantity holdings before each buy; an over-limit portfolio is not
+  automatically liquidated. Opening allocation valuation uses eligible opening
+  prices and prior known values only, never that date's closing candle fields.
 - **Closing phase:** only after opening trades may closing candle fields be
   used for analysis, closing-price marks, and stop evaluation. Existing holdings
   with an invalid or missing current close restore their prior pre-open valuation.
@@ -987,14 +1094,14 @@ simulation behavior. Each fresh run starts with isolated pending state.
   and is excluded from analysis and closing-price marks; the missing range can be
   fetched again later. Existing committed snapshots remain authoritative.
 - **Gaps and recommendations:** signals/features require a fresh candle.
-  Rankings retain latest known observations across gaps only for symbols still
-  in the current requested universe; symbols removed from that universe are
-  pruned from the cache. Gaps may leave stale ranks/slots until refreshed, not
-  future information. Only symbols with fresh recommendations can enqueue
-  ordinary targets. Omitting a held symbol from recommendations does not create
-  a liquidation target; an explicit zero-allocation recommendation still does,
-  subject to the ordinary minimum-trade threshold. With no recommendations,
-  ordinary holdings are preserved; stops are still evaluated on fresh closes.
+  Display rankings retain latest known observations only for symbols still in
+  the current requested universe; symbols removed from that universe are
+  pruned from the cache. New purchase intents require a fresh candidate and
+  available slot. Held symbols are analyzed when data permits, even outside the
+  requested universe. Missing/insufficient holding observations do not trigger
+  holding exits. Omitting a held symbol from the top-N view does not create a
+  liquidation target; a configured stop or explicit holding-condition violation
+  can still signal an exit.
 - **End and reporting:** pending intents remaining after `EndDate` are discarded;
   there are no fills beyond the requested period. Daily snapshots cover every
   calendar date, including non-trading dates. `TradesExecuted` counts actual

@@ -44,7 +44,7 @@ public sealed class PortfolioExecutionServiceTests
                 .Single(x => x.Symbol == "AAPL");
 
         Assert.Equal(2_400m, aapl.MarketValue);
-        Assert.Equal(6_800m, portfolio.Cash);
+        Assert.Equal(6_872.8m, portfolio.Cash);
     }
 
     [Fact]
@@ -85,7 +85,47 @@ public sealed class PortfolioExecutionServiceTests
             portfolio.Positions
                 .Single(x => x.Symbol == "AAPL");
 
-        Assert.Equal(3_200m, aapl.MarketValue);
+        Assert.Equal(4_000m, aapl.MarketValue);
+    }
+
+    [Fact]
+    public void ExecuteRecommendations_DoesNotExceedConfiguredOpenPositionLimit()
+    {
+        var service = new PortfolioExecutionService(maxPositionWeight: 100m, maxPositions: 1);
+        var portfolio = new Portfolio { StartingCash = 10_000m, Cash = 10_000m };
+
+        service.ExecuteRecommendations(
+            portfolio,
+            [
+                new StockRecommendation { Symbol = "AAA", AllocationPercent = 60m, Score = 60m },
+                new StockRecommendation { Symbol = "BBB", AllocationPercent = 40m, Score = 40m }
+            ],
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m },
+            new TradingEngine());
+
+        Assert.Equal("AAA", Assert.Single(portfolio.Positions).Symbol);
+        Assert.Single(portfolio.Trades);
+    }
+
+    [Fact]
+    public void ExecuteRecommendations_ReweightsAfterSelectingInitialPositions()
+    {
+        var service = new PortfolioExecutionService(maxPositionWeight: 100m, maxPositions: 1);
+        var portfolio = new Portfolio { StartingCash = 10_000m, Cash = 10_000m };
+
+        service.ExecuteRecommendations(
+            portfolio,
+            [
+                new StockRecommendation { Symbol = "AAA", AllocationPercent = 25m, Score = 100m },
+                new StockRecommendation { Symbol = "BBB", AllocationPercent = 25m, Score = 50m },
+                new StockRecommendation { Symbol = "CCC", AllocationPercent = 50m, Score = 25m }
+            ],
+            new Dictionary<string, decimal> { ["AAA"] = 100m, ["BBB"] = 100m, ["CCC"] = 100m },
+            new TradingEngine());
+
+        Assert.Equal("AAA", Assert.Single(portfolio.Positions).Symbol);
+        Assert.Equal(8_000m, portfolio.Positions[0].MarketValue);
+        Assert.Equal(2_000m, portfolio.Cash);
     }
 
     [Theory]

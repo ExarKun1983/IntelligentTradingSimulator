@@ -10,6 +10,19 @@ namespace IntelligentTradingSimulator.Core.Services;
 
 public sealed class PortfolioAllocationService
 {
+    public bool AllowsAllocationSale(
+        Portfolio portfolio,
+        StockRecommendation target,
+        decimal maxPositionWeight = 100m)
+    {
+        var position = portfolio.Positions.FirstOrDefault(x =>
+            string.Equals(x.Symbol, target.Symbol, StringComparison.OrdinalIgnoreCase));
+        return target.Score <= 0m && target.AllocationPercent == 0m ||
+               target.AllocationPercent > 0m &&
+               position?.EffectiveTargetPercent is decimal baseline &&
+               Math.Min(target.AllocationPercent, maxPositionWeight) < Math.Min(baseline, maxPositionWeight);
+    }
+
     public decimal CalculatePortfolioValue(
         Portfolio portfolio)
     {

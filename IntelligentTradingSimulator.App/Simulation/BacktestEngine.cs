@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Text.Json;
 using System.Threading.Tasks;
 using IntelligentTradingSimulator.Core.Enums;
 using IntelligentTradingSimulator.Core.Interfaces;
@@ -47,6 +48,7 @@ public sealed class BacktestEngine : IBacktestEngine
         {
             Name = request.Name,
             StrategyId = request.StrategyId,
+            StrategyConfigurationJson = JsonSerializer.Serialize(request.StrategyConfiguration),
             StartDate = request.StartDate.Date,
             EndDate = request.EndDate.Date,
             InitialCapital = request.InitialCapital,

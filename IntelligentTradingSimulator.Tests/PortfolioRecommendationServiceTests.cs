@@ -110,6 +110,24 @@ public sealed class PortfolioRecommendationServiceTests
     }
 
     [Fact]
+    public void BuildCandidates_ReturnsTheFullEligibleRanking_SeparatelyFromTheRecommendationLimit()
+    {
+        var service = new PortfolioRecommendationService(maxPositions: 2);
+        var results = new List<ObservationResult>
+        {
+            new() { Symbol = "AAPL", Score = 40m, MomentumPercent = 5m, IsAboveSma5 = true },
+            new() { Symbol = "MSFT", Score = 30m, MomentumPercent = 4m, IsAboveSma5 = true },
+            new() { Symbol = "GOOG", Score = 20m, MomentumPercent = 3m, IsAboveSma5 = true }
+        };
+
+        var candidates = service.BuildCandidates(results);
+
+        Assert.Equal(["AAPL", "MSFT", "GOOG"], candidates.Select(x => x.Symbol).ToArray());
+        Assert.Equal(100m, candidates.Sum(x => x.AllocationPercent), precision: 1);
+        Assert.Equal(["AAPL", "MSFT"], service.Build(results).Select(x => x.Symbol).ToArray());
+    }
+
+    [Fact]
     public void Build_UsesAllAvailable_WhenFewerThanConfiguredMaxPositions()
     {
         var service = new PortfolioRecommendationService(maxPositions: 5);

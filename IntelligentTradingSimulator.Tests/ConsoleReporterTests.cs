@@ -19,6 +19,31 @@ public sealed class ConsoleReporterTests
         _output = output;
     }
 
+    [Theory]
+    [InlineData(null, 50, 10, false)]
+    [InlineData(50, 50, 10, false)]
+    [InlineData(75, 50, 10, true)]
+    [InlineData(null, 0, 0, true)]
+    public void PrintRebalanceByWeight_UsesPersistedBaselineSalePolicy(
+        int? baseline, int target, int score, bool shouldRecommendSale)
+    {
+        var portfolio = new Portfolio
+        {
+            Positions =
+            [
+                new Position
+                {
+                    Symbol = "AAA", Quantity = 5m, CurrentPrice = 200m, EffectiveTargetPercent = baseline
+                },
+                new Position { Symbol = "BBB", Quantity = 5m, CurrentPrice = 100m }
+            ]
+        };
+        var output = CaptureOutput(() => CreateReporter().PrintRebalanceByWeight(
+            portfolio, [new StockRecommendation { Symbol = "AAA", Score = score, AllocationPercent = target }]));
+
+        Assert.Equal(shouldRecommendSale, output.Contains("SELL AAA", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void PrintResultReports_IncludeExplanationsWithoutBenchmarkMetrics()
     {

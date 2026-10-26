@@ -75,6 +75,8 @@ public sealed class TradingSimulatorDbContext : DbContext
             .HasPrecision(TradingPrecisionPolicy.PricePrecision, TradingPrecisionPolicy.PriceScale);
         position.Property(x => x.HighestPriceSinceEntry)
             .HasPrecision(TradingPrecisionPolicy.PricePrecision, TradingPrecisionPolicy.PriceScale);
+        position.Property(x => x.EffectiveTargetPercent)
+            .HasPrecision(TradingPrecisionPolicy.PercentagePrecision, TradingPrecisionPolicy.PercentageScale);
 
         var trade = modelBuilder.Entity<Trade>();
         trade.Property(x => x.Quantity)
@@ -236,6 +238,9 @@ public sealed class TradingSimulatorDbContext : DbContext
         entity.Property(x => x.StrategyId)
             .HasMaxLength(100)
             .IsRequired();
+
+        entity.Property(x => x.StrategyConfigurationJson)
+            .IsRequired(false);
 
         entity.Property(x => x.StartDate)
             .IsRequired();

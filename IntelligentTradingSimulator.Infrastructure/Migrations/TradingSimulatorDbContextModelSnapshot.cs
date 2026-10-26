@@ -58,6 +58,9 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     b.Property<int>("Status")
                         .HasColumnType("int");
 
+                    b.Property<string>("StrategyConfigurationJson")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("StrategyId")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -460,6 +463,10 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     b.Property<decimal>("CurrentPrice")
                         .HasPrecision(28, 12)
                         .HasColumnType("decimal(28,12)");
+
+                    b.Property<decimal?>("EffectiveTargetPercent")
+                        .HasPrecision(28, 8)
+                        .HasColumnType("decimal(28,8)");
 
                     b.Property<decimal>("HighestPriceSinceEntry")
                         .HasPrecision(28, 12)
