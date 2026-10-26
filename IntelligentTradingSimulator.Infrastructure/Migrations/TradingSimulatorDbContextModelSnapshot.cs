@@ -464,6 +464,10 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                         .HasPrecision(28, 12)
                         .HasColumnType("decimal(28,12)");
 
+                    b.Property<decimal?>("EffectiveTargetPercent")
+                        .HasPrecision(28, 8)
+                        .HasColumnType("decimal(28,8)");
+
                     b.Property<decimal>("HighestPriceSinceEntry")
                         .HasPrecision(28, 12)
                         .HasColumnType("decimal(28,12)");

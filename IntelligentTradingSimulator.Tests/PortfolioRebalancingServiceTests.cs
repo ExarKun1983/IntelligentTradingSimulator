@@ -346,7 +346,7 @@ public sealed class PortfolioRebalancingServiceTests
         {
             Positions =
             [
-                new Position { Symbol = "AAPL", Quantity = 10m, CurrentPrice = 100m }
+                new Position { Symbol = "AAPL", Quantity = 10m, CurrentPrice = 100m, EffectiveTargetPercent = 100m }
             ]
         };
         var recommendations = new List<StockRecommendation>

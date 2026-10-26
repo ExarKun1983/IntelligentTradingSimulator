@@ -205,7 +205,8 @@ public sealed class ConsoleReporter
             var difference =
                 _allocationService.CalculateDifference(portfolio, recommendation);
 
-            if (difference > -100m)
+            if (difference > -100m ||
+                !_allocationService.AllowsAllocationSale(portfolio, recommendation))
             {
                 continue;
             }

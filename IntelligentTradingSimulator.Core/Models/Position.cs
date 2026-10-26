@@ -31,6 +31,8 @@ public sealed class Position
 
     public decimal HighestPriceSinceEntry { get; set; }
 
+    public decimal? EffectiveTargetPercent { get; set; }
+
     public decimal MarketValue =>
     Quantity * CurrentPrice;
 

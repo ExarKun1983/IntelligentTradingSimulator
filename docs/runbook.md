@@ -163,6 +163,43 @@ feature snapshots. Existing historical runs retain their old behavior and are
 not rewritten; their results must not be interpreted as if generated under the
 new portfolio lifecycle.
 
+Current-portfolio runs persist `Position.EffectiveTargetPercent` as the last
+initialized or completed selected target, capped by `MaxPositionWeight`.
+`AddPositionEffectiveTarget` adds only a nullable `decimal(28,8)` column;
+existing positions remain null. No market weight, average cost, or actual
+holding snapshot is treated as a historical target. Apply the migration before
+running the updated application. Rolling it back drops these baselines, so a
+later upgrade must initialize them again.
+
+On the first valid priced, positive selected target, initialize that baseline
+without an ordinary allocation sale. Stops and supported explicit unscored
+zero-target exits still execute. Omitted holdings, missing/invalid prices, and
+positive-score targets whose selected weight rounds to zero leave the baseline
+unchanged. New filled positions also receive their selected effective target.
+Unchanged effective targets never authorize price-only allocation sales;
+cash-funded top-ups remain subject to allocation and cash limits.
+
+A genuine reduction below the saved baseline remains eligible for a partial
+`Rebalance` sale (compatibility behavior, not an investment recommendation).
+If no sale is needed because the position is already at or below the new
+target, acknowledge the new target. If a sale is needed but is below the
+minimum trade threshold, rejected, or incomplete, retain the old baseline;
+the same lower target can retry on a later valid selected run. After a
+successful sale fills the instruction's requested quantity rounded down to
+eight decimal places, acknowledge the reduced target. Completion is compared
+to that instruction, not to portfolio revaluation after other fills' cash
+rounding. This accounts for execution precision without repeatedly selling
+later price appreciation.
+The trading engine has no liquidity-based partial-fill model; ordinary partial
+position sales execute a quantized requested quantity or are rejected.
+An increase in the selected target updates the baseline without requiring a
+buy; it does not bypass cash or capacity limits. No additional pending-target
+schema is used: the prior baseline remains until a reduction completes, and
+omitted targets do not autonomously retry. Trades, quantities, cash, and
+baseline changes are saved together by the post-rebalance `SaveChanges`;
+failure of that save does not persist the reduction acknowledgement. Displayed
+allocation sell recommendations use the same baseline guard.
+
 New-entry eligibility keeps the existing rules: score above zero, momentum
 above zero, and price above SMA5 (NVDA remains excluded). Holding eligibility
 uses a separate, less demanding rule. Only when `UseHoldingConditionExit` is

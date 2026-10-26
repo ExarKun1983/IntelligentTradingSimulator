@@ -39,6 +39,7 @@ public sealed class PortfolioRebalancingService
         }
 
         var stoppedSymbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var allocationService = new PortfolioAllocationService();
         foreach (var position in portfolio.Positions.ToList())
         {
             if (position.Quantity <= 0m ||
@@ -120,6 +121,21 @@ public sealed class PortfolioRebalancingService
                 AllocationPercent = Math.Min(x.AllocationPercent, allocationEngine.MaxPositionWeight)
             })
             .ToList();
+        var pricedTargets = effectiveTargets
+            .Where(x => prices.TryGetValue(x.Symbol, out var price) &&
+                        TradingPrecisionPolicy.TryNormalizePrice(price, out _))
+            .ToList();
+        foreach (var target in pricedTargets.Where(x => x.AllocationPercent > 0m))
+        {
+            var position = portfolio.Positions.FirstOrDefault(x => x.Symbol == target.Symbol);
+            if (position is not null &&
+                (position.EffectiveTargetPercent is null ||
+                 target.AllocationPercent >= Math.Min(position.EffectiveTargetPercent.Value, allocationEngine.MaxPositionWeight) ||
+                 allocationService.CalculateDifference(portfolio, target) >= 0m))
+            {
+                position.EffectiveTargetPercent = target.AllocationPercent;
+            }
+        }
 
         void ExecuteAllocationSales(IReadOnlyList<StockRecommendation> targets)
         {
@@ -131,6 +147,14 @@ public sealed class PortfolioRebalancingService
                     continue;
                 }
 
+                if (!prices.TryGetValue(position.Symbol, out var price) ||
+                    !TradingPrecisionPolicy.TryNormalizePrice(price, out _))
+                {
+                    continue;
+                }
+
+                var target = targets.First(x => x.Symbol == position.Symbol);
+                var previousQuantity = position.Quantity;
                 tradingEngine.Execute(
                     portfolio,
                     new TradingDecision
@@ -142,15 +166,26 @@ public sealed class PortfolioRebalancingService
                     },
                     position.CurrentPrice,
                     simulatedTimestamp);
+
+                // Completion follows the quantized instruction, not revaluation after other rounded fills.
+                if (position.Quantity < previousQuantity &&
+                    position.Quantity > 0m &&
+                    previousQuantity - position.Quantity >=
+                    TradingPrecisionPolicy.FloorQuantity(Math.Abs(instruction.Difference) / position.CurrentPrice))
+                {
+                    position.EffectiveTargetPercent = target.AllocationPercent;
+                }
             }
         }
 
-        ExecuteAllocationSales(effectiveTargets);
+        ExecuteAllocationSales(pricedTargets
+            .Where(x => allocationService.AllowsAllocationSale(portfolio, x, allocationEngine.MaxPositionWeight))
+            .ToList());
 
         var allocationInstructions =
             allocationEngine.Calculate(
                 portfolio,
-                effectiveTargets);
+                pricedTargets);
 
         var trades =
             allocationEngine.BuildTrades(
@@ -186,6 +221,15 @@ public sealed class PortfolioRebalancingService
                 simulatedTimestamp);
         }
 
-        return effectiveTargets;
+        foreach (var target in pricedTargets.Where(x => x.AllocationPercent > 0m))
+        {
+            var position = portfolio.Positions.FirstOrDefault(x => x.Symbol == target.Symbol);
+            if (position is not null && position.EffectiveTargetPercent is null)
+            {
+                position.EffectiveTargetPercent = target.AllocationPercent;
+            }
+        }
+
+        return pricedTargets;
     }
 }
