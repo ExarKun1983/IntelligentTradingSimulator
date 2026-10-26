@@ -151,11 +151,12 @@ positive-quantity holding does not consume another slot.
 
 Each strategy's `MaxPositionWeight` remains an individual target-allocation cap.
 It is applied to selected targets before execution, not by an independent daily
-drift-enforcement pass. However, fresh closing signals can reissue a held
-symbol's target; executing that target can trim price-driven excess value as
-`Rebalance`, even if its score is unchanged. The current allocation behavior
-therefore does not guarantee the absence of drift-related sales and remains a
-design-review limitation against issue #191's no-forced-drift requirement.
+drift-enforcement pass. In backtests, unchanged effective targets do not cause
+`Rebalance` sales solely because prices drift. Allocation sales require an
+intentional reduction relative to the saved target baseline, with both targets
+capped by `MaxPositionWeight`; a raw target reduction that leaves the effective
+target unchanged does not qualify. Explicit unscored zero-allocation targets
+still permit full exits.
 Unallocated capital may remain cash. The effective
 strategy configuration is stored as JSON on each new backtest run and in its
 feature snapshots. Existing historical runs retain their old behavior and are
