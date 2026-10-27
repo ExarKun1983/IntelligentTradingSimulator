@@ -176,8 +176,12 @@ public sealed class FinancialModelingPrepFundamentalDataProvider : IFundamentalD
 
         try
         {
+            // Headers-first requests leave body reads outside HttpClient.Timeout.
+            using var requestTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            requestTimeout.CancelAfter(_httpClient.Timeout);
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            using var response = await _httpClient.SendAsync(
+                request, HttpCompletionOption.ResponseHeadersRead, requestTimeout.Token).ConfigureAwait(false);
             status = (int)response.StatusCode;
 
             if (response.StatusCode == HttpStatusCode.NotFound)
@@ -193,9 +197,13 @@ public sealed class FinancialModelingPrepFundamentalDataProvider : IFundamentalD
             string json;
             try
             {
-                json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                json = await response.Content.ReadAsStringAsync(requestTimeout.Token).ConfigureAwait(false);
             }
             catch (InvalidOperationException)
+            {
+                return Fail(FundamentalDataFailureCategory.InvalidJson);
+            }
+            catch (NotSupportedException)
             {
                 return Fail(FundamentalDataFailureCategory.InvalidJson);
             }

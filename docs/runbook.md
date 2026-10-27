@@ -58,6 +58,12 @@ Both failed endpoints are reported once each, including simultaneous failures.
 The final unavailability count is per symbol, not per endpoint. Analysis continues
 without fundamentals under the existing strategy/quality rules; 404 and empty
 responses remain missing data. No automatic retries are added.
+HTTP errors are classified from response headers without reading their bodies;
+successful-body reads share the same per-request timeout as the headers.
+Unsupported or disabled response encodings are reported as `InvalidJson` without
+discarding the other endpoint's diagnostics. Caller cancellation is checked before
+collection, after fetches, and before each persistence step, including when
+fundamentals are disabled.
 
 Collect the safe warning lines and aggregate summary, plus the application commit,
 strategy identifier, and run date. Warnings are retained with `--no-progress`.

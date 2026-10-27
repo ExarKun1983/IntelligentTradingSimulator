@@ -50,6 +50,7 @@ public sealed class MarketDataWorkflow
         DateTime from,
         System.Threading.CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var results = new List<ObservationResult>();
         var prices = new Dictionary<string, decimal>();
         var analysisDate = _timeProvider.GetLocalNow().Date;
@@ -86,14 +87,20 @@ public sealed class MarketDataWorkflow
                 using var operation = _progress.BeginOperation("Fetching benchmark data", benchmarkSymbol);
                 benchmarkCandles = await _historicalDataService.GetHistoricalDailyUpToAsync(
                     benchmarkSymbol, from, analysisDate, analysisDate);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (benchmarkCandles.Count == 0)
                 {
                     Console.WriteLine($"Benchmark data unavailable for {benchmarkSymbol}.");
                     _progress.Report($"Benchmark data unavailable for {benchmarkSymbol}", force: true);
                 }
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException("Market data collection canceled by caller.", cancellationToken);
+            }
             catch (Exception)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 Console.WriteLine($"Benchmark data unavailable for {benchmarkSymbol}.");
                 _progress.Report($"Benchmark data unavailable for {benchmarkSymbol}", force: true);
             }
@@ -113,6 +120,7 @@ public sealed class MarketDataWorkflow
                             from,
                             analysisDate));
                 }
+                cancellationToken.ThrowIfCancellationRequested();
 
                 var historicalCandles =
                     candles
@@ -144,6 +152,7 @@ public sealed class MarketDataWorkflow
                         using var operation = _progress.BeginOperation("Fetching fundamental data", symbol);
                         fundamentalData =
                             await _fundamentalDataProvider.GetFundamentalDataAsync(symbol, cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
                         if (fundamentalData?.AsOfDate > DateOnly.FromDateTime(analysisDate))
                             fundamentalData = null;
                         if (fundamentalData is null)
@@ -173,6 +182,7 @@ public sealed class MarketDataWorkflow
                     }
                 }
 
+                cancellationToken.ThrowIfCancellationRequested();
                 results.Add(
                     _analyzer.Analyze(
                         symbol,
@@ -226,15 +236,19 @@ public sealed class MarketDataWorkflow
 
         using (_progress.BeginOperation("Saving observations"))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             await _observationResultRepository.SaveAsync(rankedResults);
         }
         using (_progress.BeginOperation("Saving feature snapshots"))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             await _featureSnapshotRepository.SaveAsync(rankedResults, _strategyConfiguration);
         }
 
         using var previousRunOperation = _progress.BeginOperation("Loading previous run");
+        cancellationToken.ThrowIfCancellationRequested();
         var previousRun = await _observationResultRepository.GetPreviousRunAsync();
+        cancellationToken.ThrowIfCancellationRequested();
 
         return new MarketDataResult(rankedResults, recommendations, prices, previousRun);
     }

@@ -813,6 +813,132 @@ public sealed class MarketDataWorkflowTests : IDisposable
     }
 
     [Fact]
+    public async Task CollectAndAnalyzeAsync_PreCanceledCallDoesNotFetchBenchmarkOrPersist()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var provider = new FakeMarketDataProvider([]);
+        var strategy = new StrategyConfiguration { UseRelativeStrength = true };
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => BuildWorkflow(provider, strategy, timeProvider: new FixedTimeProvider(new DateTime(2024, 1, 10)))
+                .CollectAndAnalyzeAsync([], new DateTime(2024, 1, 1), cts.Token));
+
+        Assert.Equal(cts.Token, exception.CancellationToken);
+        Assert.Empty(provider.Calls);
+        Assert.Empty(_dbContext.ObservationRuns);
+        Assert.Empty(_dbContext.FeatureSnapshots);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CollectAndAnalyzeAsync_CancellationDuringBenchmarkDoesNotContinue(bool fetchThrows)
+    {
+        using var cts = new CancellationTokenSource();
+        var date = new DateTime(2024, 1, 10);
+        var provider = new FakeMarketDataProvider(new Dictionary<string, IReadOnlyList<MarketCandle>>
+        {
+            ["SPY"] = BuildCandles(date.AddDays(-4), 5),
+            ["TEST"] = BuildCandles(date.AddDays(-4), 5)
+        })
+        {
+            OnFetch = _ =>
+            {
+                cts.Cancel();
+                if (fetchThrows)
+                    throw new OperationCanceledException("fake sensitive benchmark text", cts.Token);
+            }
+        };
+        var progress = new SimulationProgressRecorder();
+        var strategy = new StrategyConfiguration
+        {
+            UseRelativeStrength = true, RelativeStrengthBenchmarkSymbol = "SPY"
+        };
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => BuildWorkflow(provider, strategy, progress: progress, timeProvider: new FixedTimeProvider(date))
+                .CollectAndAnalyzeAsync(["TEST"], date.AddDays(-4), cts.Token));
+
+        Assert.Equal(cts.Token, exception.CancellationToken);
+        Assert.DoesNotContain("fake sensitive", exception.ToString());
+        Assert.Equal(new[] { "SPY" }, provider.Calls);
+        Assert.DoesNotContain(progress.Reports, report => report.Message.Contains("Benchmark data unavailable"));
+        Assert.Empty(_dbContext.ObservationRuns);
+        Assert.Empty(_dbContext.FeatureSnapshots);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(5)]
+    public async Task CollectAndAnalyzeAsync_CancellationDuringLastPriceFetchWithoutFundamentalsDoesNotPersist(
+        int candleCount)
+    {
+        using var cts = new CancellationTokenSource();
+        var date = new DateTime(2024, 1, 10);
+        var provider = new FakeMarketDataProvider(new Dictionary<string, IReadOnlyList<MarketCandle>>
+        {
+            ["FIRST"] = BuildCandles(date.AddDays(-4), 5),
+            ["LAST"] = BuildCandles(date.AddDays(-4), candleCount)
+        })
+        {
+            OnFetch = symbol =>
+            {
+                if (symbol == "LAST")
+                    cts.Cancel();
+            }
+        };
+        var progress = new SimulationProgressRecorder();
+        var strategy = new StrategyConfiguration { UseRelativeStrength = false };
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => BuildWorkflow(provider, strategy, progress: progress, timeProvider: new FixedTimeProvider(date))
+                .CollectAndAnalyzeAsync(["FIRST", "LAST"], date.AddDays(-4), cts.Token));
+
+        Assert.Equal(cts.Token, exception.CancellationToken);
+        Assert.Equal(new[] { "FIRST", "LAST" }, provider.Calls);
+        Assert.DoesNotContain(progress.Operations, operation => operation.Operation == "Building rankings");
+        Assert.Empty(_dbContext.ObservationRuns);
+        Assert.Empty(_dbContext.ObservationResults);
+        Assert.Empty(_dbContext.FeatureSnapshots);
+    }
+
+    [Theory]
+    [InlineData("Saving observations", 0)]
+    [InlineData("Saving feature snapshots", 1)]
+    public async Task CollectAndAnalyzeAsync_ChecksCancellationBeforeEachPersistenceStep(
+        string operation, int expectedRuns)
+    {
+        using var cts = new CancellationTokenSource();
+        var date = new DateTime(2024, 1, 10);
+        var provider = new FakeMarketDataProvider(BuildCandles(date.AddDays(-4), 5));
+        var strategy = new StrategyConfiguration { UseRelativeStrength = false };
+        var progress = new CancelingWorkflowProgress(cts, operation);
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => BuildWorkflow(provider, strategy, progress: progress, timeProvider: new FixedTimeProvider(date))
+                .CollectAndAnalyzeAsync(["TEST"], date.AddDays(-4), cts.Token));
+
+        Assert.Equal(cts.Token, exception.CancellationToken);
+        Assert.Equal(expectedRuns, await _dbContext.ObservationRuns.CountAsync());
+        Assert.Equal(expectedRuns, await _dbContext.ObservationResults.CountAsync());
+        Assert.Empty(_dbContext.FeatureSnapshots);
+    }
+
+    private sealed class CancelingWorkflowProgress(
+        CancellationTokenSource cancellation, string cancelAtOperation) : IWorkflowProgress
+    {
+        public WorkflowProgressContext Context { get; set; } = new();
+        public void Report(string message, bool force = false) { }
+        public IDisposable BeginOperation(string operation, string? symbol = null)
+        {
+            if (operation == cancelAtOperation)
+                cancellation.Cancel();
+            return NullWorkflowProgress.Instance.BeginOperation(operation, symbol);
+        }
+    }
+
+    [Fact]
     public async Task CollectAndAnalyzeAsync_CallerCancellationDoesNotContinueOrReportOutage()
     {
         var date = new DateTime(2024, 1, 10);
@@ -950,7 +1076,8 @@ public sealed class MarketDataWorkflowTests : IDisposable
         IMarketDataProvider provider,
         StrategyConfiguration? strategy = null,
         IFundamentalDataProvider? fundamentalDataProvider = null,
-        IWorkflowProgress? progress = null)
+        IWorkflowProgress? progress = null,
+        TimeProvider? timeProvider = null)
     {
         return new MarketDataWorkflow(
             provider,
@@ -960,6 +1087,7 @@ public sealed class MarketDataWorkflowTests : IDisposable
             new FeatureSnapshotRepository(_dbContext),
             strategy,
             fundamentalDataProvider,
+            timeProvider: timeProvider,
             progress: progress);
     }
 

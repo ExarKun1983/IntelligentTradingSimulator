@@ -388,6 +388,97 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
     }
 
     [Theory]
+    [InlineData(403, FundamentalDataFailureCategory.AuthAccess)]
+    [InlineData(429, FundamentalDataFailureCategory.RateLimit)]
+    [InlineData(404, null)]
+    public async Task GetFundamentalDataAsync_ClassifiesErrorHeadersWithoutReadingBody(
+        int status, FundamentalDataFailureCategory? category)
+    {
+        var bodyReads = 0;
+        var handler = new MockHttpMessageHandler(_ =>
+            new HttpResponseMessage((HttpStatusCode)status)
+            {
+                Content = new CallbackHttpContent(_ =>
+                {
+                    bodyReads++;
+                    throw new IOException(Sentinel);
+                })
+            });
+        var provider = CreateProvider(handler, Sentinel);
+
+        if (category.HasValue)
+        {
+            var exception = await Assert.ThrowsAsync<FundamentalDataFetchException>(
+                () => provider.GetFundamentalDataAsync("AAPL"));
+            Assert.Equal(2, exception.Failures.Count);
+            Assert.All(exception.Failures, failure =>
+            {
+                Assert.Equal(status, failure.HttpStatus);
+                Assert.Equal(category.Value, failure.Category);
+            });
+            AssertSecretSafe(exception);
+        }
+        else
+        {
+            Assert.Null(await provider.GetFundamentalDataAsync("AAPL"));
+        }
+
+        Assert.Equal(0, bodyReads);
+    }
+
+    [Fact]
+    public async Task GetFundamentalDataAsync_TimesOutStalledSuccessfulBodyAndRetainsStatus()
+    {
+        var bodyReads = 0;
+        using var handler = new MockHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new CallbackHttpContent(async token =>
+                {
+                    Interlocked.Increment(ref bodyReads);
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                })
+            });
+        using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(1) };
+        var provider = new FinancialModelingPrepFundamentalDataProvider(
+            client, Options.Create(new FinancialModelingPrepOptions { ApiKey = Sentinel }));
+
+        var exception = await Assert.ThrowsAsync<FundamentalDataFetchException>(
+            () => provider.GetFundamentalDataAsync("AAPL").WaitAsync(TimeSpan.FromSeconds(10)));
+
+        Assert.Equal(2, bodyReads);
+        Assert.Equal(2, exception.Failures.Count);
+        Assert.All(exception.Failures, failure =>
+        {
+            Assert.Equal(200, failure.HttpStatus);
+            Assert.Equal(FundamentalDataFailureCategory.Timeout, failure.Category);
+        });
+        AssertSecretSafe(exception);
+    }
+
+    [Fact]
+    public async Task GetFundamentalDataAsync_PropagatesCallerCancellationDuringBodyRead()
+    {
+        using var cts = new CancellationTokenSource();
+        using var handler = new MockHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new CallbackHttpContent(token =>
+                {
+                    cts.Cancel();
+                    return Task.FromCanceled(token);
+                })
+            });
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => CreateProvider(handler, Sentinel).GetFundamentalDataAsync("AAPL", cts.Token));
+
+        Assert.Equal(cts.Token, exception.CancellationToken);
+        Assert.Null(exception.InnerException);
+        Assert.DoesNotContain(Sentinel, exception.ToString());
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task GetFundamentalDataAsync_AttributesSingleFailureToCorrectEndpoint(bool growthFails)
@@ -490,17 +581,22 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task GetFundamentalDataAsync_SanitizesInvalidEncodingAndRetainsOtherEndpointFailure(bool growthInvalid)
+    [InlineData(true, null, 403)]
+    [InlineData(false, null, 403)]
+    [InlineData(true, "utf-7", 403)]
+    [InlineData(false, "utf-7", 403)]
+    [InlineData(true, "utf-7", 429)]
+    [InlineData(false, "utf-7", 429)]
+    public async Task GetFundamentalDataAsync_SanitizesInvalidEncodingAndRetainsOtherEndpointFailure(
+        bool growthInvalid, string? charset, int otherStatus)
     {
         var handler = new MockHttpMessageHandler(request =>
         {
             if (request.RequestUri!.AbsolutePath.Contains("financial-growth") != growthInvalid)
-                return new HttpResponseMessage(HttpStatusCode.Forbidden);
+                return new HttpResponseMessage((HttpStatusCode)otherStatus);
 
             var content = new StringContent($"{Sentinel} {Uri.EscapeDataString(Sentinel)}");
-            content.Headers.ContentType!.CharSet = "unsupported-" + Uri.EscapeDataString(Sentinel);
+            content.Headers.ContentType!.CharSet = charset ?? "unsupported-" + Uri.EscapeDataString(Sentinel);
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
         });
         var exception = await Assert.ThrowsAsync<FundamentalDataFetchException>(
@@ -510,9 +606,10 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
         Assert.All(exception.Failures, failure =>
         {
             var invalid = (failure.Endpoint == FundamentalDataEndpoint.FinancialGrowth) == growthInvalid;
-            Assert.Equal(invalid ? 200 : 403, failure.HttpStatus);
+            Assert.Equal(invalid ? 200 : otherStatus, failure.HttpStatus);
             Assert.Equal(invalid ? FundamentalDataFailureCategory.InvalidJson
-                : FundamentalDataFailureCategory.AuthAccess, failure.Category);
+                : otherStatus == 403 ? FundamentalDataFailureCategory.AuthAccess
+                : FundamentalDataFailureCategory.RateLimit, failure.Category);
         });
         AssertSecretSafe(exception);
     }
@@ -737,6 +834,22 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
         });
 
         return new FinancialModelingPrepFundamentalDataProvider(httpClient, options);
+    }
+
+    private sealed class CallbackHttpContent(Func<CancellationToken, Task> serialize) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            serialize(CancellationToken.None);
+
+        protected override Task SerializeToStreamAsync(
+            Stream stream, TransportContext? context, CancellationToken cancellationToken) =>
+            serialize(cancellationToken);
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
     }
 
     private sealed class MockHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler)
