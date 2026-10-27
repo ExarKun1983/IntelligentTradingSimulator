@@ -12,18 +12,18 @@ namespace IntelligentTradingSimulator.Tests;
 public sealed class SimulationRunnerTests : IDisposable
 {
     private readonly TradingSimulatorDbContext _dbContext;
+    private readonly PaperWorkflowTestSupport.Database _database = new();
 
     public SimulationRunnerTests()
     {
-        var options =
-            new DbContextOptionsBuilder<TradingSimulatorDbContext>()
-                .UseInMemoryDatabase(Guid.NewGuid().ToString())
-                .Options;
-
-        _dbContext = new TradingSimulatorDbContext(options);
+        _dbContext = new TradingSimulatorDbContext(_database.Options);
     }
 
-    public void Dispose() => _dbContext.Dispose();
+    public void Dispose()
+    {
+        _dbContext.Dispose();
+        _database.Dispose();
+    }
 
     [Theory]
     [InlineData(14)]
@@ -96,7 +96,7 @@ public sealed class SimulationRunnerTests : IDisposable
             new PortfolioRecommendationService(strategy.MaxPositions),
             new ObservationResultRepository(_dbContext),
             new FeatureSnapshotRepository(_dbContext),
-            strategy);
+            strategy, timeProvider: PaperWorkflowTestSupport.Clock);
         var portfolioWorkflow = new PortfolioWorkflow(
             new PortfolioRepository(_dbContext),
             new PortfolioSnapshotRepository(_dbContext),
@@ -107,12 +107,12 @@ public sealed class SimulationRunnerTests : IDisposable
             new PortfolioRebalancingService(),
             new PortfolioPerformanceService(),
             workflowReporter,
-            strategy);
+            strategy, timeProvider: PaperWorkflowTestSupport.Clock);
         var runner = new SimulationRunner(
             marketDataWorkflow,
             portfolioWorkflow,
             new ConsoleReporter(allocationService, new PortfolioContributionService()),
-            strategy);
+            strategy, timeProvider: PaperWorkflowTestSupport.Clock);
         var originalOutput = Console.Out;
         using var output = new StringWriter();
         try
@@ -222,7 +222,7 @@ public sealed class SimulationRunnerTests : IDisposable
                     var close = 101m + index;
                     return new MarketCandle
                     {
-                        Date = DateTime.Today.AddDays(index - 4),
+                        Date = new DateTime(2024, 1, 3).AddDays(index),
                         Open = 100m + index,
                         Close = close,
                         High = close + 1m,

@@ -17,8 +17,8 @@ public sealed class PortfolioWorkflowTests
     public async Task RunAsync_PersistsHighAcrossContexts_AndTrailingStopExit(
         bool enabled, bool hasPrice, int price, bool shouldSell)
     {
-        var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        using var database = new PaperWorkflowTestSupport.Database();
+        var options = database.Options;
         await using (var context = new TradingSimulatorDbContext(options))
         {
             var portfolio = new Portfolio { Name = "Current", StartingCash = 1000m, Cash = 1000m };
@@ -40,13 +40,18 @@ public sealed class PortfolioWorkflowTests
                 new PortfolioRebalancingService(),
                 new PortfolioPerformanceService(),
                 new ConsoleReporter(new PortfolioAllocationService(), new PortfolioContributionService()),
-                new StrategyConfiguration { TrailingStopPercent = enabled ? 10m : null });
+                new StrategyConfiguration { TrailingStopPercent = enabled ? 10m : null },
+                timeProvider: PaperWorkflowTestSupport.Clock);
             var prices = new Dictionary<string, decimal>();
             if (currentPrice.HasValue)
             {
                 prices["AAPL"] = currentPrice.Value;
             }
-            await workflow.RunAsync([], prices);
+            if (currentPrice.HasValue)
+                await PaperWorkflowTestSupport.RunAsync(workflow, context, [], prices);
+            else
+                await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    PaperWorkflowTestSupport.RunAsync(workflow, context, [], prices));
         }
 
         await Run(150m);
@@ -87,8 +92,8 @@ public sealed class PortfolioWorkflowTests
     public async Task RunAsync_StopLossPersistsAutomaticExit_WhenEnabledAndPriceBreachesThreshold(
         bool enabled, bool hasPrice, int price, bool shouldSell)
     {
-        var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        using var database = new PaperWorkflowTestSupport.Database();
+        var options = database.Options;
         await using (var context = new TradingSimulatorDbContext(options))
         {
             var repository = new PortfolioRepository(context);
@@ -111,14 +116,19 @@ public sealed class PortfolioWorkflowTests
                 new PortfolioRebalancingService(),
                 new PortfolioPerformanceService(),
                 new ConsoleReporter(new PortfolioAllocationService(), new PortfolioContributionService()),
-                new StrategyConfiguration { StopLossPercent = enabled ? 10m : null });
+                new StrategyConfiguration { StopLossPercent = enabled ? 10m : null },
+                timeProvider: PaperWorkflowTestSupport.Clock);
             var prices = new Dictionary<string, decimal>();
             if (hasPrice)
             {
                 prices["AAPL"] = price;
             }
 
-            await workflow.RunAsync([], prices);
+            if (hasPrice)
+                await PaperWorkflowTestSupport.RunAsync(workflow, context, [], prices);
+            else
+                await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    PaperWorkflowTestSupport.RunAsync(workflow, context, [], prices));
         }
 
         await using var readContext = new TradingSimulatorDbContext(options);
@@ -145,8 +155,8 @@ public sealed class PortfolioWorkflowTests
     [Fact]
     public async Task RunAsync_OverLimitPersistedPortfolioBlocksNewSymbolUntilExitsReduceCountBelowLimit()
     {
-        var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        using var database = new PaperWorkflowTestSupport.Database();
+        var options = database.Options;
         await using (var context = new TradingSimulatorDbContext(options))
         {
             await new PortfolioRepository(context).SaveAsync(new Portfolio
@@ -176,8 +186,9 @@ public sealed class PortfolioWorkflowTests
                 new PortfolioRebalancingService(),
                 new PortfolioPerformanceService(),
                 new ConsoleReporter(allocationService, new PortfolioContributionService()),
-                new StrategyConfiguration { MaxPositions = 1, StopLossPercent = 10m });
-            return await workflow.RunAsync(
+                new StrategyConfiguration { MaxPositions = 1, StopLossPercent = 10m },
+                timeProvider: PaperWorkflowTestSupport.Clock);
+            return await PaperWorkflowTestSupport.RunAsync(workflow, context,
                 [new StockRecommendation { Symbol = "CCC", Score = 10m, AllocationPercent = 100m }],
                 prices);
         }
@@ -209,8 +220,8 @@ public sealed class PortfolioWorkflowTests
     [Fact]
     public async Task RunAsync_StopAndRefillRetainsEligibleCandidateWhosePreliminaryAllocationRoundsToZero()
     {
-        var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        using var database = new PaperWorkflowTestSupport.Database();
+        var options = database.Options;
         await using var context = new TradingSimulatorDbContext(options);
         await new PortfolioRepository(context).SaveAsync(new Portfolio
         {
@@ -244,11 +255,11 @@ public sealed class PortfolioWorkflowTests
             new PortfolioRebalancingService(),
             new PortfolioPerformanceService(),
             new ConsoleReporter(allocationService, new PortfolioContributionService()),
-            configuration);
+            configuration, timeProvider: PaperWorkflowTestSupport.Clock);
 
         Assert.Equal(0m, candidates.Single(x => x.Symbol == "BBB").AllocationPercent);
 
-        var result = await workflow.RunAsync(
+        var result = await PaperWorkflowTestSupport.RunAsync(workflow, context,
             candidates,
             new Dictionary<string, decimal> { ["AAA"] = 80m, ["BBB"] = 100m });
 

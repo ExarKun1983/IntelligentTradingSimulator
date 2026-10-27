@@ -4,6 +4,187 @@ This guide covers the current console application and its SQL Server and Yahoo F
 
 For the connected feature-to-dataset-to-evaluation flow, implemented AI boundaries, safety constraints, and explicitly future roadmap, see the [AI-ready architecture and workflows](../README.md#ai-ready-architecture-and-workflows). The API and command examples below describe today's implementation; selecting the `AI` engine does not load a trained model.
 
+## Paper execution safety and upgrade (#196)
+
+Paper execution is keyed by the stable identity **`main`**, not strategy ID, portfolio
+name, latest portfolio ID, download revision, process, machine date, or data hash.
+`PaperPortfolioStates` maps that identity to exactly one portfolio (unique in both
+directions), with a durable last-completed-session high-water mark.
+`PaperPortfolioExecutions` has a composite primary key `(Identity, SessionDate)`.
+Changing strategy or downloading revised prices never permits replaying a session.
+The application returns `Executed`, `AlreadyExecuted`, or `OlderSession`. Duplicate
+and older requests do not change prices, trailing highs, target baselines, cash,
+positions, trades, or portfolio/position execution snapshots.
+Inside the portfolio guard, a request matching the last completed session returns
+`AlreadyExecuted` before freshness validation, even if its previously accepted
+session object has since become stale. Any date before that high-water mark returns
+`OlderSession`, including an earlier session that also has a completion marker.
+Fresh collection still refuses stale downloaded feeds before authorizing execution.
+
+### Completed daily data policy
+
+The simulation uses `CollectAndAnalyzeCompletedSessionAsync`. A candle date is the
+provider's **daily session label**, not a UTC timestamp to convert. Completion is
+conservatively determined in **America/New_York**, including DST: a candle is usable
+only after the *next New York midnight*. Today's NY candle is never used, even
+after a normal or early exchange close. This deliberately delays execution rather
+than assuming a close time or a holiday calendar.
+
+Every requested universe symbol (and the relative-strength benchmark, when enabled)
+must have the same latest completed candle date. Missing symbols, differing latest
+dates, duplicate daily candles, invalid OHLCV, or unsupported close prices refuse
+execution; we do not silently intersect dates or fill prices forward. Held and
+recommended symbols must all have prices in the same immutable session price set.
+Analysis used for paper recommendations excludes incomplete candles too.
+Every requested symbol must be successfully analyzed: insufficient scoring history
+or an analyzer failure refuses execution rather than using partial recommendations.
+When the benchmark is also in the universe, ranking and execution reuse its single
+fetched candle set so a second revised fetch cannot produce conflicting inputs.
+Missing fundamentals still continue under the existing strategy rules and safe
+diagnostics; they do not imply missing price data.
+
+The latest candle may be at most **7 calendar days** old relative to the NY date at
+collection and again under the mutation lock. This bounded freshness allowance
+accommodates weekends/holidays without asserting that any weekday must trade.
+It is not proof of exchange-calendar completeness: coherent but delayed data within
+that bound may execute once, and outages longer than the bound require fresh data,
+not a force-rerun. An exchange-calendar integration is intentionally out of scope.
+
+All HTTP retrieval and analysis occur **before** the portfolio transaction. Analytical
+observation records may repeat, and feature records may be inserted/updated by repeated
+analysis (including a changed strategy); therefore a duplicate *whole command* is
+not claimed to be write-free. `CollectAndAnalyzeAsync` remains analytical-only and
+does not authorize execution. Backtests retain their existing independent workflow.
+
+### Development migration
+
+1. Stop all paper writers, back up the **development** database, and verify the
+   selected connection privately. Do not run these steps against an ongoing user
+   simulation or any portfolio without explicit authorization.
+2. Set `TRADING_DB_CONNECTION` privately to that development database, then run:
+
+   ```bash
+   dotnet ef database update --project IntelligentTradingSimulator.Infrastructure --startup-project IntelligentTradingSimulator.App
+   ```
+
+   Use EF CLI 9.0.17 matching the repository packages. The
+   `AddPaperExecutionSafety` migration only adds two tables, indexes, and foreign
+   keys. It does not backfill, delete, rename, or renumber existing records.
+3. If no non-backtest portfolio exists, the first valid session can create the
+   initial portfolio. Otherwise execution **fails closed** until the explicit
+   procedure below is completed. It never adopts the latest ID automatically.
+
+### Explicit existing-portfolio initialization
+
+Independently verify the chosen portfolio's **last successfully executed market
+session**, using reliable source records/operator evidence. A snapshot timestamp
+alone is *not* session evidence; never infer the session from local/UTC wall-clock
+dates, the current date, prices, or this runbook. If evidence is insufficient, leave
+the application blocked. Reconcile questionable/partial legacy execution separately
+before initializing. Preserve all old portfolios and IDs; select the intended one
+explicitly when there are multiple historical portfolios.
+
+With writers stopped, have an authorized operator fill in the three NULL values
+below from verified evidence. The script intentionally cannot run as supplied.
+Do not overwrite an existing mapping or lower a high-water mark. The seed marker
+records a verified historical completion; it does not fabricate historical execution
+snapshots or claim to reconstruct all past session identities.
+
+```sql
+SET XACT_ABORT ON;
+DECLARE @PortfolioId int = NULL;            -- Explicit, independently verified ID.
+DECLARE @VerifiedLastSession date = NULL;   -- Actual market-session label.
+DECLARE @EvidenceReference nvarchar(400) = NULL; -- Retain evidence in operator audit.
+IF @PortfolioId IS NULL OR @VerifiedLastSession IS NULL
+   OR NULLIF(LTRIM(RTRIM(@EvidenceReference)), N'') IS NULL
+    THROW 51010, 'Verified portfolio, last session and audit evidence are required.', 1;
+BEGIN TRANSACTION;
+DECLARE @lockResult int;
+EXEC @lockResult = sys.sp_getapplock @Resource = N'PaperPortfolio:main',
+    @LockMode = N'Exclusive', @LockOwner = N'Transaction', @LockTimeout = 60000;
+IF @lockResult < 0
+BEGIN
+    ROLLBACK;
+    THROW 51011, 'Paper initialization lock unavailable.', 1;
+END;
+IF NOT EXISTS (SELECT 1 FROM Portfolios WHERE Id = @PortfolioId)
+   OR EXISTS (SELECT 1 FROM BacktestRuns WHERE PortfolioId = @PortfolioId)
+   OR EXISTS (SELECT 1 FROM PaperPortfolioStates
+              WHERE [Identity] = N'main' OR PortfolioId = @PortfolioId)
+BEGIN
+    ROLLBACK;
+    THROW 51012, 'Invalid portfolio or an existing identity mapping; do not overwrite.', 1;
+END;
+INSERT INTO PaperPortfolioStates ([Identity], PortfolioId, LastCompletedSession)
+VALUES (N'main', @PortfolioId, @VerifiedLastSession);
+INSERT INTO PaperPortfolioExecutions ([Identity], SessionDate, CompletedAtUtc)
+VALUES (N'main', @VerifiedLastSession, SYSUTCDATETIME());
+COMMIT;
+```
+
+Retain the evidence reference, operator, verified session, and before/after counts in
+your operational audit. The application does not deduce this information for you.
+
+### Transaction, recovery, and verification
+
+On SQL Server, `sys.sp_getapplock` takes an exclusive **transaction-owned**
+`PaperPortfolio:main` lock *before* reading the mapping or checking initialization.
+All negative lock results fail closed; timeout/cancellation/SQL exceptions do not
+permit unlocked execution. The same lock serializes different sessions too.
+The transaction includes first initialization, initial trades, price updates,
+rebalancing/trailing highs/target baselines, cash/positions/trades, one portfolio
+execution snapshot, current-position execution snapshots, high-water mark, and the
+completion marker. Even unchanged portfolio value gets one snapshot per executed
+session. A position snapshot is written for each position remaining after execution.
+
+Any pre-commit failure or cancellation rolls back all these changes and clears EF
+tracking so a retry reloads durable state. Do not manually remove markers to retry.
+After a lost commit response, rerun normally: a committed marker suppresses replay;
+an actual rollback permits retry. No automatic forced rerun is provided.
+Other tools directly editing paper portfolios must not run concurrently and must
+honor this locking/identity protocol. SQL Server is the production concurrency
+provider; nontransactional providers such as EF InMemory are refused before execution.
+SQLite unit tests are not evidence of SQL Server locking safety.
+
+Use the explicitly verified ID as `@PortfolioId`, and record these counts before and
+after a run (do not use snapshot wall-clock dates to identify market sessions):
+
+```sql
+SELECT [Identity], PortfolioId, LastCompletedSession FROM PaperPortfolioStates;
+SELECT [Identity], SessionDate, CompletedAtUtc
+FROM PaperPortfolioExecutions ORDER BY [Identity], SessionDate;
+SELECT COUNT(*) AS Trades FROM Trades WHERE PortfolioId = @PortfolioId;
+SELECT COUNT(*) AS PortfolioSnapshots FROM PortfolioSnapshots WHERE PortfolioId = @PortfolioId;
+SELECT COUNT(*) AS PositionSnapshots FROM PositionSnapshots WHERE PortfolioId = @PortfolioId;
+SELECT Cash, StartingCash FROM Portfolios WHERE Id = @PortfolioId;
+SELECT Symbol, Quantity, CurrentPrice, HighestPriceSinceEntry, EffectiveTargetPercent
+FROM Positions WHERE PortfolioId = @PortfolioId;
+```
+
+A repeated/revised-strategy run must leave all execution counts and values unchanged.
+A new successful session adds one marker and portfolio snapshot; position snapshot
+count increases by the remaining position count. Analytical record counts may change.
+
+### Runnable isolated SQL Server tests
+
+Do **not** install SQL Server for this task or point tests at a user/development
+simulation database. On an existing disposable test server, set
+`PAPER_TEST_SQL_CONNECTION` privately to a connection explicitly targeting **master**,
+with permission to create/drop isolated test databases. Then run:
+
+```bash
+dotnet test IntelligentTradingSimulator.Tests --configuration Release --filter FullyQualifiedName~PaperExecutionSqlServerTests --verbosity normal
+```
+
+Each test creates/migrates and deletes only a unique `ITS_PaperTests_<guid>` catalog.
+Non-master input is rejected. Tests cover actual independent-context SQL locking
+(first initialization and existing portfolios, equal and differing dates), database
+uniqueness, an actual negative lock return under contention, every persistence
+boundary, cancellation/rollback/retry, and preservation of IDs during upgrade.
+Without that explicit environment variable these tests are reported **skipped**,
+not passed. Offline SQLite tests verify rollback and retry; deterministic session
+tests cover NY/DST boundaries, ambiguity, freshness, and price consistency.
+
 ## Console workflow progress
 
 Progress is enabled by default for simulations, backtests, variant runs, and report/export
@@ -77,8 +258,10 @@ There is **no diagnostics-only CLI flag**. Running the simulation can execute
 virtual trades and persist results. Only reproduce locally after verifying that
 the separate dev clone's effective configuration points to the intended migrated
 dev database (for example `IntelligentTradingSimulator_Dev`), never the ongoing
-simulation database. A second same-day run is not made safe/idempotent by these
-diagnostics. Offline fake-handler tests need neither API credentials nor SQL Server.
+simulation database. The paper execution guard described above—not these
+diagnostics—prevents duplicate execution for the same completed market session,
+including across same-day starts; analytical records may still be written again.
+Offline fake-handler tests need neither API credentials nor SQL Server.
 
 ## Prerequisites
 

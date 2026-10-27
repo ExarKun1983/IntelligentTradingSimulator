@@ -16,11 +16,12 @@ public sealed class PositionSnapshotRepository
     }
 
     public async Task SaveAsync(
-        IEnumerable<PositionSnapshot> snapshots)
+        IEnumerable<PositionSnapshot> snapshots,
+        CancellationToken cancellationToken = default)
     {
         _dbContext.PositionSnapshots
             .AddRange(snapshots);
 
-        await _dbContext.SaveChangesAsync();
+        await _dbContext.SaveChangesAsync(cancellationToken);
     }
 }

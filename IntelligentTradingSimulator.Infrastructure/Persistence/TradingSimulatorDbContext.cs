@@ -45,6 +45,8 @@ public sealed class TradingSimulatorDbContext : DbContext
     public DbSet<FutureOutcomeLabel> FutureOutcomeLabels => Set<FutureOutcomeLabel>();
     public DbSet<MarketCandleEntity> MarketCandles => Set<MarketCandleEntity>();
     public DbSet<MarketDataCoverage> MarketDataCoverage => Set<MarketDataCoverage>();
+    public DbSet<PaperPortfolioState> PaperPortfolioStates => Set<PaperPortfolioState>();
+    public DbSet<PaperPortfolioExecution> PaperPortfolioExecutions => Set<PaperPortfolioExecution>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -56,6 +58,19 @@ public sealed class TradingSimulatorDbContext : DbContext
         ConfigureFeatureSnapshot(modelBuilder);
         ConfigureFutureOutcomeLabel(modelBuilder);
         ConfigureMarketData(modelBuilder);
+        var state = modelBuilder.Entity<PaperPortfolioState>();
+        state.HasKey(x => x.Identity);
+        state.Property(x => x.Identity).HasMaxLength(100);
+        state.Property(x => x.LastCompletedSession).HasColumnType("date");
+        state.HasIndex(x => x.PortfolioId).IsUnique();
+        state.HasOne(x => x.Portfolio).WithOne().HasForeignKey<PaperPortfolioState>(x => x.PortfolioId)
+            .OnDelete(DeleteBehavior.Restrict);
+        var execution = modelBuilder.Entity<PaperPortfolioExecution>();
+        execution.HasKey(x => new { x.Identity, x.SessionDate });
+        execution.Property(x => x.Identity).HasMaxLength(100);
+        execution.Property(x => x.SessionDate).HasColumnType("date");
+        execution.HasOne<PaperPortfolioState>().WithMany().HasForeignKey(x => x.Identity)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 
     private static void ConfigureTradingPrecision(ModelBuilder modelBuilder)
