@@ -32,6 +32,48 @@ benchmark calculations, and CSV exports may still be running after the simulatio
 an export is only confirmed after its write succeeds. Snapshot-only report exports do not
 generate summaries or request benchmarks.
 
+## Safe fundamental-fetch diagnostics
+
+Fundamental fetch failures report only the symbol, fixed provider name
+(`FinancialModelingPrep`), fixed endpoint (`financial-growth` or `ratios`), numeric
+HTTP status (or `unknown`), and a failure category. Example with fake data:
+
+```text
+Failed to fetch fundamental data for EXAMPLE; Provider=FinancialModelingPrep; Endpoint=ratios; HTTP=403; Category=AuthAccess. Continuing without fundamentals.
+```
+
+`AuthAccess` (401/403) indicates denied access, not proof of an invalid key or a
+particular subscription restriction. Check access/account settings privately.
+`RateLimit` means HTTP 429; `UpstreamServer` means HTTP 5xx. `Transport` with
+`HTTP=unknown` means no status was obtained; check local connectivity privately.
+`Timeout` distinguishes request timeout from genuine caller cancellation, which
+propagates rather than being reported as a provider outage. `InvalidJson` and
+`ProviderError` identify malformed/unexpected JSON (including invalid response
+encoding) and provider error objects
+(including HTTP-success error responses); `HttpFailure` covers other HTTP errors.
+An unclassified provider failure reports `Unknown` without exposing exception text.
+Do not infer the upstream cause from the category alone.
+
+Both failed endpoints are reported once each, including simultaneous failures.
+The final unavailability count is per symbol, not per endpoint. Analysis continues
+without fundamentals under the existing strategy/quality rules; 404 and empty
+responses remain missing data. No automatic retries are added.
+
+Collect the safe warning lines and aggregate summary, plus the application commit,
+strategy identifier, and run date. Warnings are retained with `--no-progress`.
+Do not share API keys, appsettings, connection strings, full request URLs, headers,
+raw response bodies, or exception dumps. Default HTTP-client request logging is
+removed only for the FMP client because its query string contains the API key;
+unrelated clients retain their logging. External HTTP tracing/proxies may still
+capture secrets: do not enable or share such traces for diagnosis.
+
+There is **no diagnostics-only CLI flag**. Running the simulation can execute
+virtual trades and persist results. Only reproduce locally after verifying that
+the separate dev clone's effective configuration points to the intended migrated
+dev database (for example `IntelligentTradingSimulator_Dev`), never the ongoing
+simulation database. A second same-day run is not made safe/idempotent by these
+diagnostics. Offline fake-handler tests need neither API credentials nor SQL Server.
+
 ## Prerequisites
 
 - The .NET SDK version in `global.json` (currently `9.0.318`; its `latestPatch` roll-forward setting permits later patches in that feature band).

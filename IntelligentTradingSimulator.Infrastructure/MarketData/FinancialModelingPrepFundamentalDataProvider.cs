@@ -56,13 +56,20 @@ public sealed class FinancialModelingPrepFundamentalDataProvider : IFundamentalD
             baseUri,
             $"stable/ratios?symbol={encodedSymbol}&limit=1&apikey={encodedApiKey}");
 
-        var growthTask = FetchEndpointAsync(growthUri, cancellationToken);
-        var ratiosTask = FetchEndpointAsync(ratiosUri, cancellationToken);
+        var growthTask = FetchEndpointAsync(growthUri, FundamentalDataEndpoint.FinancialGrowth, cancellationToken);
+        var ratiosTask = FetchEndpointAsync(ratiosUri, FundamentalDataEndpoint.Ratios, cancellationToken);
 
-        await Task.WhenAll(growthTask, ratiosTask).ConfigureAwait(false);
+        var endpoints = await Task.WhenAll(growthTask, ratiosTask).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        var failures = endpoints.Where(result => result.Failure is not null)
+            .Select(result => result.Failure!).ToArray();
+        if (failures.Length > 0)
+        {
+            throw new FundamentalDataFetchException(failures);
+        }
 
-        var growthElement = await growthTask.ConfigureAwait(false);
-        var ratiosElement = await ratiosTask.ConfigureAwait(false);
+        var growthElement = endpoints[0].Data;
+        var ratiosElement = endpoints[1].Data;
 
         if (!growthElement.HasValue && !ratiosElement.HasValue)
         {
@@ -156,61 +163,107 @@ public sealed class FinancialModelingPrepFundamentalDataProvider : IFundamentalD
         };
     }
 
-    private async Task<JsonElement?> FetchEndpointAsync(
+    private sealed record EndpointResult(JsonElement? Data = null, FundamentalDataFailure? Failure = null);
+
+    private async Task<EndpointResult> FetchEndpointAsync(
         Uri uri,
+        FundamentalDataEndpoint endpoint,
         CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-        using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        int? status = null;
+        EndpointResult Fail(FundamentalDataFailureCategory category) =>
+            new(Failure: new FundamentalDataFailure(endpoint, category, status));
 
-        if (response.StatusCode == HttpStatusCode.NotFound)
+        try
         {
-            return null;
-        }
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            status = (int)response.StatusCode;
 
-        if (!response.IsSuccessStatusCode)
-        {
-            var errorContent = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            throw new HttpRequestException(
-                $"FinancialModelingPrep request to '{uri.GetLeftPart(UriPartial.Path)}' failed with status {(int)response.StatusCode} ({response.StatusCode}): {errorContent}",
-                null,
-                response.StatusCode);
-        }
-
-        var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(json))
-        {
-            return null;
-        }
-
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement.Clone();
-
-        if (root.ValueKind == JsonValueKind.Object)
-        {
-            if (root.TryGetProperty("Error Message", out var errorProp) ||
-                root.TryGetProperty("errorMessage", out errorProp) ||
-                root.TryGetProperty("error", out errorProp))
+            if (response.StatusCode == HttpStatusCode.NotFound)
             {
-                var errorText = errorProp.GetString() ?? "Unknown provider error.";
-                throw new InvalidOperationException($"FinancialModelingPrep returned error: {errorText}");
+                return new();
             }
 
-            return root;
-        }
-
-        if (root.ValueKind == JsonValueKind.Array)
-        {
-            if (root.GetArrayLength() == 0)
+            if (!response.IsSuccessStatusCode)
             {
-                return null;
+                return Fail(ClassifyStatus(status));
             }
 
-            return root[0].Clone();
-        }
+            string json;
+            try
+            {
+                json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidOperationException)
+            {
+                return Fail(FundamentalDataFailureCategory.InvalidJson);
+            }
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return new();
+            }
 
-        return null;
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement.Clone();
+
+            if (root.ValueKind == JsonValueKind.Array)
+            {
+                if (root.GetArrayLength() == 0)
+                {
+                    return new();
+                }
+
+                root = root[0].Clone();
+            }
+
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                if (root.TryGetProperty("Error Message", out _) ||
+                    root.TryGetProperty("errorMessage", out _) ||
+                    root.TryGetProperty("error", out _))
+                {
+                    return Fail(FundamentalDataFailureCategory.ProviderError);
+                }
+
+                return new(root);
+            }
+
+            return root.ValueKind == JsonValueKind.Null
+                ? new()
+                : Fail(FundamentalDataFailureCategory.InvalidJson);
+        }
+        catch (OperationCanceledException)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException("Fundamental data fetch canceled by caller.", cancellationToken);
+            }
+
+            return Fail(FundamentalDataFailureCategory.Timeout);
+        }
+        catch (HttpRequestException exception)
+        {
+            status ??= (int?)exception.StatusCode;
+            return Fail(status >= 400 ? ClassifyStatus(status) : FundamentalDataFailureCategory.Transport);
+        }
+        catch (IOException)
+        {
+            return Fail(FundamentalDataFailureCategory.Transport);
+        }
+        catch (JsonException)
+        {
+            return Fail(FundamentalDataFailureCategory.InvalidJson);
+        }
     }
+
+    private static FundamentalDataFailureCategory ClassifyStatus(int? status) => status switch
+    {
+        401 or 403 => FundamentalDataFailureCategory.AuthAccess,
+        429 => FundamentalDataFailureCategory.RateLimit,
+        >= 500 and <= 599 => FundamentalDataFailureCategory.UpstreamServer,
+        _ => FundamentalDataFailureCategory.HttpFailure
+    };
 
     private static decimal? GetDecimalProperty(JsonElement element, params string[] propertyNames)
     {

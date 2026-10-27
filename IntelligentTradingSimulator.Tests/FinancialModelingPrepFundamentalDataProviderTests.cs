@@ -1,17 +1,30 @@
 using System.Net;
 using System.Text.Json;
 using IntelligentTradingSimulator.Core.Interfaces;
+using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Infrastructure;
 using IntelligentTradingSimulator.Infrastructure.MarketData;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
 
 namespace IntelligentTradingSimulator.Tests;
 
 public sealed class FinancialModelingPrepFundamentalDataProviderTests
 {
     private const string ValidApiKey = "test-api-key";
+    private const string Sentinel = "fake sentinel &+/?#";
+
+    private static void AssertSecretSafe(FundamentalDataFetchException exception)
+    {
+        var diagnostic = exception + string.Join(" ", exception.Failures);
+        Assert.DoesNotContain(Sentinel, diagnostic);
+        Assert.DoesNotContain(Uri.EscapeDataString(Sentinel), diagnostic);
+        Assert.DoesNotContain("https://", diagnostic);
+        Assert.DoesNotContain("apikey", diagnostic);
+        Assert.Null(exception.InnerException);
+    }
 
     [Fact]
     public async Task GetFundamentalDataAsync_MapsAllFieldsAndConvertsUnits()
@@ -318,48 +331,190 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
             new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(JsonSerializer.Serialize(
-                    new Dictionary<string, string> { [errorProperty] = "Provider rejected request." }))
+                    new Dictionary<string, string>
+                    {
+                        [errorProperty] = $"https://example.test/?apikey={Uri.EscapeDataString(Sentinel)} {Sentinel}"
+                    }))
             });
         var provider = CreateProvider(handler);
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = await Assert.ThrowsAsync<FundamentalDataFetchException>(
             () => provider.GetFundamentalDataAsync("AAPL"));
 
-        Assert.Contains("Provider rejected request.", exception.Message);
+        Assert.Equal(2, exception.Failures.Count);
+        Assert.All(exception.Failures, failure =>
+        {
+            Assert.Equal(FundamentalDataFailureCategory.ProviderError, failure.Category);
+            Assert.Equal(200, failure.HttpStatus);
+        });
+        AssertSecretSafe(exception);
     }
 
-    [Fact]
-    public async Task GetFundamentalDataAsync_PropagatesUnauthorizedHttpError()
+    [Theory]
+    [InlineData(401, FundamentalDataFailureCategory.AuthAccess)]
+    [InlineData(403, FundamentalDataFailureCategory.AuthAccess)]
+    [InlineData(429, FundamentalDataFailureCategory.RateLimit)]
+    [InlineData(500, FundamentalDataFailureCategory.UpstreamServer)]
+    [InlineData(503, FundamentalDataFailureCategory.UpstreamServer)]
+    [InlineData(400, FundamentalDataFailureCategory.HttpFailure)]
+    public async Task GetFundamentalDataAsync_ReportsBothHttpFailuresWithoutUpstreamText(
+        int status, FundamentalDataFailureCategory category)
     {
+        var calls = 0;
         var handler = new MockHttpMessageHandler(_ =>
-            new HttpResponseMessage(HttpStatusCode.Unauthorized)
+        {
+            calls++;
+            return new HttpResponseMessage((HttpStatusCode)status)
             {
-                ReasonPhrase = "Unauthorized"
-            });
+                Content = new StringContent($"{Sentinel} {Uri.EscapeDataString(Sentinel)}"),
+                ReasonPhrase = Uri.EscapeDataString(Sentinel)
+            };
+        });
 
-        var provider = CreateProvider(handler);
+        var provider = CreateProvider(handler, Sentinel);
 
-        var exception = await Assert.ThrowsAsync<HttpRequestException>(
+        var exception = await Assert.ThrowsAsync<FundamentalDataFetchException>(
             () => provider.GetFundamentalDataAsync("AAPL"));
 
-        Assert.Equal(HttpStatusCode.Unauthorized, exception.StatusCode);
+        Assert.Equal(2, calls);
+        Assert.Equal(new[] { FundamentalDataEndpoint.FinancialGrowth, FundamentalDataEndpoint.Ratios },
+            exception.Failures.Select(failure => failure.Endpoint));
+        Assert.All(exception.Failures, failure =>
+        {
+            Assert.Equal(category, failure.Category);
+            Assert.Equal(status, failure.HttpStatus);
+        });
+        AssertSecretSafe(exception);
     }
 
-    [Fact]
-    public async Task GetFundamentalDataAsync_PropagatesServerError()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GetFundamentalDataAsync_AttributesSingleFailureToCorrectEndpoint(bool growthFails)
     {
-        var handler = new MockHttpMessageHandler(_ =>
-            new HttpResponseMessage(HttpStatusCode.InternalServerError)
+        var handler = new MockHttpMessageHandler(request =>
+            new HttpResponseMessage(request.RequestUri!.AbsolutePath.Contains("financial-growth") == growthFails
+                ? HttpStatusCode.Forbidden : HttpStatusCode.OK)
             {
-                ReasonPhrase = "Internal Server Error"
+                Content = new StringContent("[]")
             });
-
         var provider = CreateProvider(handler);
-
-        var exception = await Assert.ThrowsAsync<HttpRequestException>(
+        var exception = await Assert.ThrowsAsync<FundamentalDataFetchException>(
             () => provider.GetFundamentalDataAsync("AAPL"));
 
-        Assert.Equal(HttpStatusCode.InternalServerError, exception.StatusCode);
+        var failure = Assert.Single(exception.Failures);
+        Assert.Equal(growthFails ? FundamentalDataEndpoint.FinancialGrowth : FundamentalDataEndpoint.Ratios,
+            failure.Endpoint);
+        Assert.Equal(403, failure.HttpStatus);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GetFundamentalDataAsync_PreservesConcurrentFailuresRegardlessOfCompletionOrder(bool growthFirst)
+    {
+        var growth = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ratios = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requests = new List<string>();
+        var handler = new AsyncHttpMessageHandler((request, _) =>
+        {
+            requests.Add(request.RequestUri!.AbsolutePath);
+            return request.RequestUri.AbsolutePath.Contains("financial-growth") ? growth.Task : ratios.Task;
+        });
+        var pending = CreateProvider(handler).GetFundamentalDataAsync("AAPL");
+        Assert.Equal(2, requests.Count);
+        if (growthFirst)
+            growth.SetResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
+        else
+            ratios.SetResult(new HttpResponseMessage(HttpStatusCode.TooManyRequests));
+        Assert.False(pending.IsCompleted);
+        if (growthFirst)
+            ratios.SetResult(new HttpResponseMessage(HttpStatusCode.TooManyRequests));
+        else
+            growth.SetResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
+
+        var exception = await Assert.ThrowsAsync<FundamentalDataFetchException>(() => pending);
+        Assert.Collection(exception.Failures,
+            failure =>
+            {
+                Assert.Equal(FundamentalDataEndpoint.FinancialGrowth, failure.Endpoint);
+                Assert.Equal(401, failure.HttpStatus);
+            },
+            failure =>
+            {
+                Assert.Equal(FundamentalDataEndpoint.Ratios, failure.Endpoint);
+                Assert.Equal(429, failure.HttpStatus);
+            });
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(403)]
+    public async Task GetFundamentalDataAsync_SanitizesTransportException(int? status)
+    {
+        var handler = new MockHttpMessageHandler(request =>
+            throw new HttpRequestException($"{request.RequestUri} {Sentinel}",
+                new Exception(Sentinel), (HttpStatusCode?)status));
+        var exception = await Assert.ThrowsAsync<FundamentalDataFetchException>(
+            () => CreateProvider(handler, Sentinel).GetFundamentalDataAsync("AAPL"));
+
+        Assert.All(exception.Failures, failure =>
+        {
+            Assert.Equal(status, failure.HttpStatus);
+            Assert.Equal(status.HasValue ? FundamentalDataFailureCategory.AuthAccess
+                : FundamentalDataFailureCategory.Transport, failure.Category);
+        });
+        AssertSecretSafe(exception);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GetFundamentalDataAsync_ReportsInvalidJsonWithoutRawPayload(bool array)
+    {
+        var handler = new MockHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(array
+                ? JsonSerializer.Serialize(new[] { Sentinel, Uri.EscapeDataString(Sentinel) })
+                : $"{{{Sentinel} {Uri.EscapeDataString(Sentinel)}")
+        });
+        var exception = await Assert.ThrowsAsync<FundamentalDataFetchException>(
+            () => CreateProvider(handler).GetFundamentalDataAsync("AAPL"));
+
+        Assert.All(exception.Failures, failure =>
+        {
+            Assert.Equal(FundamentalDataFailureCategory.InvalidJson, failure.Category);
+            Assert.Equal(200, failure.HttpStatus);
+        });
+        AssertSecretSafe(exception);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GetFundamentalDataAsync_SanitizesInvalidEncodingAndRetainsOtherEndpointFailure(bool growthInvalid)
+    {
+        var handler = new MockHttpMessageHandler(request =>
+        {
+            if (request.RequestUri!.AbsolutePath.Contains("financial-growth") != growthInvalid)
+                return new HttpResponseMessage(HttpStatusCode.Forbidden);
+
+            var content = new StringContent($"{Sentinel} {Uri.EscapeDataString(Sentinel)}");
+            content.Headers.ContentType!.CharSet = "unsupported-" + Uri.EscapeDataString(Sentinel);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+        });
+        var exception = await Assert.ThrowsAsync<FundamentalDataFetchException>(
+            () => CreateProvider(handler, Sentinel).GetFundamentalDataAsync("AAPL"));
+
+        Assert.Equal(2, exception.Failures.Count);
+        Assert.All(exception.Failures, failure =>
+        {
+            var invalid = (failure.Endpoint == FundamentalDataEndpoint.FinancialGrowth) == growthInvalid;
+            Assert.Equal(invalid ? 200 : 403, failure.HttpStatus);
+            Assert.Equal(invalid ? FundamentalDataFailureCategory.InvalidJson
+                : FundamentalDataFailureCategory.AuthAccess, failure.Category);
+        });
+        AssertSecretSafe(exception);
     }
 
     [Theory]
@@ -420,17 +575,71 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
     [Fact]
     public async Task GetFundamentalDataAsync_PropagatesHttpClientTimeout()
     {
-        using var httpClient = new HttpClient(new DelayingHttpMessageHandler())
-        {
-            BaseAddress = new Uri("https://financialmodelingprep.com/"),
-            Timeout = TimeSpan.FromMilliseconds(20)
-        };
-        var provider = new FinancialModelingPrepFundamentalDataProvider(
-            httpClient,
-            Options.Create(new FinancialModelingPrepOptions { ApiKey = ValidApiKey }));
+        var handler = new MockHttpMessageHandler(request =>
+            throw new TaskCanceledException($"{request.RequestUri} {Sentinel}",
+                new TimeoutException(Sentinel)));
+        var exception = await Assert.ThrowsAsync<FundamentalDataFetchException>(
+            () => CreateProvider(handler, Sentinel).GetFundamentalDataAsync("AAPL"));
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+        Assert.All(exception.Failures, failure =>
+        {
+            Assert.Equal(FundamentalDataFailureCategory.Timeout, failure.Category);
+            Assert.Null(failure.HttpStatus);
+        });
+        AssertSecretSafe(exception);
+    }
+
+    [Fact]
+    public async Task GetFundamentalDataAsync_PropagatesInFlightCallerCancellationWithoutSecrets()
+    {
+        using var cts = new CancellationTokenSource();
+        var handler = new MockHttpMessageHandler(request =>
+        {
+            cts.Cancel();
+            throw new OperationCanceledException($"{request.RequestUri} {Sentinel}",
+                new Exception(Sentinel), cts.Token);
+        });
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => CreateProvider(handler, Sentinel).GetFundamentalDataAsync("AAPL", cts.Token));
+
+        Assert.Equal(cts.Token, exception.CancellationToken);
+        Assert.Null(exception.InnerException);
+        Assert.DoesNotContain(Sentinel, exception.ToString());
+        Assert.DoesNotContain(Uri.EscapeDataString(Sentinel), exception.ToString());
+    }
+
+    [Fact]
+    public async Task AddInfrastructure_DisablesOnlyFmpRequestLogging()
+    {
+        var services = new ServiceCollection();
+        var logs = new CapturingLoggerProvider();
+        services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Trace).AddProvider(logs));
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["FundamentalData:FinancialModelingPrep:ApiKey"] = Sentinel
+        }).Build();
+        services.AddInfrastructure("Server=localhost;Database=Unused;", config);
+        services.AddHttpClient(nameof(FinancialModelingPrepFundamentalDataProvider))
+            .ConfigurePrimaryHttpMessageHandler(() => new MockHttpMessageHandler(request =>
+                throw new HttpRequestException($"{request.RequestUri} {Sentinel}")));
+        services.AddHttpClient("unrelated")
+            .ConfigurePrimaryHttpMessageHandler(() => new MockHttpMessageHandler(_ =>
+                new HttpResponseMessage(HttpStatusCode.OK)));
+        using var serviceProvider = services.BuildServiceProvider();
+        var provider = serviceProvider.GetRequiredService<IFundamentalDataProvider>();
+
+        var exception = await Assert.ThrowsAsync<FundamentalDataFetchException>(
             () => provider.GetFundamentalDataAsync("AAPL"));
+        AssertSecretSafe(exception);
+        Assert.DoesNotContain(logs.Messages, message =>
+            message.Contains(nameof(FinancialModelingPrepFundamentalDataProvider)));
+        Assert.DoesNotContain(logs.Messages, message =>
+            message.Contains(Sentinel) || message.Contains(Uri.EscapeDataString(Sentinel)) ||
+            message.Contains("apikey"));
+
+        using var response = await serviceProvider.GetRequiredService<IHttpClientFactory>()
+            .CreateClient("unrelated").GetAsync("https://example.test/no-secret");
+        Assert.Contains(logs.Messages, message => message.Contains("System.Net.Http.HttpClient.unrelated"));
     }
 
     [Fact]
@@ -542,14 +751,27 @@ public sealed class FinancialModelingPrepFundamentalDataProviderTests
         }
     }
 
-    private sealed class DelayingHttpMessageHandler : HttpMessageHandler
+    private sealed class AsyncHttpMessageHandler(
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) : HttpMessageHandler
     {
-        protected override async Task<HttpResponseMessage> SendAsync(
+        protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken) => handler(request, cancellationToken);
+    }
+
+    private sealed class CapturingLoggerProvider : ILoggerProvider
+    {
+        public List<string> Messages { get; } = [];
+        public ILogger CreateLogger(string categoryName) => new CapturingLogger(categoryName, Messages);
+        public void Dispose() { }
+
+        private sealed class CapturingLogger(string category, List<string> messages) : ILogger
         {
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK);
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => true;
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+                Exception? exception, Func<TState, Exception?, string> formatter) =>
+                messages.Add(category + ": " + formatter(state, exception) + exception);
         }
     }
 }

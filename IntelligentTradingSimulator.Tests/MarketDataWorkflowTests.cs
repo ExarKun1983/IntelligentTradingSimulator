@@ -4,7 +4,10 @@ using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
+using IntelligentTradingSimulator.Infrastructure.MarketData;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using System.Net;
 
 namespace IntelligentTradingSimulator.Tests;
 
@@ -702,7 +705,7 @@ public sealed class MarketDataWorkflowTests : IDisposable
         {
             if (symbol == "FAIL")
             {
-                throw new HttpRequestException("Simulated API failure");
+                throw new HttpRequestException("Simulated API failure https://example.test/?apikey=fake%20sentinel fake sentinel");
             }
 
             return Task.FromResult<FundamentalData?>(passFundamentals);
@@ -722,15 +725,23 @@ public sealed class MarketDataWorkflowTests : IDisposable
         {
             Console.SetOut(originalOut);
         }
-        Assert.Contains(
-            "Failed to fetch fundamental data for FAIL (HttpRequestException). Continuing without fundamentals.",
-            output.ToString());
+        var warning = "Failed to fetch fundamental data for FAIL; Provider=unknown; Endpoint=unknown; HTTP=unknown; Category=Unknown. Continuing without fundamentals.";
+        var consoleWarnings = output.ToString().Split(Environment.NewLine)
+            .Where(line => line.StartsWith("Failed to fetch fundamental data")).ToArray();
+        if (progressEnabled)
+            Assert.Empty(consoleWarnings);
+        else
+            Assert.Equal(warning, Assert.Single(consoleWarnings));
         Assert.DoesNotContain("Simulated API failure", output.ToString());
+        Assert.DoesNotContain("fake sentinel", output.ToString());
+        Assert.DoesNotContain("fake%20sentinel", output.ToString());
         if (progress is not null)
         {
             Assert.Contains(progress.Reports,
-                x => x.Message == "Failed to fetch fundamental data for FAIL (HttpRequestException). Continuing without fundamentals.");
+                x => x.Message == warning && x.Force);
             Assert.DoesNotContain(progress.Reports, x => x.Message.Contains("Simulated API failure"));
+            Assert.DoesNotContain(progress.Reports, x => x.Message.Contains("fake sentinel") ||
+                x.Message.Contains("fake%20sentinel"));
             Assert.Equal(0, progress.ActiveOperations);
         }
 
@@ -742,6 +753,113 @@ public sealed class MarketDataWorkflowTests : IDisposable
 
         var failObservation = result.RankedResults.Single(r => r.Symbol == "FAIL");
         Assert.Null(failObservation.Fundamentals);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CollectAndAnalyzeAsync_FmpFailuresAreSafeVisibleOnceAndCountedPerSymbol(bool progressEnabled)
+    {
+        const string sentinel = "fake secret &+/?#";
+        var date = new DateTime(2024, 1, 10);
+        using var output = new StringWriter();
+        using var progress = progressEnabled
+            ? new ConsoleWorkflowProgress(output, interval: TimeSpan.FromDays(1))
+            : null;
+        using var handler = new FundamentalFailureHandler(sentinel);
+        using var client = new HttpClient(handler);
+        var fundamentals = new FinancialModelingPrepFundamentalDataProvider(
+            client, Options.Create(new FinancialModelingPrepOptions { ApiKey = sentinel }));
+        var market = new FakeMarketDataProvider(new Dictionary<string, IReadOnlyList<MarketCandle>>
+        {
+            ["FAIL"] = BuildCandles(date.AddDays(-4), 5),
+            ["PASS"] = BuildCandles(date.AddDays(-4), 5)
+        });
+        var strategy = new StrategyConfiguration { UseRelativeStrength = false };
+        var workflow = new MarketDataWorkflow(
+            market, new MarketObservationAnalyzer(strategy), new PortfolioRecommendationService(),
+            new ObservationResultRepository(_dbContext), new FeatureSnapshotRepository(_dbContext),
+            strategy, fundamentals, new FixedTimeProvider(date), progress);
+        var originalOut = Console.Out;
+        MarketDataResult result;
+        try
+        {
+            Console.SetOut(output);
+            result = await workflow.CollectAndAnalyzeAsync(["FAIL", "PASS"], date.AddDays(-4));
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        var text = output.ToString();
+        var warnings = text.Split(Environment.NewLine)
+            .Where(line => line.StartsWith("Failed to fetch fundamental data")).ToArray();
+        Assert.Equal(2, warnings.Length);
+        Assert.Contains(warnings, line => line.Contains("FAIL; Provider=FinancialModelingPrep; Endpoint=financial-growth; HTTP=403; Category=AuthAccess"));
+        Assert.Contains(warnings, line => line.Contains("FAIL; Provider=FinancialModelingPrep; Endpoint=ratios; HTTP=429; Category=RateLimit"));
+        Assert.Single(text.Split(Environment.NewLine), line => line.StartsWith("Fundamentals unavailable for 1 symbols"));
+        Assert.All(warnings, line => Assert.Contains("Continuing without fundamentals", line));
+        Assert.DoesNotContain(sentinel, text);
+        Assert.DoesNotContain(Uri.EscapeDataString(sentinel), text);
+        Assert.DoesNotContain("apikey", text);
+        Assert.DoesNotContain("https://", text);
+        Assert.Equal(4, handler.Calls);
+        Assert.Equal(new[] { "FAIL", "PASS" }, market.Calls);
+        Assert.Equal(2, result.RankedResults.Count);
+        Assert.Null(result.RankedResults.Single(item => item.Symbol == "FAIL").Fundamentals);
+        Assert.NotNull(result.RankedResults.Single(item => item.Symbol == "PASS").Fundamentals);
+        Assert.Equal(2, await _dbContext.ObservationResults.CountAsync());
+    }
+
+    [Fact]
+    public async Task CollectAndAnalyzeAsync_CallerCancellationDoesNotContinueOrReportOutage()
+    {
+        var date = new DateTime(2024, 1, 10);
+        using var cts = new CancellationTokenSource();
+        var market = new FakeMarketDataProvider(BuildCandles(date.AddDays(-4), 5));
+        var fundamentals = new CallbackFundamentalDataProvider(_ =>
+        {
+            cts.Cancel();
+            throw new OperationCanceledException("fake sensitive transport text", cts.Token);
+        });
+        using var output = new StringWriter();
+        using var progress = new ConsoleWorkflowProgress(output, interval: TimeSpan.FromDays(1));
+        var strategy = new StrategyConfiguration { UseRelativeStrength = false };
+        var workflow = new MarketDataWorkflow(
+            market, new MarketObservationAnalyzer(strategy), new PortfolioRecommendationService(),
+            new ObservationResultRepository(_dbContext), new FeatureSnapshotRepository(_dbContext),
+            strategy, fundamentals, new FixedTimeProvider(date), progress);
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => workflow.CollectAndAnalyzeAsync(["TEST"], date.AddDays(-4), cts.Token));
+
+        Assert.Equal(cts.Token, exception.CancellationToken);
+        Assert.DoesNotContain("fake sensitive", exception.ToString() + output);
+        Assert.DoesNotContain("Continuing without fundamentals", output.ToString());
+        Assert.DoesNotContain("Failed to fetch fundamental", output.ToString());
+        Assert.Empty(_dbContext.ObservationResults);
+    }
+
+    private sealed class FundamentalFailureHandler(string sentinel) : HttpMessageHandler
+    {
+        public int Calls { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Calls++;
+            var failure = request.RequestUri!.Query.Contains("symbol=FAIL");
+            var status = !failure ? HttpStatusCode.OK
+                : request.RequestUri.AbsolutePath.Contains("financial-growth")
+                    ? HttpStatusCode.Forbidden : HttpStatusCode.TooManyRequests;
+            return Task.FromResult(new HttpResponseMessage(status)
+            {
+                Content = new StringContent(failure
+                    ? $"{request.RequestUri} {sentinel} {Uri.EscapeDataString(sentinel)}"
+                    : """[{"date":"2024-01-01","revenueGrowth":0.1,"netProfitMargin":0.2}]""")
+            });
+        }
     }
 
     [Fact]
