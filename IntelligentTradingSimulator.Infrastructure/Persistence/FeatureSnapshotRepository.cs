@@ -1,6 +1,7 @@
 using System.Text.Json;
 using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 
 namespace IntelligentTradingSimulator.Infrastructure.Persistence;
@@ -53,12 +54,43 @@ public sealed class FeatureSnapshotRepository(
                 .Select(x => (x.Symbol, x.AnalysisDate))
                 .ToHashSet();
 
-            dbContext.FeatureSnapshots.AddRange(snapshots.Where(snapshot =>
-                !existing.Contains((snapshot.Symbol, snapshot.AnalysisDate))));
-        }
+            var snapshotsToInsert = snapshots.Where(snapshot =>
+                !existing.Contains((snapshot.Symbol, snapshot.AnalysisDate))).ToList();
+            dbContext.FeatureSnapshots.AddRange(snapshotsToInsert);
 
-        await dbContext.SaveChangesAsync();
+            try
+            {
+                await dbContext.SaveChangesAsync();
+            }
+            catch (DbUpdateException exception) when (
+                snapshotsToInsert.Count > 0 && IsUniqueConstraintViolation(exception))
+            {
+                foreach (var snapshot in snapshotsToInsert)
+                    dbContext.Entry(snapshot).State = EntityState.Detached;
+
+                var persistedKeys = await dbContext.FeatureSnapshots
+                    .AsNoTracking()
+                    .Where(x => x.StrategyId == strategyConfiguration.Id &&
+                        x.BacktestRunId == backtestRunId &&
+                        x.AnalysisDate >= from && x.AnalysisDate <= to &&
+                        symbols.Contains(x.Symbol))
+                    .Select(x => new { x.Symbol, x.AnalysisDate })
+                    .ToListAsync();
+                var persisted = persistedKeys
+                    .Select(x => (x.Symbol, x.AnalysisDate))
+                    .ToHashSet();
+
+                if (!snapshotsToInsert.All(snapshot =>
+                    persisted.Contains((snapshot.Symbol, snapshot.AnalysisDate))))
+                    throw;
+            }
+        }
+        else
+            await dbContext.SaveChangesAsync();
     }
+
+    private static bool IsUniqueConstraintViolation(DbUpdateException exception) =>
+        exception.GetBaseException() is SqlException { Number: 2601 or 2627 };
 
     public async Task<List<FeatureSnapshot>> QueryAsync(
         DateOnly from,

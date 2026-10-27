@@ -1,5 +1,8 @@
 using System.Data.Common;
+using IntelligentTradingSimulator.App.Simulation;
+using IntelligentTradingSimulator.Core.Interfaces;
 using IntelligentTradingSimulator.Core.Models;
+using IntelligentTradingSimulator.Core.Services;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -84,6 +87,39 @@ public sealed class PaperExecutionSqlServerTests
     }
 
     [SqlServerPaperFact]
+    public async Task ConcurrentCollectionsWithSameStrategy_ReachPaperExecutionGuard()
+    {
+        await using var database = await IsolatedDatabase.Create();
+        var barrier = new FeatureSnapshotReadBarrier();
+        await using var firstContext = database.Context(barrier);
+        await using var secondContext = database.Context(barrier);
+        var strategy = new StrategyConfiguration { Id = "concurrent", UseRelativeStrength = false };
+
+        var firstCollection = CreateMarketDataWorkflow(firstContext, strategy)
+            .CollectAndAnalyzeCompletedSessionAsync(["AAA"], new DateTime(2024, 1, 1));
+        var secondCollection = CreateMarketDataWorkflow(secondContext, strategy)
+            .CollectAndAnalyzeCompletedSessionAsync(["AAA"], new DateTime(2024, 1, 1));
+        var collected = await Task.WhenAll(firstCollection, secondCollection)
+            .WaitAsync(TimeSpan.FromSeconds(90));
+        Assert.All(collected, result => Assert.NotNull(result.ExecutionSession));
+
+        var firstExecution = PaperExecutionSafetyTests.Workflow(
+            firstContext, strategy, PaperWorkflowTestSupport.Clock)
+            .RunAsync(collected[0].Recommendations, collected[0].ExecutionSession!);
+        var secondExecution = PaperExecutionSafetyTests.Workflow(
+            secondContext, strategy, PaperWorkflowTestSupport.Clock)
+            .RunAsync(collected[1].Recommendations, collected[1].ExecutionSession!);
+        var outcomes = await Task.WhenAll(firstExecution, secondExecution)
+            .WaitAsync(TimeSpan.FromSeconds(90));
+
+        Assert.Contains(outcomes, result => result.Outcome == PaperExecutionOutcome.Executed);
+        Assert.Contains(outcomes, result => result.Outcome == PaperExecutionOutcome.AlreadyExecuted);
+        await using var read = database.Context();
+        Assert.Single(await read.FeatureSnapshots.ToListAsync());
+        Assert.Single(await read.PaperPortfolioExecutions.ToListAsync());
+    }
+
+    [SqlServerPaperFact]
     public async Task SqlConstraints_RejectDuplicateSessionAndSecondStableMapping()
     {
         await using var database = await IsolatedDatabase.Create();
@@ -165,6 +201,68 @@ public sealed class PaperExecutionSqlServerTests
                 PaperExecutionSafetyTests.Session()));
         Assert.Empty(await context.PaperPortfolioStates.ToListAsync());
         Assert.Empty(await context.PaperPortfolioExecutions.ToListAsync());
+    }
+
+    private static MarketDataWorkflow CreateMarketDataWorkflow(
+        TradingSimulatorDbContext context,
+        StrategyConfiguration strategy) =>
+        new(new ConcurrentMarketDataProvider(), new MarketObservationAnalyzer(strategy),
+            new PortfolioRecommendationService(), new ObservationResultRepository(context),
+            new FeatureSnapshotRepository(context), strategy, timeProvider: PaperWorkflowTestSupport.Clock);
+
+    private sealed class ConcurrentMarketDataProvider : IMarketDataProvider
+    {
+        private static readonly IReadOnlyList<MarketCandle> Candles =
+            Enumerable.Range(0, 5).Select(index =>
+            {
+                var close = 100m + index;
+                return new MarketCandle
+                {
+                    Date = new DateTime(2024, 1, 1).AddDays(index),
+                    Open = close,
+                    High = close + 1m,
+                    Low = close - 1m,
+                    Close = close,
+                    Volume = 1_000m
+                };
+            }).ToArray();
+
+        public Task<IReadOnlyList<MarketCandle>> GetHistoricalDailyAsync(string symbol, DateTime from) =>
+            Task.FromResult(Candles);
+
+        public Task<IReadOnlyList<MarketCandle>> GetHistoricalDailyAsync(
+            string symbol,
+            DateTime from,
+            DateTime to) => Task.FromResult(Candles);
+    }
+
+    private sealed class FeatureSnapshotReadBarrier : DbCommandInterceptor
+    {
+        private readonly TaskCompletionSource _bothQueriesExecuted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private int _queryCount;
+
+        public override async ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("[FeatureSnapshots]", StringComparison.OrdinalIgnoreCase)
+                && command.CommandText.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
+            {
+                var count = Interlocked.Increment(ref _queryCount);
+                if (count <= 2)
+                {
+                    if (count == 2)
+                        _bothQueriesExecuted.TrySetResult();
+                    await _bothQueriesExecuted.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+                }
+            }
+
+            return result;
+        }
     }
 
     private sealed class HoldFirstSave : SaveChangesInterceptor
