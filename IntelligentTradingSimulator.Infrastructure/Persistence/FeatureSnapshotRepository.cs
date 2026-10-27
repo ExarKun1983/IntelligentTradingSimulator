@@ -56,33 +56,42 @@ public sealed class FeatureSnapshotRepository(
 
             var snapshotsToInsert = snapshots.Where(snapshot =>
                 !existing.Contains((snapshot.Symbol, snapshot.AnalysisDate))).ToList();
-            dbContext.FeatureSnapshots.AddRange(snapshotsToInsert);
-
-            try
+            var pendingSnapshots = snapshotsToInsert;
+            while (pendingSnapshots.Count > 0)
             {
-                await dbContext.SaveChangesAsync();
-            }
-            catch (DbUpdateException exception) when (
-                snapshotsToInsert.Count > 0 && IsUniqueConstraintViolation(exception))
-            {
-                foreach (var snapshot in snapshotsToInsert)
-                    dbContext.Entry(snapshot).State = EntityState.Detached;
+                dbContext.FeatureSnapshots.AddRange(pendingSnapshots);
+                try
+                {
+                    await dbContext.SaveChangesAsync();
+                    break;
+                }
+                catch (DbUpdateException exception) when (IsUniqueConstraintViolation(exception))
+                {
+                    foreach (var snapshot in pendingSnapshots)
+                        dbContext.Entry(snapshot).State = EntityState.Detached;
 
-                var persistedKeys = await dbContext.FeatureSnapshots
-                    .AsNoTracking()
-                    .Where(x => x.StrategyId == strategyConfiguration.Id &&
-                        x.BacktestRunId == backtestRunId &&
-                        x.AnalysisDate >= from && x.AnalysisDate <= to &&
-                        symbols.Contains(x.Symbol))
-                    .Select(x => new { x.Symbol, x.AnalysisDate })
-                    .ToListAsync();
-                var persisted = persistedKeys
-                    .Select(x => (x.Symbol, x.AnalysisDate))
-                    .ToHashSet();
+                    var persistedKeys = await dbContext.FeatureSnapshots
+                        .AsNoTracking()
+                        .Where(x => x.StrategyId == strategyConfiguration.Id &&
+                            x.BacktestRunId == backtestRunId &&
+                            x.AnalysisDate >= from && x.AnalysisDate <= to &&
+                            symbols.Contains(x.Symbol))
+                        .Select(x => new { x.Symbol, x.AnalysisDate })
+                        .ToListAsync();
+                    var persisted = persistedKeys
+                        .Select(x => (x.Symbol, x.AnalysisDate))
+                        .ToHashSet();
+                    var remainingSnapshots = pendingSnapshots
+                        .Where(snapshot => !persisted.Contains((snapshot.Symbol, snapshot.AnalysisDate)))
+                        .ToList();
 
-                if (!snapshotsToInsert.All(snapshot =>
-                    persisted.Contains((snapshot.Symbol, snapshot.AnalysisDate))))
-                    throw;
+                    if (remainingSnapshots.Count == pendingSnapshots.Count)
+                        throw;
+
+                    foreach (var snapshot in remainingSnapshots)
+                        snapshot.Id = 0;
+                    pendingSnapshots = remainingSnapshots;
+                }
             }
         }
         else

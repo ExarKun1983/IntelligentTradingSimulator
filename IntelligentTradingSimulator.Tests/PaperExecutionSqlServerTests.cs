@@ -87,7 +87,7 @@ public sealed class PaperExecutionSqlServerTests
     }
 
     [SqlServerPaperFact]
-    public async Task ConcurrentCollectionsWithSameStrategy_ReachPaperExecutionGuard()
+    public async Task ConcurrentPartiallyOverlappingCollectionsWithSameStrategy_ReachPaperExecutionGuard()
     {
         await using var database = await IsolatedDatabase.Create();
         var barrier = new FeatureSnapshotReadBarrier();
@@ -96,9 +96,9 @@ public sealed class PaperExecutionSqlServerTests
         var strategy = new StrategyConfiguration { Id = "concurrent", UseRelativeStrength = false };
 
         var firstCollection = CreateMarketDataWorkflow(firstContext, strategy)
-            .CollectAndAnalyzeCompletedSessionAsync(["AAA"], new DateTime(2024, 1, 1));
+            .CollectAndAnalyzeCompletedSessionAsync(["AAA", "BBB"], new DateTime(2024, 1, 1));
         var secondCollection = CreateMarketDataWorkflow(secondContext, strategy)
-            .CollectAndAnalyzeCompletedSessionAsync(["AAA"], new DateTime(2024, 1, 1));
+            .CollectAndAnalyzeCompletedSessionAsync(["AAA", "CCC"], new DateTime(2024, 1, 1));
         var collected = await Task.WhenAll(firstCollection, secondCollection)
             .WaitAsync(TimeSpan.FromSeconds(90));
         Assert.All(collected, result => Assert.NotNull(result.ExecutionSession));
@@ -115,7 +115,7 @@ public sealed class PaperExecutionSqlServerTests
         Assert.Contains(outcomes, result => result.Outcome == PaperExecutionOutcome.Executed);
         Assert.Contains(outcomes, result => result.Outcome == PaperExecutionOutcome.AlreadyExecuted);
         await using var read = database.Context();
-        Assert.Single(await read.FeatureSnapshots.ToListAsync());
+        Assert.Equal(3, await read.FeatureSnapshots.CountAsync());
         Assert.Single(await read.PaperPortfolioExecutions.ToListAsync());
     }
 
