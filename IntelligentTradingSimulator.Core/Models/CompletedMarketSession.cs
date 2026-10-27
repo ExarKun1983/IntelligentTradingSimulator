@@ -46,13 +46,13 @@ public sealed class CompletedMarketSession
             if (completed.Count == 0 ||
                 completed.GroupBy(x => x.Date.Date).Any(x => x.Count() != 1))
                 throw new InvalidOperationException("Paper execution requires unique completed daily candles.");
+            if (completed.Any(x => !HasValidOhlcv(x)))
+                throw new InvalidOperationException("Paper execution requires valid completed daily OHLCV history.");
             var latest = completed[^1];
             var date = DateOnly.FromDateTime(latest.Date);
             if (session.HasValue && session != date)
                 throw new InvalidOperationException("Paper execution requires the same latest completed session for every symbol.");
-            if (latest.Open <= 0 || latest.Low <= 0 || latest.High < Math.Max(latest.Open, latest.Close) ||
-                latest.Low > Math.Min(latest.Open, latest.Close) || latest.Volume < 0 ||
-                !TradingPrecisionPolicy.TryNormalizePrice(latest.Close, out var price))
+            if (!TradingPrecisionPolicy.TryNormalizePrice(latest.Close, out var price))
                 throw new InvalidOperationException("Paper execution requires valid daily OHLCV prices.");
             session = date;
             prices.Add(symbol, price);
@@ -63,4 +63,10 @@ public sealed class CompletedMarketSession
         result.Validate(now);
         return result;
     }
+
+    private static bool HasValidOhlcv(MarketCandle candle) =>
+        candle.Open > 0 && candle.Low > 0 &&
+        candle.High >= Math.Max(candle.Open, candle.Close) &&
+        candle.Low <= Math.Min(candle.Open, candle.Close) &&
+        candle.Volume >= 0;
 }

@@ -12,6 +12,14 @@ public sealed class CompletedMarketSessionTests
     private static MarketCandle Candle(DateTime date, decimal price = 100m) =>
         new() { Date = date, Open = price, High = price, Low = price, Close = price, Volume = 100m };
 
+    private static MarketCandle MalformedCandle(DateTime date)
+    {
+        var candle = Candle(date, 103m);
+        candle.High = 90m;
+        candle.Low = 110m;
+        return candle;
+    }
+
     [Theory]
     [InlineData("2024-07-06T03:59:59Z", "2024-07-04")]
     [InlineData("2024-07-06T04:00:00Z", "2024-07-05")]
@@ -60,6 +68,7 @@ public sealed class CompletedMarketSessionTests
     [InlineData("incomplete")]
     [InlineData("stale")]
     [InlineData("invalid")]
+    [InlineData("malformedhistory")]
     public void AmbiguousIncompleteOrStalePrices_AreRejected(string scenario)
     {
         var date = new DateTime(2024, 1, 7);
@@ -76,6 +85,9 @@ public sealed class CompletedMarketSessionTests
             case "incomplete": data["AAA"] = [Candle(date.AddDays(1))]; break;
             case "stale": data["AAA"] = data["BBB"] = [Candle(date.AddDays(-7))]; break;
             case "invalid": data["AAA"] = [Candle(date, 0m)]; break;
+            case "malformedhistory":
+                data["AAA"] = [MalformedCandle(date.AddDays(-1)), Candle(date)];
+                break;
         }
         Assert.Throws<InvalidOperationException>(() =>
             CompletedMarketSession.Create(["AAA", "BBB"], data, PaperWorkflowTestSupport.Clock.GetUtcNow()));
@@ -108,6 +120,7 @@ public sealed class CompletedMarketSessionTests
     [InlineData("duplicate")]
     [InlineData("short")]
     [InlineData("analysisfailure")]
+    [InlineData("malformedhistory")]
     public async Task InconsistentCollection_PermitsAnalysisButNeverAuthorizesExecution(string scenario)
     {
         await using var context = new TradingSimulatorDbContext(new DbContextOptionsBuilder<TradingSimulatorDbContext>()
@@ -220,6 +233,9 @@ public sealed class CompletedMarketSessionTests
                     case "invalid": candles[6] = Candle(new DateTime(2024, 1, 7), 0m); break;
                     case "duplicate": candles.Add(Candle(new DateTime(2024, 1, 7))); break;
                     case "short": candles = candles.Skip(3).ToList(); break;
+                    case "malformedhistory":
+                        candles[5] = MalformedCandle(new DateTime(2024, 1, 6));
+                        break;
                 }
 
             }
