@@ -17,9 +17,9 @@ public sealed class PositionTargetBaselineTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task FirstSelectedTarget_InitializesCappedBaselineWithoutSale_AndSurvivesFreshContexts(bool relational)
+    public async Task FirstSelectedTarget_InitializesCappedBaselineWithoutSale_AndSurvivesFreshContexts(bool sharedConnection)
     {
-        await using var database = await TestDatabase.Create(relational);
+        await using var database = await TestDatabase.Create(sharedConnection);
         await database.Seed(new Portfolio
         {
             StartingCash = 1000m,
@@ -44,9 +44,9 @@ public sealed class PositionTargetBaselineTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task CompletedEffectiveReduction_PersistsWithTrade_AndDoesNotRepeatAfterPriceDrift(bool relational)
+    public async Task CompletedEffectiveReduction_PersistsWithTrade_AndDoesNotRepeatAfterPriceDrift(bool sharedConnection)
     {
-        await using var database = await TestDatabase.Create(relational);
+        await using var database = await TestDatabase.Create(sharedConnection);
         await database.Seed(new Portfolio
         {
             StartingCash = 1000m,
@@ -74,9 +74,9 @@ public sealed class PositionTargetBaselineTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task BelowThresholdReduction_PreservesBaselineUntilItCanExecute(bool relational)
+    public async Task BelowThresholdReduction_PreservesBaselineUntilItCanExecute(bool sharedConnection)
     {
-        await using var database = await TestDatabase.Create(relational);
+        await using var database = await TestDatabase.Create(sharedConnection);
         await database.Seed(new Portfolio
         {
             StartingCash = 100m,
@@ -165,7 +165,10 @@ public sealed class PositionTargetBaselineTests
         if (scenario == "invalid")
             prices["AAA"] = 0m;
 
-        await database.Run(targets, prices);
+        if (scenario is "missing" or "invalid")
+            await Assert.ThrowsAsync<InvalidOperationException>(() => database.Run(targets, prices));
+        else
+            await database.Run(targets, prices);
 
         var saved = await database.Load();
         Assert.Equal(50m, saved.Positions.Single(x => x.Symbol == "AAA").EffectiveTargetPercent);
@@ -352,20 +355,17 @@ public sealed class PositionTargetBaselineTests
             _options = options;
         }
 
-        public static async Task<TestDatabase> Create(bool relational)
+        public static async Task<TestDatabase> Create(bool sharedConnection)
         {
             var builder = new DbContextOptionsBuilder<TradingSimulatorDbContext>();
-            SqliteConnection? connection = null;
-            if (relational)
-            {
-                connection = new SqliteConnection("Data Source=:memory:");
-                await connection.OpenAsync();
+            var connectionString = sharedConnection ? "Data Source=:memory:" :
+                $"Data Source={Guid.NewGuid():N};Mode=Memory;Cache=Shared";
+            var connection = new SqliteConnection(connectionString);
+            await connection.OpenAsync();
+            if (sharedConnection)
                 builder.UseSqlite(connection);
-            }
             else
-            {
-                builder.UseInMemoryDatabase(Guid.NewGuid().ToString());
-            }
+                builder.UseSqlite(connectionString);
             var database = new TestDatabase(connection, builder.Options);
             await using var context = database.Context();
             await context.Database.EnsureCreatedAsync();
@@ -392,15 +392,16 @@ public sealed class PositionTargetBaselineTests
             await using var context = Context();
             var allocationService = new PortfolioAllocationService();
             var configuration = new StrategyConfiguration { MaxPositions = limit, MaxPositionWeight = cap };
-            await new PortfolioWorkflow(
+            var workflow = new PortfolioWorkflow(
                 new PortfolioRepository(context),
                 new PortfolioSnapshotRepository(context),
                 new PositionSnapshotRepository(context),
                 new PortfolioExecutionService(cap, limit), new TradingEngine(),
                 new PortfolioAllocationEngine(allocationService, cap), new PortfolioRebalancingService(),
                 new PortfolioPerformanceService(),
-                new ConsoleReporter(allocationService, new PortfolioContributionService()), configuration)
-                .RunAsync(targets, prices);
+                new ConsoleReporter(allocationService, new PortfolioContributionService()), configuration,
+                timeProvider: PaperWorkflowTestSupport.Clock);
+            await PaperWorkflowTestSupport.RunAsync(workflow, context, targets, prices);
         }
 
         public async ValueTask DisposeAsync()

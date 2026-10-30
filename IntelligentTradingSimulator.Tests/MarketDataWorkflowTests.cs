@@ -395,15 +395,17 @@ public sealed class MarketDataWorkflowTests : IDisposable
     [Fact]
     public async Task CollectAndAnalyzeAsync_TracksHighWhileDisabled_ThenExitsAfterEnablingTrailingStop()
     {
+        using var database = new PaperWorkflowTestSupport.Database();
+        await using var seedContext = new TradingSimulatorDbContext(database.Options);
         var date = new DateTime(2024, 1, 10);
         var portfolio = new Portfolio { Name = "Current", StartingCash = 1000m, Cash = 1000m };
         new TradingEngine().Execute(portfolio,
             new TradingDecision { Symbol = "TEST", Action = TradeActionType.Buy, Amount = 1000m }, 100m);
-        await new PortfolioRepository(_dbContext).SaveAsync(portfolio);
+        await new PortfolioRepository(seedContext).SaveAsync(portfolio);
 
         async Task Run(decimal price, decimal? trailingStopPercent)
         {
-            await using var context = new TradingSimulatorDbContext(_options);
+            await using var context = new TradingSimulatorDbContext(database.Options);
             var strategy = new StrategyConfiguration
             {
                 UseRelativeStrength = false, TrailingStopPercent = trailingStopPercent
@@ -428,12 +430,12 @@ public sealed class MarketDataWorkflowTests : IDisposable
                 new PortfolioRebalancingService(),
                 new PortfolioPerformanceService(),
                 new ConsoleReporter(new PortfolioAllocationService(), new PortfolioContributionService()),
-                strategy);
-            await workflow.RunAsync(result.Recommendations, result.Prices);
+                strategy, timeProvider: PaperWorkflowTestSupport.Clock);
+            await PaperWorkflowTestSupport.RunAsync(workflow, context, result.Recommendations, result.Prices);
         }
 
         await Run(150m, null);
-        await using (var context = new TradingSimulatorDbContext(_options))
+        await using (var context = new TradingSimulatorDbContext(database.Options))
         {
             var saved = await new PortfolioRepository(context).GetLatestAsync();
             var position = Assert.Single(saved!.Positions);
@@ -443,7 +445,7 @@ public sealed class MarketDataWorkflowTests : IDisposable
         }
 
         await Run(135m, 10m);
-        await using var readContext = new TradingSimulatorDbContext(_options);
+        await using var readContext = new TradingSimulatorDbContext(database.Options);
         var exited = await new PortfolioRepository(readContext).GetLatestAsync();
         Assert.Empty(exited!.Positions);
         var sell = Assert.Single(exited.Trades, trade => trade.Action == TradeActionType.Sell);
