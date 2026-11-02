@@ -1,12 +1,15 @@
 using IntelligentTradingSimulator.App.Simulation;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
+using IntelligentTradingSimulator.Infrastructure.Migrations;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations.Operations;
 using System.Text.Json;
 
 namespace IntelligentTradingSimulator.Tests;
@@ -436,6 +439,13 @@ public sealed class PaperExecutionSafetyTests
         using var context = new TradingSimulatorDbContext(
             new DbContextOptionsBuilder<TradingSimulatorDbContext>().UseSqlServer().Options);
         Assert.False(context.Database.HasPendingModelChanges());
+        var modelConstraint = context.GetService<IDesignTimeModel>().Model.FindEntityType(typeof(PaperPortfolioState))!
+            .GetCheckConstraints().Single(x => x.Name == "CK_PaperPortfolioStates_Adoption").Sql;
+        var migrationConstraint = Assert.IsType<AddCheckConstraintOperation>(
+            Assert.Single(new AddPaperPortfolioAdoption().UpOperations.OfType<AddCheckConstraintOperation>())).Sql;
+        var windowsConstraint = migrationConstraint.Replace("\n", "\r\n", StringComparison.Ordinal);
+        Assert.Equal(migrationConstraint, windowsConstraint.Replace("\r\n", "\n", StringComparison.Ordinal));
+        Assert.Equal(migrationConstraint, modelConstraint);
         var script = context.GetService<IMigrator>().GenerateScript("20261026114621_AddPositionEffectiveTarget");
         Assert.Contains("CREATE TABLE [PaperPortfolioStates]", script);
         Assert.Contains("CREATE TABLE [PaperPortfolioExecutions]", script);

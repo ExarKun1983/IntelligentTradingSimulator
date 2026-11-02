@@ -71,7 +71,7 @@ public sealed class TradingSimulatorDbContext : DbContext
                 AND [AdoptionAuditReference] IS NOT NULL AND TRIM([AdoptionAuditReference]) <> ''
                 AND [AdoptedAtUtc] IS NOT NULL
                 AND ([LastCompletedSession] IS NULL OR [LastCompletedSession] > [AdoptionCutoffSession]))
-            """));
+            """.Replace("\r\n", "\n")));
         state.HasIndex(x => x.PortfolioId).IsUnique();
         state.HasOne(x => x.Portfolio).WithOne().HasForeignKey<PaperPortfolioState>(x => x.PortfolioId)
             .OnDelete(DeleteBehavior.Restrict);
