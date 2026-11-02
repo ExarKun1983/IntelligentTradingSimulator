@@ -388,6 +388,43 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     b.ToTable("ObservationRuns", (string)null);
                 });
 
+            modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.PaperPortfolioExecution", b =>
+                {
+                    b.Property<string>("Identity")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateOnly>("SessionDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime>("CompletedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Identity", "SessionDate");
+
+                    b.ToTable("PaperPortfolioExecutions");
+                });
+
+            modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.PaperPortfolioState", b =>
+                {
+                    b.Property<string>("Identity")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateOnly?>("LastCompletedSession")
+                        .HasColumnType("date");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Identity");
+
+                    b.HasIndex("PortfolioId")
+                        .IsUnique();
+
+                    b.ToTable("PaperPortfolioStates");
+                });
+
             modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.Portfolio", b =>
                 {
                     b.Property<int>("Id")
@@ -614,6 +651,26 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("ObservationRun");
+                });
+
+            modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.PaperPortfolioExecution", b =>
+                {
+                    b.HasOne("IntelligentTradingSimulator.Core.Models.PaperPortfolioState", null)
+                        .WithMany()
+                        .HasForeignKey("Identity")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.PaperPortfolioState", b =>
+                {
+                    b.HasOne("IntelligentTradingSimulator.Core.Models.Portfolio", "Portfolio")
+                        .WithOne()
+                        .HasForeignKey("IntelligentTradingSimulator.Core.Models.PaperPortfolioState", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Portfolio");
                 });
 
             modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.Position", b =>

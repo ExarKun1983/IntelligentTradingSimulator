@@ -7,4 +7,8 @@ public sealed record MarketDataResult(
     IReadOnlyList<ObservationResult> RankedResults,
     IReadOnlyList<StockRecommendation> Recommendations,
     IReadOnlyDictionary<string, decimal> Prices,
-    ObservationRun? PreviousRun);
+    ObservationRun? PreviousRun)
+{
+    public CompletedMarketSession? ExecutionSession { get; init; }
+    public string? ExecutionRejection { get; init; }
+}

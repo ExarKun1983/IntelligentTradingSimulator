@@ -128,14 +128,15 @@ public sealed class VariantPortfolioLimitsTests
     [InlineData("tight", 1, 5)]
     public async Task NormalWorkflows_UseActiveStrategy(string activeId, int maxPositions, int cap)
     {
-        using var fixture = new Fixture(activeId);
+        using var fixture = new Fixture(activeId, paper: true);
         var marketData = await fixture.Services.GetRequiredService<MarketDataWorkflow>()
             .CollectAndAnalyzeAsync(Symbols, Start.AddDays(-4));
         Assert.Equal(Symbols.Length, marketData.Recommendations.Count);
         Assert.True(marketData.Recommendations[0].AllocationPercent > 60m);
 
         var state = await fixture.Services.GetRequiredService<PortfolioWorkflow>()
-            .RunAsync(marketData.Recommendations, marketData.Prices);
+            .RunAsync(marketData.Recommendations,
+                PaperWorkflowTestSupport.Session(marketData.Prices, new DateOnly(2024, 1, 3)));
 
         var firstBuy = state.Portfolio.Trades.First();
         var target = 10_000m * 0.80m * Math.Min(marketData.Recommendations[0].AllocationPercent, cap) / 100m;
@@ -204,12 +205,13 @@ public sealed class VariantPortfolioLimitsTests
     {
         private readonly ServiceProvider _provider;
         private readonly IServiceScope _scope;
+        private readonly PaperWorkflowTestSupport.Database? _paperDatabase;
         public IServiceProvider Services => _scope.ServiceProvider;
         public StrategyConfiguration[] Variants { get; }
         public List<DayCapture> Days => Services.GetRequiredService<RecordingDayProcessor>().Days;
         public IFeatureSnapshotRepository Features => Services.GetRequiredService<IFeatureSnapshotRepository>();
 
-        public Fixture(string activeId)
+        public Fixture(string activeId, bool paper = false)
         {
             var settings = new Dictionary<string, string?> { ["ActiveStrategy"] = activeId };
             foreach (var (id, count, cap) in new[]
@@ -231,7 +233,15 @@ public sealed class VariantPortfolioLimitsTests
                 .Where(x => x.Id is "twenty" or "twenty-five").OrderBy(x => x.MaxPositionWeight).ToArray();
             var databaseName = Guid.NewGuid().ToString();
             var services = new ServiceCollection();
-            services.AddDbContext<TradingSimulatorDbContext>(options => options.UseInMemoryDatabase(databaseName));
+            if (paper)
+                _paperDatabase = new PaperWorkflowTestSupport.Database();
+            services.AddDbContext<TradingSimulatorDbContext>(options =>
+            {
+                if (_paperDatabase is not null)
+                    options.UseSqlite(_paperDatabase.Connection);
+                else
+                    options.UseInMemoryDatabase(databaseName);
+            });
             services.AddSingleton(active);
             services.AddPortfolioServices(active);
             services.AddSingleton<BacktestEngineRequestFactory>();
@@ -269,6 +279,7 @@ public sealed class VariantPortfolioLimitsTests
         {
             _scope.Dispose();
             _provider.Dispose();
+            _paperDatabase?.Dispose();
         }
     }
 
