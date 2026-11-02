@@ -411,6 +411,16 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
+                    b.Property<DateTime?>("AdoptedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("AdoptionAuditReference")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<DateOnly?>("AdoptionCutoffSession")
+                        .HasColumnType("date");
+
                     b.Property<DateOnly?>("LastCompletedSession")
                         .HasColumnType("date");
 
@@ -422,7 +432,10 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                     b.HasIndex("PortfolioId")
                         .IsUnique();
 
-                    b.ToTable("PaperPortfolioStates");
+                    b.ToTable("PaperPortfolioStates", t =>
+                        {
+                            t.HasCheckConstraint("CK_PaperPortfolioStates_Adoption", "([AdoptionCutoffSession] IS NULL AND [AdoptionAuditReference] IS NULL AND [AdoptedAtUtc] IS NULL)\nOR ([AdoptionCutoffSession] IS NOT NULL AND [AdoptionCutoffSession] > '0001-01-01'\n    AND [AdoptionCutoffSession] < '9999-12-31'\n    AND [AdoptionAuditReference] IS NOT NULL AND TRIM([AdoptionAuditReference]) <> ''\n    AND [AdoptedAtUtc] IS NOT NULL\n    AND ([LastCompletedSession] IS NULL OR [LastCompletedSession] > [AdoptionCutoffSession]))");
+                        });
                 });
 
             modelBuilder.Entity("IntelligentTradingSimulator.Core.Models.Portfolio", b =>

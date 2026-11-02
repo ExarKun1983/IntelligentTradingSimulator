@@ -7,6 +7,9 @@ public sealed class PaperPortfolioState
     public int PortfolioId { get; set; }
     public Portfolio Portfolio { get; set; } = null!;
     public DateOnly? LastCompletedSession { get; set; }
+    public DateOnly? AdoptionCutoffSession { get; set; }
+    public string? AdoptionAuditReference { get; set; }
+    public DateTime? AdoptedAtUtc { get; set; }
 }
 
 public sealed class PaperPortfolioExecution
@@ -20,5 +23,6 @@ public enum PaperExecutionOutcome
 {
     Executed,
     AlreadyExecuted,
-    OlderSession
+    OlderSession,
+    PreAdoptionSession
 }

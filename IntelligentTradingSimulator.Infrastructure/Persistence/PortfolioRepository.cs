@@ -92,19 +92,32 @@ public sealed class PortfolioRepository
                 if (await _dbContext.Portfolios.AnyAsync(
                     x => !_dbContext.BacktestRuns.Any(run => run.PortfolioId == x.Id), cancellationToken))
                     throw new InvalidOperationException(
-                        "Existing paper portfolios require explicit verified session initialization. See docs/runbook.md.");
+                        "Existing paper portfolios require explicit verified session initialization or unknown-history adoption. See docs/runbook.md.");
                 state = new PaperPortfolioState
                 {
                     Portfolio = new Portfolio { Name = "Main Portfolio", StartingCash = 10000m, Cash = 10000m }
                 };
             }
 
+            if (state.AdoptionCutoffSession is { } cutoff)
+            {
+                if (cutoff == DateOnly.MinValue || cutoff == DateOnly.MaxValue
+                    || string.IsNullOrWhiteSpace(state.AdoptionAuditReference)
+                    || state.AdoptionAuditReference.Length > 1000 || state.AdoptedAtUtc is null
+                    || state.LastCompletedSession <= cutoff)
+                    throw new InvalidOperationException("Paper adoption state is inconsistent; execution refused.");
+                if (sessionDate <= cutoff)
+                    return (PaperExecutionOutcome.PreAdoptionSession, default, state.Portfolio);
+            }
+            else if (state.AdoptionAuditReference is not null || state.AdoptedAtUtc is not null)
+                throw new InvalidOperationException("Paper adoption state is incomplete; execution refused.");
+
             if (state.LastCompletedSession is { } last && sessionDate <= last)
             {
                 var outcome = sessionDate == last ? PaperExecutionOutcome.AlreadyExecuted : PaperExecutionOutcome.OlderSession;
                 return (outcome, default, state.Portfolio);
             }
-            if (!isNew && state.LastCompletedSession is null)
+            if (!isNew && state.LastCompletedSession is null && state.AdoptionCutoffSession is null)
                 throw new InvalidOperationException("Paper execution state requires verified session initialization.");
             if (await _dbContext.PaperPortfolioExecutions.AnyAsync(
                 x => x.Identity == PaperPortfolioState.MainIdentity && x.SessionDate == sessionDate, cancellationToken))
