@@ -8,5 +8,6 @@ public sealed record PortfolioState(
     PortfolioPerformance Performance,
     decimal TotalValue)
 {
+    public PaperExecutionOutcome Outcome { get; init; } = PaperExecutionOutcome.Executed;
     public IReadOnlyList<StockRecommendation> ExecutionTargets { get; init; } = [];
 }

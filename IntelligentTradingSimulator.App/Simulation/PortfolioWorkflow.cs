@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Threading;
 using IntelligentTradingSimulator.Core.Models;
 using IntelligentTradingSimulator.Core.Services;
 using IntelligentTradingSimulator.Infrastructure.Persistence;
@@ -21,6 +22,7 @@ public sealed class PortfolioWorkflow
     private readonly ConsoleReporter _reporter;
     private readonly StrategyConfiguration _strategyConfiguration;
     private readonly IWorkflowProgress _progress;
+    private readonly TimeProvider _timeProvider;
 
     public PortfolioWorkflow(
         PortfolioRepository portfolioRepository,
@@ -33,7 +35,8 @@ public sealed class PortfolioWorkflow
         PortfolioPerformanceService performanceService,
         ConsoleReporter reporter,
         StrategyConfiguration? strategyConfiguration = null,
-        IWorkflowProgress? progress = null)
+        IWorkflowProgress? progress = null,
+        TimeProvider? timeProvider = null)
     {
         _portfolioRepository = portfolioRepository;
         _portfolioSnapshotRepository = portfolioSnapshotRepository;
@@ -46,20 +49,42 @@ public sealed class PortfolioWorkflow
         _reporter = reporter;
         _strategyConfiguration = strategyConfiguration ?? new StrategyConfiguration();
         _progress = progress ?? NullWorkflowProgress.Instance;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<PortfolioState> RunAsync(
         IReadOnlyList<StockRecommendation> recommendations,
-        IReadOnlyDictionary<string, decimal> prices)
+        CompletedMarketSession session,
+        CancellationToken cancellationToken = default)
+    {
+        var execution = await _portfolioRepository.ExecutePaperSessionAsync(
+            session.SessionDate,
+            portfolio =>
+            {
+                session.Validate(_timeProvider.GetUtcNow());
+                if (portfolio.Positions.Any(x => !session.Prices.ContainsKey(x.Symbol)) ||
+                    recommendations.Any(x => !session.Prices.ContainsKey(x.Symbol)))
+                    throw new InvalidOperationException("Paper execution requires session prices for every held and recommended symbol.");
+            },
+            (portfolio, isNew, token) => ExecuteAsync(portfolio, isNew, recommendations, session.Prices, token),
+            cancellationToken);
+        return execution.Result is { } result
+            ? result with { Outcome = execution.Outcome }
+            : new PortfolioState(execution.Portfolio, _performanceService.Calculate(execution.Portfolio),
+                execution.Portfolio.TotalValue) { Outcome = execution.Outcome };
+    }
+
+    private async Task<PortfolioState> ExecuteAsync(
+        Portfolio portfolio,
+        bool isNew,
+        IReadOnlyList<StockRecommendation> recommendations,
+        IReadOnlyDictionary<string, decimal> prices,
+        CancellationToken cancellationToken)
     {
         using var operation = _progress.BeginOperation("Processing portfolio");
-        Portfolio? portfolio;
-        using (_progress.BeginOperation("Loading portfolio"))
-            portfolio = await _portfolioRepository.GetLatestAsync();
-
-        if (portfolio is null)
+        if (isNew)
         {
-            portfolio = await CreateInitialPortfolioAsync(recommendations, prices);
+            await CreateInitialPortfolioAsync(portfolio, recommendations, prices, cancellationToken);
         }
         else
         {
@@ -76,7 +101,7 @@ public sealed class PortfolioWorkflow
         }
 
         using (_progress.BeginOperation("Saving portfolio prices"))
-            await _portfolioRepository.SaveAsync(portfolio);
+            await _portfolioRepository.SaveAsync(portfolio, cancellationToken);
 
         var executionTargets = _rebalancingService.Execute(
             portfolio,
@@ -89,7 +114,7 @@ public sealed class PortfolioWorkflow
             maxPositions: _strategyConfiguration.MaxPositions);
 
         using (_progress.BeginOperation("Saving rebalanced portfolio"))
-            await _portfolioRepository.SaveAsync(portfolio);
+            await _portfolioRepository.SaveAsync(portfolio, cancellationToken);
 
         var performance = _performanceService.Calculate(portfolio);
 
@@ -107,7 +132,7 @@ public sealed class PortfolioWorkflow
                         TradingPrecisionPolicy.SnapshotScale, MidpointRounding.AwayFromZero),
                     ReturnPercent = Math.Round(performance.ReturnPercent,
                         TradingPrecisionPolicy.PercentageScale, MidpointRounding.AwayFromZero)
-                });
+                }, executionSnapshot: true, cancellationToken);
 
         var totalValue =
             portfolio.Cash +
@@ -130,7 +155,7 @@ public sealed class PortfolioWorkflow
                 .ToList();
 
         using (_progress.BeginOperation("Saving position snapshots"))
-            await _positionSnapshotRepository.SaveAsync(positionSnapshots);
+            await _positionSnapshotRepository.SaveAsync(positionSnapshots, cancellationToken);
 
         return new PortfolioState(portfolio, performance, totalValue)
         {
@@ -138,19 +163,14 @@ public sealed class PortfolioWorkflow
         };
     }
 
-    private async Task<Portfolio> CreateInitialPortfolioAsync(
+    private async Task CreateInitialPortfolioAsync(
+        Portfolio portfolio,
         IReadOnlyList<StockRecommendation> recommendations,
-        IReadOnlyDictionary<string, decimal> prices)
+        IReadOnlyDictionary<string, decimal> prices,
+        CancellationToken cancellationToken)
     {
         Console.WriteLine();
         Console.WriteLine("===== CREATE INITIAL PORTFOLIO =====");
-
-        var portfolio = new Portfolio
-        {
-            Name = "Main Portfolio",
-            StartingCash = 10000m,
-            Cash = 10000m
-        };
 
         _executionService.ExecuteRecommendations(
             portfolio,
@@ -159,8 +179,6 @@ public sealed class PortfolioWorkflow
             _tradingEngine);
 
         using (_progress.BeginOperation("Saving initial portfolio"))
-            await _portfolioRepository.SaveAsync(portfolio);
-
-        return portfolio;
+            await _portfolioRepository.SaveAsync(portfolio, cancellationToken);
     }
 }

@@ -75,7 +75,7 @@ public static class ServiceCollectionExtensions
 
                 client.BaseAddress = new Uri(baseUrl, UriKind.Absolute);
                 client.Timeout = TimeSpan.FromSeconds(options.RequestTimeoutSeconds);
-            });
+            }).RemoveAllLoggers();
 
             services.AddTransient<IFundamentalDataProvider>(sp =>
                 sp.GetRequiredService<FinancialModelingPrepFundamentalDataProvider>());

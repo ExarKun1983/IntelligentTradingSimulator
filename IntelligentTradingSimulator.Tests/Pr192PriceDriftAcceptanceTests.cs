@@ -16,9 +16,8 @@ public sealed class Pr192PriceDriftAcceptanceTests
     [Fact]
     public async Task UnchangedTargets_AcrossPersistedRuns_ShouldNotTradePriceDrift()
     {
-        var options = new DbContextOptionsBuilder<TradingSimulatorDbContext>()
-            .UseInMemoryDatabase($"pr192-drift-{Guid.NewGuid()}")
-            .Options;
+        using var database = new PaperWorkflowTestSupport.Database();
+        var options = database.Options;
 
         // Seed an existing portfolio, not the initial-purchase workflow.
         await using (var context = new TradingSimulatorDbContext(options))
@@ -78,9 +77,9 @@ public sealed class Pr192PriceDriftAcceptanceTests
                 new ConsoleReporter(
                     allocationService,
                     new PortfolioContributionService()),
-                configuration);
+                configuration, timeProvider: PaperWorkflowTestSupport.Clock);
 
-            await workflow.RunAsync(
+            await PaperWorkflowTestSupport.RunAsync(workflow, context,
                 [
                     new StockRecommendation
                     {

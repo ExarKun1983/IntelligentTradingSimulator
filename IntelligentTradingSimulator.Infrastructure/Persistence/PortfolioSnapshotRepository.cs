@@ -16,16 +16,18 @@ public sealed class PortfolioSnapshotRepository
     }
 
     public async Task SaveAsync(
-        PortfolioSnapshot snapshot)
+        PortfolioSnapshot snapshot,
+        bool executionSnapshot = false,
+        CancellationToken cancellationToken = default)
     {
 
         var lastSnapshot =
         await _dbContext.PortfolioSnapshots
             .Where(x => x.PortfolioId == snapshot.PortfolioId)
             .OrderByDescending(x => x.Timestamp)
-            .FirstOrDefaultAsync();
+            .FirstOrDefaultAsync(cancellationToken);
 
-        if (lastSnapshot is not null &&
+        if (!executionSnapshot && lastSnapshot is not null &&
             Math.Round(lastSnapshot.PortfolioValue, 2) ==
             Math.Round(snapshot.PortfolioValue, 2))
         {
@@ -36,7 +38,7 @@ public sealed class PortfolioSnapshotRepository
         _dbContext.PortfolioSnapshots.Add(
             snapshot);
 
-        await _dbContext.SaveChangesAsync();
+        await _dbContext.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<List<PortfolioSnapshot>>

@@ -45,12 +45,28 @@ public sealed class MarketDataWorkflow
         _progress = progress ?? NullWorkflowProgress.Instance;
     }
 
-    public async Task<MarketDataResult> CollectAndAnalyzeAsync(
+    public Task<MarketDataResult> CollectAndAnalyzeAsync(
+        IEnumerable<string> symbols, DateTime from,
+        System.Threading.CancellationToken cancellationToken = default) =>
+        CollectAsync(symbols, from, completedSessionOnly: false, cancellationToken);
+
+    public Task<MarketDataResult> CollectAndAnalyzeCompletedSessionAsync(
+        IEnumerable<string> symbols, DateTime from,
+        System.Threading.CancellationToken cancellationToken = default) =>
+        CollectAsync(symbols, from, completedSessionOnly: true, cancellationToken);
+
+    private async Task<MarketDataResult> CollectAsync(
         IEnumerable<string> symbols,
-        DateTime from)
+        DateTime from,
+        bool completedSessionOnly,
+        System.Threading.CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var results = new List<ObservationResult>();
         var prices = new Dictionary<string, decimal>();
+        var executionCandles = new Dictionary<string, IReadOnlyList<MarketCandle>>(StringComparer.OrdinalIgnoreCase);
+        var collectionTime = _timeProvider.GetUtcNow();
+        var completedBefore = CompletedMarketSession.NewYorkDate(collectionTime);
         var analysisDate = _timeProvider.GetLocalNow().Date;
         var symbolList = symbols.ToList();
         var succeeded = 0;
@@ -83,16 +99,28 @@ public sealed class MarketDataWorkflow
             try
             {
                 using var operation = _progress.BeginOperation("Fetching benchmark data", benchmarkSymbol);
-                benchmarkCandles = await _historicalDataService.GetHistoricalDailyUpToAsync(
-                    benchmarkSymbol, from, analysisDate, analysisDate);
+                benchmarkCandles = completedSessionOnly
+                    ? await _provider.GetHistoricalDailyAsync(
+                        benchmarkSymbol, MarketHistoryRequirements.GetEffectiveStartDate(from, analysisDate))
+                    : await _historicalDataService.GetHistoricalDailyUpToAsync(
+                        benchmarkSymbol, from, analysisDate, analysisDate);
+                if (completedSessionOnly)
+                    benchmarkCandles = benchmarkCandles.Where(x => DateOnly.FromDateTime(x.Date) < completedBefore).ToList();
+                executionCandles[benchmarkSymbol] = benchmarkCandles;
+                cancellationToken.ThrowIfCancellationRequested();
                 if (benchmarkCandles.Count == 0)
                 {
                     Console.WriteLine($"Benchmark data unavailable for {benchmarkSymbol}.");
                     _progress.Report($"Benchmark data unavailable for {benchmarkSymbol}", force: true);
                 }
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException("Market data collection canceled by caller.", cancellationToken);
+            }
             catch (Exception)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 Console.WriteLine($"Benchmark data unavailable for {benchmarkSymbol}.");
                 _progress.Report($"Benchmark data unavailable for {benchmarkSymbol}", force: true);
             }
@@ -100,22 +128,29 @@ public sealed class MarketDataWorkflow
 
         foreach (var symbol in symbolList)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 IReadOnlyList<MarketCandle> candles;
                 using (_progress.BeginOperation("Fetching price data", symbol))
                 {
-                    candles = await _provider.GetHistoricalDailyAsync(
-                        symbol,
-                        MarketHistoryRequirements.GetEffectiveStartDate(
-                            from,
-                            analysisDate));
+                    candles = completedSessionOnly && string.Equals(symbol, benchmarkSymbol, StringComparison.OrdinalIgnoreCase)
+                        ? benchmarkCandles
+                        : await _provider.GetHistoricalDailyAsync(
+                            symbol,
+                            MarketHistoryRequirements.GetEffectiveStartDate(
+                                from,
+                                analysisDate));
                 }
+                cancellationToken.ThrowIfCancellationRequested();
 
                 var historicalCandles =
                     candles
-                        .Where(x => x.Date.Date <= analysisDate)
+                        .Where(x => completedSessionOnly
+                            ? DateOnly.FromDateTime(x.Date) < completedBefore
+                            : x.Date.Date <= analysisDate)
                         .OrderBy(x => x.Date).ToList();
+                executionCandles[symbol] = historicalCandles;
                 var usableCandles =
                     historicalCandles
                         .Where(x => x.Date.Date >= from.Date)
@@ -141,7 +176,8 @@ public sealed class MarketDataWorkflow
                     {
                         using var operation = _progress.BeginOperation("Fetching fundamental data", symbol);
                         fundamentalData =
-                            await _fundamentalDataProvider.GetFundamentalDataAsync(symbol);
+                            await _fundamentalDataProvider.GetFundamentalDataAsync(symbol, cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
                         if (fundamentalData?.AsOfDate > DateOnly.FromDateTime(analysisDate))
                             fundamentalData = null;
                         if (fundamentalData is null)
@@ -150,16 +186,28 @@ public sealed class MarketDataWorkflow
                             _progress.Report($"Fundamentals unavailable for {symbol}; continuing without fundamentals");
                         }
                     }
-                    catch (Exception ex)
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw new OperationCanceledException("Market data collection canceled by caller.", cancellationToken);
+                    }
+                    catch (FundamentalDataFetchException ex)
                     {
                         unavailableFundamentals++;
-                        Console.WriteLine(
-                            $"Failed to fetch fundamental data for {symbol} ({ex.GetType().Name}). Continuing without fundamentals.");
-                        _progress.Report(
-                            $"Failed to fetch fundamental data for {symbol} ({ex.GetType().Name}). Continuing without fundamentals.");
+                        foreach (var failure in ex.Failures)
+                        {
+                            ReportFundamentalWarning(
+                                $"Failed to fetch fundamental data for {symbol}; {failure}. Continuing without fundamentals.");
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        unavailableFundamentals++;
+                        ReportFundamentalWarning(
+                            $"Failed to fetch fundamental data for {symbol}; Provider=unknown; Endpoint=unknown; HTTP=unknown; Category=Unknown. Continuing without fundamentals.");
                     }
                 }
 
+                cancellationToken.ThrowIfCancellationRequested();
                 results.Add(
                     _analyzer.Analyze(
                         symbol,
@@ -173,8 +221,13 @@ public sealed class MarketDataWorkflow
                 prices[symbol] = usableCandles.Last().Close;
                 succeeded++;
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException("Market data collection canceled by caller.", cancellationToken);
+            }
             catch (Exception ex)
             {
+                executionCandles.Remove(symbol);
                 Console.WriteLine(
                     $"Błąd pobierania danych dla {symbol}: {ex.Message}");
                 failed++;
@@ -191,9 +244,8 @@ public sealed class MarketDataWorkflow
         _progress.Report($"Symbols processed: {succeeded} analyzed, {skipped} skipped, {failed} failed", force: true);
         if (unavailableFundamentals > 0)
         {
-            _progress.Report(
-                $"Fundamentals unavailable for {unavailableFundamentals} symbols; Continuing without fundamentals",
-                force: true);
+            ReportFundamentalWarning(
+                $"Fundamentals unavailable for {unavailableFundamentals} symbols; Continuing without fundamentals");
         }
 
         List<ObservationResult> rankedResults;
@@ -210,16 +262,52 @@ public sealed class MarketDataWorkflow
 
         using (_progress.BeginOperation("Saving observations"))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             await _observationResultRepository.SaveAsync(rankedResults);
         }
         using (_progress.BeginOperation("Saving feature snapshots"))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             await _featureSnapshotRepository.SaveAsync(rankedResults, _strategyConfiguration);
         }
 
         using var previousRunOperation = _progress.BeginOperation("Loading previous run");
+        cancellationToken.ThrowIfCancellationRequested();
         var previousRun = await _observationResultRepository.GetPreviousRunAsync();
+        cancellationToken.ThrowIfCancellationRequested();
 
-        return new MarketDataResult(rankedResults, recommendations, prices, previousRun);
+        CompletedMarketSession? executionSession = null;
+        string? rejection = null;
+        try
+        {
+            if (completedSessionOnly)
+            {
+                if (failed != 0 || skipped != 0)
+                    throw new InvalidOperationException("Paper execution requires successful analysis for every requested symbol.");
+                executionSession = CompletedMarketSession.Create(
+                    benchmarkSymbol is null || symbolList.Contains(benchmarkSymbol, StringComparer.OrdinalIgnoreCase)
+                        ? symbolList : symbolList.Append(benchmarkSymbol),
+                    executionCandles, _timeProvider.GetUtcNow());
+            }
+            else
+                rejection = "Analytical collection does not authorize paper execution.";
+        }
+        catch (InvalidOperationException ex)
+        {
+            rejection = ex.Message;
+        }
+        return new MarketDataResult(rankedResults, recommendations, prices, previousRun)
+        {
+            ExecutionSession = executionSession,
+            ExecutionRejection = rejection
+        };
+    }
+
+    private void ReportFundamentalWarning(string message)
+    {
+        if (_progress is NullWorkflowProgress)
+            Console.WriteLine(message);
+        else
+            _progress.Report(message, force: true);
     }
 }
