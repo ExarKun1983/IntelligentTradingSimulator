@@ -20,6 +20,34 @@ public sealed class ConsoleReporterTests
     }
 
     [Theory]
+    [InlineData(DateTimeKind.Utc)]
+    [InlineData(DateTimeKind.Unspecified)]
+    public void PrintPreviousRunInfo_LabelsPreviousAnalysisAndPreservesUtcTimestamp(DateTimeKind kind)
+    {
+        var previousRun = new ObservationRun
+        {
+            Id = 42,
+            CreatedAt = new DateTime(2026, 10, 23, 14, 35, 12, kind)
+        };
+
+        var output = CaptureOutput(() => CreateReporter().PrintPreviousRunInfo(previousRun));
+        _output.WriteLine(output);
+
+        Assert.Equal(
+            $"Previous analysis RunId: 42{Environment.NewLine}" +
+            $"Previous analysis CreatedAt (UTC): {previousRun.CreatedAt}{Environment.NewLine}",
+            output);
+    }
+
+    [Fact]
+    public void PrintPreviousRunInfo_WhenPreviousAnalysisIsNull_PrintsNothing()
+    {
+        var output = CaptureOutput(() => CreateReporter().PrintPreviousRunInfo(null));
+
+        Assert.Equal(string.Empty, output);
+    }
+
+    [Theory]
     [InlineData(null, 50, 10, false)]
     [InlineData(50, 50, 10, false)]
     [InlineData(75, 50, 10, true)]
