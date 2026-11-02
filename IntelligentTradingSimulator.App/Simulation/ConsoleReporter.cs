@@ -256,10 +256,10 @@ public sealed class ConsoleReporter
         }
 
         Console.WriteLine(
-            $"RunId: {previousRun.Id}");
+            $"Previous analysis RunId: {previousRun.Id}");
 
         Console.WriteLine(
-            $"CreatedAt: {previousRun.CreatedAt}");
+            $"Previous analysis CreatedAt (UTC): {previousRun.CreatedAt}");
     }
 
     public void PrintVariantComparisonReport(StrategyComparisonReport report)
