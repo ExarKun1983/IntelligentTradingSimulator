@@ -1524,3 +1524,190 @@ dotnet test IntelligentTradingSimulator.sln --configuration Release --verbosity 
 - **A table or schema is missing.** Apply migrations with the `dotnet ef database update` command above before starting the application.
 - **Yahoo Finance returns no data or a request fails.** Check internet access, confirm the symbol/date range is valid, and retry later if the provider is temporarily unavailable. Application simulation and backtest commands depend on this external provider.
 - **The selected strategy cannot be found or fails validation.** Ensure `ActiveStrategy` exactly names an entry under `Strategies`, and check the numeric ranges in the strategy table.
+
+## Agent state machine: offline implementation, not activated
+
+The replacement orchestration component is separate from the trading application:
+`IntelligentTradingSimulator.Orchestration`. Issue #213's approved reduced-scope
+contract uses **label-controlled initiation**, not a mandatory Start button.
+Implementation/testing approval is not activation approval. The legacy workflow
+remains disabled in GitHub; never restart it for comparison, shadow mode, or rollback.
+The replacement workflow has a literal `if: false` job guard, read-only permissions,
+no secrets, and a dry-run-only entry point. Removing that guard alone is **not**
+a supported activation procedure.
+
+### Ownership and labels
+
+After a separately reviewed cutover, an authorized human adding `agent:ready` to
+an eligible open Issue is a notification to the shared reconciler. The reconciler
+must validate numeric repository/Issue/actor identity, live write permission,
+open state and current readiness before accepting/queuing it durably. A notification
+or queued Actions run is not acknowledgement of durable acceptance.
+
+The canonical phase projects the following labels:
+
+| Phase | Visible status | Next automatic work |
+| --- | --- | --- |
+| `READY` | `agent:ready` | Wait for repository admission; recheck live readiness |
+| `CODING` | `agent:working` | One tracked task; no managed full CI/review |
+| `CI_PENDING` | `agent:ci` | CI for the completed task's captured final SHA |
+| `REVIEW_PENDING` | `agent:ai-review` | Review the eligible task/round/SHA |
+| `FIX_PENDING` | `agent:working` | One recorded repair handoff |
+| `HUMAN_REVIEW` | `agent:review` | Human approval; never automatic merge |
+| `BLOCKED` | `agent:blocked` | Authorized decision; Resume cannot clear the hold |
+| `CLOSED` | No automatic-work label | Preserve terminal record |
+
+Duplicate ready notifications do not launch another task. Withdrawal prevents
+admission of queued, unstarted work. Withdrawal during active work must stop new
+effects without forgetting an active/uncertain task. Stage-label edits only request
+projection repair: they cannot manufacture completion, CI success, review acceptance,
+or reactivation. Projection-origin notifications do not become commands.
+The opt-in label may coexist with a stage label while work is active; a stage
+projection must not itself be interpreted as readiness withdrawal.
+
+GitHub documents that Issue labels written with `GITHUB_TOKEN` **do not trigger**
+another label workflow run. Human actions and suitable PAT/App actions can trigger
+one, subject to repository settings. Do not rely on token suppression alone:
+the parser also rejects unknown bots and ignores the configured projection actor.
+Automated producers using `GITHUB_TOKEN` must invoke the shared reconciler explicitly
+or use the exceptional recovery path; they cannot assume adding `agent:ready` wakes
+Actions. See [GitHub trigger semantics](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+
+### Persistence, admission and recovery
+
+`GitStateStore` uses an injectable Git object/ref transport. `GitHubGitTransport`
+implements the Git database REST shapes without shell pushes and disables mutations
+by default. No state branch is created by the CLI or tests. The approved state
+reference is `refs/heads/agent-state`. Bootstrap/protection and initial-state review
+are explicit operator prerequisites; missing state after setup must fail closed,
+not rebuild admission or holds from labels.
+
+Each snapshot contains schema/generation/version, Issue/PR/task/round/SHA identities,
+inbox/outbox and repository admission. Publishing a single-parent commit with
+`force:false` exposes state plus intents together at one reference. Competing children
+cannot both fast-forward: reload and re-reduce on conflict; never merge state or
+force-update. Lost publication responses are reconciled using exact commit identity/
+ancestry. This is not a transaction with the task, review or CI service.
+
+Record an intent before every effect, and record its executing state before a call.
+On restart, reconcile an executing intent with the external system before repeating
+it. An unknown result blocks and retains ownership; lease expiry or a failed metadata
+write is not permission to launch another task. Only one Issue can hold repository
+admission; other ready Issues stay queued. Held/closed/review-ready Issues release it
+only when active and uncertain mutations have been resolved. Reacquire it for new work.
+Bounded indexes are used instead of scanning all historical PRs.
+
+Reachable Git history has no Actions-artifact expiry, but deletion, force updates
+and privileged tampering are not impossible. Protect the reference, monitor size and
+stop at capacity; never silently prune pending work or buy storage. Public state
+must contain no credentials or private feedback. Backups and GitHub availability
+are not strengthened into an unsupported durability SLA.
+
+### Sequencing and integration boundaries
+
+Only explicit completion of the current confirmed task plus a matching live head
+permits CI. Store the completed task, response round, final SHA, CI intent and run.
+Intermediate pushes, early/unrelated green CI, labels and Resume cannot open this
+gate. Eligible green CI alone can authorize the current review request. A failed
+build/test creates a tracked child coding repair on the same PR; complete it before
+CI again, preserving blocker/round obligations. Technical CI failures have a
+consecutive budget of three; only eligible green CI resets it. Productive review
+cycles have no arbitrary round cap. Changed SHA/green CI are not per-finding progress.
+
+Live integration is **not wired by this offline entry point**. Before activation,
+the host must provide trusted observations, authorization, Git credentials and
+supported task/CI/review adapters. The test executor is not a production API.
+In particular:
+
+- Verify Agent Tasks endpoint availability, user-to-server authentication,
+  numeric repository/artifact identities and explicit `completed` states using real
+  response shapes. Do not assume installation tokens work or creation is idempotent.
+- Verify reviewer semantics. Prose, badges, missing findings and `COMMENTED` reviews
+  are not approval/blocker contracts. Unsupported output is `needs-human`.
+  An authorized, round/head-scoped classification decision must be recorded before
+  an automatic handoff can resume. Do not add a separately billed classifier.
+- Wire exact-SHA CI only at cutover: trusted workflow definition, checkout of captured
+  SHA with `HEAD` verification, durable dispatch/run correlation, checks against that
+  tested head, and no credentials in PR-code test jobs. Gate managed intermediate
+  push CI without changing unrelated/manual PR behavior. Existing CI is intentionally
+  unchanged until this routing and check identity are verified.
+- Wire bounded task/run observations and supported wake-ups to the same worker.
+  Persist before yielding. Manual **Resume** is exceptional recovery, not normal Start
+  or a per-stage action. It cannot reset rounds/retry history, clear a hold or duplicate
+  pending effects. Pause/reactivation are distinct authorized decisions with reasons.
+- Ordinary feedback can be fetched, but Actions is not a lossless inbox for every
+  edited/deleted/transient event. Only durably accepted explicit commands have that
+  recovery contract. Ambiguous history stops; do not infer missing approval.
+- Status-comment identity/rendered-content reconciliation must be verified before
+  enabling projection writes; labels/comments never become the audit database.
+
+### Offline replay and validation
+
+The executable supports only `--dry-run`; there is no live execution switch.
+A replay fixture is local JSON with `State`, `Events`, `Observation` and
+`AuthorizedActors`. Events have a `Data.type` discriminator (`ready`, `withdraw`,
+`stage-edited`, `resume`, `pause`, `reactivate`, `task-completed`, `head-changed`,
+`ci-result`, `review-result`, `human-feedback`, `human-classification`, `closure`,
+`reopen`). Fixture actors
+authorize only offline simulation, never live requests.
+
+For example, save this empty replay to a file under `/tmp`:
+
+```json
+{
+  "State": { "SchemaVersion": 1, "Generation": 1, "Repository": "owner/repo" },
+  "Events": [],
+  "Observation": { "Issues": {} },
+  "AuthorizedActors": []
+}
+```
+
+From the repository root:
+
+```bash
+dotnet run --project IntelligentTradingSimulator.Orchestration --configuration Release -- \
+  --dry-run --replay /tmp/orchestration-replay.json
+dotnet test IntelligentTradingSimulator.Tests --configuration Release \
+  --filter FullyQualifiedName~Orchestration
+```
+
+Output explicitly reports `AcceptedDurably: false` and `ExternalEffectsExecuted: 0`.
+`--notification <payload> --event-name issues --dry-run` inspects notification context;
+it does not trust payload actors as authorization or accept work. Invalid input fails
+without echoing arbitrary payloads into diagnostics. Tests use fake APIs/transports,
+including Git publication conflicts and lost responses; no test launches a live agent,
+CI run, review or remote state write.
+
+### Cost and activation checklist
+
+The public repository's standard hosted Actions compute is currently free, but AI
+credits, artifacts, caches, LFS, larger runners and a change to private visibility
+must not be assumed free. Current documented allowances/limits include Free/Pro
+artifact storage of 500 MB/1 GB (shared with Packages), cache allowance 10 GB/repository,
+20/40 standard concurrent jobs, and `GITHUB_TOKEN` REST limit 1,000 requests/hour/
+repository. Artifacts/logs normally expire after 90 days; schedules and pending
+Actions runs can be dropped. None is canonical storage.
+
+Illustratively, 20 Issues/month × two 30-minute worker invocations is 1,200 standard
+runner-minutes before CI, not an AI usage forecast or guaranteed account allowance.
+This implementation adds no external service, package dependency, cache upload,
+artifact upload or paid runner. Actual account AI entitlement, remaining allowance,
+effective no-overage enforcement and reviewer/API capabilities remain **unverified**.
+No live effects may be enabled on that basis.
+
+Before separate activation approval:
+
+1. Reconcile residual legacy tasks/PR mappings and uncertain work; leave legacy disabled.
+2. Verify/protect/bootstrap canonical state and approve its public-data/retention policy.
+3. Verify current API shapes, identities, permissions and reliable review classification.
+4. Verify existing entitlement and provider-enforced no-additional-charge controls.
+   A local counter or billing alert alone is not a hard cap on variable-cost sessions.
+5. Complete and review live host, exact-SHA CI/check routing and projections described
+   above, using offline crash/replay tests first. No user-work dispatch is authorized.
+6. Obtain explicit maintainer approval for the cutover. Rollback pauses effects and
+   reconciles retained canonical state; never restarts the known-broken legacy workflow.
+
+Sources: [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions),
+[Actions limits](https://docs.github.com/en/actions/reference/limits),
+[Git references](https://docs.github.com/en/rest/git/refs),
+[Agent Tasks](https://docs.github.com/en/rest/agent-tasks/agent-tasks).

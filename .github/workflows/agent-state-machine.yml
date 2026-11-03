@@ -1,0 +1,49 @@
+name: Agent state machine (not activated)
+
+on:
+  issues:
+    types: [labeled, unlabeled, closed, reopened]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number for guarded recovery (not a normal Start)
+        required: true
+        type: string
+      operation:
+        description: Resume never clears a hold; reactivation requires a reason
+        required: true
+        default: resume
+        type: choice
+        options: [resume, pause, reactivate]
+      reason:
+        description: Required for pause/reactivation
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    # Implementation/offline validation approval is NOT activation approval.
+    # Keep a literal false, not a mutable repository variable, until reviewed cutover.
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Inspect notification without accepting work or executing effects
+        env:
+          EVENT_PATH: ${{ github.event_path }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: >-
+          dotnet run --project IntelligentTradingSimulator.Orchestration
+          --configuration Release --
+          --notification "$EVENT_PATH" --event-name "$EVENT_NAME"
+          --dry-run
