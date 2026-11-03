@@ -120,7 +120,12 @@ public sealed class ReviewIdentity
     public ReviewClassification? Classification { get; set; }
     public List<Finding> Findings { get; set; } = [];
     public List<FindingResponse> Responses { get; set; } = [];
+    public ReviewRequestBoundary? RequestBoundary { get; set; }
+    public string? SourceEvidence { get; set; }
 }
+
+public sealed record ReviewRequestBoundary(long ReviewerId, string ReviewerNodeId, DateTimeOffset PreparedAt,
+    List<long> ExistingReviewIds, bool Confirmed = false);
 
 public sealed record Finding(string Id, string Description, string Evidence);
 public sealed record FindingResponse(string FindingId, string Evidence, bool Resolved);
@@ -193,7 +198,8 @@ public sealed record HeadChanged(int PullRequest, string Sha) : EventData;
 public sealed record CiResult(string RunId, string TaskId, int Round, int PullRequest, string Sha, bool Green,
     List<Finding>? Blockers = null) : EventData;
 public sealed record ReviewResult(string ReviewId, string TaskId, int Round, int PullRequest, string Sha,
-    ReviewClassification Classification, List<Finding> Findings, List<FindingResponse> Responses) : EventData;
+    ReviewClassification Classification, List<Finding> Findings, List<FindingResponse> Responses,
+    string? SourceEvidence = null) : EventData;
 public sealed record HumanFeedback(string Text, string? HandoffId = null, int? Round = null, string? Sha = null) : EventData;
 public sealed record HumanClassification(string HandoffId, int Round, int PullRequest, string Sha,
     ReviewClassification Classification, string Reason, List<Finding>? Findings = null,

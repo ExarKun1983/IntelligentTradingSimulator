@@ -1737,8 +1737,9 @@ in 128-event pages, remembering each observed immutable event until inbox accept
 It feeds the same leased bounded worker and CAS store as existing reducer tests.
 Ordinary feedback during coding is queued for a child task; no review may bypass it.
 The library host can publish state and perform authorized task/projection effects,
-but **CI and review effects still return unknown without issuing a request**, producing
-an explicit hold. This is not a finished coding/CI/review deployment. CLI, replacement
+but **CI effects still return unknown without issuing a request**, producing
+an explicit hold. Review requests have their own default-false approval gates and
+the conservative integration below. This is not a finished coding/CI/review deployment. CLI, replacement
 workflow activation and production wake-up delivery are unchanged and disabled.
 
 `GitHubTaskIntegrationTests` uses mocked REST responses for approved/disabled host
@@ -1762,6 +1763,65 @@ documented trusted completion-SHA source (or approve a separate requirement/desi
 change), plus account access/cost verification—not to populate this source from
 today's head or turn on the workflow. Until then, completion remains blocked.
 
+#### Review request and result implementation
+
+`GitHubReviewAdapter` implements the documented Copilot requested-reviewer POST
+and bounded reviews/review-comments GETs. `GitHubReviewApproval` defaults to false
+for activation, API policy/credentials, no-added-charge verification and disabled
+automatic reviews. This approval is separate from task approval. Neither account
+access nor cost controls are established by the code or HTTP fixtures.
+
+Before POST, the adapter verifies the canonical executing intent, completed
+task/round/final SHA, exact eligible green CI receipt, admission, no holds/feedback,
+and live open Issue/PR/head/repository. It verifies the Copilot bot through the
+user API and rejects an already requested reviewer or pre-existing pending review.
+The reducer persists a `ReviewRequestBoundary` containing verified bot IDs, time,
+and pre-existing review IDs before the non-idempotent call.
+Only the first CAS publication may claim an unconfirmed boundary; concurrent
+executors cannot re-use even an identical prepared boundary to repeat POST.
+Accepted feedback is rechecked after publication and before mutation.
+The returned PR must
+still match the head/repository and acknowledge the verified bot. A confirmed
+boundary is saved before normal outcome publication.
+
+`review-request:<intent-id>` is a **local durable acknowledgement identity**, not
+a GitHub review-job ID. The existing `ReviewIdentity.ReviewId` holds this local
+receipt for this adapter; actual API review/comment IDs are retained in
+`SourceEvidence`. Recovery only uses a saved confirmed boundary to restore that
+receipt. A lost response or failed confirmation write remains unknown, even if
+the reviewer now appears or a new review exists. It never repeats POST or clears
+a human hold. A crash after preparation but before POST also remains uncertain;
+operator reconciliation is required rather than guessing that no request occurred.
+
+Submitted output is fetched only for the current completed/CI-green task and
+request. Existing review IDs, other actors, pending and stale-head submissions
+cannot satisfy it. Candidate output must match verified bot IDs, PR URL, SHA and
+post-boundary submission time. Review comments must match the API review/author/PR
+identities. Pagination and total evidence size are bounded; API or malformed
+identity failures fail the invocation without promoting or requesting again.
+
+**All captured REST output returns `needs-human`, including `APPROVED`.** GitHub
+does not return a request-to-submission round token, so time/actor/SHA alone cannot
+prove that output belongs to this request rather than concurrent human/automatic
+requests. `COMMENTED` prose is also not reliable blocker/acceptance classification.
+Raw review/comment JSON and the uncertainty reason are durably retained with the
+typed result and human handoff. No suggestion is silently called a blocker and no
+old blocker is cleared. The existing authorized human classification reducer can
+then accept/classify/reject the exact handoff and assemble eligible repair prompts.
+REST observation plus mocked classification is not production correlation proof.
+
+`GitHubReviewIntegrationTests` covers gated requests, exact task/CI/SHA eligibility,
+live identities, intent/boundary/receipt ordering, lost responses and writes,
+lookup-only recovery, submitted states and raw evidence, stale/pending/other actors,
+malformed scope, paginated-result failures, concurrent executors, replay and
+shared-worker feedback precedence. Closed/changed-head live PRs stop review
+polling without preventing shared closure/head reconciliation. Full automatic
+approval/repair remains blocked pending either a supported trustworthy round and
+classification contract or authorized human classification. CLI and workflow
+execution remain disabled; this library wiring cannot resolve the separate
+task-final-SHA blocker. Managed CI/check routing and cross-invocation wake-up
+delivery still require implementation, not merely activation.
+
 #### Verified API contracts versus activation prerequisites
 
 Read-only documentation research on 2026-11-03 establishes public contracts, **not
@@ -1772,8 +1832,8 @@ this account's access, credentials, entitlements, policy or spending configurati
 | Coding tasks | [`POST /agents/repos/{owner}/{repo}/tasks`, repo/task GETs](https://docs.github.com/en/rest/agent-tasks/agent-tasks). Public preview; launch requires Business/Enterprise. `prompt`, `base_ref`, `head_ref`, `create_pull_request` are documented and implemented with offline HTTP coverage. | Verify eligible existing plan and a user access token with Agent tasks permissions. Installation tokens, including `GITHUB_TOKEN`, are unsupported. No plan upgrade is authorized. Lost creates without a unique saved ID remain blocked. |
 | Task/PR association | Branch lookup and pull-artifact candidate global-node lookup with GraphQL/REST database/repository checks are implemented. Independent task-bound final-head evidence remains mandatory. [Global node guide](https://docs.github.com/en/graphql/guides/using-global-node-ids), [PR fields](https://docs.github.com/en/graphql/reference/pulls#object-pullrequest). | No reviewed task/session/artifact field attests the final commit; production final-head source remains unavailable and completed REST tasks hold. Pull artifacts lacking usable global IDs also hold; no PR-number guessing. |
 | Follow-up coding | A new task can target an existing `head_ref`/`base_ref`; [PR mentions](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-on-github) are a separate interaction. | Preserve child task/round/blocker identity. No supported append-to-existing-task endpoint or bot-mention task-ID response is established. |
-| Review request | [Requested reviewers REST](https://docs.github.com/en/rest/pulls/review-requests#request-reviewers-for-a-pull-request) and [Copilot review guide](https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/copilot-code-review) document `copilot-pull-request-reviewer[bot]`. Response is a PR, not a review-job ID. | Request/result adapter and durable request-to-submitted-review correlation are not implemented. Verify repository policy/auth and account billing first. |
-| Review result | [PR reviews/comments](https://docs.github.com/en/rest/pulls/reviews) expose actor, `commit_id`, review ID and comments. | Match actor/head/current request and paginate. Missing requested-reviewer entry is not success. Prose or `COMMENTED` is not acceptance; ambiguous results require authorized human classification. |
+| Review request | [Requested reviewers REST](https://docs.github.com/en/rest/pulls/review-requests#request-reviewers-for-a-pull-request) and [Copilot review guide](https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/copilot-code-review) document `copilot-pull-request-reviewer[bot]`. Gated request/boundary/receipt and lookup-only recovery are implemented. | Response is a PR, not a review-job ID. Verify repository policy/auth, automatic-review settings and account billing. Missing confirmed receipts remain uncertain; no speculative retry. |
+| Review result | [PR reviews/comments](https://docs.github.com/en/rest/pulls/reviews) expose actor, `commit_id`, review ID and comments; bounded validated raw capture is implemented. | No request-round token or dependable prose classifier; captured output is `needs-human`, never guessed promotion/repair. Authorized classification or independently verified provider evidence is required. |
 | Lost mutation response | Neither task launch nor review request documents a caller-supplied idempotency key or exactly-once creation. | Persist intent before call; retain returned identity; if no unique operation can be established, hold for human reconciliation, never repeat a speculative create. |
 | CI | Workflow dispatch/run/check APIs are public, but dispatch response alone is not tested-SHA proof. | Managed CI workflow/check routing and concrete dispatch/result adapters are not implemented. Trusted workflow, captured-SHA checkout/verification, correlation, read-only isolated test jobs and intermediate-push policy remain work. Existing CI is unchanged. |
 | Charges | [Organization billing](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing), [budgets](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/budgets), and [review pricing](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing) describe paid usage and review attribution. | Maintainer/admin must verify existing entitlement, attribution, disable paid overages, and enforce stop-usage controls for AI and Actions. Alerts alone are not caps; public Actions compute does not establish free AI use. No per-operation included-only billing field was established. |
@@ -1787,22 +1847,22 @@ refer to `IntelligentTradingSimulator.Tests/Orchestration`.
 | # / requirement | Implemented evidence | Outstanding / blocked |
 | --- | --- | --- |
 | 1 Legal/illegal transitions and invariants | `OrchestrationCoreTests`, shared reducer | Exhaustive coverage is not claimed; extend with each production contract. |
-| 2 Actual handlers, replay/reorder/concurrency and boundaries | `GitHubActionsIngressTests`, `GitHubHostIntegrationTests`, `GitHubTaskIntegrationTests`, worker/persistence tests | Review/CI HTTP handlers and exhaustive production boundary matrices remain. |
-| 3 Crash after every intent/effect | Persistence/worker crash and CAS tests; projection lost-create, task lost-launch/outcome-write worker recovery and canonical saved-ID lookup | Not yet every production API boundary; no exactly-once upstream guarantee. |
-| 4 Exact effect counts and preserved holds | Worker, core, persistence, task and projection recovery tests; pull-node replay/mismatch and saved-ID recovery counts/holds | Extend counts to production review/CI adapters. |
+| 2 Actual handlers, replay/reorder/concurrency and boundaries | `GitHubActionsIngressTests`, `GitHubHostIntegrationTests`, `GitHubTaskIntegrationTests`, `GitHubReviewIntegrationTests`, worker/persistence tests | CI HTTP handlers and exhaustive production boundary matrices remain. |
+| 3 Crash after every intent/effect | Persistence/worker crash and CAS tests; task/projection recovery; review boundary/POST/confirmation/outcome failure tests | Not yet every production API boundary; no exactly-once upstream guarantee. |
+| 4 Exact effect counts and preserved holds | Worker/core/task/projection tests; review single-POST, saved-receipt and unknown-response recovery with preserved holds | Extend counts to production CI adapters and full review concurrency matrices. |
 | 5 Coding-before-exact-SHA CI | Worker initial-unmapped/completion-mismatch and duplicate-Resume tests; reducer guards; HTTP tests reject absent task-final-head evidence and later external pushes | Verified production task-final-head source and actual dispatch/checkout/check routing remain unwired. |
 | 6 Green CI/review and two repair cycles | Worker automatic two-CI-repair/review-repair loop | Offline fakes only for task/CI/review execution. |
 | 7 Stale CI/head checks and unmanaged compatibility | Core task/round/SHA/head-change tests | Required checks on tested SHA and managed/unmanaged workflow routing remain. |
 | 8 Feedback precedence and distinct identical events | Core/command tests; worker paged-input priority; API-authorized ordinary feedback with distinct/edit replay and before/during-task tests | Exhaustive concurrent feedback/service boundary matrices remain. No lossless arbitrary history promised. |
-| 9 Productive rounds/no-progress stop | Core multi-round, evidence/progress and reopened-blocker tests | Production reviewer classification still requires verified typed/human contract. |
+| 9 Productive rounds/no-progress stop | Core multi-round/evidence/reopened-blocker tests; review API output conservatively captured as needs-human without blocker inference | Production autonomous round correlation/classification still lacks provider evidence; authorized human classification required. |
 | 10 Closure/reopen/reactivation | Core and command tests; live REST merge/closure; branch/pull-node artifact checks reject closed PRs; canonical saved-task lookup preserves holds | Verified manual uncertain-task terminal resolution and wider HTTP closure matrix remain. |
 | 11 Operations documentation | This runbook: state, ownership, failure, migration/rollback and recovery | Cutover runbook must be revalidated against final host/routing before approval. |
 | 12 Human final approval/no auto-merge | `HUMAN_REVIEW` reducer terminal gate; no merge effect/API | Preserve at activation. |
 | 13 Label-controlled start/queue, guarded recovery | Ingress/core/worker tests; API-verified preview and gated write host with replay tests | Live notification ingestion remains disabled; no normal manual Start introduced. |
 | 14 Automatic stages/labels/continuation | Shared bounded worker; task/label/status adapter and gated write-host HTTP tests | Production workflow activation, wake-ups and persisted continuation delivery remain disabled/unimplemented. Resume stays exceptional recovery, not a normal stage button. |
-| 15 Shared C# decision path/real response shapes | Worker/reconciler/reducer; REST/Git/ingress, task/session/artifact/feedback fixtures and read-only GraphQL PR-node/fullDatabaseId shapes | Review/CI shapes still require their concrete adapter tests. |
+| 15 Shared C# decision path/real response shapes | Worker/reconciler/reducer; REST/Git/task/feedback/GraphQL fixtures; requested-reviewer PR acknowledgement and API review/comment fixtures | CI shapes still require their concrete adapter tests; live contract/account capability is not established by fakes. |
 | 16 Repository admission/queue | Core/persistence/worker concurrent admission tests | Verify production ingress/continuation races once wired. |
-| 17 Reviewer behavior/needs-human | Typed core classification and human-handoff tests | No concrete reviewer adapter yet; cannot claim production review readiness. |
+| 17 Reviewer behavior/needs-human | Concrete gated review request/result adapter; API output captured as needs-human with raw evidence and durable handoff; shared-worker replay/feedback tests | Autonomous round correlation/approval/blocker semantics unavailable; account prerequisites and live readiness remain unverified. |
 | 18 Comment replay and preserved recovery state | Durable `ProjectStatus`, owned-comment HTTP tests, lost-create worker-ledger recovery | Live status wiring and remote tamper/deletion monitoring are not enabled. |
 
 Separate activation approval, canonical branch bootstrap/protection, credential/policy

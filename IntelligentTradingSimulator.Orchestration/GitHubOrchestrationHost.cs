@@ -11,7 +11,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         long repositoryGeneration, long issueGeneration, DateTimeOffset occurredAt,
         HashSet<long> projectionActorIds, long projectionActorId, string baseBranch, long taskCreatorId,
         GitHubExecutionApproval? approval = null, WorkerOptions? options = null,
-        ITaskFinalHeadSource? finalHeadSource = null, CancellationToken token = default)
+        ITaskFinalHeadSource? finalHeadSource = null, CancellationToken token = default,
+        GitHubReviewApproval? reviewApproval = null)
     {
         if (approval?.AllowsTasks != true) throw new InvalidOperationException("Live activation prerequisites are not verified.");
         var snapshot = await store.LoadAsync(token);
@@ -22,8 +23,9 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             repositoryGeneration, issueGeneration, message);
         var authorization = new VerifiedEvents();
         var tasks = new GitHubTaskAdapter(api, store, baseBranch, taskCreatorId, approval, finalHeadSource);
-        var events = new ProductionEvents(message, api, tasks, authorization, projectionActorId);
-        var effects = new ProductionEffects(tasks, new GitHubProjectionAdapter(api, projectionActorId, true));
+        var reviews = new GitHubReviewAdapter(api, store, clock, reviewApproval);
+        var events = new ProductionEvents(message, api, tasks, reviews, authorization, projectionActorId);
+        var effects = new ProductionEffects(tasks, reviews, new GitHubProjectionAdapter(api, projectionActorId, true));
         return await new OrchestrationWorker(new OrchestrationReducer(authorization), clock).RunAsync(store, events,
             new TaskObservations(tasks, clock), effects, new ReconcileOptions(false, true, true, true),
             options, token);
@@ -104,7 +106,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
     }
 
     private sealed class ProductionEvents(OrchestrationEvent? command, GitHubRepositoryApi api,
-        GitHubTaskAdapter tasks, VerifiedEvents authorization, long projectionActorId) : IWorkerEventSource
+        GitHubTaskAdapter tasks, GitHubReviewAdapter reviews, VerifiedEvents authorization, long projectionActorId) : IWorkerEventSource
     {
         private readonly Dictionary<string, OrchestrationEvent> acceptedObservations = [];
         public async Task<WorkerEventBatch> ReadAsync(RepositoryState state, CancellationToken token)
@@ -134,6 +136,11 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             // Fetch newly verified PR feedback before applying completion or authorizing downstream effects.
             messages.AddRange(await new GitHubFeedbackSource(api, projectionActorId).ReadAsync(feedbackState, token));
             messages.AddRange(completions);
+            foreach (var issue in state.Issues.Values)
+            {
+                var result = await reviews.ReadEventAsync(state, issue, token);
+                if (result is not null && !state.Inbox.ContainsKey(result.Id)) messages.Add(result);
+            }
             var batch = new List<OrchestrationEvent>();
             foreach (var message in messages.Take(128))
             {
@@ -155,19 +162,22 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             tasks.ObserveAsync(state, clock.GetUtcNow(), token);
     }
 
-    private sealed class ProductionEffects(GitHubTaskAdapter tasks, GitHubProjectionAdapter projections) : IVerifiedAgentEffectAdapter
+    private sealed class ProductionEffects(GitHubTaskAdapter tasks, GitHubReviewAdapter reviews,
+        GitHubProjectionAdapter projections) : IVerifiedAgentEffectAdapter
     {
         public bool AgentEffectsAuthorized => tasks.AgentEffectsAuthorized;
         public Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken token) => intent.Kind switch
         {
             EffectKind.LaunchTask => tasks.ExecuteAsync(intent, token),
+            EffectKind.RequestReview => reviews.ExecuteAsync(intent, token),
             EffectKind.ProjectLabels or EffectKind.ProjectStatus => projections.ExecuteAsync(intent, token),
-            // Concrete CI/review correlation is still required. Do not issue speculative requests.
+            // Concrete CI correlation is still required. Do not issue speculative dispatches.
             _ => Task.FromResult(new EffectOutcome(DeliveryStatus.Unknown))
         };
         public Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken token) => intent.Kind switch
         {
             EffectKind.LaunchTask => tasks.ReconcileAsync(intent, token),
+            EffectKind.RequestReview => reviews.ReconcileAsync(intent, token),
             EffectKind.ProjectLabels or EffectKind.ProjectStatus => projections.ReconcileAsync(intent, token),
             _ => Task.FromResult(new EffectOutcome(DeliveryStatus.Unknown))
         };

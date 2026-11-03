@@ -163,6 +163,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     review.Findings.Any(finding => finding.Id == response.FindingId) &&
                     !review.Responses.Contains(response));
                 review.Classification = result.Classification;
+                review.SourceEvidence = result.SourceEvidence;
                 review.Findings = RetainUnresolvedFindings(review, result.Classification, result.Findings, result.Responses);
                 review.Responses.AddRange(result.Responses.Where(response => !review.Responses.Contains(response)));
                 if (!eligibleReview)
@@ -483,6 +484,34 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 string.IsNullOrWhiteSpace(outcome.ExternalId))
                 throw new InvalidOperationException("Successful remote operation requires an identity.");
         }, outcome);
+    }
+
+    public RepositoryState RecordReviewBoundary(RepositoryState input, string id, ReviewRequestBoundary boundary)
+    {
+        ValidateState(input);
+        var state = StateJson.Clone(input);
+        var intent = state.Outbox[id];
+        var issue = state.Issues[intent.IssueNumber];
+        if (intent.Kind != EffectKind.RequestReview || intent.Status != DeliveryStatus.Executing ||
+            issue.Generation != intent.Generation || issue.Review?.IntentId != id ||
+            boundary.ReviewerId <= 0 || string.IsNullOrWhiteSpace(boundary.ReviewerNodeId) ||
+            boundary.ExistingReviewIds.Count > MaximumIndexEntries ||
+            boundary.ExistingReviewIds.Any(value => value <= 0) ||
+            boundary.ExistingReviewIds.Distinct().Count() != boundary.ExistingReviewIds.Count)
+            throw new InvalidOperationException("Invalid executing review request boundary.");
+        var previous = issue.Review.RequestBoundary;
+        if (previous is not null)
+        {
+            if (previous.ReviewerId != boundary.ReviewerId || previous.ReviewerNodeId != boundary.ReviewerNodeId ||
+                previous.PreparedAt != boundary.PreparedAt ||
+                !previous.ExistingReviewIds.SequenceEqual(boundary.ExistingReviewIds) ||
+                previous.Confirmed && !boundary.Confirmed)
+                throw new InvalidOperationException("Review request boundary identity changed.");
+        }
+        else if (boundary.Confirmed) throw new InvalidOperationException("Review must be prepared before confirmation.");
+        issue.Review.RequestBoundary = boundary;
+        Touch(state, issue, state.LastEventId);
+        return state;
     }
 
     private static RepositoryState ChangeEffect(RepositoryState input, string id, Action<EffectIntent> change, EffectOutcome? outcome = null)
