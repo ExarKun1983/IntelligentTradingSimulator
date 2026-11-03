@@ -41,7 +41,8 @@ env:
   LAUNCH_MATCH_WINDOW_SECONDS: 1800
   CI_WORKFLOW_FILE: ci.yml
 # Jobs share resolver/state helpers from .github/scripts/agent-orchestrator.sh, always checked out from the
-# default branch so every job runs identical mapping and state logic.
+# default branch so every job runs identical mapping and state logic. Review requires the latest Copilot Agent
+# Task API state to be `completed`; a green CI run alone is not evidence that implementation has finished.
 
 jobs:
   bootstrap:
@@ -105,6 +106,9 @@ jobs:
             gh issue edit "$ISSUE" --repo "$REPO" --remove-label "$WORKING_LABEL" --add-label "$BLOCKED_LABEL"
             exit 1
           fi
+          task_id="$(jq -er '.id | select(type == "string" and length > 0)' "$out")"
+          record_agent_task "$ISSUE" "$task_id"
+          echo "Started Copilot task $task_id for Issue #$ISSUE"
 
   map-pr:
     if: >-
@@ -132,7 +136,8 @@ jobs:
           echo "PR #$PR mapped to Issue #$issue"
 
   review-after-ci:
-    # After green CI: request Copilot review, wait for it in this job, then hand off findings or promote.
+    # A green CI run is eligible only after its Copilot Agent Task reports completed and the PR head is still
+    # the tested SHA. Then request review, wait for the current-SHA review, and hand off findings or promote.
     # Unresolved inline findings are handed off as before. With none, a current-SHA review summary that says
     # "Changes recommended" (not "Needs a closer look", "Approval recommended", or the could-not-review-files
     # notice) is handed off once per SHA, capped at MAX_FIX_ROUNDS, before promotion to human review.
@@ -156,7 +161,6 @@ jobs:
           REPO: ${{ github.repository }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           SHA: ${{ github.event.workflow_run.head_sha }}
-          CI_CONFIRMED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           source .github/scripts/agent-orchestrator.sh
@@ -164,9 +168,11 @@ jobs:
           if [ -z "$pr" ]; then echo "No open PR for $BRANCH"; exit 0; fi
           issue="$(resolve_issue "$pr" "$BRANCH")"
           if [ -z "$issue" ]; then echo "No Issue mapping for PR #$pr" >&2; exit 1; fi
+          if ! wait_for_agent_task "$issue"; then exit 0; fi
+          request_rc=0
+          request_review_if_eligible "$pr" "$issue" "$SHA" || request_rc=$?
+          if [ "$request_rc" -eq 1 ]; then exit 0; elif [ "$request_rc" -ne 0 ]; then exit "$request_rc"; fi
           echo "PR #$pr -> Issue #$issue, SHA $SHA"
-          request_copilot_review "$pr" "$SHA"
-          set_state "$issue" "$AI_REVIEW_LABEL"
           rc=0; wait_for_review "$pr" "$SHA" || rc=$?
           if [ "$rc" -eq 0 ]; then process_review "$pr" "$issue" "$SHA"; fi
 
@@ -187,6 +193,7 @@ jobs:
       - name: Route CI failure
         env:
           GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
+          ACTIONS_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           SHA: ${{ github.event.workflow_run.head_sha }}
@@ -203,7 +210,8 @@ jobs:
           handle_ci_failure "$pr" "$issue" "$SHA" "$CONCLUSION" "$RUN_URL"
 
   process-ai-review:
-    # Backup path, in case GitHub delivers the Copilot review event to Actions.
+    # Backup path, in case GitHub delivers the Copilot review event to Actions. process_review repeats the
+    # implementation-complete, open/current-head, green-CI, and current-review checks before doing anything.
     if: >-
       github.event_name == 'pull_request_review' &&
       startsWith(github.event.review.user.login, 'copilot-pull-request-reviewer')
@@ -227,9 +235,12 @@ jobs:
         run: |
           set -euo pipefail
           source .github/scripts/agent-orchestrator.sh
-          if [ "$REVIEW_SHA" != "$HEAD_SHA" ]; then echo "Stale review; ignoring"; exit 0; fi
           issue="$(resolve_issue "$PR" "$BRANCH")"
           if [ -z "$issue" ]; then echo "No Issue mapping for PR #$PR" >&2; exit 1; fi
+          if [ "$REVIEW_SHA" != "$HEAD_SHA" ] || ! review_eligible "$PR" "$issue" "$HEAD_SHA"; then
+            echo "Review is stale or the implementation/CI gate is not satisfied; ignoring"
+            exit 0
+          fi
           process_review "$PR" "$issue" "$HEAD_SHA"
 
   human-feedback:
@@ -249,6 +260,7 @@ jobs:
       - name: Hand off human feedback to Copilot
         env:
           GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
+          ACTIONS_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
@@ -261,9 +273,10 @@ jobs:
           marker="<!-- agent-orchestrator:human-handoff-sha=$HEAD_SHA -->"
           existing="$(gh pr view "$PR" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
           if ! printf '%s\n' "$existing" | grep -Fq "$marker"; then
-            gh pr comment "$PR" --repo "$REPO" --body "$(printf '%s\n\n%s' \
-              '@copilot Please address all unresolved human review comments on this PR branch. Run all tests, push the fix, and resolve the addressed threads. Do not merge.' \
-              "$marker")"
+            prompt='Please address all unresolved human review comments on this PR branch. Run all tests, push the fix, and resolve the addressed threads. Do not merge.'
+            task_id="$(start_pr_fix_task "$PR" "$issue" "$HEAD_SHA" "$prompt")"
+            gh pr comment "$PR" --repo "$REPO" --body "$(printf 'Started Copilot cloud agent task %s to address human review feedback on %s.\n\n%s\n\n%s' \
+              "$task_id" "$HEAD_SHA" "$prompt" "$marker")"
           fi
           set_state "$issue" "$WORKING_LABEL"
 
@@ -302,7 +315,8 @@ jobs:
           fi
 
   reconcile-existing-pr:
-    # Runs on push of this file or manual "Run workflow": repairs a PR stuck in agent:ai-review.
+    # Runs on push of this file or manual "Run workflow": repairs a PR stuck in agent:ai-review, but only
+    # requests review after the associated Copilot task is complete and the current head has green CI.
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -329,9 +343,11 @@ jobs:
           sha="$(jq -r '.[0].headRefOid' <<< "$copilot_prs")"
           issue="$(resolve_issue "$pr" "$branch")"
           if [ -z "$issue" ]; then echo "No Issue mapping for PR #$pr; no-op"; exit 0; fi
+          if ! wait_for_agent_task "$issue"; then exit 0; fi
+          request_rc=0
+          request_review_if_eligible "$pr" "$issue" "$sha" || request_rc=$?
+          if [ "$request_rc" -eq 1 ]; then exit 0; elif [ "$request_rc" -ne 0 ]; then exit "$request_rc"; fi
           echo "PR #$pr -> Issue #$issue, SHA $sha"
-          request_copilot_review "$pr" "$sha"
-          set_state "$issue" "$AI_REVIEW_LABEL"
           rc=0; wait_for_review "$pr" "$sha" || rc=$?
           if [ "$rc" -eq 0 ]; then process_review "$pr" "$issue" "$sha"; fi
 
