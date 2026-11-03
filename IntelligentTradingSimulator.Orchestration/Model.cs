@@ -107,6 +107,7 @@ public sealed class CiIdentity
     public int Round { get; set; }
     public string Sha { get; set; } = "";
     public bool? Green { get; set; }
+    public string? TerminalStopReason { get; set; }
     public List<Finding> Blockers { get; set; } = [];
     public CiDispatchBoundary? DispatchBoundary { get; set; }
 }

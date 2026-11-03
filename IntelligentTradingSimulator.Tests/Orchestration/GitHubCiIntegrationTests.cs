@@ -14,6 +14,40 @@ public sealed class GitHubCiIntegrationTests
     private static readonly GitHubCiRoute Route = new(10, "refs/tags/ci-trusted", Definition);
     private static readonly GitHubCiApproval Approved = new(true, true, true, true);
 
+    [Fact]
+    public async Task FeedbackCommittedAfterBoundaryAndDuringFinalLiveCheckDefersDispatch()
+    {
+        var store = new Store(State());
+        var api = new Api();
+        api.AfterPullRead = () =>
+        {
+            if (store.Value.Issues[7].Ci!.DispatchBoundary is not null)
+                store.Value.Issues[7].PendingFeedbackEventIds.Add("authorized-feedback");
+        };
+        using var client = api.Client();
+        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved);
+        await Assert.ThrowsAsync<InvalidDataException>(() => adapter.ExecuteAsync(store.Value.Outbox["ci"], default));
+        Assert.NotNull(store.Value.Issues[7].Ci!.DispatchBoundary);
+        Assert.Null(store.Value.Issues[7].Ci!.DispatchBoundary!.RunId);
+        Assert.Equal(0, api.Posts);
+        Assert.Equal(DeliveryStatus.Unknown, (await adapter.ReconcileAsync(store.Value.Outbox["ci"], default)).Status);
+        Assert.Equal(0, api.Posts);
+    }
+
+    [Theory]
+    [InlineData("ci-trusted")]
+    [InlineData("refs/heads/ci-trusted")]
+    [InlineData("refs/tags/")]
+    public async Task MutableOrAmbiguousDefinitionRefIsRejectedBeforeIo(string reference)
+    {
+        var store = new Store(State());
+        var api = new Api();
+        using var client = api.Client();
+        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route with { Ref = reference }, new Clock(), Approved);
+        await Assert.ThrowsAsync<InvalidDataException>(() => adapter.ExecuteAsync(store.Value.Outbox["ci"], default));
+        Assert.Empty(api.Requests);
+    }
+
     [Theory]
     [InlineData("success")]
     [InlineData("build-failure")]
@@ -255,7 +289,7 @@ public sealed class GitHubCiIntegrationTests
     }
 
     [Fact]
-    public async Task ChangedHeadStopsPollingAndReducerHoldsWithoutReplacementDispatch()
+    public async Task ChangedHeadReconcilesTerminalRunWithoutReplacementDispatch()
     {
         var store = new Store(State());
         var api = new Api();
@@ -264,10 +298,41 @@ public sealed class GitHubCiIntegrationTests
         var outcome = await adapter.ExecuteAsync(store.Value.Outbox["ci"], default);
         store.Value = new OrchestrationReducer().RecordOutcome(store.Value, "ci", outcome, Now);
         api.Corruption = "head-changed";
-        Assert.Null(await adapter.ReadEventAsync(store.Value, store.Value.Issues[7], default));
+        var message = (await adapter.ReadEventAsync(store.Value, store.Value.Issues[7], default))!;
+        Assert.IsType<CiStopped>(message.Data);
+        store.Value = new OrchestrationReducer(new Allow()).Apply(store.Value, message);
+        Assert.Null(store.Value.AdmittedIssue);
+        Assert.NotNull(store.Value.Issues[7].Ci!.TerminalStopReason);
         store.Value = new OrchestrationReducer(new Allow()).Apply(store.Value,
             new("push", "owner/repo", 7, 1, 1, new("maintainer", ActorKind.Human), Now, new HeadChanged(17, Definition)));
         Assert.Equal(Phase.BLOCKED, store.Value.Issues[7].Phase);
+        Assert.Equal(1, api.Posts);
+    }
+
+    [Fact]
+    public async Task VerifiedTerminalStopReleasesAdmissionButOnlyExplicitReactivationClearsHold()
+    {
+        var store = new Store(State());
+        var api = new Api { Corruption = "cancelled" };
+        using var client = api.Client();
+        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved);
+        var outcome = await adapter.ExecuteAsync(store.Value.Outbox["ci"], default);
+        store.Value = new OrchestrationReducer().RecordOutcome(store.Value, "ci", outcome, Now);
+        var message = (await adapter.ReadEventAsync(store.Value, store.Value.Issues[7], default))!;
+        var reducer = new OrchestrationReducer(new Allow());
+        var stopped = reducer.Apply(store.Value, message);
+        Assert.Null(stopped.AdmittedIssue);
+        Assert.Equal(Phase.BLOCKED, stopped.Issues[7].Phase);
+        Assert.Null(stopped.Issues[7].Ci!.Green);
+        Assert.Equal("90", stopped.Issues[7].Ci!.RunId);
+        Assert.NotNull(stopped.Issues[7].Ci!.TerminalStopReason);
+        Assert.Equal(StateJson.Serialize(stopped), StateJson.Serialize(reducer.Apply(stopped, message)));
+        Assert.Null(await adapter.ReadEventAsync(stopped, stopped.Issues[7], default));
+        var ready = reducer.Apply(stopped, new("reactivate", "owner/repo", 7, 1, 1,
+            new("human", ActorKind.Human), Now, new Reactivate("Verified terminal run; restart explicitly.")));
+        Assert.Equal(Phase.READY, ready.Issues[7].Phase);
+        Assert.Equal(2, ready.Issues[7].Generation);
+        Assert.Null(ready.Issues[7].Ci);
         Assert.Equal(1, api.Posts);
     }
 
@@ -357,6 +422,7 @@ public sealed class GitHubCiIntegrationTests
         public string Body { get; private set; } = "";
         public List<string> Requests { get; } = [];
         public Action? BeforePost { get; set; }
+        public Action? AfterPullRead { get; set; }
         public bool SynchronizePreflight { get; init; }
         private readonly TaskCompletionSource preflights = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int reads;
@@ -391,6 +457,7 @@ public sealed class GitHubCiIntegrationTests
                 result = new { number = 17, state = "open",
                     head = new { sha = Corruption == "head-changed" ? Definition : Sha,
                         repo = new { id = Corruption == "repository" ? 2 : 1 } }, @base = new { repo = new { id = 1 } } };
+                AfterPullRead?.Invoke();
             }
             else if (path.EndsWith("/runs/90"))
             {

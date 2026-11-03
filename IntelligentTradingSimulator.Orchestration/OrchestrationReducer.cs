@@ -120,8 +120,10 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             case CiStopped stopped:
                 if (issue.Ci is not { } stoppedCi || stoppedCi.RunId != stopped.RunId ||
                     stoppedCi.TaskId != stopped.TaskId || stoppedCi.Round != stopped.Round || stoppedCi.Sha != stopped.Sha ||
+                    stoppedCi.Green is not null || stoppedCi.TerminalStopReason is not null ||
                     string.IsNullOrWhiteSpace(stopped.Reason))
                     throw new InvalidOperationException("CI stop does not match the tracked run.");
+                stoppedCi.TerminalStopReason = stopped.Reason;
                 Hold(issue, stopped.Reason);
                 CancelPendingWork(state, issue);
                 break;
@@ -129,7 +131,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 CheckMapping(issue, result.PullRequest, result.Sha, requireHead: false);
                 if (string.IsNullOrWhiteSpace(result.RunId) || issue.Ci is not { } ci ||
                     ci.RunId != result.RunId || ci.TaskId != result.TaskId ||
-                    ci.Round != result.Round || ci.Sha != result.Sha || ci.Green is not null ||
+                    ci.Round != result.Round || ci.Sha != result.Sha || ci.Green is not null || ci.TerminalStopReason is not null ||
                     !CompletedTaskMatches(issue, result.TaskId, result.Round, result.Sha))
                     throw new InvalidOperationException("Ineligible CI result.");
                 var eligibleCi = issue.Phase == Phase.CI_PENDING && issue.ActiveAuthorized && !issue.Paused &&
@@ -708,7 +710,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
     private static bool HasUnfinishedWork(RepositoryState state, IssueState issue) =>
         issue.Tasks.Values.Any(t => t.Status is TaskStatus.Intended or TaskStatus.Executing or TaskStatus.Running or
             TaskStatus.AwaitingHeadConfirmation or TaskStatus.Unknown) ||
-        issue.Ci is { RunId: not null, Green: null } ||
+        issue.Ci is { RunId: not null, Green: null, TerminalStopReason: null } ||
         issue.Review is { ReviewId: not null, Classification: null } ||
         state.Outbox.Values.Any(e => e.IssueNumber == issue.Number &&
             (e.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown ||

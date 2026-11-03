@@ -34,6 +34,8 @@ public sealed class GitHubCiAdapter(GitHubRepositoryApi api, IStateStore store, 
         ValidateEligibility(latest, ValidateIntent(latest, intent), intent);
         await VerifyRouteAsync(token);
         if (!await LiveEligibleAsync(issue, token)) throw new InvalidDataException("CI head changed before dispatch.");
+        latest = (await store.LoadAsync(token)).State;
+        ValidateEligibility(latest, ValidateIntent(latest, intent), intent);
         using var response = await api.WriteAsync(HttpMethod.Post, $"actions/workflows/{route.WorkflowId}/dispatches",
             new { @ref = route.Ref, inputs = new { sha = intent.Sha, correlation = boundary.Correlation } }, token);
         var runId = response.RootElement.GetProperty("workflow_run_id").GetInt64();
@@ -56,18 +58,20 @@ public sealed class GitHubCiAdapter(GitHubRepositoryApi api, IStateStore store, 
 
     public async Task<OrchestrationEvent?> ReadEventAsync(RepositoryState state, IssueState issue, CancellationToken token)
     {
-        if (state.Repository != api.Repository || issue.Ci is not { Green: null, DispatchBoundary: { RunId: { } runId } boundary } ci ||
+        if (state.Repository != api.Repository || issue.Ci is not { Green: null, TerminalStopReason: null,
+                DispatchBoundary: { RunId: { } runId } boundary } ci ||
             ci.RunId != runId.ToString(CultureInfo.InvariantCulture) || issue.PullRequest is null ||
             issue.ActiveTaskId != ci.TaskId || !issue.Tasks.TryGetValue(ci.TaskId, out var task) ||
             task.Status != TaskStatus.Completed || !task.LaunchConfirmed || task.FinalSha != ci.Sha || task.Round != ci.Round ||
             !state.Outbox.TryGetValue(ci.IntentId, out var intent) || intent.Status != DeliveryStatus.Succeeded)
             return null;
         await api.VerifyRepositoryAsync(token);
-        if (issue.HeadSha != ci.Sha || !await LiveEligibleAsync(issue, token)) return null;
+        var eligibleHead = await LiveEligibleAsync(issue, token) && issue.HeadSha == ci.Sha;
         using var run = await api.GetAsync($"actions/runs/{runId}", token);
         var root = run.RootElement;
         ValidateRun(root, runId, boundary);
         if (root.GetProperty("status").GetString() != "completed") return null;
+        if (!eligibleHead) return Stopped("Managed CI reached a terminal outcome after its live head or open mapping changed.");
         var conclusion = root.GetProperty("conclusion").GetString();
         if (conclusion is not ("success" or "failure")) return Stopped("Managed CI did not complete with build/test evidence.");
         var jobs = new List<JsonElement>();
