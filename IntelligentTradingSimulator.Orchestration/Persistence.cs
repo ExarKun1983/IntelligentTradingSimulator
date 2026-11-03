@@ -45,6 +45,7 @@ public sealed class GitStateStore(
         var state = StateJson.Deserialize(commit.StateJson);
         if (state.Repository != repository || state.SchemaVersion != 1)
             throw new InvalidDataException("State repository or schema mismatch.");
+        OrchestrationContinuation.Validate(state);
         return new(tip, state);
     }
 
@@ -53,6 +54,7 @@ public sealed class GitStateStore(
         if (state.Repository != repository || state.SchemaVersion != 1 ||
             expected.State.Repository != repository || state.Generation < expected.State.Generation)
             throw new InvalidDataException("Invalid state publication.");
+        OrchestrationContinuation.Validate(state);
         var current = await transport.ReadRefAsync(reference, cancellationToken);
         if (current is null) RequireExplicitInitialization();
         else Interlocked.Exchange(ref observedExistingState, 1);

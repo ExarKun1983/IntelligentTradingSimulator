@@ -9,7 +9,7 @@ public enum Phase { READY, CODING, CI_PENDING, REVIEW_PENDING, FIX_PENDING, HUMA
 public enum TaskKind { Coding, CiRepair, ReviewRepair, FeedbackRepair }
 public enum TaskLaunchSource { PullRequestHead, UnmappedIssue }
 public enum TaskStatus { Intended, Executing, Running, AwaitingHeadConfirmation, Completed, Failed, Unknown }
-public enum EffectKind { LaunchTask, RunCi, RequestReview, ProjectLabels, ProjectStatus }
+public enum EffectKind { LaunchTask, RunCi, RequestReview, ProjectLabels, ProjectStatus, PublishRequiredStatus }
 public enum DeliveryStatus { Pending, Executing, Succeeded, Failed, Unknown, Cancelled }
 public enum ReviewClassification { Accepted, Blocking, NeedsHuman }
 public enum ActorKind { Human, TaskService, CiService, ReviewService }
@@ -32,6 +32,7 @@ public sealed class RepositoryState
     public string? LastEventId { get; set; }
     public int? AdmittedIssue { get; set; }
     public WorkerLease? WorkerLease { get; set; }
+    public ContinuationTicket? Continuation { get; set; }
     public Dictionary<int, IssueState> Issues { get; set; } = [];
     public Dictionary<string, InboxEntry> Inbox { get; set; } = [];
     public Dictionary<string, EffectIntent> Outbox { get; set; } = [];
@@ -80,6 +81,8 @@ public sealed class IssueState
     public string? ProjectionDigest { get; set; }
     public string? ObservedProjectionDigest { get; set; }
     public string? StatusProjectionDigest { get; set; }
+    public long RequiredStatusSequence { get; set; }
+    public string? RequiredStatusIntentId { get; set; }
 }
 
 public sealed class TaskIdentity
@@ -94,6 +97,8 @@ public sealed class TaskIdentity
     public string? FinalSha { get; set; }
     public bool LaunchConfirmed { get; set; }
     public string? ExternalId { get; set; }
+    public TaskTerminalRecord? TerminalEvidence { get; set; }
+    public TaskOperatorResolution? OperatorResolution { get; set; }
     public List<Finding> ReviewBlockers { get; set; } = [];
     public List<Finding> CiBlockers { get; set; } = [];
     public List<string> FeedbackEventIds { get; set; } = [];
@@ -152,6 +157,15 @@ public sealed record HumanClassificationRecord(string EventId, string HandoffId,
     List<FindingResponse> Responses, DateTimeOffset OccurredAt);
 public sealed record TerminalRecord(long Generation, TerminalOutcome Outcome, int? PullRequest,
     string? Sha, DateTimeOffset ObservedAt);
+public sealed record TaskSessionTerminalEvidence(string Id, string ExternalTaskId, long RepositoryId,
+    string State, DateTimeOffset CompletedAt);
+public sealed record TaskTerminalEvidence(string LaunchIntentId, string ExternalTaskId, string Repository,
+    long RepositoryId, long CreatorId, string State, int SessionCount,
+    List<TaskSessionTerminalEvidence> Sessions, DateTimeOffset UpdatedAt, DateTimeOffset ObservedAt,
+    string ResponseDigest);
+public sealed record TaskTerminalRecord(string EventId, TaskTerminalEvidence Evidence);
+public sealed record TaskOperatorResolution(string EventId, string EvidenceEventId, Actor Author,
+    string Reason, DateTimeOffset OccurredAt);
 
 public sealed class EffectIntent
 {
@@ -172,7 +186,14 @@ public sealed class EffectIntent
     public DateTimeOffset? CompletedAt { get; set; }
     public string? StatusBody { get; set; }
     public string? TaskPrompt { get; set; }
+    public RequiredStatusPayload? RequiredStatus { get; set; }
+    public RequiredStatusBoundary? RequiredStatusBoundary { get; set; }
 }
+
+public sealed record RequiredStatusPayload(string Context, string State, string Description, string TargetUrl,
+    string? CiIntentId, string? CiRunId);
+public sealed record RequiredStatusBoundary(long ActorId, string ActorLogin, string ActorNodeId, string ActorType,
+    DateTimeOffset PreparedAt, List<long> ExistingStatusIds, long? StatusId = null);
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(Ready), "ready")]
@@ -182,7 +203,10 @@ public sealed class EffectIntent
 [JsonDerivedType(typeof(Pause), "pause")]
 [JsonDerivedType(typeof(Reactivate), "reactivate")]
 [JsonDerivedType(typeof(TaskCompleted), "task-completed")]
+[JsonDerivedType(typeof(TaskPrMapped), "task-pr-mapped")]
 [JsonDerivedType(typeof(TaskStopped), "task-stopped")]
+[JsonDerivedType(typeof(TaskTerminalObserved), "task-terminal-observed")]
+[JsonDerivedType(typeof(ResolveTaskTerminal), "resolve-task-terminal")]
 [JsonDerivedType(typeof(HeadChanged), "head-changed")]
 [JsonDerivedType(typeof(CiResult), "ci-result")]
 [JsonDerivedType(typeof(CiStopped), "ci-stopped")]
@@ -199,7 +223,10 @@ public sealed record Resume : EventData;
 public sealed record Pause(string Reason) : EventData;
 public sealed record Reactivate(string Reason) : EventData;
 public sealed record TaskCompleted(string TaskId, int PullRequest, string Sha) : EventData;
+public sealed record TaskPrMapped(string TaskId, int PullRequest, string ObservedHead) : EventData;
 public sealed record TaskStopped(string TaskId, string Reason) : EventData;
+public sealed record TaskTerminalObserved(string TaskId, TaskTerminalEvidence Evidence) : EventData;
+public sealed record ResolveTaskTerminal(string TaskId, string EvidenceEventId, string Reason) : EventData;
 public sealed record HeadChanged(int PullRequest, string Sha) : EventData;
 public sealed record CiResult(string RunId, string TaskId, int Round, int PullRequest, string Sha, bool Green,
     List<Finding>? Blockers = null) : EventData;

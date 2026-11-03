@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace IntelligentTradingSimulator.Orchestration;
 
-public enum NotificationKind { Ignore, Readiness, WithdrawReadiness, Projection, Closed, Reopened, Resume, Pause, Reactivate }
+public enum NotificationKind { Ignore, Readiness, WithdrawReadiness, Projection, Closed, Reopened, Resume, Pause, Reactivate, ResolveTask, ClassifyReview }
 
 public sealed record ActionsNotification(
     NotificationKind Kind, string SourceId, long RepositoryId, long IssueId, int IssueNumber,
@@ -39,12 +39,17 @@ public static class GitHubActionsIngress
             NotificationKind.Resume => new Resume(),
             NotificationKind.Pause => new Pause(notification.Reason!),
             NotificationKind.Reactivate => new Reactivate(notification.Reason!),
+            NotificationKind.ResolveTask => new ResolveTaskTerminal(payload.GetProperty("inputs").GetProperty("task").GetString()!,
+                "", notification.Reason!),
+            NotificationKind.ClassifyReview => ReadClassification(payload.GetProperty("inputs"), notification.Reason!),
             _ => throw new InvalidDataException("Unsupported command.")
         };
         return new(notification.SourceId, evidence.Repository, notification.IssueNumber,
             repositoryGeneration, issueGeneration,
             new Actor(notification.ActorId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                ActorKind.Human, notification.ActorId), occurredAt, data);
+                ActorKind.Human, notification.ActorId,
+                Type: notification.Kind is NotificationKind.ResolveTask or NotificationKind.ClassifyReview ? evidence.ActorType : null),
+            occurredAt, data);
     }
 
     public static ActionsNotification Parse(
@@ -85,12 +90,17 @@ public static class GitHubActionsIngress
                 "resume" => NotificationKind.Resume,
                 "pause" => NotificationKind.Pause,
                 "reactivate" => NotificationKind.Reactivate,
+                "resolve-task" => NotificationKind.ResolveTask,
+                "classify-review" => NotificationKind.ClassifyReview,
                 _ => throw new InvalidDataException("Only guarded recovery operations are supported.")
             };
             var reason = inputs.TryGetProperty("reason", out var value) ? value.GetString() : null;
-            if (kind is NotificationKind.Pause or NotificationKind.Reactivate &&
+            if (kind is NotificationKind.Pause or NotificationKind.Reactivate or NotificationKind.ResolveTask or NotificationKind.ClassifyReview &&
                 string.IsNullOrWhiteSpace(reason))
                 throw new InvalidDataException("Pause/reactivation requires a reason.");
+            if (kind == NotificationKind.ResolveTask &&
+                (!inputs.TryGetProperty("task", out var task) || string.IsNullOrWhiteSpace(task.GetString()) || task.GetString()!.Length > 256))
+                throw new InvalidDataException("Terminal task resolution requires the canonical task identity.");
             return Result(kind, reason: reason);
         }
 
@@ -123,4 +133,26 @@ public static class GitHubActionsIngress
         return Result(action == "labeled" ? NotificationKind.Readiness : NotificationKind.Ignore, label);
     }
 
+    private static HumanClassification ReadClassification(JsonElement inputs, string reason)
+    {
+        var classification = inputs.GetProperty("classification").GetString() switch
+        {
+            "accepted" => ReviewClassification.Accepted,
+            "blocking" => ReviewClassification.Blocking,
+            "needs-human" => ReviewClassification.NeedsHuman,
+            _ => throw new InvalidDataException("Explicit review classification is required.")
+        };
+        string Text(string name) => inputs.GetProperty(name).GetString() ?? throw new InvalidDataException("Missing classification input.");
+        List<T> Items<T>(string name)
+        {
+            var text = inputs.TryGetProperty(name, out var value) ? value.GetString() : null;
+            if (string.IsNullOrWhiteSpace(text)) return [];
+            if (text.Length > 16 * 1024) throw new InvalidDataException("Classification evidence exceeds capacity.");
+            return JsonSerializer.Deserialize<List<T>>(text, StateJson.Options) ??
+                throw new InvalidDataException("Invalid classification evidence.");
+        }
+        return new(Text("handoff"), int.Parse(Text("round"), System.Globalization.CultureInfo.InvariantCulture),
+            int.Parse(Text("pull"), System.Globalization.CultureInfo.InvariantCulture), Text("sha"), classification,
+            reason, Items<Finding>("findings"), Items<FindingResponse>("responses"));
+    }
 }

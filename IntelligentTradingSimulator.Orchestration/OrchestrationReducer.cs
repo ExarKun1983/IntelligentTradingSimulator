@@ -1,6 +1,6 @@
 namespace IntelligentTradingSimulator.Orchestration;
 
-public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = null)
+public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = null, bool requiredStatusEnabled = false)
 {
     public const int MaximumIndexEntries = 2048;
     private readonly IAuthorizationPolicy authorization = authorization ?? new DenyAllAuthorizationPolicy();
@@ -101,6 +101,29 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     throw new InvalidOperationException("Completion does not match a confirmed active task.");
                 task.FinalSha = completed.Sha;
                 task.Status = TaskStatus.AwaitingHeadConfirmation;
+                break;
+            case TaskPrMapped mapping:
+                if (issue.ActiveTaskId != mapping.TaskId || !issue.Tasks.TryGetValue(mapping.TaskId, out var mappedTask) ||
+                    !mappedTask.LaunchConfirmed || mappedTask.Status != TaskStatus.Running ||
+                    mappedTask.Round != issue.Round)
+                    throw new InvalidOperationException("PR observation requires a confirmed active running task.");
+                if (TaskTerminalRecovery.RequireSavedLaunch(state, issue, mapping.TaskId).Status != DeliveryStatus.Succeeded)
+                    throw new InvalidOperationException("PR observation requires the confirmed launch receipt.");
+                CheckMapping(issue, mapping.PullRequest, mapping.ObservedHead, requireHead: false);
+                issue.HeadSha = mapping.ObservedHead;
+                break;
+            case TaskTerminalObserved observed:
+                var observedLaunch = TaskTerminalRecovery.RequireSavedLaunch(state, issue, observed.TaskId);
+                TaskTerminalRecovery.ValidateEvidence(observed.Evidence, state, observedLaunch);
+                if (observed.Evidence.ObservedAt != message.OccurredAt ||
+                    issue.Tasks[observed.TaskId].TerminalEvidence is { } priorEvidence &&
+                    priorEvidence.Evidence.ObservedAt > observed.Evidence.ObservedAt)
+                    throw new InvalidOperationException("Task recovery evidence is stale.");
+                issue.Tasks[observed.TaskId].TerminalEvidence = new(message.Id, observed.Evidence);
+                // Evidence alone never ends tracking or authorizes another operation.
+                break;
+            case ResolveTaskTerminal resolution:
+                ResolveEndedTask(state, issue, message, resolution);
                 break;
             case HeadChanged changed:
                 CheckMapping(issue, changed.PullRequest, changed.Sha, requireHead: false);
@@ -350,16 +373,28 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     CancelPendingWork(state, issue);
                 }
             }
-            if (issue.HeadSha is not null && live.HeadSha != issue.HeadSha &&
-                issue.ActiveTaskId is { } active && issue.Tasks[active].Status == TaskStatus.Completed)
+            if (issue.PullRequest is > 0 && live.PullRequest == issue.PullRequest && live.HeadSha != issue.HeadSha)
             {
-                Hold(issue, "Live head differs from the completed task.");
-                CancelPendingWork(state, issue);
+                if (!IsSha(live.HeadSha))
+                {
+                    Hold(issue, "Live mapped pull request head is unavailable or invalid.");
+                    CancelPendingWork(state, issue);
+                }
+                else
+                {
+                    if (issue.ActiveTaskId is { } active && issue.Tasks[active].Status == TaskStatus.Completed)
+                    {
+                        Hold(issue, "Live head differs from the completed task.");
+                        CancelPendingWork(state, issue);
+                    }
+                    issue.HeadSha = live.HeadSha;
+                }
             }
             ReleaseIfSafe(state, issue);
         }
         if (state.AdmittedIssue is null &&
-            !state.Outbox.Values.Any(e => e.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown))
+            !state.Outbox.Values.Any(e => e.Kind != EffectKind.PublishRequiredStatus &&
+                e.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown))
         {
             var next = state.Issues.Values.Where(i => (i.Ready || i.ActiveAuthorized) &&
                     i.Phase is Phase.READY or Phase.FIX_PENDING &&
@@ -409,6 +444,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         foreach (var issue in state.Issues.Values)
         {
             if (!observation.Issues.TryGetValue(issue.Number, out var live)) continue;
+            if (requiredStatusEnabled && issue.PullRequest is > 0 && IsSha(issue.HeadSha))
+                PlanRequiredStatus(state, issue, observation.ObservedAt);
             var labels = ProjectLabels(issue);
             foreach (var stale in state.Outbox.Values.Where(effect => effect.IssueNumber == issue.Number &&
                          effect.Kind == EffectKind.ProjectLabels && effect.Status == DeliveryStatus.Pending &&
@@ -548,12 +585,43 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         return state;
     }
 
+    public RepositoryState RecordRequiredStatusBoundary(RepositoryState input, string id, RequiredStatusBoundary boundary)
+    {
+        ValidateState(input);
+        var state = StateJson.Clone(input);
+        var intent = state.Outbox[id];
+        var issue = state.Issues[intent.IssueNumber];
+        if (intent.Kind != EffectKind.PublishRequiredStatus || intent.Status != DeliveryStatus.Executing ||
+            intent.Generation != issue.Generation || boundary.ActorId <= 0 ||
+            string.IsNullOrWhiteSpace(boundary.ActorLogin) || string.IsNullOrWhiteSpace(boundary.ActorNodeId) ||
+            boundary.ActorType is not ("User" or "Bot") || boundary.PreparedAt == default ||
+            boundary.ExistingStatusIds.Count > MaximumIndexEntries ||
+            boundary.ExistingStatusIds.Any(value => value <= 0) ||
+            boundary.ExistingStatusIds.Distinct().Count() != boundary.ExistingStatusIds.Count ||
+            boundary.StatusId is <= 0)
+            throw new InvalidOperationException("Invalid required-status publication boundary.");
+        if (intent.RequiredStatusBoundary is { } previous)
+        {
+            if (previous.ActorId != boundary.ActorId || previous.ActorLogin != boundary.ActorLogin ||
+                previous.ActorNodeId != boundary.ActorNodeId || previous.ActorType != boundary.ActorType ||
+                previous.PreparedAt != boundary.PreparedAt ||
+                !previous.ExistingStatusIds.SequenceEqual(boundary.ExistingStatusIds) ||
+                previous.StatusId is not null && previous.StatusId != boundary.StatusId)
+                throw new InvalidOperationException("Required-status publication boundary identity changed.");
+        }
+        else if (boundary.StatusId is not null)
+            throw new InvalidOperationException("Status must be prepared before confirmation.");
+        intent.RequiredStatusBoundary = boundary;
+        Touch(state, issue, state.LastEventId);
+        return state;
+    }
+
     private static RepositoryState ChangeEffect(RepositoryState input, string id, Action<EffectIntent> change, EffectOutcome? outcome = null)
     {
         var state = StateJson.Clone(input);
         var effect = state.Outbox[id];
         var issue = state.Issues[effect.IssueNumber];
-        if (outcome is null)
+        if (outcome is null && effect.Kind != EffectKind.PublishRequiredStatus)
         {
             if (state.AdmittedIssue is { } owner && owner != issue.Number)
                 throw new InvalidOperationException("Another issue owns the repository admission.");
@@ -626,7 +694,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         !(message.Actor.Kind == ActorKind.Human && message.Actor.Type == "Bot") &&
         message.Data switch
     {
-        TaskCompleted or TaskStopped => message.Actor.Kind == ActorKind.TaskService,
+        TaskCompleted or TaskPrMapped or TaskStopped or TaskTerminalObserved => message.Actor.Kind == ActorKind.TaskService,
         CiResult or CiStopped => message.Actor.Kind == ActorKind.CiService,
         ReviewResult => message.Actor.Kind == ActorKind.ReviewService,
         _ => message.Actor.Kind == ActorKind.Human
@@ -639,6 +707,36 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         issue.PullRequest ??= pullRequest;
     }
     private static bool IsSha(string? sha) => sha is { Length: 40 or 64 } && sha.All(Uri.IsHexDigit);
+    private static void ResolveEndedTask(RepositoryState state, IssueState issue, OrchestrationEvent message,
+        ResolveTaskTerminal resolution)
+    {
+        var launch = TaskTerminalRecovery.RequireSavedLaunch(state, issue, resolution.TaskId);
+        var task = issue.Tasks[resolution.TaskId];
+        if (message.Actor.Id is not > 0 || message.Actor.Type != "User" ||
+            string.IsNullOrWhiteSpace(resolution.Reason) ||
+            task.TerminalEvidence is not { } record || record.EventId != resolution.EvidenceEventId ||
+            !state.Inbox.TryGetValue(record.EventId, out var saved) ||
+            saved.Status != DeliveryStatus.Succeeded ||
+            saved.Event?.Data is not TaskTerminalObserved observed || observed.TaskId != task.Id ||
+            System.Text.Json.JsonSerializer.Serialize(observed.Evidence, StateJson.Options) !=
+                System.Text.Json.JsonSerializer.Serialize(record.Evidence, StateJson.Options) ||
+            message.OccurredAt < record.Evidence.ObservedAt ||
+            message.OccurredAt - record.Evidence.ObservedAt > TaskTerminalRecovery.MaximumEvidenceAge)
+            throw new InvalidOperationException("Resolution requires fresh, durable task-service evidence and an audit reason.");
+        TaskTerminalRecovery.ValidateEvidence(record.Evidence, state, launch);
+        task.OperatorResolution = new(message.Id, record.EventId, message.Actor, resolution.Reason, message.OccurredAt);
+        task.Status = TaskStatus.Failed;
+        // Retain the original launch receipt and final-head evidence, but never make it eligible for CI.
+        if (launch.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown)
+        {
+            launch.Status = DeliveryStatus.Failed;
+            launch.CompletedAt = message.OccurredAt;
+        }
+        var previousHold = issue.HoldReason;
+        Hold(issue, previousHold ?? "Task tracking ended by an operator; explicit reactivation is required.");
+        issue.Ready = false;
+        CancelPendingWork(state, issue);
+    }
     private static bool CompletedTaskMatches(IssueState issue, string taskId, int round, string sha) =>
         issue.ActiveTaskId == taskId && issue.Tasks.TryGetValue(taskId, out var task) && task.LaunchConfirmed &&
         task.Status == TaskStatus.Completed && task.Round == round && task.FinalSha == sha;
@@ -712,7 +810,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             TaskStatus.AwaitingHeadConfirmation or TaskStatus.Unknown) ||
         issue.Ci is { RunId: not null, Green: null, TerminalStopReason: null } ||
         issue.Review is { ReviewId: not null, Classification: null } ||
-        state.Outbox.Values.Any(e => e.IssueNumber == issue.Number &&
+        state.Outbox.Values.Any(e => e.IssueNumber == issue.Number && e.Kind != EffectKind.PublishRequiredStatus &&
             (e.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown ||
                 e.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus) && e.Status == DeliveryStatus.Pending));
 
@@ -724,7 +822,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
     private static void CancelPendingWork(RepositoryState state, IssueState issue)
     {
         foreach (var effect in state.Outbox.Values.Where(e => e.IssueNumber == issue.Number && e.Status == DeliveryStatus.Pending &&
-                     e.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus)))
+                     e.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus or EffectKind.PublishRequiredStatus)))
         {
             effect.Status = DeliveryStatus.Cancelled;
             if (effect.Kind == EffectKind.LaunchTask && effect.TaskId is { } id && issue.Tasks[id].Status == TaskStatus.Intended)
@@ -749,6 +847,25 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             issue.Feedback[feedbackId] = issue.Feedback[feedbackId] with { PlannedTaskId = id };
         issue.ActiveTaskId = id;
         AddIntent(state, issue, EffectKind.LaunchTask, now, id);
+    }
+    private static void PlanRequiredStatus(RepositoryState state, IssueState issue, DateTimeOffset now)
+    {
+        if (issue.RequiredStatusIntentId is { } previousId && state.Outbox.TryGetValue(previousId, out var previous) &&
+            RequiredStatusPolicy.Matches(state, issue, previous)) return;
+        foreach (var stale in state.Outbox.Values.Where(effect => effect.IssueNumber == issue.Number &&
+                     effect.Kind == EffectKind.PublishRequiredStatus && effect.Status == DeliveryStatus.Pending))
+            stale.Status = DeliveryStatus.Cancelled;
+        EnsureCapacity(state);
+        var intent = new EffectIntent
+        {
+            Id = $"required-status:{issue.Number}:{issue.Generation}:{++issue.RequiredStatusSequence}",
+            Kind = EffectKind.PublishRequiredStatus, IssueNumber = issue.Number, Generation = issue.Generation,
+            TaskId = issue.ActiveTaskId, Round = issue.Round, Sha = issue.HeadSha, CreatedAt = now,
+        };
+        intent.RequiredStatus = RequiredStatusPolicy.ForIntent(state, issue, intent.Id);
+        intent.Digest = StateJson.Digest(System.Text.Json.JsonSerializer.Serialize(intent, StateJson.Options));
+        state.Outbox.Add(intent.Id, intent);
+        issue.RequiredStatusIntentId = intent.Id;
     }
     private static EffectIntent AddIntent(RepositoryState state, IssueState issue, EffectKind kind, DateTimeOffset now,
         string? taskId = null, string? idOverride = null, IReadOnlyList<string>? labels = null, string? statusBody = null)

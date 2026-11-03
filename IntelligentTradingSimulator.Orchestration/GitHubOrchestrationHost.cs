@@ -2,17 +2,37 @@ using System.Text.Json;
 
 namespace IntelligentTradingSimulator.Orchestration;
 
-/// <summary>Production composition; read-only preview remains the only exposed CLI mode.</summary>
+/// <summary>Production composition with explicit prerequisite gates; ordinary CLI defaults remain read-only.</summary>
 public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore store, TimeProvider? clock = null)
 {
     private readonly TimeProvider clock = clock ?? TimeProvider.System;
+
+    public async Task<WorkerResult?> ReconcileWakeAsync(JsonElement trustedActionsPayload, string eventName, string runId,
+        GitHubWakeRoute wakeRoute, GitHubWakeApproval wakeApproval, long projectionActorId, string baseBranch,
+        long taskCreatorId, GitHubExecutionApproval? approval = null, WorkerOptions? options = null,
+        ITaskFinalHeadSource? finalHeadSource = null, CancellationToken token = default,
+        GitHubReviewApproval? reviewApproval = null, GitHubCiRoute? ciRoute = null, GitHubCiApproval? ciApproval = null,
+        GitHubStatusPublisher? statusPublisher = null, GitHubRequiredStatusApproval? statusApproval = null)
+    {
+        if (!wakeApproval.AllowsWake || approval?.AllowsTasks != true)
+            throw new InvalidOperationException("Automatic live execution prerequisites are not verified.");
+        var state = (await store.LoadAsync(token)).State;
+        if (!await new GitHubWakeSource(api, wakeRoute).VerifyAsync(trustedActionsPayload, eventName, runId, state, token))
+            return null;
+        if (eventName == "schedule" && !OrchestrationContinuation.IsDue(state, clock.GetUtcNow()) &&
+            !OrchestrationContinuation.HasWork(state) && !OrchestrationContinuation.RequiresObservation(state))
+            return null;
+        return await RunVerifiedAsync(null, projectionActorId, baseBranch, taskCreatorId, approval, options,
+            finalHeadSource, token, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval);
+    }
 
     public async Task<WorkerResult> ReconcileAsync(JsonElement trustedActionsPayload, string eventName, string runId,
         long repositoryGeneration, long issueGeneration, DateTimeOffset occurredAt,
         HashSet<long> projectionActorIds, long projectionActorId, string baseBranch, long taskCreatorId,
         GitHubExecutionApproval? approval = null, WorkerOptions? options = null,
         ITaskFinalHeadSource? finalHeadSource = null, CancellationToken token = default,
-        GitHubReviewApproval? reviewApproval = null, GitHubCiRoute? ciRoute = null, GitHubCiApproval? ciApproval = null)
+        GitHubReviewApproval? reviewApproval = null, GitHubCiRoute? ciRoute = null, GitHubCiApproval? ciApproval = null,
+        GitHubStatusPublisher? statusPublisher = null, GitHubRequiredStatusApproval? statusApproval = null)
     {
         if (approval?.AllowsTasks != true) throw new InvalidOperationException("Live activation prerequisites are not verified.");
         var snapshot = await store.LoadAsync(token);
@@ -21,13 +41,74 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             repositoryGeneration, issueGeneration, occurredAt);
         ValidateGeneration(snapshot.State, IssueNumber(trustedActionsPayload, eventName),
             repositoryGeneration, issueGeneration, message);
+        return await RunVerifiedAsync(message, projectionActorId, baseBranch, taskCreatorId, approval, options,
+            finalHeadSource, token, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval);
+    }
+
+    private async Task<WorkerResult> RunVerifiedAsync(OrchestrationEvent? message,
+        long projectionActorId, string baseBranch, long taskCreatorId, GitHubExecutionApproval approval,
+        WorkerOptions? options, ITaskFinalHeadSource? finalHeadSource, CancellationToken token,
+        GitHubReviewApproval? reviewApproval, GitHubCiRoute? ciRoute, GitHubCiApproval? ciApproval,
+        GitHubStatusPublisher? statusPublisher, GitHubRequiredStatusApproval? statusApproval)
+    {
         var authorization = new VerifiedEvents();
         var tasks = new GitHubTaskAdapter(api, store, baseBranch, taskCreatorId, approval, finalHeadSource);
+        if (message?.Data is HumanClassification classification)
+        {
+            var state = (await store.LoadAsync(token)).State;
+            if (!state.Inbox.ContainsKey(message.Id))
+            {
+                var live = await api.ObserveAsync(state, clock.GetUtcNow(), token);
+                if (!live.Issues.TryGetValue(message.IssueNumber, out var issue) || issue.Closed ||
+                    issue.PullRequest != classification.PullRequest || issue.HeadSha != classification.Sha)
+                    throw new InvalidDataException("Review classification no longer matches the live open head.");
+            }
+        }
+        if (message?.Data is ResolveTaskTerminal resolution)
+        {
+            var snapshot = (await store.LoadAsync(token)).State;
+            if (snapshot.Inbox.GetValueOrDefault(message.Id)?.Event is { Data: ResolveTaskTerminal previous } saved)
+            {
+                if (previous.TaskId != resolution.TaskId || previous.Reason != resolution.Reason ||
+                    saved.Actor != message.Actor || saved.IssueNumber != message.IssueNumber ||
+                    saved.RepositoryGeneration != message.RepositoryGeneration || saved.IssueGeneration != message.IssueGeneration)
+                    throw new InvalidDataException("Replayed terminal resolution changed its command.");
+                message = saved;
+            }
+            else
+            {
+                if (!snapshot.Issues.TryGetValue(message.IssueNumber, out var issue) || issue.ActiveTaskId != resolution.TaskId)
+                    throw new InvalidDataException("Terminal resolution does not match the canonical task.");
+                var observed = await tasks.ReadTerminalEventAsync(snapshot, issue, clock.GetUtcNow(), token);
+                var evidenceId = $"terminal-for:{message.Id}";
+                var terminal = observed with { Id = evidenceId };
+                if (snapshot.Inbox.GetValueOrDefault(evidenceId)?.Event is { Data: TaskTerminalObserved prior } priorEvent)
+                {
+                    var current = (TaskTerminalObserved)observed.Data;
+                    if (prior.TaskId != current.TaskId || prior.Evidence.ResponseDigest != current.Evidence.ResponseDigest ||
+                        observed.OccurredAt - priorEvent.OccurredAt > TaskTerminalRecovery.MaximumEvidenceAge)
+                        throw new InvalidDataException("Terminal evidence changed or expired; a fresh operator decision is required.");
+                    terminal = priorEvent;
+                }
+                authorization.Grant(terminal);
+                await new OrchestrationReconciler(new(authorization)).DispatchAsync(store, terminal, token);
+                message = message with { OccurredAt = observed.OccurredAt,
+                    Data = resolution with { EvidenceEventId = terminal.Id } };
+            }
+        }
+        if (message is not null)
+        {
+            authorization.Grant(message);
+            // Persist a verified command before unrelated service reads can fail or the invocation yields.
+            await new OrchestrationReconciler(new(authorization)).DispatchAsync(store, message, token);
+        }
         var reviews = new GitHubReviewAdapter(api, store, clock, reviewApproval);
         var ci = ciRoute is null ? null : new GitHubCiAdapter(api, store, ciRoute, clock, ciApproval);
         var events = new ProductionEvents(message, api, tasks, reviews, ci, authorization, projectionActorId);
-        var effects = new ProductionEffects(tasks, reviews, ci, new GitHubProjectionAdapter(api, projectionActorId, true));
-        return await new OrchestrationWorker(new OrchestrationReducer(authorization), clock).RunAsync(store, events,
+        var statuses = statusPublisher is null ? null : new GitHubRequiredStatusAdapter(api, store, statusPublisher, statusApproval, clock);
+        var effects = new ProductionEffects(tasks, reviews, ci, statuses, new GitHubProjectionAdapter(api, projectionActorId, true));
+        return await new OrchestrationWorker(new OrchestrationReducer(authorization, statuses is not null &&
+            statusApproval?.AllowsPublication == true), clock).RunAsync(store, events,
             new TaskObservations(tasks, clock), effects, new ReconcileOptions(false, true, true, true),
             options, token);
     }
@@ -111,15 +192,17 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         VerifiedEvents authorization, long projectionActorId) : IWorkerEventSource
     {
         private readonly Dictionary<string, OrchestrationEvent> acceptedObservations = [];
+        private bool reactivationBoundaryPending = command?.Data is Reactivate;
         public async Task<WorkerEventBatch> ReadAsync(RepositoryState state, CancellationToken token)
         {
             var messages = new List<OrchestrationEvent>();
             if (command is not null && !state.Inbox.ContainsKey(command.Id)) messages.Add(command);
-            if (messages.Count > 0 && command!.Data is Reactivate)
+            if (reactivationBoundaryPending)
             {
-                authorization.Grant(command);
+                reactivationBoundaryPending = false;
+                authorization.Grant(command!);
                 // Commit the generation change before reading any feedback for its resulting generation.
-                return new([command], true);
+                return new(messages, true);
             }
             var feedbackState = StateJson.Clone(state);
             if (command?.Data is Ready && !feedbackState.Issues.ContainsKey(command.IssueNumber))
@@ -171,7 +254,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
     }
 
     private sealed class ProductionEffects(GitHubTaskAdapter tasks, GitHubReviewAdapter reviews,
-        GitHubCiAdapter? ci, GitHubProjectionAdapter projections) : IVerifiedAgentEffectAdapter
+        GitHubCiAdapter? ci, GitHubRequiredStatusAdapter? statuses, GitHubProjectionAdapter projections) : IVerifiedAgentEffectAdapter
     {
         public bool AgentEffectsAuthorized => tasks.AgentEffectsAuthorized;
         public Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken token) => intent.Kind switch
@@ -179,8 +262,9 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             EffectKind.LaunchTask => tasks.ExecuteAsync(intent, token),
             EffectKind.RequestReview => reviews.ExecuteAsync(intent, token),
             EffectKind.RunCi when ci is not null => ci.ExecuteAsync(intent, token),
+            EffectKind.PublishRequiredStatus when statuses is not null => statuses.ExecuteAsync(intent, token),
             EffectKind.ProjectLabels or EffectKind.ProjectStatus => projections.ExecuteAsync(intent, token),
-            // Concrete CI correlation is still required. Do not issue speculative dispatches.
+            // Missing adapters/capabilities must never issue speculative effects.
             _ => Task.FromResult(new EffectOutcome(DeliveryStatus.Unknown))
         };
         public Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken token) => intent.Kind switch
@@ -188,6 +272,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             EffectKind.LaunchTask => tasks.ReconcileAsync(intent, token),
             EffectKind.RequestReview => reviews.ReconcileAsync(intent, token),
             EffectKind.RunCi when ci is not null => ci.ReconcileAsync(intent, token),
+            EffectKind.PublishRequiredStatus when statuses is not null => statuses.ReconcileAsync(intent, token),
             EffectKind.ProjectLabels or EffectKind.ProjectStatus => projections.ReconcileAsync(intent, token),
             _ => Task.FromResult(new EffectOutcome(DeliveryStatus.Unknown))
         };

@@ -1532,9 +1532,13 @@ The replacement orchestration component is separate from the trading application
 contract uses **label-controlled initiation**, not a mandatory Start button.
 Implementation/testing approval is not activation approval. The legacy workflow
 remains disabled in GitHub; never restart it for comparison, shadow mode, or rollback.
-The replacement workflow has a literal `if: false` job guard, read-only permissions,
-no secrets, and a dry-run-only entry point. Removing that guard alone is **not**
-a supported activation procedure.
+The replacement workflow retains a literal `if: false` job guard and read-only
+Actions-token permissions. Its production step references a separately approved
+user credential, but cannot run while disabled. Offline/read-only modes remain the
+CLI default; the new `--github-live --execute` path additionally requires explicit
+default-false prerequisite attestations. Removing the workflow guard alone is **not**
+a supported activation procedure. No credential, repository variable or setting
+has been provisioned or changed by this implementation.
 
 ### Ownership and labels
 
@@ -1615,10 +1619,12 @@ repository numeric identity, Actions run event/workflow/actor, current user iden
 collaborator permission, Issue identity and expected workflow generations. The
 notification must originate from the trusted Actions event file; checking a run
 exists does not authenticate arbitrary user-uploaded JSON as that run's original
-payload. The CLI continues to expose preview only. The library's write-capable
+payload. Preview/offline modes remain unchanged. The library's write-capable
 `ReconcileAsync` composition is separate and requires explicit activation, user-token,
 task-API/entitlement and no-added-charge attestations. All default to false; no
-workflow or CLI switch enables them.
+ordinary dry-run switch enables them. The explicit production entry point reads
+attestations only from the trusted runner environment and verifies the credential
+actor through `/user`; fixture files cannot supply production authorization.
 
 The CLI adds an explicitly read-only mode while preserving existing offline fixtures:
 
@@ -1741,7 +1747,8 @@ but **CI effects return unknown without a configured, separately approved route*
 producing an explicit hold. The disabled managed route is described below.
 Review requests have their own default-false approval gates and
 the conservative integration below. This is not a finished coding/CI/review deployment. CLI, replacement
-workflow activation and production wake-up delivery are unchanged and disabled.
+workflow activation remains disabled. Scheduled/event continuation wiring is
+described below and does not establish a lossless-delivery guarantee.
 
 `GitHubTaskIntegrationTests` uses mocked REST responses for approved/disabled host
 invocations, launch deduplication/replay, coding-only sequencing, session/artifact/PR
@@ -1820,9 +1827,8 @@ polling without preventing shared closure/head reconciliation. Full automatic
 approval/repair remains blocked pending either a supported trustworthy round and
 classification contract or authorized human classification. CLI and workflow
 execution remain disabled; this library wiring cannot resolve the separate
-task-final-SHA blocker. Required-check publication, managed intermediate-push
-routing and cross-invocation wake-up delivery still require implementation,
-not merely activation.
+task-final-SHA blocker. Required-status publication, guarded push routing and
+cross-invocation wake-up wiring are implemented below, still default-disabled.
 
 #### Managed exact-SHA CI implementation (disabled)
 
@@ -1882,27 +1888,165 @@ responses/receipt writes; saved-run recovery; replay; successful and repair resu
 and cancelled, stale or contradictory evidence. Completed tasks in these fixtures
 are **not production completion-SHA evidence**.
 
-This is dispatch/result integration, **not complete CI/check routing**. Actions
-publishes this run on the definition SHA. A separately trusted, intent-bound
-required-check publisher on the tested PR SHA still needs implementation and
-offline tests; branch protection is unchanged. Ordinary CI remains unchanged,
-including its intermediate PR-push behavior. Managed/unmanaged trigger policy and
-durable cross-invocation wake-up/continuation delivery remain implementable work,
-not external capability blockers or features obtained by enabling this workflow.
-The bounded host can consume a saved run on a subsequent invocation, but no
-production wake-up source currently delivers that invocation. Final task-SHA
-evidence, uncertain-task terminal reconciliation and account prerequisites remain
-as documented separately.
+Actions still publishes the isolated run on the definition SHA. The separate
+trusted required-status publisher below targets the tested PR SHA; branch
+protection is unchanged. Final task-SHA evidence and account prerequisites remain
+external blockers, not capabilities supplied by these CI fixtures.
 
-Uncertain-task terminal recovery is not completed by the CI terminal-stop path.
-Task GET can validate a **saved** task identity/status, but the current reducer
-deliberately retains an active/unknown task and admission after `TaskStopped`.
-A verified terminal-session reconciliation and authorized operator decision path
-still need implementation/tests; status lookup alone currently cannot clear that
-hold. When launch returned no saved task ID, the documented creation API provides
-neither a caller idempotency key nor a unique intent lookup: maintainer-supplied,
-independently verified operation identity is required before terminal resolution.
-Do not deactivate/recreate or edit canonical JSON to guess that no task exists.
+#### Durable continuation and production command routing (disabled)
+
+`OrchestrationContinuation` stores one canonical repository-generation ticket
+before a leased invocation reads services or executes effects. An unfinished
+invocation keeps the ticket and admission/task/round/outbox identities; clean
+settlement retires it. A failed cleanup leaves the ticket and lease expiry for
+recovery. Verified human commands are committed before unrelated service reads,
+so a service failure cannot lose an already-verified ready/pause/reactivation.
+Ticket expiry/due time is not task completion or permission to recreate an effect.
+
+The disabled replacement workflow defines periodic `schedule`, exact managed
+`workflow_run` completion, PR synchronization/closure, ordinary feedback and review
+submission wakes. `GitHubWakeSource` checks repository/run/workflow/event and the
+approved immutable code revision; an upstream CI wake must refer to a saved run.
+These wakes only request fresh API observations. Payload heads, status conclusions,
+review text, actor labels and comment content never become synthetic completion
+or approval events. The leased shared host re-fetches feedback before downstream
+effects, performs lookup-only recovery, and automatically continues eligible work.
+Duplicate wakes cannot bypass admission or execute the same prepared intent twice.
+
+The production job checks out only `ORCHESTRATION_DEFINITION_SHA`, never PR code,
+and exposes the user credential only to the trusted reconciler step. Its Actions
+token remains read-only. No downloaded PR artifacts/caches are executed. The
+live CLI verifies `/user`, the current workflow definition SHA and canonical
+generations. Stable API run timestamps and saved events handle replay; recovery
+inputs require explicit expected repository/Issue generations. All library effects,
+status publication and the live CLI have default-false activation/policy/cost gates.
+
+[GitHub's event contract](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)
+requires the workflow on the default branch; schedules may be delayed/dropped,
+and public-repository schedules may be disabled after 60 inactive days. The
+15-minute off-hour schedule redelivers canonical pending work, not a guaranteed
+timer or lossless event inbox. `workflow_run` chains have a three-level limit;
+periodic reconciliation does not depend on indefinite chained dispatches. No
+self-dispatch API is used, so a lost dispatch acknowledgement cannot create an
+unbounded wake-up storm. Monitor the oldest pending ticket, worker lease expiry,
+workflow drift and disabled schedules. Exceptional authorized Resume remains the
+recovery path when GitHub cannot deliver wakes; it cannot clear holds.
+
+#### Authorized lookup-only terminal task recovery
+
+`resolve-task` requires the canonical local task ID, reason and expected
+generations, an API-verified human with write permission, and a saved external
+launch receipt. `ReadTerminalEventAsync` fetches only that task and validates its
+creator/repository, complete unique session list, ended states and timestamps.
+The host durably records that evidence, then references its exact event ID in the
+authorized operator command. Fresh evidence expires after five minutes.
+Replayed committed resolution uses its saved command/evidence before another
+lookup, including after an interrupted response. No launch or speculative search
+is performed.
+
+Resolution marks local tracking **Failed, never Completed**. Receipts, parent/round,
+blocker and response obligations, feedback, evidence and human holds survive.
+Admission releases only without another unfinished task/CI/review/effect. Explicit
+human Reactivate is still required for a new generation. Missing saved task IDs,
+active/waiting sessions, incomplete/contradictory evidence or failed lookup remain
+blocked. No edit to canonical JSON or absence from a search can resolve them.
+
+The preview API establishes an **ended-session snapshot**, not irreversible remote
+termination. Operator resolution acknowledges this limitation; before reactivation,
+the maintainer must confirm the remote operation is quiescent and prevent manual
+resumption of its old sessions. This is not final-commit evidence and never opens
+CI. Missing launch receipts still require an independently verified operation
+identity/capability or an explicitly approved design decision; the API has no
+caller-intent idempotency/search contract.
+
+#### Explicit review classification
+
+`classify-review` uses the same authorized ingress and live open-head checks.
+The operator supplies the exact handoff, PR, round, SHA, reason and explicit
+`accepted`/`blocking`/`needs-human` decision, plus bounded JSON arrays of stable
+findings and finding-specific responses where needed. The reducer validates
+current-round obligations; empty prose, old responses or a manual stage-label edit
+cannot clear a blocker. A committed command can replay without reclassifying or
+launching another repair. REST output stays human-gated; this command is not an
+automated classifier and does not assert provider request-round correlation.
+
+#### Required tested-head status and managed push routing
+
+`GitHubRequiredStatusAdapter` publishes the separate `Agent managed CI` commit
+status on the **tested PR SHA**, using the documented REST status create/list
+contracts. Its immutable outbox intent binds Issue generation, task, round, head,
+CI intent/run and payload. A CAS boundary records verified publisher identity and
+pre-existing status IDs before POST; the response is saved before outcome publication.
+Read-back checks the exact commit/repository, creator, context, payload, time and
+intent-correlated target URL. Lost acknowledgement recovery is lookup-only against
+that boundary/receipt; ambiguous or absent evidence never repeats a success create.
+
+Green reflects eligible exact-head CI in `REVIEW_PENDING`, or the same eligible
+head after explicit accepted review in `HUMAN_REVIEW`. Before task completion/CI it
+is pending; failures, human holds, feedback and stale heads cannot advertise current
+success. Review classification and **human final approval remain separate gates**:
+a green CI status is never review acceptance or permission for automatic merge.
+New pushes update the observed canonical head while retaining the old task-final,
+CI and review identities. An untracked completed-head change stops automation;
+it does not infer task completion or dispatch replacement CI.
+
+The planner publishes a new guarded status when canonical eligibility changes.
+Non-success revocation can execute despite a human hold or admission held by a
+different Issue. Status uncertainty remains a human hold for its Issue, not
+permission to repeat a create or release an active task. Status APIs are not atomic
+with Git state, head pushes or feedback: a late upstream write can race correction.
+An unresolvable status create or conflicting writer requires human inspection/
+correction of the GitHub context before reactivation; canonical state never promotes
+from a remote status. No exactly-once or atomic branch-protection guarantee is claimed.
+
+At cutover the maintainer must require `Agent managed CI` independently of the
+ordinary Actions `Build and test` check, retain human review approval, and verify
+trusted publisher permissions/provenance. A context name alone does not enforce
+the expected REST creator; other permitted writers must not spoof it. These
+repository/credential settings remain unmodified and unverified.
+
+The ordinary CI workflow's new read-only route is disabled unless explicitly
+approved. It checks out only the reviewed orchestration revision, not PR code,
+before reading canonical state with a read-only Actions token. The command verifies
+numeric repository/PR identities and independently fetches the live head; labels
+and webhook head alone never establish ownership. Verified owned intermediate
+pushes and completed-head drift defer ordinary full CI to the managed completion
+gate/reconciliation; canonical head lag does not cause intermediate full CI.
+Unmanaged PRs, forks and manual/default-branch runs preserve ordinary CI. Missing
+canonical state or failed approved routing must stop rather than guess ownership.
+Skipped ordinary build jobs are not managed green proof; only the exact saved
+managed run can authorize lifecycle progress.
+
+#### Activation checklist (not performed)
+
+- Keep both literal-false workflow guards and legacy disablement until separately
+  approved cutover; rollback disables effects, not the legacy orchestrator.
+- Bootstrap/protect `agent-state`; review the initial canonical state. Never
+  reconstruct a missing branch from labels or auto-create it in the live CLI.
+- Verify the documented task user-token/plan permissions and no-added-charge
+  enforcement for AI and Actions. The live CLI's verified user-token actor is also
+  its projection actor, whose label events are ignored. Use an **already eligible**
+  distinct automation identity while other authorized humans issue label commands;
+  no additional account/seat/plan purchase is authorized. If that identity cannot
+  be provided at zero additional charge, leave this composition blocked and obtain
+  a separately approved credential-separation design instead.
+- Verify/pin the orchestration workflow/code SHA and immutably protect the CI
+  definition tag against update/deletion/bypass. Workflow drift fails closed.
+- Provision the approved user credential only in the trusted runner step.
+  `GitHubLiveSettings` requires activation, user-token, task-entitlement, cost,
+  trusted-definition, trusted-status-publisher and required-context attestations
+  before any live path; review and CI have their own additional default-false gates.
+  Attestation values are maintainer decisions, not capabilities established by code.
+- Require the dedicated managed status plus independent human approvals before
+  approving managed ordinary-CI routing. Verify unmanaged/manual compatibility.
+- Obtain a documented authoritative task/session-bound final commit source, or
+  explicitly approve a separate requirement/design change. The live CLI supplies
+  **no** such source and therefore stops completed REST tasks before CI.
+- Keep ambiguous review output human-gated. Use exact handoff classification
+  inputs, not a separately billed or guessed prose classifier.
+- Validate oldest continuation-ticket monitoring, expired leases, dropped/disabled
+  schedules and exceptional Resume; do not interpret wake delivery as lifecycle
+  evidence or assume every transient/edited/deleted event was captured.
 
 #### Verified API contracts versus activation prerequisites
 
@@ -1917,7 +2061,9 @@ this account's access, credentials, entitlements, policy or spending configurati
 | Review request | [Requested reviewers REST](https://docs.github.com/en/rest/pulls/review-requests#request-reviewers-for-a-pull-request) and [Copilot review guide](https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/copilot-code-review) document `copilot-pull-request-reviewer[bot]`. Gated request/boundary/receipt and lookup-only recovery are implemented. | Response is a PR, not a review-job ID. Verify repository policy/auth, automatic-review settings and account billing. Missing confirmed receipts remain uncertain; no speculative retry. |
 | Review result | [PR reviews/comments](https://docs.github.com/en/rest/pulls/reviews) expose actor, `commit_id`, review ID and comments; bounded validated raw capture is implemented. | No request-round token or dependable prose classifier; captured output is `needs-human`, never guessed promotion/repair. Authorized classification or independently verified provider evidence is required. |
 | Lost mutation response | Neither task launch nor review request documents a caller-supplied idempotency key or exactly-once creation. | Persist intent before call; retain returned identity; if no unique operation can be established, hold for human reconciliation, never repeat a speculative create. |
-| CI | [Workflow dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event), [runs](https://docs.github.com/en/rest/actions/workflow-runs) and [jobs](https://docs.github.com/en/rest/actions/workflow-jobs) contracts; gated dispatch/receipt/result adapter and literal-disabled exact-SHA workflow implemented offline. | Required checks on tested SHA, managed intermediate-push policy and wake-ups remain work. Verify Actions credential permissions, immutable trusted tag/revision and no-added-charge enforcement; obtain authoritative completed-task SHA. Existing CI is unchanged. |
+| CI/status | [Workflow dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event), [runs](https://docs.github.com/en/rest/actions/workflow-runs), [jobs](https://docs.github.com/en/rest/actions/workflow-jobs) and [commit statuses](https://docs.github.com/en/rest/commits/statuses) contracts; gated adapters, exact tested-head status, disabled exact-SHA workflow and default-disabled managed push routing. | Verify credential/publisher/context policy, immutable trusted tag/revision and no-added-charge enforcement; obtain authoritative completed-task SHA. No branch protection or workflow activation changed. |
+| Continuation | Documented default-branch schedule/workflow-run/comment/PR wakes; durable canonical ticket and leased shared host, disabled workflow wiring. | GitHub may drop/delay schedules or disable inactive public schedules; monitor and use exceptional guarded Resume. Trusted definition/default-branch placement and account cost controls require maintainer verification. No lossless SLA. |
+| Operator recovery | Saved task GET/session snapshot plus authorized `resolve-task`; local tracking ends Failed, with durable evidence and replay. `classify-review` references exact current handoff/head/round. | Task API does not promise irreversible remote termination. Verify quiescence before Reactivate; missing saved launch ID remains unresolved without an authoritative operation identity/design decision. No completion-SHA inference. |
 | Charges | [Organization billing](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing), [budgets](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/budgets), and [review pricing](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing) describe paid usage and review attribution. | Maintainer/admin must verify existing entitlement, attribution, disable paid overages, and enforce stop-usage controls for AI and Actions. Alerts alone are not caps; public Actions compute does not establish free AI use. No per-operation included-only billing field was established. |
 
 #### #213 acceptance evidence and remaining gaps
@@ -1928,24 +2074,24 @@ refer to `IntelligentTradingSimulator.Tests/Orchestration`.
 
 | # / requirement | Implemented evidence | Outstanding / blocked |
 | --- | --- | --- |
-| 1 Legal/illegal transitions and invariants | `OrchestrationCoreTests`, shared reducer | Exhaustive coverage is not claimed; extend with each production contract. |
-| 2 Actual handlers, replay/reorder/concurrency and boundaries | `GitHubActionsIngressTests`, `GitHubHostIntegrationTests`, `GitHubTaskIntegrationTests`, `GitHubReviewIntegrationTests`, `GitHubCiIntegrationTests`, worker/persistence tests | Exhaustive production boundary matrices remain. |
-| 3 Crash after every intent/effect | Persistence/worker crash and CAS tests; task/projection recovery; review and CI boundary/POST/receipt/outcome failure tests | Not yet every production API boundary; no exactly-once upstream guarantee. |
-| 4 Exact effect counts and preserved holds | Worker/core/task/projection tests; review/CI single-POST, saved-receipt, concurrent execution and unknown-response recovery | Extend to check publication/wake-up boundaries; no speculative retry. |
-| 5 Coding-before-exact-SHA CI | Worker initial-unmapped/completion-mismatch and duplicate-Resume tests; reducer and concrete CI completed-task guards; disabled workflow exact checkout/verification | Verified production task-final-head source and required-check publication remain unavailable/unwired respectively. |
-| 6 Green CI/review and two repair cycles | Worker two-repair loops; CI HTTP/shared-worker green and same-round child repair cases | Offline evidence only; production completion-SHA and autonomous review classification remain blocked. |
-| 7 Stale CI/head checks and unmanaged compatibility | Core task/round/SHA/head-change tests | Required checks on tested SHA and managed/unmanaged workflow routing remain. |
-| 8 Feedback precedence and distinct identical events | Core/command tests; worker paged-input priority; API-authorized ordinary feedback with distinct/edit replay and before/during-task tests | Exhaustive concurrent feedback/service boundary matrices remain. No lossless arbitrary history promised. |
-| 9 Productive rounds/no-progress stop | Core multi-round/evidence/reopened-blocker tests; review API output conservatively captured as needs-human without blocker inference | Production autonomous round correlation/classification still lacks provider evidence; authorized human classification required. |
-| 10 Closure/reopen/reactivation | Core and command tests; live REST merge/closure; branch/pull-node artifact checks reject closed PRs; canonical saved-task lookup preserves holds | Verified manual uncertain-task terminal resolution and wider HTTP closure matrix remain. |
-| 11 Operations documentation | This runbook: state, ownership, failure, migration/rollback and recovery | Cutover runbook must be revalidated against final host/routing before approval. |
-| 12 Human final approval/no auto-merge | `HUMAN_REVIEW` reducer terminal gate; no merge effect/API | Preserve at activation. |
-| 13 Label-controlled start/queue, guarded recovery | Ingress/core/worker tests; API-verified preview and gated write host with replay tests | Live notification ingestion remains disabled; no normal manual Start introduced. |
-| 14 Automatic stages/labels/continuation | Shared bounded worker; task/label/status adapter and gated write-host HTTP tests | Production workflow activation, wake-ups and persisted continuation delivery remain disabled/unimplemented. Resume stays exceptional recovery, not a normal stage button. |
-| 15 Shared C# decision path/real response shapes | Worker/reconciler/reducer; REST/Git/task/feedback/GraphQL fixtures; review acknowledgement/output and CI dispatch/run/job/step fixtures | Live contract/account capability is not established by fakes; check publisher/wake-ups remain unwired. |
-| 16 Repository admission/queue | Core/persistence/worker concurrent admission tests | Verify production ingress/continuation races once wired. |
-| 17 Reviewer behavior/needs-human | Concrete gated review request/result adapter; API output captured as needs-human with raw evidence and durable handoff; shared-worker replay/feedback tests | Autonomous round correlation/approval/blocker semantics unavailable; account prerequisites and live readiness remain unverified. |
-| 18 Comment replay and preserved recovery state | Durable `ProjectStatus`, owned-comment HTTP tests, lost-create worker-ledger recovery | Live status wiring and remote tamper/deletion monitoring are not enabled. |
+| 1 Legal/illegal transitions and invariants | `OrchestrationCoreTests`; terminal-evidence/operator and required-status reducer guards | Offline proof; exhaustive possible upstream failures not claimed. |
+| 2 Actual handlers/replay/reorder/concurrency | Ingress/Host/task/review/CI HTTP suites; `SharedHostLifecycleIntegrationTests`, status/routing/continuation and operator Host tests | Live account/contracts and activation remain unverified; transient unobserved events are not lossless. |
+| 3 Intent/effect crash boundaries | Persistence/worker CAS; task/review/CI/status boundary/POST/receipt/outcome failures; ticket-before-work and stable operator evidence replay | No exactly-once upstream guarantee; lost task/review IDs remain human-blocked. |
+| 4 Exact counts/preserved holds | Single-create/concurrent/recovery tests; duplicate wakes keep one launch; operator replay never looks up/relaunches committed resolution | Unknown projection writes require context inspection; no speculative retries. |
+| 5 Coding before exact-SHA CI | Concrete completed-task guards; task REST missing-evidence regression; Host lifecycle missing-finalSHA block; disabled exact checkout/verification | **Authoritative production final-task-SHA source unavailable.** Fixtures are not production evidence. |
+| 6 Green/review and two repair cycles | Worker multi-repair loops; actual Host task→CI→review→classification→status and repair coverage | Autonomous review correlation/classification unavailable; explicit human classification supported. |
+| 7 Stale heads/checks/unmanaged compatibility | Exact tested-head status and run/step tests; head/feedback revocation; `ManagedPushRoutingTests`; default-disabled trusted CI router | Publisher/required-context/human-approval policy must be verified at cutover; no settings changed. |
+| 8 Feedback priority/distinct identical events | Paged worker, authorized distinct/edit feedback tests; HumanReview feedback ingestion and current-status revocation | No recovery of revisions deleted before observation; API/capture uncertainty escalates. |
+| 9 Productive rounds/no-progress stop | Finding-specific/reintroduced-blocker core tests; Host classification cannot erase unresolved evidence | Provider request-round proof unavailable; humans classify exact handoff, never guessed prose. |
+| 10 Closure/reopen/reactivation | Core/REST closure checks; verified ended-session/operator evidence with release/no-release/replay tests; human holds remain | Snapshot is not irreversible task termination; missing launch ID requires external identity/design decision. |
+| 11 Operations documentation | This runbook: trust/cost/cutover/rollback, continuation monitoring, status provenance and operator procedures | Maintainer must verify account/prerequisites and approve activation separately. |
+| 12 Human final approval/no auto-merge | Core `HUMAN_REVIEW`; Host classification leaves final approval hold; no merge effect/API | CI status alone is not approval; preserve independent human branch protection. |
+| 13 Label start/queue/guarded recovery | Verified command committed before service reads; ingress/queue/replay tests; live CLI and disabled workflow wiring | Authorized user and distinct already-eligible automation identity/prerequisites unverified. No normal Start button. |
+| 14 Automatic stages/labels/continuation | Leased host, durable ticket, scheduled/event wake verification, bounded automatic polls and status projections | Default-disabled; GitHub schedule delays/drop/inactivity require monitoring and exceptional Resume, not a delivery SLA. |
+| 15 Shared C#/real response shapes | One reducer/reconciler; REST task/session/GraphQL/review/CI/status fixtures, trusted routing/wake adapters and production composition | Public contracts/offline fixtures do not establish this account's eligibility, credentials, spending or final-SHA capability. |
+| 16 Repository admission/queue | Core/CAS/worker concurrent admission; duplicate/expired-lease continuation tests; task recovery retains other unfinished work | Requires protected canonical branch; no paid database/external worker or premature lease release. |
+| 17 Reviewer needs-human | Raw output/handoff capture, explicit authorized live-head classification, unresolved finding regression and status revocation | Autonomous request-round/classification evidence absent; human gating remains intentional. |
+| 18 Comment replay/recovery state | Owned status-comment HTTP tests and lost-create lookup recovery; full host event/status/feedback replay | External tamper/deletion cannot be guaranteed impossible; monitoring and uncertainty holds remain. |
 
 Separate activation approval, canonical branch bootstrap/protection, credential/policy
 verification, and demonstrated zero-additional-charge enforcement remain mandatory.
@@ -1972,9 +2118,9 @@ only, not clearance for a later occurrence of the same blocker. Replaying a hist
 response neither clears a reopened finding nor counts as progress. `NeedsHuman` retains
 unresolved findings under the same rule, and human acceptance cannot bypass it.
 
-Live integration is **not wired by this offline entry point**. Before activation,
-the host must provide trusted observations, authorization, Git credentials and
-supported task/CI/review adapters. The test executor is not a production API.
+Offline/read-only entry points do not enable live integration. The separately gated
+production entry point wires trusted observations, authorization, Git credentials
+and supported task/CI/review/status adapters. The test executor is not a production API.
 In particular:
 
 - Verify Agent Tasks endpoint availability, user-to-server authentication,
@@ -1984,12 +2130,12 @@ In particular:
   are not approval/blocker contracts. Unsupported output is `needs-human`.
   An authorized, round/head-scoped classification decision must be recorded before
   an automatic handoff can resume. Do not add a separately billed classifier.
-- Wire exact-SHA CI only at cutover: trusted workflow definition, checkout of captured
+- Verify exact-SHA CI at cutover: trusted workflow definition, checkout of captured
   SHA with `HEAD` verification, durable dispatch/run correlation, checks against that
   tested head, and no credentials in PR-code test jobs. Gate managed intermediate
-  push CI without changing unrelated/manual PR behavior. Existing CI is intentionally
-  unchanged until this routing and check identity are verified.
-- Wire bounded task/run observations and supported wake-ups to the same worker.
+  push CI without changing unrelated/manual PR behavior. The new route remains
+  disabled until its dedicated status and trusted code identity are verified.
+- Verify bounded task/run observations and supported wakes through the same worker.
   Persist before yielding. Manual **Resume** is exceptional recovery, not normal Start
   or a per-stage action. It cannot reset rounds/retry history, clear a hold or duplicate
   pending effects. Pause/reactivation are distinct authorized decisions with reasons.

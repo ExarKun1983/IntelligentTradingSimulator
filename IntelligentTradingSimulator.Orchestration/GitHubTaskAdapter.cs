@@ -90,6 +90,114 @@ public sealed class GitHubTaskAdapter(
         return new(DeliveryStatus.Succeeded, ValidateTask(task.RootElement, persisted.ExternalId));
     }
 
+    public async Task<OrchestrationEvent?> ReadMappingEventAsync(RepositoryState state, IssueState issue,
+        CancellationToken token)
+    {
+        if (state.Repository != api.Repository || issue.ActiveTaskId is not { } taskId ||
+            !issue.Tasks.TryGetValue(taskId, out var task) || !task.LaunchConfirmed ||
+            task.Status != TaskStatus.Running || string.IsNullOrWhiteSpace(task.ExternalId))
+            return null;
+        var launch = TaskTerminalRecovery.RequireSavedLaunch(state, issue, taskId);
+        if (launch.Status != DeliveryStatus.Succeeded || launch.ExternalId != task.ExternalId)
+            throw new InvalidDataException("PR mapping requires a confirmed canonical launch receipt.");
+        await api.VerifyRepositoryAsync(token);
+        using var response = await api.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(task.ExternalId), token);
+        var root = response.RootElement;
+        try
+        {
+            ValidateTask(root, task.ExternalId);
+            var inProgress = root.GetProperty("state").GetString() is "queued" or "in_progress";
+            if (!root.TryGetProperty("artifacts", out var artifacts))
+            {
+                if (inProgress) return null;
+                throw new InvalidDataException("Task artifacts are unavailable.");
+            }
+            var items = artifacts.EnumerateArray().ToList();
+            if (items.Count == 0 && inProgress) return null;
+            if (items.Count > 100) throw new InvalidDataException("Task artifact capacity exceeded.");
+            var branches = items.Where(item => item.GetProperty("provider").GetString() == "github" &&
+                item.GetProperty("type").GetString() == "branch").ToList();
+            var pulls = items.Where(item => item.GetProperty("provider").GetString() == "github" &&
+                item.GetProperty("type").GetString() == "pull").ToList();
+            if (branches.Count > 1 || pulls.Count > 1 || branches.Count + pulls.Count == 0 ||
+                branches.Count + pulls.Count != items.Count)
+                throw new InvalidDataException("Task artifact mapping is incomplete or contradictory.");
+            int number;
+            string? headRef = null;
+            if (branches.Count == 1)
+            {
+                var data = branches[0].GetProperty("data");
+                headRef = data.GetProperty("head_ref").GetString();
+                var baseRef = data.GetProperty("base_ref").GetString();
+                if (string.IsNullOrWhiteSpace(headRef) || baseRef != baseBranch)
+                    throw new InvalidDataException("Task artifact refs do not match the configured repository.");
+                var owner = api.Repository.Split('/')[0];
+                var matches = await api.ListAsync($"pulls?state=open&head={Uri.EscapeDataString(owner + ":" + headRef)}&base={Uri.EscapeDataString(baseRef)}", token);
+                if (matches.Count == 0 && inProgress && pulls.Count == 0) return null;
+                if (matches.Count != 1) throw new InvalidDataException("Task artifact has no unique open PR.");
+                number = matches[0].GetProperty("number").GetInt32();
+                if (pulls.Count == 1 && await api.ResolvePullArtifactAsync(pulls[0].GetProperty("data"), token) != number)
+                    throw new InvalidDataException("Task branch and pull artifacts contradict each other.");
+            }
+            else number = await api.ResolvePullArtifactAsync(pulls[0].GetProperty("data"), token);
+            if (issue.PullRequest is { } mapped && mapped != number)
+                throw new InvalidDataException("Task artifact changed the mapped PR.");
+            using var pull = await api.GetAsync($"pulls/{number}", token);
+            ValidatePull(pull.RootElement, number);
+            if (headRef is not null && pull.RootElement.GetProperty("head").GetProperty("ref").GetString() != headRef)
+                throw new InvalidDataException("Task artifact head does not match the live PR.");
+            var sha = pull.RootElement.GetProperty("head").GetProperty("sha").GetString()!;
+            if (issue.PullRequest == number && issue.HeadSha == sha) return null;
+            var at = root.GetProperty("updated_at").GetDateTimeOffset();
+            return new($"task-pr-mapped:{api.RepositoryId}:{issue.Generation}:{task.ExternalId}:{number}:{sha}:{at:O}",
+                api.Repository, issue.Number, state.Generation, issue.Generation,
+                new("github-task-api", ActorKind.TaskService), at, new TaskPrMapped(taskId, number, sha));
+        }
+        catch (Exception exception) when (exception is InvalidDataException or JsonException or InvalidOperationException or KeyNotFoundException or FormatException)
+        {
+            var at = root.TryGetProperty("updated_at", out var updated) && updated.TryGetDateTimeOffset(out var value)
+                ? value : issue.ReadyAt ?? DateTimeOffset.UnixEpoch;
+            return new($"task-pr-mapping-stopped:{api.RepositoryId}:{issue.Generation}:{task.ExternalId}:{StateJson.Digest(root.GetRawText())}",
+                api.Repository, issue.Number, state.Generation, issue.Generation,
+                new("github-task-api", ActorKind.TaskService), at,
+                new TaskStopped(taskId, "Task PR mapping is unsupported or contradictory; admission retained."));
+        }
+    }
+
+    public async Task<OrchestrationEvent> ReadTerminalEventAsync(RepositoryState state, IssueState issue,
+        DateTimeOffset observedAt, CancellationToken token)
+    {
+        if (state.Repository != api.Repository || issue.ActiveTaskId is not { } taskId || taskCreatorId <= 0)
+            throw new InvalidDataException("Recovery repository or saved task identity is missing.");
+        var launch = TaskTerminalRecovery.RequireSavedLaunch(state, issue, taskId);
+        await api.VerifyRepositoryAsync(token);
+        using var result = await api.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(launch.ExternalId!), token);
+        try
+        {
+            var root = result.RootElement;
+            ValidateTask(root, launch.ExternalId);
+            var sessions = root.GetProperty("sessions").EnumerateArray().Select(session =>
+                new TaskSessionTerminalEvidence(session.GetProperty("id").GetString()!,
+                    session.GetProperty("task_id").GetString()!,
+                    session.GetProperty("repository").GetProperty("id").GetInt64(),
+                    session.GetProperty("state").GetString()!,
+                    session.GetProperty("completed_at").GetDateTimeOffset())).ToList();
+            var evidence = new TaskTerminalEvidence(launch.Id, launch.ExternalId!, api.Repository,
+                api.RepositoryId, taskCreatorId, root.GetProperty("state").GetString()!,
+                root.GetProperty("session_count").GetInt32(), sessions,
+                root.GetProperty("updated_at").GetDateTimeOffset(), observedAt,
+                StateJson.Digest(root.GetRawText()));
+            TaskTerminalRecovery.ValidateEvidence(evidence, state, launch);
+            return new($"task-ended:{api.RepositoryId}:{issue.Generation}:{launch.ExternalId}:{evidence.ResponseDigest}:{observedAt:O}",
+                api.Repository, issue.Number, state.Generation, issue.Generation,
+                new("github-task-api", ActorKind.TaskService), observedAt, new TaskTerminalObserved(taskId, evidence));
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException or KeyNotFoundException or FormatException)
+        {
+            throw new InvalidDataException("Unsupported task recovery response; admission remains blocked.", exception);
+        }
+    }
+
     public async Task<OrchestrationEvent?> ReadEventAsync(RepositoryState state, IssueState issue, CancellationToken token)
     {
         if (state.Repository != api.Repository || issue.ActiveTaskId is not { } taskId ||

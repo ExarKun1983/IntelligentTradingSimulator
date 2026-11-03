@@ -83,7 +83,7 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             }
             if (!enabled) return new(snapshot.State, decision.PendingEffects, true);
 
-            var executing = InFlight(snapshot.State);
+            var executing = InFlight(snapshot.State, includeUncertainStatuses: false);
             if (executing is not null)
             {
                 // Both in-flight and uncertain intents are lookup-only; neither can be executed again.
@@ -95,7 +95,7 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                 effects is IVerifiedAgentEffectAdapter { AgentEffectsAuthorized: true };
             var pending = snapshot.State.Outbox.Values.FirstOrDefault(e => e.Status == DeliveryStatus.Pending &&
                 (e.Kind is not (EffectKind.LaunchTask or EffectKind.RequestReview) || simulateAgents) &&
-                !snapshot.State.Outbox.Values.Any(other => other.Status == DeliveryStatus.Unknown) &&
+                !snapshot.State.Outbox.Values.Any(IsExclusiveUncertain) &&
                 IsSafeToExecute(snapshot.State, e, live));
             if (pending is null) return new(snapshot.State, decision.PendingEffects, false);
             var marked = reducer.MarkExecuting(snapshot.State, pending.Id, live.ObservedAt);
@@ -120,9 +120,14 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
     private static bool EffectsEnabled(ReconcileOptions options) =>
         !options.DryRun && options.LiveEffectsEnabled && options.PrerequisiteCapabilitiesVerified && options.CostApproved;
 
-    private static EffectIntent? InFlight(RepositoryState state) =>
+    public static bool IsExclusiveUncertain(EffectIntent effect) =>
+        effect.Status == DeliveryStatus.Unknown && effect.Kind != EffectKind.PublishRequiredStatus;
+
+    private static EffectIntent? InFlight(RepositoryState state, bool includeUncertainStatuses = true) =>
         state.Outbox.Values.FirstOrDefault(effect => effect.Status == DeliveryStatus.Executing) ??
-        state.Outbox.Values.FirstOrDefault(effect => effect.Status == DeliveryStatus.Unknown);
+        state.Outbox.Values.FirstOrDefault(IsExclusiveUncertain) ??
+        (includeUncertainStatuses ? state.Outbox.Values.FirstOrDefault(effect =>
+            effect.Status == DeliveryStatus.Unknown && effect.Kind == EffectKind.PublishRequiredStatus) : null);
 
     private async Task<RepositoryState> RecoverIntentAsync(IStateStore store, IEffectAdapter effects,
         EffectIntent intent, DateTimeOffset observedAt, int maximumConflicts, CancellationToken cancellationToken)
@@ -162,6 +167,10 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
         var issue = state.Issues[intent.IssueNumber];
         if (intent.Generation != issue.Generation ||
             !observation.Issues.TryGetValue(issue.Number, out var live)) return false;
+        if (intent.Kind == EffectKind.PublishRequiredStatus)
+            return RequiredStatusPolicy.Matches(state, issue, intent) && issue.PullRequest == live.PullRequest &&
+                issue.HeadSha == live.HeadSha &&
+                (intent.RequiredStatus?.State != "success" || !live.Closed);
         if (intent.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus)
             return (state.AdmittedIssue == issue.Number || state.AdmittedIssue is null &&
                     issue.Phase is Phase.HUMAN_REVIEW or Phase.BLOCKED or Phase.CLOSED) &&

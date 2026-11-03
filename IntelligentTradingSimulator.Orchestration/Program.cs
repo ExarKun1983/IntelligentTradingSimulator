@@ -10,6 +10,8 @@ public static class OrchestrationCommand
 
     public static async Task<int> RunAsync(string[] args, TextWriter output, TextWriter error)
     {
+        if (args.Contains("--github-route", StringComparer.Ordinal)) return await GitHubManagedRoutingCommand.RunAsync(args, output, error);
+        if (args.Contains("--github-live", StringComparer.Ordinal)) return await GitHubLiveCommand.RunAsync(args, output, error);
         if (!args.Contains("--github-read-only", StringComparer.Ordinal)) return Run(args, output, error);
         try
         {
@@ -122,7 +124,7 @@ public static class OrchestrationCommand
             return 0;
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or InvalidOperationException
-            or ArgumentException or UnauthorizedAccessException or KeyNotFoundException)
+            or ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FormatException or OverflowException)
         {
             // Do not echo arbitrary payloads, local paths, or exception messages that could contain credentials.
             error.WriteLine($"Orchestration stopped ({exception.GetType().Name}); no live effects are enabled.");

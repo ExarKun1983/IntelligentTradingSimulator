@@ -13,7 +13,7 @@ public sealed class GitHubFeedbackSource(GitHubRepositoryApi api, long? projecti
         foreach (var issue in state.Issues.Values)
         {
             var since = issue.FeedbackSince ?? issue.ReadyAt;
-            if (since is null || issue.Phase is Phase.CLOSED or Phase.HUMAN_REVIEW) continue;
+            if (since is null || issue.Phase == Phase.CLOSED) continue;
             var targets = new[] { issue.Number, issue.PullRequest ?? issue.Number }.Distinct();
             foreach (var target in targets)
             {

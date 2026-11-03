@@ -550,7 +550,7 @@ public sealed class GitHubTaskIntegrationTests
         host.ReconcileAsync(notification, "issues", "44", 1, 1, Now, [], 99, "master", 55,
             ApprovedFixture, options ?? Bounded, new FinalHead());
 
-    private sealed class FinalHead : ITaskFinalHeadSource
+    internal sealed class FinalHead : ITaskFinalHeadSource
     {
         public Task<TaskFinalHeadEvidence?> ReadAsync(string externalTaskId, CancellationToken token) =>
             Task.FromResult<TaskFinalHeadEvidence?>(new(externalTaskId, ["session"], 17, Head));
@@ -570,7 +570,7 @@ public sealed class GitHubTaskIntegrationTests
         public DateTimeOffset UtcNow { get; set; } = Now;
         public override DateTimeOffset GetUtcNow() => UtcNow;
     }
-    private sealed class Store(RepositoryState? initial = null) : IStateStore
+    internal sealed class Store(RepositoryState? initial = null) : IStateStore
     {
         public RepositoryState State { get; private set; } = initial ?? RepositoryState.Create("owner/repo");
         public bool FailWrites { get; set; }
@@ -585,7 +585,7 @@ public sealed class GitHubTaskIntegrationTests
         }
     }
 
-    private sealed class ApiFixture : HttpMessageHandler
+    internal sealed class ApiFixture : HttpMessageHandler
     {
         public List<string> Requests { get; } = [];
         public List<(string Path, string Body)> Writes { get; } = [];

@@ -101,7 +101,7 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                 // Later pages may contain a pause or feedback; do not authorize an effect on a partial inbox.
                 if (batch!.HasMore) continue;
                 if (recovered is not null &&
-                    current.Outbox.Values.Any(effect => effect.Status == DeliveryStatus.Unknown))
+                    current.Outbox.Values.Any(OrchestrationReconciler.IsExclusiveUncertain))
                 {
                     last = new(current, current.Outbox.Values.Where(effect => effect.Status == DeliveryStatus.Pending).ToList(), false);
                     return new(WorkerStopReason.Blocked, iterations, last);
@@ -113,9 +113,9 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                 // Re-fetch live guards after event publication, including after any CAS conflict.
                 last = await reconciler.RunAsync(store, observations, effects, reconcileOptions, token);
                 if (last.EffectsDisabled) return new(WorkerStopReason.EffectsDisabled, iterations, last);
-                if (last.State.Outbox.Values.Any(effect => effect.Status == DeliveryStatus.Unknown))
+                if (last.State.Outbox.Values.Any(OrchestrationReconciler.IsExclusiveUncertain))
                     return new(WorkerStopReason.Blocked, iterations, last);
-                if (!HasAutomaticWork(last.State))
+                if (!OrchestrationContinuation.HasWork(last.State))
                     return new(last.State.Issues.Values.Any(issue => issue.Phase == Phase.BLOCKED)
                         ? WorkerStopReason.Blocked : WorkerStopReason.Settled, iterations, last);
 
@@ -159,34 +159,28 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                     throw new InvalidDataException("Invalid persisted worker lease; reconciliation is required.");
                 if (lease.ExpiresAt > timeProvider.GetUtcNow()) return false;
             }
-            var state = StateJson.Clone(snapshot.State);
+            // Commit recovery responsibility before observations or external effects can begin.
+            var state = OrchestrationContinuation.Prepare(snapshot.State, timeProvider.GetUtcNow(), "Invocation in flight.", true);
             state.WorkerLease = new(owner, expiresAt);
-            state.Version++;
             if (await store.TrySaveAsync(snapshot, state, cancellationToken)) return true;
         }
         throw new InvalidOperationException("Worker lease publication conflict limit exceeded.");
     }
 
-    private static async Task ReleaseLeaseAsync(IStateStore store, string owner,
+    private async Task ReleaseLeaseAsync(IStateStore store, string owner,
         int maximumConflicts, CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt < maximumConflicts; attempt++)
         {
             var snapshot = await store.LoadAsync(cancellationToken);
             if (snapshot.State.WorkerLease?.Owner != owner) return;
-            var state = StateJson.Clone(snapshot.State);
+            var state = OrchestrationContinuation.Prepare(snapshot.State, timeProvider.GetUtcNow(),
+                OrchestrationContinuation.HasWork(snapshot.State) ? "Automatic work remains." : "Invocation settled or human-held.");
             state.WorkerLease = null;
-            state.Version++;
             if (await store.TrySaveAsync(snapshot, state, cancellationToken)) return;
         }
         throw new InvalidOperationException("Worker lease release conflict; wait for its recorded expiry.");
     }
-
-    private static bool HasAutomaticWork(RepositoryState state) =>
-        state.Outbox.Values.Any(effect => effect.Status is DeliveryStatus.Pending or DeliveryStatus.Executing) ||
-        state.Issues.Values.Any(issue => !issue.Paused && !issue.ReactivationRequired &&
-            (issue.Ready || issue.ActiveAuthorized) &&
-            issue.Phase is Phase.READY or Phase.CODING or Phase.CI_PENDING or Phase.REVIEW_PENDING or Phase.FIX_PENDING);
 
     private static bool AwaitingOperationIdentity(RepositoryState state, OrchestrationEvent message)
     {
