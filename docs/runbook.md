@@ -4,15 +4,19 @@ This guide covers the current console application and its SQL Server and Yahoo F
 
 For the connected feature-to-dataset-to-evaluation flow, implemented AI boundaries, safety constraints, and explicitly future roadmap, see the [AI-ready architecture and workflows](../README.md#ai-ready-architecture-and-workflows). The API and command examples below describe today's implementation; selecting the `AI` engine does not load a trained model.
 
-## Paper execution safety and upgrade (#196)
+## Paper execution safety and upgrade (#196, #200)
 
 Paper execution is keyed by the stable identity **`main`**, not strategy ID, portfolio
 name, latest portfolio ID, download revision, process, machine date, or data hash.
 `PaperPortfolioStates` maps that identity to exactly one portfolio (unique in both
-directions), with a durable last-completed-session high-water mark.
+directions), with a durable last-completed-session high-water mark. Unknown-history
+adoption instead starts with an explicit `AdoptionCutoffSession`, audit reference,
+and UTC adoption time; `LastCompletedSession` remains NULL until actual execution.
 `PaperPortfolioExecutions` has a composite primary key `(Identity, SessionDate)`.
 Changing strategy or downloading revised prices never permits replaying a session.
-The application returns `Executed`, `AlreadyExecuted`, or `OlderSession`. Duplicate
+The application returns `Executed`, `AlreadyExecuted`, `OlderSession`, or
+`PreAdoptionSession`. The latter refuses any session at/before an adoption cutoff,
+even after later executions; it does **not** mean that session was executed. Duplicate
 and older requests do not change prices, trailing highs, target baselines, cash,
 positions, trades, or portfolio/position execution snapshots.
 Inside the portfolio guard, a request matching the last completed session returns
@@ -52,7 +56,9 @@ not a force-rerun. An exchange-calendar integration is intentionally out of scop
 
 All HTTP retrieval and analysis occur **before** the portfolio transaction. Analytical
 observation records may repeat, and feature records may be inserted/updated by repeated
-analysis (including a changed strategy); therefore a duplicate *whole command* is
+analysis (including a changed strategy), also on pre-adoption/rejected runs.
+`ObservationRuns`, `ObservationResults`, and `FeatureSnapshots` are analytical
+records, not execution evidence; therefore a duplicate or refused *whole command* is
 not claimed to be write-free. `CollectAndAnalyzeAsync` remains analytical-only and
 does not authorize execution. Backtests retain their existing independent workflow.
 
@@ -79,12 +85,14 @@ does not authorize execution. Backtests retain their existing independent workfl
 Independently verify the chosen portfolio's **last successfully executed market
 session**, using reliable source records/operator evidence. A snapshot timestamp
 alone is *not* session evidence; never infer the session from local/UTC wall-clock
-dates, the current date, prices, or this runbook. If evidence is insufficient, leave
-the application blocked. Reconcile questionable/partial legacy execution separately
+dates, analysis dates, the current date, prices, or this runbook. If evidence is
+insufficient, either leave the application blocked or use the distinct
+**unknown-history adoption** procedure below; do not guess a verified session.
+Reconcile questionable/partial legacy execution separately
 before initializing. Preserve all old portfolios and IDs; select the intended one
 explicitly when there are multiple historical portfolios.
 
-With writers stopped, have an authorized operator fill in the three NULL values
+With writers stopped, have an authorized operator fill in the four NULL values
 below from verified evidence. The script intentionally cannot run as supplied.
 Do not overwrite an existing mapping or lower a high-water mark. The seed marker
 records a verified historical completion; it does not fabricate historical execution
@@ -92,10 +100,15 @@ snapshots or claim to reconstruct all past session identities.
 
 ```sql
 SET XACT_ABORT ON;
+DECLARE @ExpectedDatabase nvarchar(128) = NULL; -- Exact privately verified catalog.
 DECLARE @PortfolioId int = NULL;            -- Explicit, independently verified ID.
 DECLARE @VerifiedLastSession date = NULL;   -- Actual market-session label.
 DECLARE @EvidenceReference nvarchar(400) = NULL; -- Retain evidence in operator audit.
-IF @PortfolioId IS NULL OR @VerifiedLastSession IS NULL
+IF @ExpectedDatabase IS NULL
+   OR @ExpectedDatabase COLLATE Latin1_General_100_BIN2 <> DB_NAME() COLLATE Latin1_General_100_BIN2
+   OR DATALENGTH(@ExpectedDatabase) <> DATALENGTH(DB_NAME())
+    THROW 51013, 'Explicit target database identity does not match.', 1;
+IF @PortfolioId IS NULL OR @PortfolioId <= 0 OR @VerifiedLastSession IS NULL
    OR NULLIF(LTRIM(RTRIM(@EvidenceReference)), N'') IS NULL
     THROW 51010, 'Verified portfolio, last session and audit evidence are required.', 1;
 BEGIN TRANSACTION;
@@ -124,6 +137,134 @@ COMMIT;
 
 Retain the evidence reference, operator, verified session, and before/after counts in
 your operational audit. The application does not deduce this information for you.
+
+### Unknown-history adoption of an existing portfolio
+
+This is an operator-authorized **forward-only boundary**, not a reconstructed last
+execution. It does not assert that the portfolio traded on the cutoff (or on any
+historical date), and creates **no** `PaperPortfolioExecution` rows. All portfolios,
+IDs, positions, trades, balances, and execution snapshots are preserved. No latest
+portfolio is silently selected. Strategy and ongoing simulation configuration stay
+unchanged.
+
+1. Stop **all** paper writers, scheduled jobs, and direct-edit tools. Privately verify
+   the intended server, database, application connection, and operator authorization.
+   Never paste connection strings, credentials, real portfolio IDs, or private audit
+   details into issues or checked-in files.
+2. Take a database backup and verify that it is restorable, preferably by actually
+   restoring to a separately authorized isolated copy. A successful backup command
+   alone is not proof of recovery. Retain the backup and private before-state evidence.
+3. Inventory candidates with read-only queries. Exclude every portfolio referenced by
+   `BacktestRuns`; if several candidates remain, explicitly choose one using private
+   operational evidence, not the greatest ID. Record the selected ID, all-portfolio
+   counts, its cash/starting cash, positions, trades, and both snapshot sets (including
+   their IDs and values). Counts alone cannot prove unchanged contents:
+
+   ```sql
+   SELECT DB_NAME() AS CurrentDatabase; -- Compare privately with the intended catalog.
+   SELECT p.Id, p.Name, p.Cash, p.StartingCash
+   FROM dbo.Portfolios p
+   WHERE NOT EXISTS (SELECT 1 FROM dbo.BacktestRuns b WHERE b.PortfolioId = p.Id)
+   ORDER BY p.Id;
+   SELECT COUNT_BIG(*) AS Portfolios FROM dbo.Portfolios;
+   SELECT COUNT_BIG(*) AS Positions FROM dbo.Positions;
+   SELECT COUNT_BIG(*) AS Trades FROM dbo.Trades;
+   SELECT COUNT_BIG(*) AS PortfolioSnapshots FROM dbo.PortfolioSnapshots;
+   SELECT COUNT_BIG(*) AS PositionSnapshots FROM dbo.PositionSnapshots;
+
+   DECLARE @PortfolioId int = NULL; -- Supply the explicitly selected ID privately.
+   IF @PortfolioId IS NULL OR @PortfolioId <= 0
+       THROW 51030, 'Explicit portfolio selection required.', 1;
+   SELECT * FROM dbo.Portfolios WHERE Id = @PortfolioId;
+   SELECT * FROM dbo.Positions WHERE PortfolioId = @PortfolioId ORDER BY Id;
+   SELECT * FROM dbo.Trades WHERE PortfolioId = @PortfolioId ORDER BY Id;
+   SELECT * FROM dbo.PortfolioSnapshots WHERE PortfolioId = @PortfolioId ORDER BY Id;
+   SELECT * FROM dbo.PositionSnapshots WHERE PortfolioId = @PortfolioId ORDER BY Id;
+   ```
+
+4. Make and record an explicit, conservative operator decision for a **New York
+   market-session label** as cutoff. Never derive it from timestamps, analysis dates,
+   market prices, or the machine date. No historical execution is asserted.
+   **The guarded workflow will never replay the cutoff or any earlier session.**
+   Reconcile any uncertain/partial legacy trades before authorizing future trading;
+   adoption cannot repair them. The audit reference must identify the private decision
+   record explaining that prior session history is unknown and why this boundary was
+   authorized (include operator and approval in that record).
+5. Review and explicitly apply `AddPaperPortfolioAdoption` using the existing authorized
+   migration process, with writers still stopped and the verified backup available.
+   It adds only nullable state columns, a consistency constraint, and the SQL Server
+   procedure below; existing verified mappings remain unchanged. No migration or
+   initialization is run automatically by the application. Then run this sample in
+   the intended database as a standalone command, **not inside another transaction**.
+   All four values are intentionally NULL, so the checked-in sample cannot adopt
+   anything until explicit values are supplied:
+
+   ```sql
+   DECLARE @ExpectedDatabase nvarchar(max) = NULL; -- Exact privately verified catalog; not DB_NAME().
+   DECLARE @PortfolioId int = NULL;                -- Explicit selected non-backtest ID.
+   DECLARE @CutoffSession date = NULL;             -- Operator's NY session boundary.
+   DECLARE @AuditReference nvarchar(max) = NULL;   -- Private unknown-history decision reference, <=1000 characters.
+   EXEC dbo.AdoptPaperPortfolioUnknownHistory
+       @ExpectedDatabase = @ExpectedDatabase,
+       @PortfolioId = @PortfolioId,
+       @CutoffSession = @CutoffSession,
+       @AuditReference = @AuditReference;
+   ```
+
+   The parameterized procedure checks the exact database name, a positive existing
+   portfolio ID, no backtest association, a nonblank audit reference, and a non-NULL
+   cutoff strictly between `0001-01-01` and `9999-12-31`. Malformed date input is refused
+   by SQL Server's typed date parameter. It uses a serializable transaction and takes
+   the exclusive transaction-owned **`PaperPortfolio:main`** application lock before
+   reading mappings or inserting state. All negative lock results fail closed.
+   Cutoff, audit reference, and adoption UTC time are inserted atomically.
+   Every existing mapping for `main` or the selected portfolio is refused, including
+   an identical retry: it never overwrites a verified/adopted mapping, advances or
+   lowers a cutoff, resets data, or inserts a historical completion marker.
+6. Before restarting, run the queries below and repeat the step-3 inventory using the
+   same explicit ID. Compare IDs and row contents as well as counts/balances across
+   **all** portfolios against the retained before-state. The only new row should be
+   the selected `main` mapping: cutoff/reference/time populated, last completed
+   session NULL, and no completion marker. Stop and investigate any difference.
+
+   ```sql
+   SELECT [Identity], PortfolioId, AdoptionCutoffSession, AdoptionAuditReference,
+          AdoptedAtUtc, LastCompletedSession,
+          CASE WHEN AdoptionCutoffSession IS NOT NULL THEN 'Unknown-history adoption'
+               ELSE 'Verified-session / normal initialization' END AS InitializationOrigin
+   FROM dbo.PaperPortfolioStates ORDER BY [Identity];
+   SELECT [Identity], SessionDate, CompletedAtUtc
+   FROM dbo.PaperPortfolioExecutions ORDER BY [Identity], SessionDate;
+   ```
+
+   Adoption provenance remains present even after real completions. A cutoff is never
+   reported as a completed execution. Only restart writers after reconciling the exact
+   intended mapping and unchanged historical data.
+7. The first execution must use the existing complete, valid, fresh session-price
+   policy and a session **strictly after** the cutoff. Verify its NY session label in
+   console output, the same actual `SessionDate` in its one completion marker and
+   `LastCompletedSession`, cash/positions/trades, one new portfolio snapshot, and one
+   position snapshot per remaining position. Verify cash against trade notionals;
+   do not interpret a snapshot UTC timestamp as its market session.
+   Replaying that session returns `AlreadyExecuted`; a later valid session executes
+   once; a session below the completed high-water mark but above the cutoff returns
+   `OlderSession`. Requests at/before cutoff always return `PreAdoptionSession`.
+   All these refusals leave execution state and snapshots unchanged, but pre-guard
+   analytical collection may still write the analytical records described above.
+
+**Recovery:** on an adoption error or cancellation, keep writers stopped and inspect
+durable state with the read-only queries. A rolled-back adoption leaves no mapping,
+so the exact authorized command can safely retry. A lost commit response may mean
+adoption committed: an identical retry is deliberately refused; verify the existing
+ID/cutoff/reference/time and unchanged legacy data rather than overwriting it.
+For execution, a pre-commit failure rolls back portfolio changes and the actual
+completion marker together; retry the same valid session normally. After a lost
+execution commit response, inspect the marker/high-water mark and retry normally:
+a committed execution is suppressed. **Never delete mappings, cutoffs, or completion
+markers to force a rerun.** For an incorrect adoption decision or a required restore,
+stop writers and obtain an approved recovery plan against the verified backup;
+do not lower the boundary or drop the adoption migration. Its downgrade removes the
+adoption provenance and boundary, and is not an operational rollback procedure.
 
 ### Transaction, recovery, and verification
 
@@ -170,7 +311,12 @@ count increases by the remaining position count. Analytical record counts may ch
 Do **not** install SQL Server for this task or point tests at a user/development
 simulation database. On an existing disposable test server, set
 `PAPER_TEST_SQL_CONNECTION` privately to a connection explicitly targeting **master**,
-with permission to create/drop isolated test databases. Then run:
+with permission to create/drop isolated test databases.
+
+Adoption synchronization tests inspect `sys.dm_exec_requests` and require
+permission to observe other sessions: `VIEW SERVER STATE`, or
+`VIEW SERVER PERFORMANCE STATE` on SQL Server 2022 and later.
+Then run:
 
 ```bash
 dotnet test IntelligentTradingSimulator.Tests --configuration Release --filter FullyQualifiedName~PaperExecutionSqlServerTests --verbosity normal
@@ -181,6 +327,11 @@ Non-master input is rejected. Tests cover actual independent-context SQL locking
 (first initialization and existing portfolios, equal and differing dates), database
 uniqueness, an actual negative lock return under contention, every persistence
 boundary, cancellation/rollback/retry, and preservation of IDs during upgrade.
+Adoption tests additionally exercise upgrades from `AddPaperExecutionSafety` with
+legacy data and verified mappings, parameter validation, backtest/conflicting mappings,
+adoption consistency constraints, actual adoption-versus-execution/adoption races
+using independent connections, injected failure/cancellation after adoption insertion,
+and rollback of the first real post-cutoff execution.
 Without that explicit environment variable these tests are reported **skipped**,
 not passed. Offline SQLite tests verify rollback and retry; deterministic session
 tests cover NY/DST boundaries, ambiguity, freshness, and price consistency.

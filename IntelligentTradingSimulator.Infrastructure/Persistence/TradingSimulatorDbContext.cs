@@ -62,6 +62,16 @@ public sealed class TradingSimulatorDbContext : DbContext
         state.HasKey(x => x.Identity);
         state.Property(x => x.Identity).HasMaxLength(100);
         state.Property(x => x.LastCompletedSession).HasColumnType("date");
+        state.Property(x => x.AdoptionCutoffSession).HasColumnType("date");
+        state.Property(x => x.AdoptionAuditReference).HasMaxLength(1000);
+        state.ToTable(t => t.HasCheckConstraint("CK_PaperPortfolioStates_Adoption", """
+            ([AdoptionCutoffSession] IS NULL AND [AdoptionAuditReference] IS NULL AND [AdoptedAtUtc] IS NULL)
+            OR ([AdoptionCutoffSession] IS NOT NULL AND [AdoptionCutoffSession] > '0001-01-01'
+                AND [AdoptionCutoffSession] < '9999-12-31'
+                AND [AdoptionAuditReference] IS NOT NULL AND TRIM([AdoptionAuditReference]) <> ''
+                AND [AdoptedAtUtc] IS NOT NULL
+                AND ([LastCompletedSession] IS NULL OR [LastCompletedSession] > [AdoptionCutoffSession]))
+            """.Replace("\r\n", "\n")));
         state.HasIndex(x => x.PortfolioId).IsUnique();
         state.HasOne(x => x.Portfolio).WithOne().HasForeignKey<PaperPortfolioState>(x => x.PortfolioId)
             .OnDelete(DeleteBehavior.Restrict);
