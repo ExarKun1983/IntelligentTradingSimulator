@@ -117,7 +117,12 @@ public sealed class ReviewIdentity
 
 public sealed record Finding(string Id, string Description, string Evidence);
 public sealed record FindingResponse(string FindingId, string Evidence, bool Resolved);
-public sealed record InboxEntry(string Id, string Digest, DeliveryStatus Status, DateTimeOffset ReceivedAt, DateTimeOffset CompletedAt);
+public sealed record InboxEntry(string Id, string Digest, DeliveryStatus Status, DateTimeOffset ReceivedAt,
+    DateTimeOffset CompletedAt, string? PayloadJson = null)
+{
+    [JsonIgnore]
+    public OrchestrationEvent? Event => PayloadJson is null ? null : StateJson.DeserializeEvent(PayloadJson);
+}
 public sealed record HumanHandoff(string Id, long Generation, string? ReviewId, string? TaskId,
     int Round, string? Sha, string Reason, DateTimeOffset CreatedAt, string? ClassificationEventId = null);
 public sealed record FeedbackRecord(string EventId, string Text, Actor Author, DateTimeOffset OccurredAt,
@@ -246,5 +251,8 @@ public static class StateJson
     public static RepositoryState Deserialize(string json) =>
         JsonSerializer.Deserialize<RepositoryState>(json, Options) ?? throw new InvalidDataException("Missing state.");
     internal static RepositoryState Clone(RepositoryState state) => Deserialize(Serialize(state));
+    internal static string SerializeEvent(OrchestrationEvent message) => JsonSerializer.Serialize(message, EventOptions);
+    internal static OrchestrationEvent DeserializeEvent(string json) =>
+        JsonSerializer.Deserialize<OrchestrationEvent>(json, EventOptions) ?? throw new InvalidDataException("Missing event payload.");
     internal static string Digest(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 }

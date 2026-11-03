@@ -828,6 +828,80 @@ public sealed class OrchestrationCoreTests
         Assert.Throws<ArgumentException>(() => RepositoryState.Create(" "));
     }
 
+    [Fact]
+    public void InboxRetainsFullReadyPauseAndReactivateCommandsAcrossStateRoundTrip()
+    {
+        var reducer = Reducer();
+        var ready = Event(new Ready(), "audit:ready") with
+        {
+            Actor = new Actor("maintainer", ActorKind.Human, 42, "user-node", "User")
+        };
+        var pause = ready with
+        {
+            Id = "audit:pause", Data = new Pause("Operator requested a pause."), OccurredAt = Now.AddMinutes(1)
+        };
+        var reactivate = ready with
+        {
+            Id = "audit:reactivate", Data = new Reactivate("Operator accepted a new generation."),
+            OccurredAt = Now.AddMinutes(2)
+        };
+        var state = reducer.Apply(Empty(), ready);
+        state = reducer.Apply(state, pause);
+        state = reducer.Apply(state, reactivate);
+        var roundTrip = StateJson.Deserialize(StateJson.Serialize(state));
+        Assert.Equal(3, roundTrip.Inbox.Count);
+        foreach (var original in new[] { ready, pause, reactivate })
+        {
+            var entry = roundTrip.Inbox[original.Id];
+            Assert.NotNull(entry.PayloadJson);
+            Assert.Equal(original, entry.Event);
+            Assert.Equal(original.Digest, entry.Digest);
+            Assert.Equal(original.Digest, entry.Event!.Digest);
+            Assert.Equal(original.Actor, entry.Event.Actor);
+            Assert.Equal(original.OccurredAt, entry.Event.OccurredAt);
+            Assert.Equal(1, entry.Event.IssueGeneration);
+        }
+        Assert.Equal(2, roundTrip.Issues[7].Generation);
+        Assert.Equal("Operator requested a pause.", Assert.IsType<Pause>(roundTrip.Inbox[pause.Id].Event!.Data).Reason);
+        Assert.Equal("Operator accepted a new generation.",
+            Assert.IsType<Reactivate>(roundTrip.Inbox[reactivate.Id].Event!.Data).Reason);
+        Assert.Equal(StateJson.Serialize(roundTrip), StateJson.Serialize(reducer.Apply(roundTrip, ready)));
+    }
+
+    [Fact]
+    public void InboxPayloadIsDetachedFromMutableEventListsAndAccessorReturnsDefensiveCopies()
+    {
+        var reducer = Reducer();
+        var state = FinishCi(CompleteTask(Admitted(), 2), true, "audit-green");
+        state = reducer.Reconcile(state, Live(state)).State;
+        state = SucceedEffect(state, EffectKind.RequestReview, "audit-review");
+        var review = state.Issues[7].Review!;
+        var findings = new List<Finding> { new("f", "Original defect", "Original evidence") };
+        var responses = new List<FindingResponse>();
+        var message = Event(new ReviewResult("audit-review", review.TaskId, review.Round, 11, review.Sha,
+            ReviewClassification.Blocking, findings, responses), "audit:review");
+        var originalDigest = message.Digest;
+        state = reducer.Apply(state, message);
+        var originalPayload = state.Inbox[message.Id].PayloadJson;
+        findings[0] = new Finding("f", "Mutated defect", "Mutated evidence");
+        findings.Add(new Finding("injected", "Injected defect", "Injected evidence"));
+        responses.Add(new FindingResponse("f", "Injected resolution", true));
+        var copy = Assert.IsType<ReviewResult>(state.Inbox[message.Id].Event!.Data);
+        Assert.Equal("Original defect", Assert.Single(copy.Findings).Description);
+        Assert.Empty(copy.Responses);
+        copy.Findings.Clear();
+        copy.Responses.Add(new FindingResponse("f", "Accessor mutation", true));
+        var restored = StateJson.Deserialize(StateJson.Serialize(state));
+        var accepted = Assert.IsType<ReviewResult>(restored.Inbox[message.Id].Event!.Data);
+        Assert.Equal("Original defect", Assert.Single(accepted.Findings).Description);
+        Assert.Empty(accepted.Responses);
+        Assert.Equal("Original defect", Assert.Single(restored.Issues[7].Review!.Findings).Description);
+        Assert.Equal(originalPayload, restored.Inbox[message.Id].PayloadJson);
+        Assert.Equal(originalDigest, restored.Inbox[message.Id].Digest);
+        Assert.Equal(originalDigest, restored.Inbox[message.Id].Event!.Digest);
+        Assert.Throws<InvalidOperationException>(() => reducer.Apply(state, message));
+    }
+
     private sealed class TrustedPolicy : IAuthorizationPolicy
     {
         public bool IsAuthorized(OrchestrationEvent message) => message.Actor.Login is

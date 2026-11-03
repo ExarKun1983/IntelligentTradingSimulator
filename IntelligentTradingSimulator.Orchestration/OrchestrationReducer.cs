@@ -8,6 +8,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
     public RepositoryState Apply(RepositoryState input, OrchestrationEvent message)
     {
         ValidateState(input);
+        var payloadJson = StateJson.SerializeEvent(message);
+        message = StateJson.DeserializeEvent(payloadJson);
         if (input.Inbox.TryGetValue(message.Id, out var previous))
         {
             if (previous.Digest != message.Digest) throw new InvalidOperationException("Event ID reused with different content.");
@@ -243,7 +245,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 throw new InvalidOperationException("Unsupported event.");
         }
         Touch(state, issue, message.Id);
-        state.Inbox.Add(message.Id, new(message.Id, message.Digest, DeliveryStatus.Succeeded, message.OccurredAt, message.OccurredAt));
+        state.Inbox.Add(message.Id, new(message.Id, message.Digest, DeliveryStatus.Succeeded,
+            message.OccurredAt, message.OccurredAt, payloadJson));
         ReleaseIfSafe(state, issue);
         return state;
     }
