@@ -54,6 +54,7 @@ gh_dispatch() {
     "pr view")
       local fields
       fields="$(printf '%s\n' "$@" | grep -A1 -- '--json' | tail -1)"
+      echo "pr view $n" >> "$STATE/pr-views.log"
       [ -f "$STATE/pr-$n.json" ] || { echo "no PR $n" >&2; return 1; }
       if [[ "$fields" == *comments* ]]; then
         [ ! -f "$STATE/pr-comments-failure" ] || { echo "simulated PR comments failure" >&2; return 1; }
@@ -238,6 +239,7 @@ check_contains() { # name needle haystack
 }
 
 calls_matching() { grep -c -- "$1" "$STATE/calls.log" || true; }
+pr_views_matching() { grep -c -- "$1" "$STATE/pr-views.log" 2>/dev/null || true; }
 
 # --- task prompt -------------------------------------------------------------------------------------------
 prompt="$(build_task_prompt 39 "Add exit reason tracking" "Issue body" master)"
@@ -503,6 +505,7 @@ jq '. + {closedAt:"2026-10-12T12:50:00Z",mergedAt:null}' "$STATE/pr-145.json" > 
 add_pr 146 "newer open PR" "2026-10-12T13:00:00Z"
 process_pending_terminal_issue 39
 check "closure recovery skips superseded old PRs and releases pending state" "agent:working" "$(labels_of 39)"
+check "terminal recovery does not rescan historical mapped PRs" "0" "$(pr_views_matching 'pr view 145')"
 
 reset_state
 add_issue 39 "$WORKING_LABEL"
