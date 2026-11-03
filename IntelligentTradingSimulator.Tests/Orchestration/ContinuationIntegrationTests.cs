@@ -86,7 +86,6 @@ public sealed class ContinuationIntegrationTests
     [InlineData("schedule")]
     [InlineData("issue_comment")]
     [InlineData("pull_request_target")]
-    [InlineData("pull_request_review")]
     public async Task SupportedWakeUsesTrustedRunNotPayloadProseHeadOrActor(string eventName)
     {
         using var client = new HttpClient(new Handler("", eventName)) { BaseAddress = new("https://api.github.com/") };
@@ -97,6 +96,18 @@ public sealed class ContinuationIntegrationTests
         Assert.Empty(state.Issues);
         Assert.Empty(state.Inbox);
         Assert.Empty(state.Outbox);
+    }
+
+    [Fact]
+    public async Task DirectPrReviewWakeCannotUsePrivilegedDefaultBranchComposition()
+    {
+        var handler = new Handler("", "pull_request_review");
+        using var client = new HttpClient(handler) { BaseAddress = new("https://api.github.com/") };
+        var source = new GitHubWakeSource(new(client, "owner/repo", 1), new(10, Definition));
+        using var payload = JsonDocument.Parse("""{"repository":{"id":1,"full_name":"owner/repo"}}""");
+        await Assert.ThrowsAsync<InvalidDataException>(() => source.VerifyAsync(payload.RootElement,
+            "pull_request_review", "90", RepositoryState.Create("owner/repo"), default));
+        Assert.Equal(0, handler.Requests);
     }
 
     [Fact]

@@ -1771,6 +1771,15 @@ documented trusted completion-SHA source (or approve a separate requirement/desi
 change), plus account access/cost verification—not to populate this source from
 today's head or turn on the workflow. Until then, completion remains blocked.
 
+PR association is now observed **independently of completion** through
+`ReadMappingEventAsync`/`TaskPrMapped`: confirmed task receipt, repository/creator,
+unique branch/pull artifacts and current REST PR identity must agree. The reducer
+records the mapping and observed head without changing task status or FinalSha.
+Missing artifacts during active coding defer mapping; contradictory artifacts
+stop for reconciliation. The host drains newly mapped PR feedback before any
+completion/CI effect. `TaskPrMappingTests` covers replay, disabled/unconfirmed
+mapping, missing/contradictory identities, and in-progress PR mapping with no CI.
+
 #### Review request and result implementation
 
 `GitHubReviewAdapter` implements the documented Copilot requested-reviewer POST
@@ -1904,17 +1913,26 @@ so a service failure cannot lose an already-verified ready/pause/reactivation.
 Ticket expiry/due time is not task completion or permission to recreate an effect.
 
 The disabled replacement workflow defines periodic `schedule`, exact managed
-`workflow_run` completion, PR synchronization/closure, ordinary feedback and review
-submission wakes. `GitHubWakeSource` checks repository/run/workflow/event and the
+`workflow_run` completion, PR synchronization/closure and ordinary feedback wakes.
+Review results use trusted worker/periodic API polling. Direct `pull_request_review`
+wakes are deliberately excluded: their PR merge revision is not the approved
+default-branch workflow definition and must not receive orchestration credentials.
+`GitHubWakeSource` checks repository/run/workflow/event and the
 approved immutable code revision; an upstream CI wake must refer to a saved run.
 These wakes only request fresh API observations. Payload heads, status conclusions,
 review text, actor labels and comment content never become synthetic completion
 or approval events. The leased shared host re-fetches feedback before downstream
 effects, performs lookup-only recovery, and automatically continues eligible work.
 Duplicate wakes cannot bypass admission or execute the same prepared intent twice.
+Scheduled reconciliation also re-observes tracked open PRs/active tasks after
+automatic work settles, including HUMAN_REVIEW. A late feedback/head wake that
+encounters a lease therefore cannot disappear forever when the active worker
+retires its ticket; the next periodic observation still applies status revocation.
 
 The production job checks out only `ORCHESTRATION_DEFINITION_SHA`, never PR code,
-and exposes the user credential only to the trusted reconciler step. Its Actions
+and exposes the user credential only to the trusted reconciler step in the
+`agent-orchestration` environment. The credential must be environment-only, never
+a repository-wide secret accessible to unrelated PR workflows. Its Actions
 token remains read-only. No downloaded PR artifacts/caches are executed. The
 live CLI verifies `/user`, the current workflow definition SHA and canonical
 generations. Stable API run timestamps and saved events handle replay; recovery
@@ -2032,7 +2050,13 @@ managed run can authorize lifecycle progress.
   a separately approved credential-separation design instead.
 - Verify/pin the orchestration workflow/code SHA and immutably protect the CI
   definition tag against update/deletion/bypass. Workflow drift fails closed.
-- Provision the approved user credential only in the trusted runner step.
+- Provision the approved user credential only in the protected `agent-orchestration`
+  environment, with deployment-branch policy restricted to the reviewed default
+  branch. Do not create a repository-level secret of that name or allow PR merge/
+  arbitrary refs to request it. Verify this protection before setting
+  `ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED`; no environment or
+  secret has been provisioned here. Normal automatic wakes do not require per-stage
+  approval clicks; branch policy supplies credential isolation after cutover approval.
   `GitHubLiveSettings` requires activation, user-token, task-entitlement, cost,
   trusted-definition, trusted-status-publisher and required-context attestations
   before any live path; review and CI have their own additional default-false gates.
@@ -2075,10 +2099,10 @@ refer to `IntelligentTradingSimulator.Tests/Orchestration`.
 | # / requirement | Implemented evidence | Outstanding / blocked |
 | --- | --- | --- |
 | 1 Legal/illegal transitions and invariants | `OrchestrationCoreTests`; terminal-evidence/operator and required-status reducer guards | Offline proof; exhaustive possible upstream failures not claimed. |
-| 2 Actual handlers/replay/reorder/concurrency | Ingress/Host/task/review/CI HTTP suites; `SharedHostLifecycleIntegrationTests`, status/routing/continuation and operator Host tests | Live account/contracts and activation remain unverified; transient unobserved events are not lossless. |
+| 2 Actual handlers/replay/reorder/concurrency | Ingress/Host/task/review/CI HTTP suites; `SharedHostLifecycleIntegrationTests`, status/routing/continuation, independent task-PR mapping and operator Host tests | Live account/contracts and activation remain unverified; transient unobserved events are not lossless. |
 | 3 Intent/effect crash boundaries | Persistence/worker CAS; task/review/CI/status boundary/POST/receipt/outcome failures; ticket-before-work and stable operator evidence replay | No exactly-once upstream guarantee; lost task/review IDs remain human-blocked. |
 | 4 Exact counts/preserved holds | Single-create/concurrent/recovery tests; duplicate wakes keep one launch; operator replay never looks up/relaunches committed resolution | Unknown projection writes require context inspection; no speculative retries. |
-| 5 Coding before exact-SHA CI | Concrete completed-task guards; task REST missing-evidence regression; Host lifecycle missing-finalSHA block; disabled exact checkout/verification | **Authoritative production final-task-SHA source unavailable.** Fixtures are not production evidence. |
+| 5 Coding before exact-SHA CI | Concrete completed-task guards; in-progress PR mapping without completion; task REST missing-evidence regression; Host missing-finalSHA block; disabled exact checkout/verification | **Authoritative production final-task-SHA source unavailable.** Fixtures are not production evidence. |
 | 6 Green/review and two repair cycles | Worker multi-repair loops; actual Host task→CI→review→classification→status and repair coverage | Autonomous review correlation/classification unavailable; explicit human classification supported. |
 | 7 Stale heads/checks/unmanaged compatibility | Exact tested-head status and run/step tests; head/feedback revocation; `ManagedPushRoutingTests`; default-disabled trusted CI router | Publisher/required-context/human-approval policy must be verified at cutover; no settings changed. |
 | 8 Feedback priority/distinct identical events | Paged worker, authorized distinct/edit feedback tests; HumanReview feedback ingestion and current-status revocation | No recovery of revisions deleted before observation; API/capture uncertainty escalates. |
@@ -2096,6 +2120,15 @@ refer to `IntelligentTradingSimulator.Tests/Orchestration`.
 Separate activation approval, canonical branch bootstrap/protection, credential/policy
 verification, and demonstrated zero-additional-charge enforcement remain mandatory.
 Neither the legacy workflow nor replacement live execution is enabled by this work.
+
+Consolidated offline validation for this pass: solution restore and Release build
+passed; full suite **1,963 passed, one existing SQL Server skip**; orchestration
+selection **553 passed**; unchanged legacy harness **90 passed, zero failed**.
+Focused cases include the actual hosted lifecycle, task PR mapping before completion,
+status receipt loss/replay, current-head/feedback revocation, contended late feedback
+followed by a scheduled wake, and terminal operator evidence interruption/recovery.
+All API/effect fixtures remain offline. These results do not verify production
+completion-SHA capability, account billing/access, credential protection or activation.
 
 An initial coding task may use the explicit `UnmappedIssue` launch source only when
 both PR and head are absent and no parent task exists. Mapped coding and all repair

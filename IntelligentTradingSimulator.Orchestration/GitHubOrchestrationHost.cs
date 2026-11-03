@@ -210,15 +210,21 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                 {
                     Number = command.IssueNumber, Generation = command.IssueGeneration, FeedbackSince = command.OccurredAt
                 });
+            var mappings = new List<OrchestrationEvent>();
             var completions = new List<OrchestrationEvent>();
             foreach (var issue in state.Issues.Values)
             {
+                var mapping = await tasks.ReadMappingEventAsync(state, issue, token);
+                if (mapping?.Data is TaskPrMapped mapped)
+                    feedbackState.Issues[issue.Number].PullRequest = mapped.PullRequest;
+                if (mapping is not null && !state.Inbox.ContainsKey(mapping.Id)) mappings.Add(mapping);
                 var completion = await tasks.ReadEventAsync(state, issue, token);
                 if (completion?.Data is TaskCompleted completed)
                     feedbackState.Issues[issue.Number].PullRequest = completed.PullRequest;
                 if (completion is not null && !state.Inbox.ContainsKey(completion.Id)) completions.Add(completion);
             }
             // Fetch newly verified PR feedback before applying completion or authorizing downstream effects.
+            messages.AddRange(mappings);
             messages.AddRange(await new GitHubFeedbackSource(api, projectionActorId).ReadAsync(feedbackState, token));
             messages.AddRange(completions);
             if (ci is not null)

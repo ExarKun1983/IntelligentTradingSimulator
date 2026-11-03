@@ -16,7 +16,8 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
         long Identity(string name) => long.TryParse(Required(name), NumberStyles.None, CultureInfo.InvariantCulture,
             out var id) && id > 0 ? id : throw new InvalidDataException("Invalid live identity.");
         var activation = Approved("ORCHESTRATION_ACTIVATION_APPROVED");
-        var credential = Approved("ORCHESTRATION_USER_TOKEN_VERIFIED");
+        var credential = Approved("ORCHESTRATION_USER_TOKEN_VERIFIED") &&
+            Approved("ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED");
         var cost = Approved("ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED");
         var tasks = new GitHubExecutionApproval(activation, credential, Approved("ORCHESTRATION_TASK_ENTITLEMENT_VERIFIED"), cost);
         var wake = new GitHubWakeApproval(activation, credential, Approved("ORCHESTRATION_TRUSTED_DEFINITION_VERIFIED"), cost);

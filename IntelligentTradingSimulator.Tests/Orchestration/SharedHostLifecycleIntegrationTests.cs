@@ -22,6 +22,7 @@ public sealed class SharedHostLifecycleIntegrationTests
     [Theory]
     [InlineData("unchanged")]
     [InlineData("feedback")]
+    [InlineData("scheduled-feedback-contention")]
     [InlineData("head-changed")]
     public async Task SharedHostWakeDrainsTaskCiReviewHumanClassificationAndPublishesOnlyExactSafeStatus(string afterApproval)
     {
@@ -80,9 +81,9 @@ public sealed class SharedHostLifecycleIntegrationTests
         Assert.All(fixture.StatusWrites, write => Assert.Equal("/repos/owner/repo/statuses/" + Head, write));
         Assert.DoesNotContain(fixture.StatusWrites, write => write.EndsWith(Definition));
 
-        if (afterApproval == "feedback")
+        if (afterApproval is "feedback" or "scheduled-feedback-contention")
         {
-            fixture.WakeEvent = "issue_comment";
+            fixture.WakeEvent = afterApproval == "feedback" ? "issue_comment" : "schedule";
             taskApi.Comments.Add(JsonSerializer.SerializeToElement(new
             {
                 id = 200, body = "Human follow-up must revoke eligibility", updated_at = Now.AddMinutes(2),
@@ -93,6 +94,14 @@ public sealed class SharedHostLifecycleIntegrationTests
         {
             fixture.WakeEvent = "pull_request_target";
             taskApi.Corruption = "later-push";
+        }
+        if (afterApproval == "scheduled-feedback-contention")
+        {
+            store.State.WorkerLease = new("another-worker", Now.AddHours(1));
+            Assert.Equal(WorkerStopReason.LeaseHeld, (await Wake(host))!.Reason);
+            Assert.Empty(store.State.Issues[7].PendingFeedbackEventIds);
+            Assert.Equal("success", fixture.Statuses.Last().GetProperty("state").GetString());
+            store.State.WorkerLease = null;
         }
         await Wake(host, fixture.WakeEvent);
         var final = store.State.Issues[7];
@@ -109,7 +118,7 @@ public sealed class SharedHostLifecycleIntegrationTests
         {
             Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
             Assert.True(final.ReactivationRequired);
-            if (afterApproval == "feedback") Assert.Single(final.PendingFeedbackEventIds);
+            if (afterApproval is "feedback" or "scheduled-feedback-contention") Assert.Single(final.PendingFeedbackEventIds);
             else
             {
                 Assert.Equal(Phase.BLOCKED, final.Phase);
@@ -180,6 +189,53 @@ public sealed class SharedHostLifecycleIntegrationTests
         Assert.Equal(0, fixture.ReviewRequests);
         Assert.DoesNotContain(fixture.Statuses, status => status.GetProperty("state").GetString() == "success");
         Assert.Single(taskApi.Writes, write => write.Path.StartsWith("/agents/"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InitialRunningPrMappingDefersIntermediatePushAndReadsPrFeedbackWithoutFinalSha(bool feedbackDuringMapping)
+    {
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
+        using var fixture = new PipelineApi(taskApi);
+        using var client = new HttpClient(fixture) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        var comment = JsonSerializer.SerializeToElement(new
+        {
+            id = 201, body = "Feedback on the new initial task PR", updated_at = Now.AddMinutes(2),
+            user = new { id = 55, login = "maintainer", type = "User" }
+        });
+        if (feedbackDuringMapping) taskApi.PrComments.Add(comment);
+        await host.ReconcileAsync(taskApi.Notification(), "issues", "44", 1, 1, Now, [],
+            99, "master", 55, TaskApproval, Bounded, reviewApproval: ReviewApproval,
+            ciRoute: CiRoute, ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
+        var issue = store.State.Issues[7];
+        Assert.Equal(17, issue.PullRequest);
+        Assert.Equal(Head, issue.HeadSha);
+        Assert.Equal(TaskStatus.Running, Assert.Single(issue.Tasks.Values).Status);
+        Assert.Null(Assert.Single(issue.Tasks.Values).FinalSha);
+        Assert.Equal(feedbackDuringMapping ? Phase.FIX_PENDING : Phase.CODING, issue.Phase);
+        Assert.Single(store.State.Inbox.Values, entry => entry.Event?.Data is TaskPrMapped);
+        Assert.False(ManagedPushRouting.Decide(store.State, new("owner/repo", 17, Head, Head), true).RunFullCi);
+        if (!feedbackDuringMapping) taskApi.PrComments.Add(comment);
+        await host.ReconcileWakeAsync(JsonSerializer.SerializeToElement(new
+            { repository = new { id = 1, full_name = "owner/repo" } }), "schedule", "90",
+            new(10, Definition), new(true, true, true, true), 99, "master", 55, TaskApproval, Bounded,
+            reviewApproval: ReviewApproval, ciRoute: CiRoute, ciApproval: CiApproval,
+            statusPublisher: Publisher, statusApproval: StatusApproval);
+        issue = store.State.Issues[7];
+        var feedback = Assert.Single(issue.Feedback.Values);
+        Assert.Equal(Head, feedback.Sha);
+        Assert.Single(issue.PendingFeedbackEventIds);
+        Assert.Equal(TaskStatus.Running, Assert.Single(issue.Tasks.Values).Status);
+        Assert.Null(Assert.Single(issue.Tasks.Values).FinalSha);
+        Assert.Null(issue.Ci);
+        Assert.Null(issue.Review);
+        Assert.Equal(0, fixture.CiDispatches);
+        Assert.Equal(0, fixture.ReviewRequests);
+        Assert.Single(taskApi.Writes, write => write.Path.StartsWith("/agents/"));
+        Assert.Equal(7, store.State.AdmittedIssue);
     }
 
     [Fact]

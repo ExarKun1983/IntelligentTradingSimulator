@@ -7,8 +7,6 @@ on:
     types: [created, edited, deleted]
   pull_request_target:
     types: [synchronize, closed, reopened]
-  pull_request_review:
-    types: [submitted, edited, dismissed]
   workflow_run:
     workflows: ["Agent managed CI (disabled)"]
     types: [completed]
@@ -82,6 +80,7 @@ jobs:
     if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    environment: agent-orchestration
     steps:
       - name: Require an explicitly reviewed immutable code revision
         env:
@@ -100,6 +99,7 @@ jobs:
           ORCHESTRATION_USER_TOKEN: ${{ secrets.ORCHESTRATION_USER_TOKEN }}
           ORCHESTRATION_ACTIVATION_APPROVED: ${{ vars.ORCHESTRATION_ACTIVATION_APPROVED }}
           ORCHESTRATION_USER_TOKEN_VERIFIED: ${{ vars.ORCHESTRATION_USER_TOKEN_VERIFIED }}
+          ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED: ${{ vars.ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED }}
           ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED: ${{ vars.ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED }}
           ORCHESTRATION_TASK_ENTITLEMENT_VERIFIED: ${{ vars.ORCHESTRATION_TASK_ENTITLEMENT_VERIFIED }}
           ORCHESTRATION_TRUSTED_DEFINITION_VERIFIED: ${{ vars.ORCHESTRATION_TRUSTED_DEFINITION_VERIFIED }}

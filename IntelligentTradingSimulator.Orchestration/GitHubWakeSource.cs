@@ -15,7 +15,7 @@ public sealed class GitHubWakeSource(GitHubRepositoryApi api, GitHubWakeRoute ro
     public async Task<bool> VerifyAsync(JsonElement payload, string eventName, string runId,
         RepositoryState state, CancellationToken token)
     {
-        if (eventName is not ("schedule" or "workflow_run" or "issue_comment" or "pull_request_target" or "pull_request_review") ||
+        if (eventName is not ("schedule" or "workflow_run" or "issue_comment" or "pull_request_target") ||
             route.WorkflowId <= 0 || route.DefinitionSha.Length != 40 || !route.DefinitionSha.All(Uri.IsHexDigit) ||
             state.Repository != api.Repository || !long.TryParse(runId, out var id) || id <= 0 ||
             payload.GetProperty("repository").GetProperty("id").GetInt64() != api.RepositoryId ||

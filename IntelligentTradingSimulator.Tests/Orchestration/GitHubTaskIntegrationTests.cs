@@ -92,7 +92,7 @@ public sealed class GitHubTaskIntegrationTests
         fixture.Corruption = corruption;
         await Run(host, fixture.Notification());
         await Run(host, fixture.Notification());
-        Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
+        Assert.Equal(corruption == "closed-pr" ? Phase.CLOSED : Phase.BLOCKED, store.State.Issues[7].Phase);
         Assert.Equal(7, store.State.AdmittedIssue);
         Assert.Null(store.State.Issues[7].Ci);
         Assert.Null(store.State.Issues[7].Review);
@@ -436,12 +436,14 @@ public sealed class GitHubTaskIntegrationTests
         await Run(host, fixture.Notification());
         fixture.RemoteState = "completed";
         fixture.Corruption = corruption;
-        var result = await Run(host, fixture.Notification());
-
-        Assert.Equal(WorkerStopReason.Blocked, result.Reason);
+        if (corruption == "sha")
+            await Assert.ThrowsAsync<InvalidDataException>(() => Run(host, fixture.Notification()));
+        else
+            Assert.Equal(WorkerStopReason.Blocked, (await Run(host, fixture.Notification())).Reason);
         Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
         Assert.Equal(7, store.State.AdmittedIssue);
         Assert.Null(store.State.Issues[7].Ci);
+        Assert.Null(store.State.Issues[7].Review);
         Assert.Single(fixture.Writes, write => write.Path.StartsWith("/agents/"));
     }
 
