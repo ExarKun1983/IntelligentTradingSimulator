@@ -341,6 +341,84 @@ public sealed class OrchestrationCoreTests
     }
 
     [Fact]
+    public void ReintroducedBlockerCannotUseHistoricalClearanceForAcceptance()
+    {
+        var state = ReintroducedBlocker();
+        var oldEvidence = new FindingResponse("a", "test A now passes", true);
+        Assert.Contains(oldEvidence, state.Issues[7].Review!.Responses);
+        Assert.Throws<InvalidOperationException>(() =>
+            FinishReview(state, ReviewClassification.Accepted, "missing-new-clearance"));
+        Assert.Throws<InvalidOperationException>(() =>
+            FinishReview(state, ReviewClassification.Accepted, "replayed-clearance", responses: [oldEvidence]));
+
+        state = FinishReview(state, ReviewClassification.Accepted, "fresh-clearance",
+            responses: [new("a", "Reintroduced A regression passes at the repaired head.", true)]);
+        Assert.Equal(Phase.HUMAN_REVIEW, state.Issues[7].Phase);
+        Assert.True(state.Issues[7].PendingReviewProgress);
+        Assert.Empty(state.Issues[7].Review!.Findings);
+        Assert.Equal(3, state.Issues[7].Review!.Responses.Count);
+        Assert.Contains(oldEvidence, state.Issues[7].Review!.Responses);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NeedsHumanAndClassificationRetainReintroducedBlockerUntilFreshEvidence(bool replayOldEvidence)
+    {
+        var oldEvidence = new FindingResponse("a", "test A now passes", true);
+        var state = FinishReview(ReintroducedBlocker(), ReviewClassification.NeedsHuman, "ambiguous-reopened",
+            responses: replayOldEvidence ? [oldEvidence] : []);
+        Assert.Equal("a", Assert.Single(state.Issues[7].Review!.Findings).Id);
+        Assert.False(state.Issues[7].PendingReviewProgress);
+        var failures = state.Issues[7].ConsecutiveReviewFailures;
+        var issue = state.Issues[7];
+        var classification = new HumanClassification(issue.CurrentHandoffId!, issue.Round, 11, issue.HeadSha!,
+            ReviewClassification.Accepted, "Classify the current blocker.");
+        Assert.Throws<InvalidOperationException>(() =>
+            Reducer().Apply(state, Event(classification, "missing")));
+        Assert.Throws<InvalidOperationException>(() =>
+            Reducer().Apply(state, Event(classification with { Responses = [oldEvidence] }, "replayed")));
+
+        state = Reducer().Apply(state, Event(classification with
+        {
+            Classification = ReviewClassification.NeedsHuman, Responses = [oldEvidence]
+        }, "still-ambiguous"));
+        Assert.Equal("a", Assert.Single(state.Issues[7].Review!.Findings).Id);
+        Assert.False(state.Issues[7].PendingReviewProgress);
+        Assert.Equal(failures, state.Issues[7].ConsecutiveReviewFailures);
+
+        state = Reducer().Apply(state, Event(classification with
+        {
+            HandoffId = state.Issues[7].CurrentHandoffId!,
+            Responses = [new("a", "Current-head regression confirms reopened A is repaired.", true)]
+        }, "fresh-human-clearance"));
+        Assert.Equal(Phase.HUMAN_REVIEW, state.Issues[7].Phase);
+        Assert.True(state.Issues[7].PendingReviewProgress);
+        Assert.Empty(state.Issues[7].Review!.Findings);
+        Assert.Contains(oldEvidence, state.Issues[7].Review!.Responses);
+    }
+
+    private static RepositoryState ReintroducedBlocker()
+    {
+        var reducer = Reducer();
+        var a = new Finding("a", "Defect A", "Regression A fails.");
+        var b = new Finding("b", "Defect B", "Regression B fails.");
+        var state = FinishCi(CompleteTask(Admitted(), 2), true, "initial-ab");
+        state = FinishReview(state, ReviewClassification.Blocking, "ab", [a, b]);
+        state = reducer.Reconcile(state, Live(state)).State;
+        state = FinishCi(CompleteTask(state, 3), true, "a-repaired");
+        state = FinishReview(state, ReviewClassification.Blocking, "only-b", [b],
+            [new("a", "test A now passes", true)]);
+        state = reducer.Reconcile(state, Live(state)).State;
+        state = FinishCi(CompleteTask(state, 4), true, "b-repaired");
+        state = FinishReview(state, ReviewClassification.Blocking, "a-reopened", [a],
+            [new("b", "test B now passes", true)]);
+        state = reducer.Reconcile(state, Live(state)).State;
+        Assert.Equal("a", Assert.Single(state.Issues[7].Tasks[state.Issues[7].ActiveTaskId!].ReviewBlockers).Id);
+        return FinishCi(CompleteTask(state, 5), true, "reopened-a-repaired");
+    }
+
+    [Fact]
     public void UnstructuredReviewNeedsHumanAndOnlySeparateClassificationCanResumeIt()
     {
         var reducer = Reducer();

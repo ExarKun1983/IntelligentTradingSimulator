@@ -7,6 +7,7 @@ namespace IntelligentTradingSimulator.Orchestration;
 
 public enum Phase { READY, CODING, CI_PENDING, REVIEW_PENDING, FIX_PENDING, HUMAN_REVIEW, BLOCKED, CLOSED }
 public enum TaskKind { Coding, CiRepair, ReviewRepair, FeedbackRepair }
+public enum TaskLaunchSource { PullRequestHead, UnmappedIssue }
 public enum TaskStatus { Intended, Executing, Running, AwaitingHeadConfirmation, Completed, Failed, Unknown }
 public enum EffectKind { LaunchTask, RunCi, RequestReview, ProjectLabels }
 public enum DeliveryStatus { Pending, Executing, Succeeded, Failed, Unknown, Cancelled }
@@ -86,7 +87,8 @@ public sealed class TaskIdentity
     public TaskStatus Status { get; set; }
     public string? ParentTaskId { get; set; }
     public int Round { get; set; }
-    public string SourceSha { get; set; } = "";
+    public TaskLaunchSource LaunchSource { get; set; }
+    public string? SourceSha { get; set; }
     public string? FinalSha { get; set; }
     public bool LaunchConfirmed { get; set; }
     public string? ExternalId { get; set; }

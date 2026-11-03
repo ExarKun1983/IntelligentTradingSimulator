@@ -39,6 +39,72 @@ public sealed class OrchestrationWorkerTests
     }
 
     [Fact]
+    public async Task UnmappedIssueLaunchesOnceAndWaitsForCompletionAndVerifiedFinalMapping()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { NoInitialPullRequest = true, CompleteTasks = false };
+        var bounded = Fast with { MaximumIterations = 3 };
+        await Worker().RunAsync(store, api, api, api, Simulation, bounded);
+        var issue = store.Current.Issues[7];
+        var task = issue.Tasks[issue.ActiveTaskId!];
+        Assert.Single(api.Executions, kind => kind == EffectKind.LaunchTask);
+        Assert.Equal(TaskLaunchSource.UnmappedIssue, task.LaunchSource);
+        Assert.Null(task.SourceSha);
+        Assert.Null(issue.PullRequest);
+        Assert.Null(issue.HeadSha);
+        Assert.True(task.LaunchConfirmed);
+        Assert.NotNull(task.ExternalId);
+
+        api.Backlog.Enqueue(new([
+            new("ready-again", "owner/repo", 7, 1, 1, new("maintainer", ActorKind.Human), Now.AddMinutes(1), new Ready()),
+            new("resume", "owner/repo", 7, 1, 1, new("maintainer", ActorKind.Human), Now.AddMinutes(1), new Resume())
+        ]));
+        await Worker().RunAsync(store, api, api, api, Simulation, bounded);
+        Assert.Single(api.Executions, kind => kind == EffectKind.LaunchTask);
+        Assert.Single(store.Current.Issues[7].Tasks);
+        Assert.Equal(7, store.Current.AdmittedIssue);
+        Assert.Equal(Phase.CODING, store.Current.Issues[7].Phase);
+        Assert.DoesNotContain(store.Current.Outbox.Values,
+            effect => effect.Kind is EffectKind.RunCi or EffectKind.RequestReview);
+
+        api.CompleteTasks = true;
+        // One iteration accepts completion, verifies live mapping, then dispatches exact-final-SHA CI.
+        await Worker().RunAsync(store, api, api, api, Simulation, Fast with { MaximumIterations = 1 });
+        issue = store.Current.Issues[7];
+        Assert.Equal(Phase.CI_PENDING, issue.Phase);
+        Assert.Equal(17, issue.PullRequest);
+        Assert.Equal(TaskStatus.Completed, issue.Tasks[task.Id].Status);
+        Assert.Equal(issue.Tasks[task.Id].FinalSha, issue.HeadSha);
+        Assert.Equal(issue.HeadSha, issue.Ci!.Sha);
+        Assert.Equal(task.Id, issue.Ci.TaskId);
+        Assert.Single(api.Executions, kind => kind == EffectKind.RunCi);
+        Assert.DoesNotContain(EffectKind.RequestReview, api.Executions);
+        await Worker().RunAsync(store, api, api, api, Simulation, Fast);
+        Assert.Equal(Phase.HUMAN_REVIEW, store.Current.Issues[7].Phase);
+        Assert.Single(api.Executions, kind => kind == EffectKind.LaunchTask);
+    }
+
+    [Theory]
+    [InlineData("pr")]
+    [InlineData("head")]
+    [InlineData("task")]
+    public async Task UnmappedCompletionCannotDispatchCiWithoutMatchingLivePrHeadAndTask(string mismatch)
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { NoInitialPullRequest = true, CompleteTasks = false };
+        await Worker().RunAsync(store, api, api, api, Simulation, Fast with { MaximumIterations = 2 });
+        api.CompletionMismatch = mismatch;
+        api.CompleteTasks = true;
+        var result = await Worker().RunAsync(store, api, api, api, Simulation, Fast);
+
+        Assert.Equal(WorkerStopReason.Blocked, result.Reason);
+        Assert.Single(api.Executions, kind => kind == EffectKind.LaunchTask);
+        Assert.DoesNotContain(EffectKind.RunCi, api.Executions);
+        Assert.DoesNotContain(EffectKind.RequestReview, api.Executions);
+        Assert.Null(store.Current.Issues[7].Ci);
+    }
+
+    [Fact]
     public async Task YieldAndDuplicateResumeKeepTheSameTaskAndDispatchNoEarlyCiOrReview()
     {
         var store = new Store();
@@ -530,6 +596,8 @@ public sealed class OrchestrationWorkerTests
         public int ReviewBlockers { get; init; }
         public int[] ReadyIssues { get; init; } = [7];
         public bool CompleteTasks { get; set; } = true;
+        public bool NoInitialPullRequest { get; init; }
+        public string? CompletionMismatch { get; set; }
         public bool UnknownLaunch { get; init; }
         public bool RecoveryUnknown { get; init; }
         public bool IncludeUnpublishedResults { get; init; }
@@ -612,11 +680,13 @@ public sealed class OrchestrationWorkerTests
                 Issues = ReadyIssues.ToDictionary(number => number, number =>
                 {
                     state.Issues.TryGetValue(number, out var issue);
+                    var unmapped = NoInitialPullRequest && !heads.ContainsKey(number);
                     return new LiveIssueObservation
                     {
                         Ready = issue?.Tasks.Values.Any(task => task.LaunchConfirmed) != true,
-                        PullRequest = number + 10, HeadSha = Head(number),
-                        CompletedTaskId = issue?.ActiveTaskId,
+                        PullRequest = unmapped ? null : number + (CompletionMismatch == "pr" ? 11 : 10),
+                        HeadSha = unmapped ? null : CompletionMismatch == "head" ? new string('f', 40) : Head(number),
+                        CompletedTaskId = CompletionMismatch == "task" ? null : issue?.ActiveTaskId,
                         Labels = issue is null ? [] : OrchestrationReducer.ProjectLabels(issue).ToList()
                     };
                 })

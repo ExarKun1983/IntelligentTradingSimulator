@@ -1607,6 +1607,13 @@ are not strengthened into an unsupported durability SLA.
 
 ### Sequencing and integration boundaries
 
+An initial coding task may use the explicit `UnmappedIssue` launch source only when
+both PR and head are absent and no parent task exists. Mapped coding and all repair
+tasks use `PullRequestHead` and require the exact valid source SHA. Launch confirmation
+persists the external task identity; completion records its proposed PR/final SHA.
+Live PR, final head and completed-task identity must all match before CI is created.
+Duplicate readiness notifications or Resume do not create another task.
+
 Only explicit completion of the current confirmed task plus a matching live head
 permits CI. Store the completed task, response round, final SHA, CI intent and run.
 Intermediate pushes, early/unrelated green CI, labels and Resume cannot open this
@@ -1615,6 +1622,11 @@ build/test creates a tracked child coding repair on the same PR; complete it bef
 CI again, preserving blocker/round obligations. Technical CI failures have a
 consecutive budget of three; only eligible green CI resets it. Productive review
 cycles have no arbitrary round cap. Changed SHA/green CI are not per-finding progress.
+Current findings are unresolved obligations. Removing one requires fresh finding-specific
+evidence in the eligible review/classification event; historical responses are audit
+only, not clearance for a later occurrence of the same blocker. Replaying a historical
+response neither clears a reopened finding nor counts as progress. `NeedsHuman` retains
+unresolved findings under the same rule, and human acceptance cannot bypass it.
 
 Live integration is **not wired by this offline entry point**. Before activation,
 the host must provide trusted observations, authorization, Git credentials and

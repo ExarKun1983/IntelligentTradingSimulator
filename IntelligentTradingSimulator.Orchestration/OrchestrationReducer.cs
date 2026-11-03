@@ -214,6 +214,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 ValidateReview(classification.Classification, classifiedFindings, classifiedResponses);
                 ValidateFindingResolution(issue.Review, classification.Classification, classifiedFindings, classifiedResponses);
                 var humanFindingProgress = classifiedResponses.Any(response => response.Resolved &&
+                    issue.Review.Findings.Any(finding => finding.Id == response.FindingId) &&
                     !issue.Review.Responses.Contains(response));
                 issue.Classifications.Add(message.Id, new HumanClassificationRecord(message.Id, classification.HandoffId,
                     message.Actor, classification.Reason, classification.Round, classification.Sha, classification.Classification,
@@ -566,7 +567,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             responses.Any(response => response.Resolved && findings.Any(finding => finding.Id == response.FindingId)) ||
             classification != ReviewClassification.NeedsHuman &&
             review.Findings.Any(finding => !findings.Any(next => next.Id == finding.Id) &&
-                !responses.Concat(review.Responses).Any(response => response.FindingId == finding.Id && response.Resolved)))
+                !responses.Any(response => response.FindingId == finding.Id && response.Resolved &&
+                    !review.Responses.Contains(response))))
             throw new InvalidOperationException("Each removed blocker requires finding-specific resolution evidence.");
     }
 
@@ -574,7 +576,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         List<Finding> findings, List<FindingResponse> responses) =>
         classification != ReviewClassification.NeedsHuman ? findings.ToList() :
             findings.Concat(previous.Findings.Where(old => !findings.Any(next => next.Id == old.Id) &&
-                !responses.Concat(previous.Responses).Any(response => response.FindingId == old.Id && response.Resolved))).ToList();
+                !responses.Any(response => response.FindingId == old.Id && response.Resolved &&
+                    !previous.Responses.Contains(response)))).ToList();
 
     private static void ApplyClassification(IssueState issue, ReviewClassification classification, OrchestrationEvent message,
         bool findingProgress = false)
@@ -638,11 +641,15 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
     private static void AddTask(RepositoryState state, IssueState issue, TaskKind kind, DateTimeOffset now)
     {
         var parent = issue.ActiveTaskId;
+        var unmapped = kind == TaskKind.Coding && parent is null && issue.PullRequest is null && issue.HeadSha is null;
+        if (!unmapped && (issue.PullRequest is not > 0 || !IsSha(issue.HeadSha)))
+            throw new InvalidOperationException("Mapped coding and repair tasks require a valid source head.");
         var id = $"task:{issue.Number}:{issue.Generation}:{issue.Round}:{issue.Tasks.Count + 1}";
         issue.Tasks.Add(id, new TaskIdentity
         {
             Id = id, Kind = kind, Status = TaskStatus.Intended, ParentTaskId = parent, Round = issue.Round,
-            SourceSha = issue.HeadSha ?? "", ReviewBlockers = issue.Review?.Findings.ToList() ?? [],
+            LaunchSource = unmapped ? TaskLaunchSource.UnmappedIssue : TaskLaunchSource.PullRequestHead,
+            SourceSha = issue.HeadSha, ReviewBlockers = issue.Review?.Findings.ToList() ?? [],
             CiBlockers = issue.Ci?.Blockers.ToList() ?? [], FeedbackEventIds = issue.PendingFeedbackEventIds.ToList()
         });
         foreach (var feedbackId in issue.PendingFeedbackEventIds)

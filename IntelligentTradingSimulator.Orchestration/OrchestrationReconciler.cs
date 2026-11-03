@@ -168,7 +168,7 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
         {
             EffectKind.LaunchTask => issue.ActiveTaskId == intent.TaskId && intent.TaskId is { } launchTaskId &&
                 issue.Tasks.TryGetValue(launchTaskId, out var launchTask) && launchTask.Status == TaskStatus.Intended &&
-                launchTask.Round == intent.Round && launchTask.SourceSha == intent.Sha &&
+                launchTask.Round == intent.Round && LaunchSourceMatches(issue, launchTask, intent) &&
                 issue.PendingFeedbackEventIds.All(id => launchTask.FeedbackEventIds.Contains(id)),
             EffectKind.RunCi => issue.PendingFeedbackEventIds.Count == 0 &&
                 issue.Phase == Phase.CI_PENDING && issue.Ci is { Green: null } ci &&
@@ -185,6 +185,16 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             !issue.Paused && !issue.ReactivationRequired && issue.PullRequest == live.PullRequest &&
             intent.Sha == live.HeadSha && intent.Sha == issue.HeadSha;
     }
+
+    private static bool LaunchSourceMatches(IssueState issue, TaskIdentity task, EffectIntent intent) =>
+        task.LaunchSource switch
+        {
+            TaskLaunchSource.UnmappedIssue => task.Kind == TaskKind.Coding && task.ParentTaskId is null &&
+                task.SourceSha is null && intent.Sha is null && issue.PullRequest is null && issue.HeadSha is null,
+            TaskLaunchSource.PullRequestHead => issue.PullRequest is > 0 &&
+                task.SourceSha is { Length: 40 or 64 } sha && sha.All(Uri.IsHexDigit) && sha == intent.Sha,
+            _ => false
+        };
 }
 
 public static class UpstreamIdentity

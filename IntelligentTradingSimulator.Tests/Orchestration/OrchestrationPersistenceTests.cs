@@ -68,6 +68,45 @@ public sealed class OrchestrationPersistenceTests
     }
 
     [Fact]
+    public async Task InitialMappedCodingAndRepairLaunchesStillRequireTheirExactSourceHead()
+    {
+        foreach (var kind in Enum.GetValues<TaskKind>())
+        {
+            foreach (var sourceSha in new string?[] { null, "", new('b', 40) })
+            {
+                var state = LaunchPending();
+                state.Issues[7].Tasks["task"].Kind = kind;
+                state.Issues[7].Tasks["task"].SourceSha = sourceSha;
+                var store = new MemoryStore(state);
+                var adapter = new Effects(store);
+
+                await new OrchestrationReconciler().RunAsync(store, new Observations(), adapter, Simulation);
+
+                Assert.DoesNotContain(EffectKind.LaunchTask, adapter.Kinds);
+                Assert.Equal(DeliveryStatus.Pending, store.Current.Outbox["launch"].Status);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(TaskKind.CiRepair)]
+    [InlineData(TaskKind.ReviewRepair)]
+    [InlineData(TaskKind.FeedbackRepair)]
+    public async Task RepairCannotUseUnmappedInitialLaunchContract(TaskKind kind)
+    {
+        var state = LaunchPending();
+        state.Issues[7].Tasks["task"].Kind = kind;
+        state.Issues[7].Tasks["task"].LaunchSource = TaskLaunchSource.UnmappedIssue;
+        var store = new MemoryStore(state);
+        var adapter = new Effects(store);
+
+        await new OrchestrationReconciler().RunAsync(store, new Observations(), adapter, Simulation);
+
+        Assert.DoesNotContain(EffectKind.LaunchTask, adapter.Kinds);
+        Assert.Equal(DeliveryStatus.Pending, store.Current.Outbox["launch"].Status);
+    }
+
+    [Fact]
     public async Task ExplicitOfflineSimulationExercisesLaunchCompletionCiAndReviewWithoutReadyProjection()
     {
         var state = RepositoryState.Create("owner/repo");
