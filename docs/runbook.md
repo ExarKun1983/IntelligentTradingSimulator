@@ -1607,6 +1607,108 @@ are not strengthened into an unsupported durability SLA.
 
 ### Sequencing and integration boundaries
 
+#### GitHub read-only host and projection adapters
+
+`GitHubOrchestrationHost` now composes API-verified ingress, the shared worker/reducer,
+and a canonical snapshot read through `GitStateStore`/`GitHubGitTransport`. It checks
+repository numeric identity, Actions run event/workflow/actor, current user identity,
+collaborator permission, Issue identity and expected workflow generations. The
+notification must originate from the trusted Actions event file; checking a run
+exists does not authenticate arbitrary user-uploaded JSON as that run's original
+payload. There is deliberately **no write-capable production host** yet.
+
+The CLI adds an explicitly read-only mode while preserving existing offline fixtures:
+
+```bash
+dotnet run --project IntelligentTradingSimulator.Orchestration -- \
+  --dry-run --github-read-only \
+  --notification "$GITHUB_EVENT_PATH" --event-name "$GITHUB_EVENT_NAME" \
+  --repository "$GITHUB_REPOSITORY" --repository-id "$GITHUB_REPOSITORY_ID" \
+  --run-id "$GITHUB_RUN_ID" --repository-generation 1 --issue-generation 1 \
+  --occurred-at '2026-01-01T00:00:00Z'
+```
+
+The timestamp and generations above are examples, not defaults: supply the immutable
+notification timestamp and expected canonical generations. `GITHUB_TOKEN` may be
+supplied by the host for ordinary REST/Git reads; it is never printed. This mode
+performs GETs only, never bootstraps the state branch, never accepts a command durably,
+and never launches coding/CI/review or projection writes. Missing canonical state,
+missing permissions, API failures or mismatched identities stop the preview.
+It has not been run against live user work as part of this implementation.
+
+`GitHubRepositoryApi` reads current Issue readiness/closure and already-mapped PR
+repository/head/merge state. It deliberately does not infer a task completion from
+a PR, draft state, push, label or CI result. In the absence of the task-service
+integration, `CompletedTaskId` remains unset, so production observations cannot
+open the task-completion gate.
+
+`ProjectStatus` is a durable outbox effect distinct from `ProjectLabels`; stale
+pending projections are cancelled. Status rendering omits arbitrary feedback and
+hold text. `GitHubProjectionAdapter` uses documented Issue comment/label REST
+endpoints, with mutations disabled by default. Comments are identified by an exact
+generation marker **and configured numeric author identity**, not marker text alone.
+Unchanged comments are not updated; a changed projection edits the owned comment.
+Multiple owned matches stop for reconciliation. Lost creates are lookup-only:
+absence is unknown, never authorization to create another comment. Label updates
+add/remove only lifecycle labels, preserving unrelated concurrent human labels.
+These operations are not atomic with human label edits; live canonical checks remain
+authoritative. Collections are fully paginated with a 2,048-item bound and API
+responses capped at 2 MiB; incomplete/oversized reads stop rather than guess.
+
+Offline HTTP tests in `GitHubHostIntegrationTests` exercise real REST response shapes,
+canonical Git reads, unauthorized/mismatched evidence, missing state, mapped PR
+observations without inferred completion, stable projection intents, unchanged/update
+behavior, spoofed/duplicate comments, lost create responses, worker-ledger recovery,
+retained holds, concurrent unrelated labels and response/pagination limits.
+No tests or CLI switches silently enable these adapters in a live worker.
+
+#### Verified API contracts versus activation prerequisites
+
+Read-only documentation research on 2026-11-03 establishes public contracts, **not
+this account's access, credentials, entitlements, policy or spending configuration**:
+
+| Surface | Documented contract | Remaining work / prerequisite |
+| --- | --- | --- |
+| Coding tasks | [`POST /agents/repos/{owner}/{repo}/tasks`, repo/task GETs](https://docs.github.com/en/rest/agent-tasks/agent-tasks). Public preview; launch requires Business/Enterprise. `prompt`, `base_ref`, `head_ref`, `create_pull_request` are documented. | Task mutation/completion adapter is not implemented. Verify eligible existing plan and a user access token with Agent tasks permissions. Installation tokens, including `GITHUB_TOKEN`, are unsupported. No plan upgrade is authorized. |
+| Task/PR association | Task `artifacts` expose pull/branch data; sessions expose explicit states. | Resolve verified artifacts and repository/ref identities, reject ambiguity, and confirm completed task plus live final head. Artifact numeric `id` is **not documented as PR number**; never substitute it into `/pulls/{number}`. No title/branch-name guessing. |
+| Follow-up coding | A new task can target an existing `head_ref`/`base_ref`; [PR mentions](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-on-github) are a separate interaction. | Preserve child task/round/blocker identity. No supported append-to-existing-task endpoint or bot-mention task-ID response is established. |
+| Review request | [Requested reviewers REST](https://docs.github.com/en/rest/pulls/review-requests#request-reviewers-for-a-pull-request) and [Copilot review guide](https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/copilot-code-review) document `copilot-pull-request-reviewer[bot]`. Response is a PR, not a review-job ID. | Request/result adapter and durable request-to-submitted-review correlation are not implemented. Verify repository policy/auth and account billing first. |
+| Review result | [PR reviews/comments](https://docs.github.com/en/rest/pulls/reviews) expose actor, `commit_id`, review ID and comments. | Match actor/head/current request and paginate. Missing requested-reviewer entry is not success. Prose or `COMMENTED` is not acceptance; ambiguous results require authorized human classification. |
+| Lost mutation response | Neither task launch nor review request documents a caller-supplied idempotency key or exactly-once creation. | Persist intent before call; retain returned identity; if no unique operation can be established, hold for human reconciliation, never repeat a speculative create. |
+| CI | Workflow dispatch/run/check APIs are public, but dispatch response alone is not tested-SHA proof. | Managed CI workflow/check routing and concrete dispatch/result adapters are not implemented. Trusted workflow, captured-SHA checkout/verification, correlation, read-only isolated test jobs and intermediate-push policy remain work. Existing CI is unchanged. |
+| Charges | [Organization billing](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing), [budgets](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/budgets), and [review pricing](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing) describe paid usage and review attribution. | Maintainer/admin must verify existing entitlement, attribution, disable paid overages, and enforce stop-usage controls for AI and Actions. Alerts alone are not caps; public Actions compute does not establish free AI use. No per-operation included-only billing field was established. |
+
+#### #213 acceptance evidence and remaining gaps
+
+This is a tracking matrix, **not a declaration that all acceptance criteria pass**.
+The first column follows the Issue's acceptance-list order. Test file names below
+refer to `IntelligentTradingSimulator.Tests/Orchestration`.
+
+| # / requirement | Implemented evidence | Outstanding / blocked |
+| --- | --- | --- |
+| 1 Legal/illegal transitions and invariants | `OrchestrationCoreTests`, shared reducer | Exhaustive coverage is not claimed; extend with each production contract. |
+| 2 Actual handlers, replay/reorder/concurrency and boundaries | `GitHubActionsIngressTests`, `GitHubHostIntegrationTests`, worker/persistence tests | Task/review/CI HTTP handlers and their boundary matrices remain. |
+| 3 Crash after every intent/effect | Persistence/worker crash and CAS tests; projection lost-create worker recovery | Not yet every production API boundary; no exactly-once upstream guarantee. |
+| 4 Exact effect counts and preserved holds | Worker, core, persistence and projection recovery tests | Extend counts to production task/review/CI adapters. |
+| 5 Coding-before-exact-SHA CI | Worker initial-unmapped/completion-mismatch and duplicate-Resume tests; reducer guards | Actual dispatch/checkout/check routing remains unwired. |
+| 6 Green CI/review and two repair cycles | Worker automatic two-CI-repair/review-repair loop | Offline fakes only for task/CI/review execution. |
+| 7 Stale CI/head checks and unmanaged compatibility | Core task/round/SHA/head-change tests | Required checks on tested SHA and managed/unmanaged workflow routing remain. |
+| 8 Feedback precedence and distinct identical events | Core/command tests; worker paged-input priority | Ordinary remote feedback fetching and trusted service event ingestion remain. No lossless arbitrary history promised. |
+| 9 Productive rounds/no-progress stop | Core multi-round, evidence/progress and reopened-blocker tests | Production reviewer classification still requires verified typed/human contract. |
+| 10 Closure/reopen/reactivation | Core and command tests; live REST merge/closure observation | Completion/artifact association and wider HTTP closure matrix remain. |
+| 11 Operations documentation | This runbook: state, ownership, failure, migration/rollback and recovery | Cutover runbook must be revalidated against final host/routing before approval. |
+| 12 Human final approval/no auto-merge | `HUMAN_REVIEW` reducer terminal gate; no merge effect/API | Preserve at activation. |
+| 13 Label-controlled start/queue, guarded recovery | Ingress/core/worker tests; API-verified read-only host | Live notification ingestion remains disabled; no normal manual Start introduced. |
+| 14 Automatic stages/labels/continuation | Shared bounded worker; label/status adapter HTTP tests | Production host execution/wake-ups and persisted continuation wiring remain disabled/unimplemented. Resume stays exceptional recovery, not a normal stage button. |
+| 15 Shared C# decision path/real response shapes | Worker/reconciler/reducer; REST/Git/ingress identity HTTP fixtures | Task/review/CI shapes still require their concrete adapter tests. |
+| 16 Repository admission/queue | Core/persistence/worker concurrent admission tests | Verify production ingress/continuation races once wired. |
+| 17 Reviewer behavior/needs-human | Typed core classification and human-handoff tests | No concrete reviewer adapter yet; cannot claim production review readiness. |
+| 18 Comment replay and preserved recovery state | Durable `ProjectStatus`, owned-comment HTTP tests, lost-create worker-ledger recovery | Live status wiring and remote tamper/deletion monitoring are not enabled. |
+
+Separate activation approval, canonical branch bootstrap/protection, credential/policy
+verification, and demonstrated zero-additional-charge enforcement remain mandatory.
+Neither the legacy workflow nor replacement live execution is enabled by this work.
+
 An initial coding task may use the explicit `UnmappedIssue` launch source only when
 both PR and head are absent and no parent task exists. Mapped coding and all repair
 tasks use `PullRequestHead` and require the exact valid source SHA. Launch confirmation

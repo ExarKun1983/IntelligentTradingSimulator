@@ -413,6 +413,23 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 issue.ProjectionDigest = digest;
             }
             issue.ObservedProjectionDigest = observedDigest;
+            var statusBody = StatusProjection.Render(issue);
+            var projectStatus = issue.Phase != Phase.READY || state.AdmittedIssue == issue.Number;
+            foreach (var stale in state.Outbox.Values.Where(effect => effect.IssueNumber == issue.Number &&
+                         effect.Kind == EffectKind.ProjectStatus && effect.Status == DeliveryStatus.Pending &&
+                         (!projectStatus || effect.StatusBody != statusBody)))
+                stale.Status = DeliveryStatus.Cancelled;
+            var statusDigest = StateJson.Digest(statusBody);
+            var statusId = $"status:{issue.Number}:{issue.Generation}:{statusDigest}";
+            state.Outbox.TryGetValue(statusId, out var status);
+            if (projectStatus && (status is null || status.Status == DeliveryStatus.Cancelled ||
+                status.Status == DeliveryStatus.Succeeded && issue.StatusProjectionDigest != statusDigest))
+            {
+                if (status is null)
+                    AddIntent(state, issue, EffectKind.ProjectStatus, observation.ObservedAt,
+                        idOverride: statusId, statusBody: statusBody);
+                else status.Status = DeliveryStatus.Pending;
+            }
             if (input.Issues.TryGetValue(issue.Number, out var before) &&
                 System.Text.Json.JsonSerializer.Serialize(before, StateJson.Options) !=
                 System.Text.Json.JsonSerializer.Serialize(issue, StateJson.Options))
@@ -490,6 +507,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 issue.Ci.RunId = effect.ExternalId;
             else if (effect.Kind == EffectKind.RequestReview && issue.Review?.IntentId == id)
                 issue.Review.ReviewId = effect.ExternalId;
+            else if (effect.Kind == EffectKind.ProjectStatus && outcome.Status == DeliveryStatus.Succeeded)
+                issue.StatusProjectionDigest = StateJson.Digest(effect.StatusBody!);
             if (outcome.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown)
             {
                 Hold(issue, outcome.Status == DeliveryStatus.Unknown ? "Effect outcome is ambiguous." : "Effect failed.");
@@ -621,7 +640,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         issue.Review is { ReviewId: not null, Classification: null } ||
         state.Outbox.Values.Any(e => e.IssueNumber == issue.Number &&
             (e.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown ||
-                e.Kind != EffectKind.ProjectLabels && e.Status == DeliveryStatus.Pending));
+                e.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus) && e.Status == DeliveryStatus.Pending));
 
     private static void ReleaseIfSafe(RepositoryState state, IssueState issue)
     {
@@ -631,7 +650,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
     private static void CancelPendingWork(RepositoryState state, IssueState issue)
     {
         foreach (var effect in state.Outbox.Values.Where(e => e.IssueNumber == issue.Number && e.Status == DeliveryStatus.Pending &&
-                     e.Kind != EffectKind.ProjectLabels))
+                     e.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus)))
         {
             effect.Status = DeliveryStatus.Cancelled;
             if (effect.Kind == EffectKind.LaunchTask && effect.TaskId is { } id && issue.Tasks[id].Status == TaskStatus.Intended)
@@ -658,7 +677,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         AddIntent(state, issue, EffectKind.LaunchTask, now, id);
     }
     private static EffectIntent AddIntent(RepositoryState state, IssueState issue, EffectKind kind, DateTimeOffset now,
-        string? taskId = null, string? idOverride = null, IReadOnlyList<string>? labels = null)
+        string? taskId = null, string? idOverride = null, IReadOnlyList<string>? labels = null, string? statusBody = null)
     {
         EnsureCapacity(state);
         var id = idOverride ?? $"{kind}:{issue.Number}:{issue.Generation}:{taskId}:{issue.Round}";
@@ -667,6 +686,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         {
             Id = id, IssueNumber = issue.Number, Generation = issue.Generation, Kind = kind, Status = DeliveryStatus.Pending,
             TaskId = taskId, Round = issue.Round, Sha = issue.HeadSha, CreatedAt = now, Labels = labels?.ToList() ?? [],
+            StatusBody = statusBody,
             FeedbackEventIds = taskId is not null && issue.Tasks.TryGetValue(taskId, out var task) ? task.FeedbackEventIds.ToList() : []
         };
         intent.Digest = StateJson.Digest(System.Text.Json.JsonSerializer.Serialize(intent, StateJson.Options));

@@ -9,7 +9,7 @@ public enum Phase { READY, CODING, CI_PENDING, REVIEW_PENDING, FIX_PENDING, HUMA
 public enum TaskKind { Coding, CiRepair, ReviewRepair, FeedbackRepair }
 public enum TaskLaunchSource { PullRequestHead, UnmappedIssue }
 public enum TaskStatus { Intended, Executing, Running, AwaitingHeadConfirmation, Completed, Failed, Unknown }
-public enum EffectKind { LaunchTask, RunCi, RequestReview, ProjectLabels }
+public enum EffectKind { LaunchTask, RunCi, RequestReview, ProjectLabels, ProjectStatus }
 public enum DeliveryStatus { Pending, Executing, Succeeded, Failed, Unknown, Cancelled }
 public enum ReviewClassification { Accepted, Blocking, NeedsHuman }
 public enum ActorKind { Human, TaskService, CiService, ReviewService }
@@ -78,6 +78,7 @@ public sealed class IssueState
     public Dictionary<string, HumanClassificationRecord> Classifications { get; set; } = [];
     public string? ProjectionDigest { get; set; }
     public string? ObservedProjectionDigest { get; set; }
+    public string? StatusProjectionDigest { get; set; }
 }
 
 public sealed class TaskIdentity
@@ -158,6 +159,7 @@ public sealed class EffectIntent
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
+    public string? StatusBody { get; set; }
 }
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]

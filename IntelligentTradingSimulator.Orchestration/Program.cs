@@ -1,11 +1,55 @@
 using System.Text.Json;
+using System.Net.Http.Headers;
 using IntelligentTradingSimulator.Orchestration;
 
-return OrchestrationCommand.Run(args, Console.Out, Console.Error);
+return await OrchestrationCommand.RunAsync(args, Console.Out, Console.Error);
 
 public static class OrchestrationCommand
 {
     private const int MaximumFixtureBytes = 2 * 1024 * 1024;
+
+    public static async Task<int> RunAsync(string[] args, TextWriter output, TextWriter error)
+    {
+        if (!args.Contains("--github-read-only", StringComparer.Ordinal)) return Run(args, output, error);
+        try
+        {
+            if (!args.Contains("--dry-run", StringComparer.Ordinal) || args.Contains("--execute", StringComparer.Ordinal) ||
+                args.Contains("--context", StringComparer.Ordinal) || args.Contains("--replay", StringComparer.Ordinal))
+                throw new InvalidDataException("GitHub mode is read-only and requires trusted Actions input.");
+            var path = Argument(args, "--notification") ?? throw new InvalidDataException("Missing notification.");
+            if (new FileInfo(path).Length > MaximumFixtureBytes) throw new InvalidDataException("Oversized notification.");
+            using var payload = JsonDocument.Parse(await File.ReadAllTextAsync(path));
+            using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+            {
+                BaseAddress = new Uri("https://api.github.com/"), Timeout = TimeSpan.FromSeconds(30)
+            };
+            var credential = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+            if (!string.IsNullOrWhiteSpace(credential))
+                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", credential);
+            var repository = Argument(args, "--repository") ?? throw new InvalidDataException("Missing repository.");
+            var api = new GitHubRepositoryApi(client, repository,
+                long.Parse(Argument(args, "--repository-id")!, System.Globalization.CultureInfo.InvariantCulture));
+            var host = new GitHubOrchestrationHost(api, new GitStateStore(new GitHubGitTransport(client, repository), repository));
+            var result = await host.PreviewAsync(payload.RootElement, Argument(args, "--event-name")!,
+                Argument(args, "--run-id")!,
+                long.Parse(Argument(args, "--repository-generation")!, System.Globalization.CultureInfo.InvariantCulture),
+                long.Parse(Argument(args, "--issue-generation")!, System.Globalization.CultureInfo.InvariantCulture),
+                DateTimeOffset.Parse(Argument(args, "--occurred-at")!, System.Globalization.CultureInfo.InvariantCulture), []);
+            output.WriteLine(JsonSerializer.Serialize(new
+            {
+                Mode = "github-read-only", AcceptedDurably = false, ExternalEffectsExecuted = 0, Result = result,
+                BlockedPrerequisites = new[] { "Task/review API and billing verification", "Exact-SHA CI routing", "Activation approval" }
+            }, StateJson.Options));
+            return 0;
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or InvalidOperationException or
+            ArgumentException or UnauthorizedAccessException or KeyNotFoundException or HttpRequestException or
+            OperationCanceledException or FormatException or OverflowException)
+        {
+            error.WriteLine($"GitHub preview stopped ({exception.GetType().Name}); no live effects are enabled.");
+            return 1;
+        }
+    }
 
     public static int Run(string[] args, TextWriter output, TextWriter error)
     {

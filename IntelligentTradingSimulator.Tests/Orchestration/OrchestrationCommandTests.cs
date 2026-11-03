@@ -7,6 +7,20 @@ public class OrchestrationCommandTests
 {
     [Theory]
     [InlineData("--execute")]
+    [InlineData("--context")]
+    [InlineData("--replay")]
+    public async Task GitHubReadOnlyModeRejectsMutationAndOfflineEvidenceOverridesBeforeAnyIo(string argument)
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        Assert.Equal(1, await OrchestrationCommand.RunAsync(
+            ["--dry-run", "--github-read-only", argument], output, error));
+        Assert.Contains("no live effects", error.ToString());
+        Assert.Equal("", output.ToString());
+    }
+
+    [Theory]
+    [InlineData("--execute")]
     [InlineData("--replay")]
     public void LiveExecutionCannotBeEnabledByCommandLine(string argument)
     {

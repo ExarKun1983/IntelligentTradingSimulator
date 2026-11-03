@@ -63,7 +63,8 @@ public sealed class OrchestrationPersistenceTests
         var store = new MemoryStore(state);
         var adapter = new Effects(store);
         await new OrchestrationReconciler().RunAsync(store, new Observations(), adapter, Enabled);
-        Assert.Equal(0, adapter.Executions);
+        Assert.DoesNotContain(kind, adapter.Kinds);
+        Assert.All(adapter.Kinds, executed => Assert.Equal(EffectKind.ProjectStatus, executed));
         Assert.Equal(DeliveryStatus.Pending, store.Current.Outbox["launch"].Status);
     }
 
@@ -186,7 +187,8 @@ public sealed class OrchestrationPersistenceTests
         var store = new MemoryStore(state);
         var fake = new Effects(store);
         await new OrchestrationReconciler().RunAsync(store, new Observations(), new UnmarkedAdapter(fake), Simulation);
-        Assert.Equal(0, fake.Executions);
+        Assert.DoesNotContain(EffectKind.RequestReview, fake.Kinds);
+        Assert.All(fake.Kinds, executed => Assert.Equal(EffectKind.ProjectStatus, executed));
         Assert.Contains(store.Current.Outbox.Values, effect => effect.Kind == EffectKind.RequestReview &&
             effect.Status == DeliveryStatus.Pending);
     }
@@ -584,6 +586,8 @@ public sealed class OrchestrationPersistenceTests
         public async Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken cancellationToken)
         {
             Assert.Equal(DeliveryStatus.Executing, store.Current.Outbox[intent.Id].Status);
+            if (intent.Kind is EffectKind.ProjectStatus or EffectKind.ProjectLabels)
+                return new(DeliveryStatus.Succeeded, "projection");
             Executions++;
             Started.SetResult();
             return await Completion.Task.WaitAsync(cancellationToken);
