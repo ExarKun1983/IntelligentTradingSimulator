@@ -41,7 +41,8 @@ gh() {
 }
 
 json_comments() {
-  jq '{comments: map(if type == "object" then . else {body: ., author: {login: "github-actions[bot]"}, createdAt: "2026-10-12T13:30:00Z"} end)}' "$1"
+  jq '{comments: map(if type == "object" then . else {body: ., author: {login: "github-actions[bot]"}, createdAt:
+    (if test("task-id=task-2") then "2026-10-12T13:35:00Z" else "2026-10-12T13:15:00Z" end)} end)}' "$1"
 }
 
 append_json() { local f="$1" v="$2"; jq --arg v "$v" '. + [$v]' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; }
@@ -53,7 +54,10 @@ gh_dispatch() {
       local fields
       fields="$(printf '%s\n' "$@" | grep -A1 -- '--json' | tail -1)"
       [ -f "$STATE/pr-$n.json" ] || { echo "no PR $n" >&2; return 1; }
-      if [ "$fields" = "comments" ]; then json_comments "$STATE/pr-$n.comments"; else cat "$STATE/pr-$n.json"; fi ;;
+      if [ "$fields" = "comments" ]; then
+        [ ! -f "$STATE/pr-comments-failure" ] || { echo "simulated PR comments failure" >&2; return 1; }
+        json_comments "$STATE/pr-$n.comments"
+      else cat "$STATE/pr-$n.json"; fi ;;
     "pr edit")
       local body="${all##*--body }"
       jq --arg b "$body" '.body = $b' "$STATE/pr-$n.json" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-$n.json"
@@ -76,8 +80,13 @@ gh_dispatch() {
       local fields
       fields="$(printf '%s\n' "$@" | grep -A1 -- '--json' | tail -1)"
       if [ "$fields" = "comments" ]; then json_comments "$STATE/issue-$n.comments"
+      elif [ "$fields" = "state" ]; then printf '{"state":"%s"}\n' "$(cat "$STATE/issue-$n.state" 2>/dev/null || echo OPEN)"
       else jq -R -s '{labels: (split("\n") | map(select(. != "")) | map({name: .}))}' "$STATE/issue-$n.labels"; fi ;;
     "issue comment")
+      if [[ "$*" == *"agent-orchestrator:task-id="* ]] && [ -f "$STATE/task-record-failure" ]; then
+        echo "simulated task tracking failure" >&2
+        return 1
+      fi
       append_json "$STATE/issue-$n.comments" "${all##*--body }"
       echo "issue comment $n" >> "$STATE/calls.log" ;;
     "issue edit")
@@ -105,6 +114,7 @@ gh_dispatch() {
           echo '{"id":"'"$next_id"'","state":"queued"}' ;;
         agents/repos/*/tasks/*)
           local task_id="${path##*/}"
+          [ ! -f "$STATE/task-state-failure" ] || { echo "simulated task API failure" >&2; return 1; }
           [ -f "$STATE/$task_id.json" ] || { echo "missing task $task_id" >&2; return 1; }
           cat "$STATE/$task_id.json" ;;
         repos/*/issues/*/events*) n="${path#repos/*/issues/}"; n="${n%%/*}"; cat "$STATE/issue-$n.events" 2>/dev/null || echo '[]' ;;
@@ -154,6 +164,7 @@ add_issue() { # number [labels...]
   for l in "$@"; do printf '%s\n' "$l" >> "$STATE/issue-$n.labels"; done
   echo '[]' > "$STATE/issue-$n.comments"
   echo issue > "$STATE/issue-$n.kind"
+  echo OPEN > "$STATE/issue-$n.state"
   echo '[]' > "$STATE/issue-$n.events"
 }
 
@@ -162,7 +173,7 @@ add_task() {
     '{id: $id, state: $state, updated_at: $updated}' > "$STATE/$1.json"
 }
 
-add_closed_issue() { echo issue > "$STATE/issue-$1.kind"; }
+add_closed_issue() { echo issue > "$STATE/issue-$1.kind"; echo CLOSED > "$STATE/issue-$1.state"; }
 
 issue_comment_fixture() { append_json "$STATE/issue-$1.comments" "$2"; }
 
@@ -305,6 +316,21 @@ add_issue 39 "agent:blocked" "agent:ready"
 set_state 39 "$WORKING_LABEL"
 check "relaunch leaves only agent:working" "agent:working" "$(labels_of 39)"
 
+reset_state
+add_issue 39 "$READY_LABEL"
+task_id="$(start_issue_task 39 "Add a feature" "Issue body" master)"
+check "durable ready reconciliation starts one tracked initial task" "task-1" "$task_id"
+check "initial task launch clears ready state" "agent:working" "$(labels_of 39)"
+check "initial task launch persists its completion marker" "task-1" "$(agent_task_id 39)"
+if start_issue_task 39 "Add a feature" "Issue body" master >/dev/null 2>&1; then r=launched; else r=blocked; fi
+check "active initial task cannot be launched twice" "blocked 1" "$r $(grep -c '^task create' "$STATE/calls.log")"
+
+reset_state
+add_issue 39 "$READY_LABEL"
+record_agent_task_pending 39 "orphan-launch" initial "" ""
+if start_issue_task 39 "Add a feature" "Issue body" master >/dev/null 2>&1; then r=launched; else r=blocked; fi
+check "untracked initial launch intent fails closed" "blocked 0" "$r $(grep -c '^task create' "$STATE/calls.log" || true)"
+
 # --- CI failure routing and lifecycle coalescing ------------------------------------------------------------
 setup_ci() {
   reset_state
@@ -398,6 +424,24 @@ if review_eligible 145 39 abc123 >/dev/null; then r=yes; else r=no; fi
 check "missing task completion metadata fails closed" "no" "$r"
 
 setup_review
+touch "$STATE/task-state-failure"
+if start_pr_fix_task 145 39 abc123 "duplicate task" >/dev/null 2>&1; then r=launched; else r=blocked; fi
+check "task API lookup failure prevents duplicate coding sessions" "blocked 0" "$r $(grep -c '^task create' "$STATE/calls.log" || true)"
+
+setup_review
+touch "$STATE/task-record-failure"
+if start_pr_fix_task 145 39 abc123 "untracked task" >/dev/null 2>&1; then r=tracked; else r=blocked; fi
+if review_eligible 145 39 abc123 >/dev/null 2>&1; then eligible=yes; else eligible=no; fi
+check "task persistence failure blocks review after launch" "blocked no agent:blocked 1" "$r $eligible $(labels_of 39) $(grep -c '^task create' "$STATE/calls.log")"
+
+setup_review
+echo CLOSED > "$STATE/issue-39.state"
+if review_eligible 145 39 abc123 >/dev/null; then r=yes; else r=no; fi
+check "closed Issue cannot pass review eligibility" "no" "$r"
+if start_pr_fix_task 145 39 abc123 "closed issue task" >/dev/null 2>&1; then r=launched; else r=blocked; fi
+check "closed Issue cannot start a follow-up coder" "blocked 0" "$r $(grep -c '^task create' "$STATE/calls.log" || true)"
+
+setup_review
 echo '[]' > "$STATE/issue-39.comments"
 jq '. + [{body: "<!-- agent-orchestrator:task-id=attacker-task -->", author: {login: "attacker"}}]' \
   "$STATE/issue-39.comments" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/issue-39.comments"
@@ -425,8 +469,8 @@ review_fixture() { # body [sha] [submitted_at] [state] -- appends Copilot review
 }
 pr_comments() { jq -r '.[] | if type == "object" then .body else . end' "$STATE/pr-145.comments"; }
 set_thread() {
-  jq -n --arg body "$1" --arg sha "${2:-abc123}" \
-    '{data:{repository:{pullRequest:{reviewThreads:{nodes:[{isResolved:false,comments:{nodes:[{body:$body,path:"a.cs",line:3,commit:{oid:$sha},author:{login:"copilot-pull-request-reviewer"}}]}}]}}}}}' \
+  jq -n --arg body "$1" --arg sha "${2:-abc123}" --argjson line "${3:-3}" \
+    '{data:{repository:{pullRequest:{reviewThreads:{nodes:[{isResolved:false,comments:{nodes:[{body:$body,path:"a.cs",line:$line,commit:{oid:$sha},author:{login:"copilot-pull-request-reviewer"}}]}}]}}}}}' \
     > "$STATE/threads.json"
 }
 
@@ -489,12 +533,13 @@ setup_review
 review_fixture "Changes requested" abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
 set_thread "Fix the null dereference." abc123
 process_review 145 39 abc123 >/dev/null
-add_task task-1 completed "2026-10-12T13:25:00Z"
+add_task task-1 in_progress "2026-10-12T13:25:00Z"
 feedback="$(feedback_signature '- a.cs:3 Fix the null dereference.')"
 jq -n --arg marker "<!-- agent-orchestrator:response-feedback=$feedback -->" \
   '{id:99,body:($marker + "\nEvidence: The null guard is covered by test X and the relevant path now returns safely."),author:{login:"Copilot"},createdAt:"2026-10-12T13:26:00Z"}' \
   > "$STATE/copilot-response.json"
 jq --slurpfile response "$STATE/copilot-response.json" '. + [$response[0]]' "$STATE/pr-145.comments" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.comments"
+add_task task-1 completed "2026-10-12T13:28:00Z"
 review_fixture "Changes requested" abc123 "2026-10-12T13:30:00Z" CHANGES_REQUESTED
 process_review 145 39 abc123 >/dev/null
 check "substantive evidence-based rebuttal gets reviewed on same SHA" "2" "$(grep -c '^task create' "$STATE/calls.log")"
@@ -517,6 +562,33 @@ for i in 1 2 3 4 5; do
 done
 check "productive feedback supports more than three rounds" "5" "$(grep -c '^task create' "$STATE/calls.log")"
 check "productive rounds do not trigger arbitrary escalation" "agent:working" "$(labels_of 39)"
+
+setup_review
+review_fixture "Changes requested" abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
+set_thread "Reverse the incorrectly ordered sequence." abc123
+process_review 145 39 abc123 >/dev/null
+check "first-round reversal wording is not treated as a contradiction" "agent:working 1" "$(labels_of 39) $(grep -c '^task create' "$STATE/calls.log")"
+
+setup_review
+review_fixture "Changes requested" abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
+set_thread "Fix the null dereference." abc123
+process_review 145 39 abc123 >/dev/null
+add_task task-1 completed "2026-10-12T13:25:00Z"
+review_fixture "Changes requested" abc123 "2026-10-12T13:30:00Z" CHANGES_REQUESTED
+set_thread "Reverse the earlier null dereference fix." abc123
+process_review 145 39 abc123 >/dev/null
+check "reversal of an earlier same-file recommendation escalates" "agent:blocked 1" "$(labels_of 39) $(grep -c '^task create' "$STATE/calls.log")"
+check_contains "contradictory handoff records its reason" "contradictory-feedback=" "$(pr_comments)"
+
+setup_review
+review_fixture "Changes requested" abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
+set_thread "Fix the null dereference." abc123 3
+process_review 145 39 abc123 >/dev/null
+add_task task-1 completed "2026-10-12T13:25:00Z"
+review_fixture "Changes requested" abc123 "2026-10-12T13:30:00Z" CHANGES_REQUESTED
+set_thread "Fix the null dereference." abc123 99
+process_review 145 39 abc123 >/dev/null
+check "line shifts do not disguise a repeated finding" "agent:blocked 1" "$(labels_of 39) $(grep -c '^task create' "$STATE/calls.log")"
 
 # --- stale review/CI, task completion in either order, and timeout safeguards --------------------------------
 setup_review
@@ -546,10 +618,42 @@ check "timed-out review is escalated visibly" "agent:blocked 2" "$(labels_of 39)
 check_contains "review timeout asks for a human decision" "did not arrive before the review timeout" "$(pr_comments)"
 
 setup_review
+add_issue 39 "$REVIEW_LABEL"
+record_agent_task 39 task-initial
+issue_comment_fixture 39 '<!-- agent-orchestrator:review-processed=1 -->'
+append_json "$STATE/pr-145.comments" "<!-- agent-orchestrator:review-requested-sha=abc123 task-id=task-initial -->"
+request_review_if_eligible 145 39 abc123 >/dev/null
+check "accepted review replay preserves human-review state" "agent:review" "$(labels_of 39)"
+check "accepted review replay does not request another review" "0" "$(calls_matching 'request review')"
+
+setup_review
+echo '[]' > "$STATE/reviews.json"
+append_json "$STATE/pr-145.comments" "<!-- agent-orchestrator:review-requested-sha=abc123 task-id=task-initial -->"
+touch "$STATE/reviews-api-failure"
+if request_review_if_eligible 145 39 abc123 >/dev/null 2>&1; then r=success; else r=deferred; fi
+check "review lookup failure is not misclassified as a timeout" "deferred agent:working 0" "$r $(labels_of 39) $(calls_matching 'request review')"
+
+setup_review
+echo '[]' > "$STATE/reviews.json"
+append_json "$STATE/pr-145.comments" "<!-- agent-orchestrator:review-requested-sha=abc123 task-id=task-initial -->"
+touch "$STATE/pr-comments-failure"
+if request_review_if_eligible 145 39 abc123 >/dev/null 2>&1; then r=success; else r=deferred; fi
+check "review marker lookup failure is surfaced, not treated as expiration" "deferred agent:working 0" "$r $(labels_of 39) $(calls_matching 'request review')"
+
+setup_review
 add_task task-initial queued
 record_agent_task 39 task-initial abc123
 if start_pr_fix_task 145 39 abc123 "duplicate" >/dev/null; then r=launched; else r=blocked; fi
 check "active coding session suppresses a duplicate launch" "blocked 0" "$r $(grep -c '^task create' "$STATE/calls.log" || true)"
+
+setup_ci
+add_task task-initial in_progress
+handle_ci_failure 145 39 abc123 failure https://ci/deferred >/dev/null
+check "CI failure during coding is durably deferred" "0" "$(grep -c '^task create' "$STATE/calls.log" || true)"
+check_contains "deferred CI failure is marked for reconciliation" "ci-failure-deferred-sha=abc123" "$(pr_comments)"
+add_task task-initial completed "2026-10-12T13:25:00Z"
+handle_ci_failure 145 39 abc123 failure https://ci/deferred >/dev/null
+check "deferred CI failure starts one fix after completion" "1" "$(grep -c '^task create' "$STATE/calls.log")"
 
 rm -rf "$STATE"
 echo "$passes passed, $failures failed"
