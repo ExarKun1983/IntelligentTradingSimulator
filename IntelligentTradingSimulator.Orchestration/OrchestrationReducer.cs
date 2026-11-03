@@ -34,7 +34,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             case Ready:
                 if (issue.ReadyAt is null || message.OccurredAt > issue.ReadyAt)
                 {
-                    issue.Ready = !issue.ReactivationRequired;
+                    issue.Ready = !issue.ReactivationRequired && !issue.ActiveAuthorized;
                     issue.ReadyAt = message.OccurredAt;
                 }
                 break;
@@ -42,6 +42,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 if (issue.ReadyAt is null || message.OccurredAt >= issue.ReadyAt)
                 {
                     issue.Ready = false;
+                    issue.ActiveAuthorized = false;
                     issue.ReadyAt = message.OccurredAt;
                     CancelPendingWork(state, issue);
                     if (state.AdmittedIssue == issue.Number) Hold(issue, "Readiness withdrawn.");
@@ -58,10 +59,17 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 Hold(issue, string.IsNullOrWhiteSpace(pause.Reason) ? "Paused." : pause.Reason);
                 CancelPendingWork(state, issue);
                 break;
-            case Reactivate:
+            case Reactivate reactivate:
+                if (string.IsNullOrWhiteSpace(reactivate.Reason)) throw new InvalidOperationException("Reactivation requires an audit reason.");
+                if (!issue.ReactivationRequired || issue.Phase is not (Phase.BLOCKED or Phase.HUMAN_REVIEW or Phase.CLOSED))
+                    throw new InvalidOperationException("Only a held or terminal issue can be explicitly reactivated.");
                 if (HasUnfinishedWork(state, issue)) throw new InvalidOperationException("An operation is still active or uncertain.");
+                var previousGeneration = issue.Generation;
                 issue.Generation++;
+                issue.Reactivations.Add(message.Id, new ReactivationRecord(message.Id, previousGeneration,
+                    issue.Generation, reactivate.Reason, message.Actor, message.OccurredAt));
                 issue.ReactivationRequired = false;
+                issue.ActiveAuthorized = false;
                 issue.Paused = false;
                 issue.HoldReason = null;
                 issue.Phase = Phase.READY;
@@ -98,24 +106,27 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 }
                 break;
             case CiResult result:
-                CheckMapping(issue, result.PullRequest, result.Sha);
+                CheckMapping(issue, result.PullRequest, result.Sha, requireHead: false);
                 if (string.IsNullOrWhiteSpace(result.RunId) || issue.Ci is not { } ci ||
                     ci.RunId != result.RunId || ci.TaskId != result.TaskId ||
                     ci.Round != result.Round || ci.Sha != result.Sha || ci.Green is not null ||
-                    issue.Phase != Phase.CI_PENDING || !CompletedTaskMatches(issue, result.TaskId, result.Round, result.Sha))
+                    !CompletedTaskMatches(issue, result.TaskId, result.Round, result.Sha))
                     throw new InvalidOperationException("Ineligible CI result.");
+                var eligibleCi = issue.Phase == Phase.CI_PENDING && issue.ActiveAuthorized && !issue.Paused &&
+                    !issue.ReactivationRequired && issue.HeadSha == result.Sha && issue.PendingFeedbackEventIds.Count == 0;
                 ci.Green = result.Green;
                 var ciBlockers = result.Blockers ?? [];
                 ValidateReview(ciBlockers.Count > 0 ? ReviewClassification.Blocking : ReviewClassification.Accepted, ciBlockers, []);
                 if (result.Green && ciBlockers.Count > 0) throw new InvalidOperationException("Green CI cannot carry unresolved blockers.");
                 ci.Blockers = ciBlockers.ToList();
+                if (!eligibleCi) break;
                 if (result.Green)
                 {
                     issue.ConsecutiveCiFailures = 0;
                     if (issue.PendingReviewProgress)
                         issue.ConsecutiveReviewFailures = 0;
                     issue.PendingReviewProgress = false;
-                    issue.Phase = Phase.REVIEW_PENDING;
+                    issue.Phase = issue.PendingFeedbackEventIds.Count > 0 ? Phase.FIX_PENDING : Phase.REVIEW_PENDING;
                 }
                 else
                 {
@@ -125,21 +136,32 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 }
                 break;
             case ReviewResult result:
-                CheckMapping(issue, result.PullRequest, result.Sha);
+                CheckMapping(issue, result.PullRequest, result.Sha, requireHead: false);
                 if (string.IsNullOrWhiteSpace(result.ReviewId) || issue.Review is not { } review ||
                     review.ReviewId != result.ReviewId || review.TaskId != result.TaskId ||
                     review.Round != result.Round || review.Sha != result.Sha ||
-                    issue.Phase != Phase.REVIEW_PENDING || review.Classification is not null ||
+                    review.Classification is not null ||
                     issue.Ci?.Green != true || !CompletedTaskMatches(issue, result.TaskId, result.Round, result.Sha))
                     throw new InvalidOperationException("Ineligible review result.");
+                var eligibleReview = issue.Phase == Phase.REVIEW_PENDING && issue.ActiveAuthorized && !issue.Paused &&
+                    !issue.ReactivationRequired && issue.HeadSha == result.Sha && issue.PendingFeedbackEventIds.Count == 0;
                 ValidateReview(result.Classification, result.Findings, result.Responses);
                 ValidateFindingResolution(review, result.Classification, result.Findings, result.Responses);
                 var evidencedProgress = result.Responses.Any(response => response.Resolved &&
                     review.Findings.Any(finding => finding.Id == response.FindingId) &&
                     !review.Responses.Contains(response));
                 review.Classification = result.Classification;
-                review.Findings = result.Findings.ToList();
+                review.Findings = result.Classification == ReviewClassification.NeedsHuman
+                    ? result.Findings.Concat(review.Findings.Where(old => !result.Findings.Any(next => next.Id == old.Id))).ToList()
+                    : result.Findings.ToList();
                 review.Responses.AddRange(result.Responses.Where(response => !review.Responses.Contains(response)));
+                if (!eligibleReview)
+                {
+                    if (result.Classification == ReviewClassification.NeedsHuman && issue.ActiveAuthorized &&
+                        !issue.Paused && !issue.ReactivationRequired && issue.HeadSha == result.Sha)
+                        ApplyClassification(issue, result.Classification, message);
+                    break;
+                }
                 issue.PendingReviewProgress = evidencedProgress;
                 if (!evidencedProgress && result.Classification == ReviewClassification.Blocking)
                     issue.ConsecutiveReviewFailures++;
@@ -148,6 +170,13 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             case HumanFeedback feedback:
                 if (string.IsNullOrWhiteSpace(feedback.Text)) throw new InvalidOperationException("Feedback content is required.");
                 var handoffId = feedback.HandoffId ?? issue.CurrentHandoffId;
+                if (handoffId is null)
+                {
+                    handoffId = $"handoff:{issue.Number}:{issue.Generation}:{message.Id}";
+                    issue.Handoffs.Add(handoffId, new HumanHandoff(handoffId, issue.Generation, issue.Review?.ReviewId,
+                        issue.ActiveTaskId, issue.Round, issue.HeadSha, "Human feedback awaiting task handoff.", message.OccurredAt));
+                    issue.CurrentHandoffId = handoffId;
+                }
                 HumanHandoff? handoff = null;
                 if (handoffId is not null && !issue.Handoffs.TryGetValue(handoffId, out handoff))
                     throw new InvalidOperationException("Unknown feedback handoff.");
@@ -160,10 +189,17 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 issue.LastFeedbackText = feedback.Text;
                 issue.Feedback.Add(message.Id, new FeedbackRecord(message.Id, feedback.Text, message.Actor,
                     message.OccurredAt, issue.Generation, handoffId, feedbackRound, feedbackSha));
+                issue.PendingFeedbackEventIds.Add(message.Id);
+                if (issue.ActiveAuthorized && !issue.Paused && !issue.ReactivationRequired &&
+                    issue.Phase is Phase.CODING or Phase.CI_PENDING or Phase.REVIEW_PENDING or Phase.FIX_PENDING)
+                {
+                    CancelPendingWork(state, issue);
+                    issue.Phase = Phase.FIX_PENDING;
+                }
                 break;
             case HumanClassification classification:
                 if (string.IsNullOrWhiteSpace(classification.HandoffId) ||
-                    issue.Phase != Phase.HUMAN_REVIEW || issue.HoldReason != "Review requires human classification." ||
+                    issue.Phase != Phase.BLOCKED || issue.HoldReason != "Review requires human classification." ||
                     issue.Paused || issue.Review is null || issue.Review.Classification != ReviewClassification.NeedsHuman ||
                     issue.CurrentHandoffId != classification.HandoffId ||
                     !issue.Handoffs.TryGetValue(classification.HandoffId, out var classifiedHandoff) ||
@@ -190,6 +226,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 issue.Review.Responses.AddRange(classifiedResponses.Where(response => !issue.Review.Responses.Contains(response)));
                 issue.PendingReviewProgress = humanFindingProgress;
                 issue.ReactivationRequired = false;
+                issue.ActiveAuthorized = true;
                 issue.HoldReason = null;
                 ApplyClassification(issue, classification.Classification, message, humanFindingProgress);
                 break;
@@ -218,7 +255,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         foreach (var issue in state.Issues.Values.OrderBy(i => i.Number))
         {
             if (!observation.Issues.TryGetValue(issue.Number, out var live)) continue;
-            if (!live.Ready && issue.Ready)
+            if (!live.Ready && (issue.Ready || RequiresInitialReadiness(issue)))
             {
                 issue.Ready = false;
                 issue.ReadyAt = observation.ObservedAt;
@@ -241,6 +278,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 issue.TerminalOutcome = terminalOutcome;
                 issue.Phase = Phase.CLOSED;
                 issue.Ready = false;
+                issue.ActiveAuthorized = false;
                 issue.ReactivationRequired = true;
                 issue.HoldReason = "Closed.";
                 issue.ClosurePending = false;
@@ -270,7 +308,12 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 {
                     task.Status = TaskStatus.Completed;
                     issue.HeadSha = task.FinalSha;
-                    if (!issue.ReactivationRequired && !issue.Paused && issue.Ready && !live.Closed)
+                    if (!issue.ReactivationRequired && !issue.Paused && issue.ActiveAuthorized && !live.Closed &&
+                        issue.PendingFeedbackEventIds.Count > 0)
+                    {
+                        issue.Phase = Phase.FIX_PENDING;
+                    }
+                    else if (!issue.ReactivationRequired && !issue.Paused && issue.ActiveAuthorized && !live.Closed)
                     {
                         issue.Phase = Phase.CI_PENDING;
                         var intent = AddIntent(state, issue, EffectKind.RunCi, observation.ObservedAt, task.Id);
@@ -294,13 +337,16 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         if (state.AdmittedIssue is null &&
             !state.Outbox.Values.Any(e => e.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown))
         {
-            var next = state.Issues.Values.Where(i => i.Ready && i.Phase is Phase.READY or Phase.FIX_PENDING &&
+            var next = state.Issues.Values.Where(i => (i.Ready || i.ActiveAuthorized) &&
+                    i.Phase is Phase.READY or Phase.FIX_PENDING &&
                     !i.Paused && !i.ReactivationRequired && observation.Issues.TryGetValue(i.Number, out var live) &&
-                    live.Ready && !live.Closed && !HasUnfinishedWork(state, i))
+                    (i.ActiveAuthorized || live.Ready) && !live.Closed && !HasUnfinishedWork(state, i))
                 .OrderBy(i => i.ReadyAt).ThenBy(i => i.Number).FirstOrDefault();
             if (next is not null)
             {
                 state.AdmittedIssue = next.Number;
+                next.ActiveAuthorized = true;
+                next.Ready = false;
                 var live = observation.Issues[next.Number];
                 next.PullRequest = live.PullRequest;
                 next.HeadSha = live.HeadSha;
@@ -315,12 +361,15 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         if (state.AdmittedIssue is { } owner)
         {
             var issue = state.Issues[owner];
-            if (observation.Issues.TryGetValue(owner, out var live) && live.Ready && !live.Closed &&
+            if (observation.Issues.TryGetValue(owner, out var live) && issue.ActiveAuthorized && !live.Closed &&
                 !issue.Paused && !issue.ReactivationRequired)
             {
                 if (issue.Phase == Phase.FIX_PENDING && !HasUnfinishedWork(state, issue))
-                    AddTask(state, issue, issue.Ci?.Green == false ? TaskKind.CiRepair : TaskKind.ReviewRepair, observation.ObservedAt);
+                    AddTask(state, issue, issue.Ci?.Green == false ? TaskKind.CiRepair :
+                        issue.Review?.Classification == ReviewClassification.Blocking ? TaskKind.ReviewRepair :
+                        issue.PendingFeedbackEventIds.Count > 0 ? TaskKind.FeedbackRepair : TaskKind.ReviewRepair, observation.ObservedAt);
                 if (issue.Phase == Phase.REVIEW_PENDING && issue.Ci?.Green == true &&
+                    issue.PendingFeedbackEventIds.Count == 0 &&
                     (issue.Review is null || issue.Review.Sha != issue.HeadSha || issue.Review.TaskId != issue.ActiveTaskId))
                 {
                     var old = issue.Review;
@@ -414,6 +463,13 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     outcome.Status == DeliveryStatus.Unknown ? TaskStatus.Unknown : TaskStatus.Failed;
                 task.LaunchConfirmed = outcome.Status == DeliveryStatus.Succeeded;
                 task.ExternalId = outcome.ExternalId;
+                if (task.LaunchConfirmed)
+                    foreach (var feedbackId in task.FeedbackEventIds)
+                    {
+                        var feedback = issue.Feedback[feedbackId];
+                        issue.Feedback[feedbackId] = feedback with { HandedOffTaskId = task.Id, HandedOffAt = effect.CompletedAt };
+                        issue.PendingFeedbackEventIds.Remove(feedbackId);
+                    }
             }
             else if (effect.Kind == EffectKind.RunCi && issue.Ci?.IntentId == id)
                 issue.Ci.RunId = outcome.ExternalId;
@@ -435,7 +491,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
     public static IReadOnlyList<string> ProjectLabels(IssueState issue)
     {
         var labels = new List<string>();
-        if (issue.Ready) labels.Add("agent:ready");
+        if (issue.Ready && issue.Phase == Phase.READY || RequiresInitialReadiness(issue)) labels.Add("agent:ready");
         var stage = issue.Phase switch
         {
             Phase.CODING or Phase.FIX_PENDING => "agent:working",
@@ -452,8 +508,15 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
     public static bool IsProjectionLabel(string label) =>
         label is "agent:ready" or "agent:working" or "agent:ci" or "agent:ai-review" or "agent:review" or "agent:blocked";
 
+    public static bool RequiresInitialReadiness(IssueState issue) => issue.ActiveAuthorized &&
+        !issue.Tasks.Values.Any(task => task.Round == issue.Round &&
+            (task.LaunchConfirmed || task.Status is TaskStatus.Executing or TaskStatus.Running or
+                TaskStatus.AwaitingHeadConfirmation or TaskStatus.Unknown));
+
     private static bool ActorMatches(OrchestrationEvent message) => !string.IsNullOrWhiteSpace(message.Actor.Login) &&
-        message.Actor.Id is not <= 0 && message.Data switch
+        message.Actor.Id is not <= 0 && message.Actor.Type is null or "User" or "Bot" &&
+        !(message.Actor.Kind == ActorKind.Human && message.Actor.Type == "Bot") &&
+        message.Data switch
     {
         TaskCompleted => message.Actor.Kind == ActorKind.TaskService,
         CiResult => message.Actor.Kind == ActorKind.CiService,
@@ -502,18 +565,18 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 issue.Phase = Phase.HUMAN_REVIEW;
                 issue.HoldReason = "Awaiting human approval.";
                 issue.ReactivationRequired = true;
+                issue.ActiveAuthorized = false;
                 break;
             case ReviewClassification.NeedsHuman:
-                issue.Phase = Phase.HUMAN_REVIEW;
-                issue.HoldReason = "Review requires human classification.";
-                issue.ReactivationRequired = true;
+                Hold(issue, "Review requires human classification.");
                 break;
             case ReviewClassification.Blocking:
                 if (!findingProgress && issue.ConsecutiveReviewFailures >= issue.ReviewBudget) Hold(issue, "Review repair budget exhausted.");
                 else issue.Phase = Phase.FIX_PENDING;
                 break;
         }
-        if (issue.Phase == Phase.HUMAN_REVIEW)
+        if (issue.Phase == Phase.HUMAN_REVIEW ||
+            issue.Phase == Phase.BLOCKED && issue.HoldReason == "Review requires human classification.")
         {
             var handoffId = $"handoff:{issue.Number}:{issue.Generation}:{message.Id}";
             issue.Handoffs.Add(handoffId, new HumanHandoff(handoffId, issue.Generation, issue.Review?.ReviewId,
@@ -526,10 +589,13 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         issue.Phase = Phase.BLOCKED;
         issue.HoldReason = reason;
         issue.ReactivationRequired = true;
+        issue.ActiveAuthorized = false;
     }
     private static bool HasUnfinishedWork(RepositoryState state, IssueState issue) =>
         issue.Tasks.Values.Any(t => t.Status is TaskStatus.Intended or TaskStatus.Executing or TaskStatus.Running or
             TaskStatus.AwaitingHeadConfirmation or TaskStatus.Unknown) ||
+        issue.Ci is { RunId: not null, Green: null } ||
+        issue.Review is { ReviewId: not null, Classification: null } ||
         state.Outbox.Values.Any(e => e.IssueNumber == issue.Number &&
             (e.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown ||
                 e.Kind != EffectKind.ProjectLabels && e.Status == DeliveryStatus.Pending));
@@ -557,8 +623,10 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         {
             Id = id, Kind = kind, Status = TaskStatus.Intended, ParentTaskId = parent, Round = issue.Round,
             SourceSha = issue.HeadSha ?? "", ReviewBlockers = issue.Review?.Findings.ToList() ?? [],
-            CiBlockers = issue.Ci?.Blockers.ToList() ?? []
+            CiBlockers = issue.Ci?.Blockers.ToList() ?? [], FeedbackEventIds = issue.PendingFeedbackEventIds.ToList()
         });
+        foreach (var feedbackId in issue.PendingFeedbackEventIds)
+            issue.Feedback[feedbackId] = issue.Feedback[feedbackId] with { PlannedTaskId = id };
         issue.ActiveTaskId = id;
         AddIntent(state, issue, EffectKind.LaunchTask, now, id);
     }
@@ -571,7 +639,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         var intent = new EffectIntent
         {
             Id = id, IssueNumber = issue.Number, Generation = issue.Generation, Kind = kind, Status = DeliveryStatus.Pending,
-            TaskId = taskId, Round = issue.Round, Sha = issue.HeadSha, CreatedAt = now, Labels = labels?.ToList() ?? []
+            TaskId = taskId, Round = issue.Round, Sha = issue.HeadSha, CreatedAt = now, Labels = labels?.ToList() ?? [],
+            FeedbackEventIds = taskId is not null && issue.Tasks.TryGetValue(taskId, out var task) ? task.FeedbackEventIds.ToList() : []
         };
         intent.Digest = StateJson.Digest(System.Text.Json.JsonSerializer.Serialize(intent, StateJson.Options));
         state.Outbox.Add(id, intent);

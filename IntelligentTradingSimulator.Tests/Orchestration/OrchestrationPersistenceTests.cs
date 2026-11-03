@@ -8,6 +8,15 @@ public sealed class OrchestrationPersistenceTests
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
     private static readonly string Head = new('a', 40);
     private static readonly ReconcileOptions Enabled = new(false, true, true, true);
+    private static readonly ReconcileOptions Simulation = Enabled with { AllowOfflineAgentSimulation = true };
+    private static OrchestrationEvent Message(EventData data, string id) =>
+        new(id, "owner/repo", 7, 1, 1, data switch
+        {
+            TaskCompleted => new Actor("task-service", ActorKind.TaskService),
+            CiResult => new Actor("ci-service", ActorKind.CiService),
+            ReviewResult => new Actor("review-service", ActorKind.ReviewService),
+            _ => new Actor("maintainer", ActorKind.Human)
+        }, Now, data);
 
     [Theory]
     [InlineData(true, true, true, true)]
@@ -37,6 +46,7 @@ public sealed class OrchestrationPersistenceTests
             state.Issues[7].Ci = null;
             state.Issues[7].Phase = Phase.CODING;
             state.Issues[7].Tasks["task"].Status = TaskStatus.Intended;
+            state.Issues[7].Tasks["task"].LaunchConfirmed = false;
         }
         else
         {
@@ -55,6 +65,104 @@ public sealed class OrchestrationPersistenceTests
         await new OrchestrationReconciler().RunAsync(store, new Observations(), adapter, Enabled);
         Assert.Equal(0, adapter.Executions);
         Assert.Equal(DeliveryStatus.Pending, store.Current.Outbox["launch"].Status);
+    }
+
+    [Fact]
+    public async Task ExplicitOfflineSimulationExercisesLaunchCompletionCiAndReviewWithoutReadyProjection()
+    {
+        var state = RepositoryState.Create("owner/repo");
+        var reducer = new OrchestrationReducer(new Authorized());
+        state = reducer.Apply(state, Message(new Ready(), "ready"));
+        var store = new MemoryStore(state);
+        var adapter = new Effects(store);
+        var observations = new Observations();
+        var reconciler = new OrchestrationReconciler(reducer);
+        var launched = await reconciler.RunAsync(store, observations, adapter, Simulation);
+        var issue = launched.State.Issues[7];
+        var taskId = issue.ActiveTaskId!;
+        Assert.True(issue.Tasks[taskId].LaunchConfirmed);
+        Assert.True(issue.ActiveAuthorized);
+        Assert.DoesNotContain("agent:ready", OrchestrationReducer.ProjectLabels(issue));
+        observations.Ready = false;
+        observations.HeadOverride = new string('b', 40);
+        await reconciler.DispatchAsync(store, Message(new TaskCompleted(taskId, 11, observations.HeadOverride), "completed"));
+        var ci = await reconciler.RunAsync(store, observations, adapter, Simulation);
+        Assert.Equal(Phase.CI_PENDING, ci.State.Issues[7].Phase);
+        Assert.Equal("external", ci.State.Issues[7].Ci!.RunId);
+        await reconciler.DispatchAsync(store, Message(
+            new CiResult("external", taskId, 1, 11, observations.HeadOverride, true), "ci-green"));
+        var review = await reconciler.RunAsync(store, observations, adapter, Simulation);
+        Assert.Equal("external", review.State.Issues[7].Review!.ReviewId);
+        await reconciler.DispatchAsync(store, Message(new ReviewResult("external", taskId, 1, 11,
+            observations.HeadOverride, ReviewClassification.Accepted, [], []), "review"));
+        Assert.Equal(Phase.HUMAN_REVIEW, store.Current.Issues[7].Phase);
+        Assert.Null(store.Current.AdmittedIssue);
+        Assert.Equal(new[] { EffectKind.LaunchTask, EffectKind.RunCi, EffectKind.RequestReview }, adapter.Kinds);
+    }
+
+    [Theory]
+    [InlineData(EffectKind.LaunchTask)]
+    [InlineData(EffectKind.RequestReview)]
+    public async Task AgentSimulationCrashRecoversExecutingIdentityWithoutSecondLaunch(EffectKind kind)
+    {
+        var state = CiPending();
+        state.Outbox.Clear();
+        if (kind == EffectKind.LaunchTask)
+        {
+            state.Issues[7].Ci = null;
+            state.Issues[7].Phase = Phase.CODING;
+            state.Issues[7].Tasks["task"].Status = TaskStatus.Intended;
+            state.Issues[7].Tasks["task"].LaunchConfirmed = false;
+            state.Outbox["launch"] = new EffectIntent
+            {
+                Id = "launch", IssueNumber = 7, Generation = 1, Kind = EffectKind.LaunchTask,
+                TaskId = "task", Round = 1, Sha = Head, Status = DeliveryStatus.Pending
+            };
+        }
+        else
+        {
+            state.Issues[7].Ci!.Green = true;
+            state.Issues[7].Phase = Phase.REVIEW_PENDING;
+        }
+        var store = new MemoryStore(state);
+        var adapter = new Effects(store) { AfterExecute = () => store.FailWrites = true };
+        var reconciler = new OrchestrationReconciler();
+        await Assert.ThrowsAsync<IOException>(() => reconciler.RunAsync(store, new Observations(), adapter, Simulation));
+        Assert.Single(store.Current.Outbox.Values, effect => effect.Status == DeliveryStatus.Executing && effect.Kind == kind);
+        store.FailWrites = false;
+        var recovered = await reconciler.RunAsync(store, new Observations { Ready = false }, adapter, Simulation);
+        Assert.Equal(1, adapter.Executions);
+        Assert.Equal(1, adapter.Recoveries);
+        Assert.Single(recovered.State.Outbox.Values, effect => effect.Kind == kind && effect.Status == DeliveryStatus.Succeeded);
+        Assert.True(recovered.State.Issues[7].ActiveAuthorized);
+    }
+
+    [Fact]
+    public async Task SimulationFlagCannotEnableAnAdapterWithoutExplicitOfflineMarker()
+    {
+        var state = CiPending();
+        state.Issues[7].Ci!.Green = true;
+        state.Issues[7].Phase = Phase.REVIEW_PENDING;
+        state.Outbox.Clear();
+        var store = new MemoryStore(state);
+        var fake = new Effects(store);
+        await new OrchestrationReconciler().RunAsync(store, new Observations(), new UnmarkedAdapter(fake), Simulation);
+        Assert.Equal(0, fake.Executions);
+        Assert.Contains(store.Current.Outbox.Values, effect => effect.Kind == EffectKind.RequestReview &&
+            effect.Status == DeliveryStatus.Pending);
+    }
+
+    [Fact]
+    public async Task ActiveCiIgnoresAbsenceOfProjectedReadyLabel()
+    {
+        var store = new MemoryStore(CiPending());
+        var adapter = new Effects(store);
+        var result = await new OrchestrationReconciler().RunAsync(store,
+            new Observations { Ready = false }, adapter, Enabled);
+        Assert.Equal(1, adapter.Executions);
+        Assert.True(result.State.Issues[7].ActiveAuthorized);
+        Assert.Equal(Phase.CI_PENDING, result.State.Issues[7].Phase);
+        Assert.Equal(DeliveryStatus.Succeeded, result.State.Outbox["ci"].Status);
     }
 
     [Fact]
@@ -116,11 +224,13 @@ public sealed class OrchestrationPersistenceTests
     }
 
     [Fact]
-    public async Task LiveWithdrawalIsPersistedBeforeAnyPendingEffectCanRun()
+    public async Task AuthorizedWithdrawalIsPersistedBeforeAnyPendingEffectCanRun()
     {
         var store = new MemoryStore(CiPending());
         var adapter = new Effects(store);
-        await new OrchestrationReconciler().RunAsync(store, new Observations { Ready = false }, adapter, Enabled);
+        var reconciler = new OrchestrationReconciler(new OrchestrationReducer(new Authorized()));
+        await reconciler.DispatchAsync(store, Message(new Withdraw(), "withdraw"));
+        await reconciler.RunAsync(store, new Observations { Ready = false }, adapter, Enabled);
         Assert.Equal(DeliveryStatus.Cancelled, store.Current.Outbox["ci"].Status);
         Assert.DoesNotContain(adapter.Kinds, kind => kind == EffectKind.RunCi);
     }
@@ -270,7 +380,7 @@ public sealed class OrchestrationPersistenceTests
         var state = new RepositoryState { Repository = "owner/repo", AdmittedIssue = 7 };
         state.Issues[7] = new IssueState
         {
-            Number = 7, Ready = true, ReadyAt = Now, Phase = Phase.CI_PENDING, PullRequest = 11, HeadSha = Head,
+            Number = 7, ActiveAuthorized = true, ReadyAt = Now, Phase = Phase.CI_PENDING, PullRequest = 11, HeadSha = Head,
             Round = 1, ActiveTaskId = "task",
             Tasks = new()
             {
@@ -292,25 +402,27 @@ public sealed class OrchestrationPersistenceTests
 
     private sealed class Authorized : IAuthorizationPolicy
     {
-        public bool IsAuthorized(OrchestrationEvent message) => message.Actor.Login == "maintainer";
+        public bool IsAuthorized(OrchestrationEvent message) => message.Actor.Login is
+            "maintainer" or "task-service" or "ci-service" or "review-service";
     }
 
     private sealed class Observations : IObservationSource
     {
         public bool Ready { get; set; } = true;
+        public string? HeadOverride { get; set; }
         public Task<LiveObservation> ObserveAsync(RepositoryState state, CancellationToken cancellationToken) =>
             Task.FromResult(new LiveObservation
             {
                 ObservedAt = Now,
                 Issues = state.Issues.ToDictionary(p => p.Key, p => new LiveIssueObservation
                 {
-                    Ready = Ready, PullRequest = p.Value.PullRequest ?? 11, HeadSha = p.Value.HeadSha ?? Head,
+                    Ready = Ready, PullRequest = p.Value.PullRequest ?? 11, HeadSha = HeadOverride ?? p.Value.HeadSha ?? Head,
                     CompletedTaskId = p.Value.ActiveTaskId, Labels = OrchestrationReducer.ProjectLabels(p.Value).ToList()
                 })
             });
     }
 
-    private sealed class Effects(MemoryStore store) : IEffectAdapter
+    private sealed class Effects(MemoryStore store) : IOfflineEffectAdapter
     {
         public int Executions { get; private set; }
         public int Recoveries { get; private set; }
@@ -327,12 +439,21 @@ public sealed class OrchestrationPersistenceTests
             if (ThrowOnExecute) throw new IOException("lost result");
             return Task.FromResult(new EffectOutcome(DeliveryStatus.Succeeded, "external"));
         }
+
         public Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken cancellationToken)
         {
             Assert.Equal(DeliveryStatus.Executing, intent.Status);
             Recoveries++;
             return Task.FromResult(RecoveryOutcome);
         }
+    }
+
+    private sealed class UnmarkedAdapter(Effects inner) : IEffectAdapter
+    {
+        public Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken cancellationToken) =>
+            inner.ExecuteAsync(intent, cancellationToken);
+        public Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken cancellationToken) =>
+            inner.ReconcileAsync(intent, cancellationToken);
     }
 
     private sealed class MemoryStore(RepositoryState state) : IStateStore

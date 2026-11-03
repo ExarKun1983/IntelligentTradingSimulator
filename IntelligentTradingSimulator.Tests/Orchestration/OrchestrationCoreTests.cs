@@ -152,7 +152,7 @@ public sealed class OrchestrationCoreTests
         state = reducer.Apply(state, Event(new Ready(), "ready8", 8));
         state = reducer.Reconcile(state, Live(state)).State;
         Assert.Equal(7, state.AdmittedIssue);
-        Assert.Throws<InvalidOperationException>(() => reducer.Apply(state, Event(new Reactivate(), "reactivate")));
+        Assert.Throws<InvalidOperationException>(() => reducer.Apply(state, Event(new Reactivate("Operator reactivation."), "reactivate")));
     }
 
     [Fact]
@@ -349,10 +349,10 @@ public sealed class OrchestrationCoreTests
         state = FinishReview(state, ReviewClassification.NeedsHuman, "ambiguous");
         Assert.Null(state.AdmittedIssue);
         state = reducer.Apply(state, Event(new Resume(), "resume"));
-        Assert.Equal(Phase.HUMAN_REVIEW, state.Issues[7].Phase);
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
         var handoff = state.Issues[7].CurrentHandoffId!;
         state = reducer.Apply(state, Event(new HumanFeedback("Please investigate."), "feedback"));
-        Assert.Equal(Phase.HUMAN_REVIEW, state.Issues[7].Phase);
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
         Assert.Equal(handoff, state.Issues[7].Feedback["feedback"].HandoffId);
         state = reducer.Apply(state, Event(new HumanClassification(handoff, 1, 11, Sha(2),
             ReviewClassification.Blocking, "Maintainer explicitly classified the review.",
@@ -455,7 +455,7 @@ public sealed class OrchestrationCoreTests
             Actor = new Actor("task-service", ActorKind.TaskService, 42)
         }));
         state = reducer.Apply(state, Event(new HumanFeedback("Accepted; please resume."), "prose"));
-        Assert.Equal(Phase.HUMAN_REVIEW, state.Issues[7].Phase);
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
         Assert.Equal(ReviewClassification.NeedsHuman, state.Issues[7].Review!.Classification);
         Assert.Empty(state.Issues[7].Classifications);
     }
@@ -484,7 +484,7 @@ public sealed class OrchestrationCoreTests
         Assert.All(state.Issues[7].Feedback.Values, feedback => Assert.Equal(handoff, feedback.HandoffId));
         Assert.Throws<InvalidOperationException>(() => reducer.Apply(state,
             Event(new HumanFeedback("Wrong SHA.", handoff, 1, Sha(3)), "wrong-context")));
-        Assert.Equal(Phase.HUMAN_REVIEW, state.Issues[7].Phase);
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
     }
 
     [Theory]
@@ -506,7 +506,7 @@ public sealed class OrchestrationCoreTests
         state = reducer.Apply(state, Event(new Reopen(), "reopened"));
         state = reducer.Reconcile(state, Live(state)).State;
         Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
-        state = reducer.Apply(state, Event(new Reactivate(), "reactivate"));
+        state = reducer.Apply(state, Event(new Reactivate("Explicit operator reactivation."), "reactivate"));
         Assert.Equal(TerminalOutcome.None, state.Issues[7].TerminalOutcome);
         Assert.Single(state.Issues[7].TerminalHistory);
     }
@@ -529,7 +529,7 @@ public sealed class OrchestrationCoreTests
         state = reducer.Apply(state, Event(new Resume(), "resume"));
         state = reducer.Reconcile(state, Live(state)).State;
         Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
-        state = reducer.Apply(state, Event(new Reactivate(), "reactivate"));
+        state = reducer.Apply(state, Event(new Reactivate("Explicit operator reactivation."), "reactivate"));
         Assert.Equal(2, state.Issues[7].Generation);
         Assert.Throws<InvalidOperationException>(() => reducer.Apply(state, Event(new Resume(), "stale")));
     }
@@ -581,16 +581,221 @@ public sealed class OrchestrationCoreTests
     [Fact]
     public void ActualApiShapesUseRestUserOrGraphQlAuthorNotProse()
     {
-        using var rest = JsonDocument.Parse("""{"user":{"id":42,"login":"trusted"},"body":"author: attacker"}""");
-        using var graph = JsonDocument.Parse("""{"author":{"databaseId":42,"id":"opaque-node-id","login":"trusted"},"body":"user: attacker"}""");
+        using var rest = JsonDocument.Parse("""{"user":{"id":42,"login":"trusted","type":"User"},"body":"author: attacker"}""");
+        using var graph = JsonDocument.Parse("""{"author":{"databaseId":42,"id":"opaque-node-id","login":"trusted","__typename":"User"},"body":"user: attacker"}""");
         Assert.Equal("trusted", UpstreamIdentity.RestUser(rest.RootElement, ActorKind.Human).Login);
         Assert.Equal("trusted", UpstreamIdentity.GraphQlAuthor(graph.RootElement, ActorKind.Human).Login);
         Assert.Equal(42, UpstreamIdentity.RestUser(rest.RootElement, ActorKind.Human).Id);
         Assert.Equal(42, UpstreamIdentity.GraphQlAuthor(graph.RootElement, ActorKind.Human).Id);
+        Assert.Equal("opaque-node-id", UpstreamIdentity.GraphQlAuthor(graph.RootElement, ActorKind.Human).NodeId);
+        Assert.Equal("User", UpstreamIdentity.GraphQlAuthor(graph.RootElement, ActorKind.Human).Type);
         Assert.Throws<InvalidDataException>(() => UpstreamIdentity.RestUser(graph.RootElement, ActorKind.Human));
         Assert.Throws<InvalidDataException>(() => UpstreamIdentity.GraphQlAuthor(rest.RootElement, ActorKind.Human));
-        using var textIdentity = JsonDocument.Parse("""{"user":{"id":"42","login":"trusted"}}""");
+        using var textIdentity = JsonDocument.Parse("""{"user":{"id":"42","login":"trusted","type":"User"}}""");
         Assert.Throws<InvalidDataException>(() => UpstreamIdentity.RestUser(textIdentity.RootElement, ActorKind.Human));
+    }
+
+    [Fact]
+    public void GraphQlIdentityRequiresNodeIdAndSupportedTypenameNotLoginOrDatabaseIdAlone()
+    {
+        foreach (var json in new[]
+        {
+            """{"author":{"login":"trusted","databaseId":42}}""",
+            """{"author":{"login":"trusted","id":"node","__typename":"Organization"}}""",
+            """{"author":{"login":"trusted","id":42,"__typename":"User"}}""",
+            """{"author":{"login":"trusted","id":"node","__typename":"Bot"}}"""
+        })
+        {
+            using var invalid = JsonDocument.Parse(json);
+            Assert.Throws<InvalidDataException>(() => UpstreamIdentity.GraphQlAuthor(invalid.RootElement, ActorKind.Human));
+        }
+        using var valid = JsonDocument.Parse("""{"author":{"login":"trusted","id":"user-node","__typename":"User"}}""");
+        var actor = UpstreamIdentity.GraphQlAuthor(valid.RootElement, ActorKind.Human);
+        Assert.Null(actor.Id);
+        Assert.Equal("user-node", actor.NodeId);
+        Assert.Equal("User", actor.Type);
+    }
+
+    [Fact]
+    public void InitialReadinessIsVerifiedButItsProjectedRemovalCannotWithdrawActiveAuthorization()
+    {
+        var reducer = Reducer();
+        var state = Admitted();
+        Assert.True(state.Issues[7].ActiveAuthorized);
+        Assert.Contains("agent:ready", OrchestrationReducer.ProjectLabels(state.Issues[7]));
+        state = SucceedEffect(state, EffectKind.LaunchTask, "coding-task");
+        Assert.DoesNotContain("agent:ready", OrchestrationReducer.ProjectLabels(state.Issues[7]));
+        state = reducer.Reconcile(state, Live(state, ready: false)).State;
+        Assert.True(state.Issues[7].ActiveAuthorized);
+        Assert.Equal(Phase.CODING, state.Issues[7].Phase);
+        state = reducer.Apply(state, Event(new Withdraw(), "withdraw", at: Now.AddHours(2)));
+        Assert.False(state.Issues[7].ActiveAuthorized);
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+        Assert.Equal(7, state.AdmittedIssue);
+    }
+
+    [Fact]
+    public void FeedbackDuringCodingDefersCiAndIsHandedToOneExactChildTask()
+    {
+        var reducer = Reducer();
+        var state = SucceedEffect(Admitted(), EffectKind.LaunchTask, "initial");
+        var initialTask = state.Issues[7].ActiveTaskId!;
+        state = reducer.Apply(state, Event(new HumanFeedback("Address this regression."), "comment:1"));
+        state = reducer.Apply(state, Event(new HumanFeedback("Address this regression."), "comment:2"));
+        state = reducer.Apply(state, Event(new TaskCompleted(initialTask, 11, Sha(2)), "initial-complete"));
+        state = reducer.Reconcile(state, Live(state, Sha(2), ready: false)).State;
+        Assert.DoesNotContain(state.Outbox.Values, effect => effect.Kind is EffectKind.RunCi or EffectKind.RequestReview);
+        var child = state.Issues[7].Tasks[state.Issues[7].ActiveTaskId!];
+        Assert.Equal(TaskKind.FeedbackRepair, child.Kind);
+        Assert.Equal(initialTask, child.ParentTaskId);
+        Assert.Equal(new[] { "comment:1", "comment:2" }, child.FeedbackEventIds);
+        Assert.Equal(2, state.Issues[7].PendingFeedbackEventIds.Count);
+        Assert.All(state.Issues[7].Feedback.Values, feedback => Assert.Equal(child.Id, feedback.PlannedTaskId));
+        state = CompleteTask(state, 3);
+        Assert.Empty(state.Issues[7].PendingFeedbackEventIds);
+        Assert.All(state.Issues[7].Feedback.Values, feedback =>
+        {
+            Assert.Equal(child.Id, feedback.HandedOffTaskId);
+            Assert.NotNull(feedback.HandoffId);
+            Assert.NotNull(feedback.HandedOffAt);
+        });
+        Assert.Equal(Phase.CI_PENDING, state.Issues[7].Phase);
+        Assert.Equal(child.Id, state.Issues[7].Ci!.TaskId);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FeedbackCancelsPendingCiOrReviewBeforeCreatingFeedbackRepair(bool reviewPending)
+    {
+        var reducer = Reducer();
+        var state = CompleteTask(Admitted(), 2);
+        var kind = EffectKind.RunCi;
+        if (reviewPending)
+        {
+            state = FinishCi(state, true, "green");
+            state = reducer.Reconcile(state, Live(state)).State;
+            kind = EffectKind.RequestReview;
+        }
+        var originalIntent = state.Outbox.Values.Single(effect => effect.Kind == kind && effect.Status == DeliveryStatus.Pending).Id;
+        state = reducer.Apply(state, Event(new HumanFeedback("Please address this first."), "feedback"));
+        Assert.Equal(DeliveryStatus.Cancelled, state.Outbox[originalIntent].Status);
+        state = reducer.Reconcile(state, Live(state, ready: false)).State;
+        Assert.Equal(Phase.FIX_PENDING, state.Issues[7].Phase);
+        var child = state.Issues[7].Tasks[state.Issues[7].ActiveTaskId!];
+        Assert.Equal(TaskKind.FeedbackRepair, child.Kind);
+        Assert.Equal("feedback", Assert.Single(child.FeedbackEventIds));
+        Assert.DoesNotContain(state.Outbox.Values, effect => effect.Status == DeliveryStatus.Pending &&
+            effect.Kind is EffectKind.RunCi or EffectKind.RequestReview);
+    }
+
+    [Fact]
+    public void ScopedClassificationWaitsForAdmissionAndReactivationRequiresAuditedReason()
+    {
+        var reducer = Reducer();
+        var state = FinishReview(FinishCi(CompleteTask(Admitted(), 2), true, "green"),
+            ReviewClassification.NeedsHuman, "ambiguous");
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+        Assert.Null(state.AdmittedIssue);
+        var handoff = state.Issues[7].CurrentHandoffId!;
+        state = reducer.Apply(state, Event(new Ready(), "ready8", 8));
+        state = reducer.Reconcile(state, Live(state)).State;
+        Assert.Equal(8, state.AdmittedIssue);
+        state = reducer.Apply(state, Event(new HumanClassification(handoff, 1, 11, Sha(2),
+            ReviewClassification.Blocking, "Explicit adjudication.", [new Finding("f", "Defect", "Evidence")]), "classify"));
+        state = reducer.Reconcile(state, Live(state)).State;
+        Assert.Equal(8, state.AdmittedIssue);
+        Assert.Single(state.Issues[7].Tasks);
+        state = reducer.Apply(state, Event(new Pause("Yield repository slot."), "pause8", 8));
+        state = reducer.Reconcile(state, Live(state)).State;
+        Assert.Equal(7, state.AdmittedIssue);
+        Assert.Equal(TaskKind.ReviewRepair, state.Issues[7].Tasks[state.Issues[7].ActiveTaskId!].Kind);
+        var queued = reducer.Apply(Empty(), Event(new Ready(), "ready"));
+        queued = reducer.Apply(queued, Event(new Pause("Hold."), "pause"));
+        Assert.Throws<InvalidOperationException>(() => reducer.Apply(queued, Event(new Reactivate(" "), "empty-reason")));
+        queued = reducer.Apply(queued, Event(new Reactivate("Operator accepted the new generation."), "reactivate"));
+        var audit = queued.Issues[7].Reactivations["reactivate"];
+        Assert.Equal(1, audit.PreviousGeneration);
+        Assert.Equal(2, audit.Generation);
+        Assert.Equal("Operator accepted the new generation.", audit.Reason);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PausedConfirmedCiOrReviewRetainsAdmissionUntilResultSettlesWithoutClearingHold(bool reviewPending)
+    {
+        var reducer = Reducer();
+        var state = CompleteTask(Admitted(), 2);
+        EventData result;
+        if (reviewPending)
+        {
+            state = FinishCi(state, true, "green");
+            state = reducer.Reconcile(state, Live(state)).State;
+            state = SucceedEffect(state, EffectKind.RequestReview, "review");
+            var review = state.Issues[7].Review!;
+            result = new ReviewResult("review", review.TaskId, review.Round, 11, review.Sha,
+                ReviewClassification.Accepted, [], []);
+        }
+        else
+        {
+            state = SucceedEffect(state, EffectKind.RunCi, "run");
+            var ci = state.Issues[7].Ci!;
+            result = new CiResult("run", ci.TaskId, ci.Round, 11, ci.Sha, true);
+        }
+        Assert.Throws<InvalidOperationException>(() => reducer.Apply(state,
+            Event(new Reactivate("Cannot bypass an active phase."), "active-reactivate")));
+        state.Issues[7].ConsecutiveCiFailures = 2;
+        state = reducer.Apply(state, Event(new Pause("Operator hold."), "pause"));
+        Assert.Equal(7, state.AdmittedIssue);
+        Assert.Throws<InvalidOperationException>(() => reducer.Apply(state,
+            Event(new Reactivate("Cannot bypass a confirmed pending operation."), "pending-reactivate")));
+        state = reducer.Apply(state, Event(result, "settled"));
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+        Assert.Equal("Operator hold.", state.Issues[7].HoldReason);
+        Assert.Equal(2, state.Issues[7].ConsecutiveCiFailures);
+        Assert.Null(state.AdmittedIssue);
+        state = reducer.Apply(state, Event(new Reactivate("Operation settled; new authorized generation."), "reactivate"));
+        Assert.Equal(2, state.Issues[7].Generation);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FeedbackWaitsForConfirmedCiOrReviewThenHandsOffExactlyOnce(bool reviewPending)
+    {
+        var reducer = Reducer();
+        var state = CompleteTask(Admitted(), 2);
+        EventData result;
+        if (reviewPending)
+        {
+            state = FinishCi(state, true, "green");
+            state = reducer.Reconcile(state, Live(state)).State;
+            state = SucceedEffect(state, EffectKind.RequestReview, "review");
+            var review = state.Issues[7].Review!;
+            result = new ReviewResult("review", review.TaskId, review.Round, 11, review.Sha,
+                ReviewClassification.Accepted, [], []);
+        }
+        else
+        {
+            state = SucceedEffect(state, EffectKind.RunCi, "run");
+            var ci = state.Issues[7].Ci!;
+            result = new CiResult("run", ci.TaskId, ci.Round, 11, ci.Sha, true);
+        }
+        state = reducer.Apply(state, Event(new HumanFeedback("Address this before proceeding."), "feedback"));
+        state = reducer.Reconcile(state, Live(state, ready: false)).State;
+        Assert.Single(state.Issues[7].Tasks);
+        Assert.Equal(7, state.AdmittedIssue);
+        state = reducer.Apply(state, Event(result, "settled"));
+        state = reducer.Reconcile(state, Live(state, ready: false)).State;
+        var child = state.Issues[7].Tasks[state.Issues[7].ActiveTaskId!];
+        Assert.Equal(TaskKind.FeedbackRepair, child.Kind);
+        Assert.Equal("feedback", Assert.Single(child.FeedbackEventIds));
+        state = CompleteTask(state, 3);
+        Assert.Equal(child.Id, state.Issues[7].Feedback["feedback"].HandedOffTaskId);
+        Assert.Empty(state.Issues[7].PendingFeedbackEventIds);
+        var repeated = reducer.Apply(state, Event(new HumanFeedback("Address this before proceeding."), "feedback"));
+        Assert.Equal(StateJson.Serialize(state), StateJson.Serialize(repeated));
     }
 
     [Fact]

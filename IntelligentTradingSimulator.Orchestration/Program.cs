@@ -45,6 +45,26 @@ public static class OrchestrationCommand
             var root = document.RootElement;
             if (eventName is not ("issues" or "workflow_dispatch"))
                 throw new InvalidDataException("Unsupported notification.");
+            var contextPath = Argument(args, "--context");
+            if (contextPath is not null)
+            {
+                var contextInfo = new FileInfo(contextPath);
+                if (!contextInfo.Exists || contextInfo.Length > MaximumFixtureBytes)
+                    throw new InvalidDataException("Missing or oversized notification context.");
+                var context = JsonSerializer.Deserialize<NotificationReplayContext>(
+                    File.ReadAllText(contextPath), StateJson.Options)
+                    ?? throw new InvalidDataException("Missing notification context.");
+                var decision = OfflineNotificationReplay.Run(root, eventName, context);
+                output.WriteLine(JsonSerializer.Serialize(new
+                {
+                    Mode = "notification-dry-run",
+                    AcceptedDurably = false,
+                    ExternalEffectsExecuted = 0,
+                    decision.State,
+                    decision.PendingEffects
+                }, StateJson.Options));
+                return 0;
+            }
             var repository = root.GetProperty("repository").GetProperty("full_name").GetString();
             output.WriteLine(JsonSerializer.Serialize(new
             {
@@ -79,6 +99,36 @@ public static class OrchestrationCommand
 public sealed record ReplayFixture(
     RepositoryState State, List<OrchestrationEvent> Events, LiveObservation Observation,
     List<string> AuthorizedActors);
+
+public sealed record NotificationReplayContext(
+    RepositoryState State, LiveObservation Observation, IngressEvidence Evidence,
+    string RunId, long RepositoryGeneration, long IssueGeneration, DateTimeOffset OccurredAt);
+
+public static class OfflineNotificationReplay
+{
+    public static ReconcileDecision Run(JsonElement payload, string eventName, NotificationReplayContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.State is null || context.Observation is null || context.Evidence is null ||
+            context.State.Repository != context.Evidence.Repository)
+            throw new InvalidDataException("Incomplete or mismatched notification context.");
+        if (!context.Observation.Issues.TryGetValue(context.Evidence.IssueNumber, out var observed) ||
+            observed.Ready != context.Evidence.Ready || observed.Closed == context.Evidence.IssueOpen)
+            throw new InvalidDataException("Notification evidence contradicts the supplied live observation.");
+        var message = GitHubActionsIngress.PrepareEvent(payload, eventName, context.RunId,
+            context.Evidence, context.RepositoryGeneration, context.IssueGeneration, context.OccurredAt);
+        // Like replay fixtures, supplied evidence is for offline validation, never production authorization.
+        var reducer = new OrchestrationReducer(new NotificationAuthorization(message));
+        var state = message is null ? context.State : reducer.Apply(context.State, message);
+        return reducer.Reconcile(state, context.Observation);
+    }
+
+    private sealed class NotificationAuthorization(OrchestrationEvent? expected) : IAuthorizationPolicy
+    {
+        public bool IsAuthorized(OrchestrationEvent message) =>
+            expected is not null && message.Digest == expected.Digest;
+    }
+}
 
 public static class OfflineReplay
 {

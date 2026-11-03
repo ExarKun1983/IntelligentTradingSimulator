@@ -6,7 +6,7 @@ using System.Text.Json.Serialization;
 namespace IntelligentTradingSimulator.Orchestration;
 
 public enum Phase { READY, CODING, CI_PENDING, REVIEW_PENDING, FIX_PENDING, HUMAN_REVIEW, BLOCKED, CLOSED }
-public enum TaskKind { Coding, CiRepair, ReviewRepair }
+public enum TaskKind { Coding, CiRepair, ReviewRepair, FeedbackRepair }
 public enum TaskStatus { Intended, Executing, Running, AwaitingHeadConfirmation, Completed, Failed, Unknown }
 public enum EffectKind { LaunchTask, RunCi, RequestReview, ProjectLabels }
 public enum DeliveryStatus { Pending, Executing, Succeeded, Failed, Unknown, Cancelled }
@@ -14,7 +14,7 @@ public enum ReviewClassification { Accepted, Blocking, NeedsHuman }
 public enum ActorKind { Human, TaskService, CiService, ReviewService }
 public enum TerminalOutcome { None, Merged, Unmerged, Unknown }
 
-public sealed record Actor(string Login, ActorKind Kind, long? Id = null);
+public sealed record Actor(string Login, ActorKind Kind, long? Id = null, string? NodeId = null, string? Type = null);
 
 public sealed class RepositoryState
 {
@@ -44,6 +44,7 @@ public sealed class IssueState
     public string? LastEventId { get; set; }
     public Phase Phase { get; set; } = Phase.READY;
     public bool Ready { get; set; }
+    public bool ActiveAuthorized { get; set; }
     public DateTimeOffset? ReadyAt { get; set; }
     public bool ReactivationRequired { get; set; }
     public bool Paused { get; set; }
@@ -68,6 +69,8 @@ public sealed class IssueState
     public string? CurrentHandoffId { get; set; }
     public Dictionary<string, HumanHandoff> Handoffs { get; set; } = [];
     public Dictionary<string, FeedbackRecord> Feedback { get; set; } = [];
+    public List<string> PendingFeedbackEventIds { get; set; } = [];
+    public Dictionary<string, ReactivationRecord> Reactivations { get; set; } = [];
     public Dictionary<string, HumanClassificationRecord> Classifications { get; set; } = [];
     public string? ProjectionDigest { get; set; }
     public string? ObservedProjectionDigest { get; set; }
@@ -86,6 +89,7 @@ public sealed class TaskIdentity
     public string? ExternalId { get; set; }
     public List<Finding> ReviewBlockers { get; set; } = [];
     public List<Finding> CiBlockers { get; set; } = [];
+    public List<string> FeedbackEventIds { get; set; } = [];
 }
 
 public sealed class CiIdentity
@@ -117,7 +121,10 @@ public sealed record InboxEntry(string Id, string Digest, DeliveryStatus Status,
 public sealed record HumanHandoff(string Id, long Generation, string? ReviewId, string? TaskId,
     int Round, string? Sha, string Reason, DateTimeOffset CreatedAt, string? ClassificationEventId = null);
 public sealed record FeedbackRecord(string EventId, string Text, Actor Author, DateTimeOffset OccurredAt,
-    long Generation, string? HandoffId, int Round, string? Sha);
+    long Generation, string? HandoffId, int Round, string? Sha, string? PlannedTaskId = null,
+    string? HandedOffTaskId = null, DateTimeOffset? HandedOffAt = null);
+public sealed record ReactivationRecord(string EventId, long PreviousGeneration, long Generation,
+    string Reason, Actor Author, DateTimeOffset OccurredAt);
 public sealed record HumanClassificationRecord(string EventId, string HandoffId, Actor Author, string Reason,
     int Round, string Sha, ReviewClassification Classification, List<Finding> Findings,
     List<FindingResponse> Responses, DateTimeOffset OccurredAt);
@@ -137,6 +144,7 @@ public sealed class EffectIntent
     public string? Sha { get; set; }
     public string? ExternalId { get; set; }
     public List<string> Labels { get; set; } = [];
+    public List<string> FeedbackEventIds { get; set; } = [];
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
@@ -163,7 +171,7 @@ public sealed record Withdraw : EventData;
 public sealed record StageEdited : EventData;
 public sealed record Resume : EventData;
 public sealed record Pause(string Reason) : EventData;
-public sealed record Reactivate : EventData;
+public sealed record Reactivate(string Reason) : EventData;
 public sealed record TaskCompleted(string TaskId, int PullRequest, string Sha) : EventData;
 public sealed record HeadChanged(int PullRequest, string Sha) : EventData;
 public sealed record CiResult(string RunId, string TaskId, int Round, int PullRequest, string Sha, bool Green,

@@ -1562,8 +1562,10 @@ admission of queued, unstarted work. Withdrawal during active work must stop new
 effects without forgetting an active/uncertain task. Stage-label edits only request
 projection repair: they cannot manufacture completion, CI success, review acceptance,
 or reactivation. Projection-origin notifications do not become commands.
-The opt-in label may coexist with a stage label while work is active; a stage
-projection must not itself be interpreted as readiness withdrawal.
+The opt-in label coexists with the stage label until the first task launch is
+confirmed. Subsequent stage projections can remove it: durable active authorization
+is separate from queue readiness, so projection removal is not withdrawal. An explicit
+authorized withdrawal command still stops new effects without losing task identity.
 
 GitHub documents that Issue labels written with `GITHUB_TOKEN` **do not trigger**
 another label workflow run. Human actions and suitable PAT/App actions can trigger
@@ -1673,7 +1675,16 @@ dotnet test IntelligentTradingSimulator.Tests --configuration Release \
 
 Output explicitly reports `AcceptedDurably: false` and `ExternalEffectsExecuted: 0`.
 `--notification <payload> --event-name issues --dry-run` inspects notification context;
-it does not trust payload actors as authorization or accept work. Invalid input fails
+it does not trust payload actors as authorization or accept work. Adding
+`--context /tmp/notification-context.json` exercises validated notification conversion
+and the **same reducer** used by reconciliation. That offline context contains
+`State`, `Observation`, `Evidence` (an `IngressEvidence` object), `RunId`,
+`RepositoryGeneration`, `IssueGeneration` and `OccurredAt`. Numeric actor identity,
+permissions, live readiness and workflow generations are validated before producing
+typed events; stage edits only dirty their projection. All evidence in a fixture is
+synthetic, not proof of production API permissions. Reuse the original run ID and
+timestamp when replaying a notification. Reactivation includes its explicit `Reason`.
+Invalid input fails
 without echoing arbitrary payloads into diagnostics. Tests use fake APIs/transports,
 including Git publication conflicts and lost responses; no test launches a live agent,
 CI run, review or remote state write.

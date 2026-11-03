@@ -81,6 +81,51 @@ public class OrchestrationCommandTests
     }
 
     [Fact]
+    public void NotificationWithOfflineContextUsesValidatedIngressAndSharedReducer()
+    {
+        var path = Path.GetTempFileName();
+        var contextPath = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(path, """
+                {"repository":{"id":100,"full_name":"owner/repo"},
+                 "sender":{"id":42,"type":"User"},
+                 "action":"labeled","issue":{"id":200,"number":7},
+                 "label":{"name":"agent:ready"}}
+                """);
+            var now = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+            var context = new NotificationReplayContext(
+                RepositoryState.Create("owner/repo"),
+                new LiveObservation
+                {
+                    ObservedAt = now,
+                    Issues = { [7] = new() { Ready = true } }
+                },
+                new IngressEvidence("owner/repo", 100, 42, "User", "write", 200, 7,
+                    true, true, false, []),
+                "123", 1, 1, now);
+            File.WriteAllText(contextPath, JsonSerializer.Serialize(context, StateJson.Options));
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+            Assert.Equal(0, OrchestrationCommand.Run(
+                ["--dry-run", "--notification", path, "--event-name", "issues", "--context", contextPath],
+                output, error));
+            using var result = JsonDocument.Parse(output.ToString());
+            Assert.False(result.RootElement.GetProperty("AcceptedDurably").GetBoolean());
+            Assert.Equal(0, result.RootElement.GetProperty("ExternalEffectsExecuted").GetInt32());
+            Assert.Equal("CODING",
+                result.RootElement.GetProperty("State").GetProperty("Issues").GetProperty("7")
+                    .GetProperty("Phase").GetString());
+            Assert.Equal("", error.ToString());
+        }
+        finally
+        {
+            File.Delete(path);
+            File.Delete(contextPath);
+        }
+    }
+
+    [Fact]
     public void MalformedInputDoesNotEchoPayloadInDiagnostics()
     {
         var path = Path.GetTempFileName();

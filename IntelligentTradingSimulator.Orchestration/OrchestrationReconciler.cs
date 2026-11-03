@@ -16,12 +16,16 @@ public interface IEffectAdapter
     Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken cancellationToken);
 }
 
+// Only deliberately injected offline fakes may simulate agent launch effects.
+public interface IOfflineEffectAdapter : IEffectAdapter { }
+
 public sealed record ReconcileOptions(
     bool DryRun = true,
     bool LiveEffectsEnabled = false,
     bool PrerequisiteCapabilitiesVerified = false,
     bool CostApproved = false,
-    int MaximumConflicts = 8);
+    int MaximumConflicts = 8,
+    bool AllowOfflineAgentSimulation = false);
 
 public sealed record ReconcileResult(RepositoryState State, IReadOnlyList<EffectIntent> Decisions, bool EffectsDisabled);
 
@@ -82,9 +86,9 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                     return new((await store.LoadAsync(cancellationToken)).State, decision.PendingEffects, false);
                 return new(resolved, decision.PendingEffects, false);
             }
-            // Launching coding or review agents is impossible in this release, even with flags.
+            var simulateAgents = options.AllowOfflineAgentSimulation && effects is IOfflineEffectAdapter;
             var pending = snapshot.State.Outbox.Values.FirstOrDefault(e => e.Status == DeliveryStatus.Pending &&
-                e.Kind is not (EffectKind.LaunchTask or EffectKind.RequestReview) &&
+                (e.Kind is not (EffectKind.LaunchTask or EffectKind.RequestReview) || simulateAgents) &&
                 !snapshot.State.Outbox.Values.Any(other => other.Status == DeliveryStatus.Unknown) &&
                 IsSafeToExecute(snapshot.State, e, live));
             if (pending is null) return new(snapshot.State, decision.PendingEffects, false);
@@ -129,14 +133,22 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             task.FinalSha == intent.Sha && task.Round == intent.Round;
         var eligible = intent.Kind switch
         {
-            EffectKind.RunCi => issue.Phase == Phase.CI_PENDING && issue.Ci is { Green: null } ci &&
+            EffectKind.LaunchTask => issue.ActiveTaskId == intent.TaskId && intent.TaskId is { } launchTaskId &&
+                issue.Tasks.TryGetValue(launchTaskId, out var launchTask) && launchTask.Status == TaskStatus.Intended &&
+                launchTask.Round == intent.Round && launchTask.SourceSha == intent.Sha &&
+                issue.PendingFeedbackEventIds.All(id => launchTask.FeedbackEventIds.Contains(id)),
+            EffectKind.RunCi => issue.PendingFeedbackEventIds.Count == 0 &&
+                issue.Phase == Phase.CI_PENDING && issue.Ci is { Green: null } ci &&
                 ci.IntentId == intent.Id && ci.TaskId == intent.TaskId && ci.Round == intent.Round && ci.Sha == intent.Sha,
-            EffectKind.RequestReview => issue.Phase == Phase.REVIEW_PENDING && issue.Ci?.Green == true &&
+            EffectKind.RequestReview => issue.PendingFeedbackEventIds.Count == 0 &&
+                issue.Phase == Phase.REVIEW_PENDING && issue.Ci?.Green == true &&
                 issue.Ci.TaskId == intent.TaskId && issue.Ci.Sha == intent.Sha && issue.Ci.Round == intent.Round &&
                 issue.Review is { Classification: null } review && review.IntentId == intent.Id,
             _ => false
         };
-        return eligible && matchesCompletedTask && state.AdmittedIssue == issue.Number && issue.Ready && live.Ready && !live.Closed &&
+        return eligible && (intent.Kind == EffectKind.LaunchTask || matchesCompletedTask) &&
+            state.AdmittedIssue == issue.Number && issue.ActiveAuthorized &&
+            (!OrchestrationReducer.RequiresInitialReadiness(issue) || live.Ready) && !live.Closed &&
             !issue.Paused && !issue.ReactivationRequired && issue.PullRequest == live.PullRequest &&
             intent.Sha == live.HeadSha && intent.Sha == issue.HeadSha;
     }
@@ -144,18 +156,34 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
 
 public static class UpstreamIdentity
 {
-    public static Actor RestUser(JsonElement payload, ActorKind kind) => Parse(payload, "user", "id", kind);
-    public static Actor GraphQlAuthor(JsonElement payload, ActorKind kind) => Parse(payload, "author", "databaseId", kind);
+    public static Actor RestUser(JsonElement payload, ActorKind kind) => Parse(payload, "user", "type", kind, false);
+    public static Actor GraphQlAuthor(JsonElement payload, ActorKind kind) => Parse(payload, "author", "__typename", kind, true);
     public static ReviewClassification ClassifyUnstructuredReview(string _) => ReviewClassification.NeedsHuman;
 
-    private static Actor Parse(JsonElement payload, string property, string idProperty, ActorKind kind)
+    private static Actor Parse(JsonElement payload, string property, string typeProperty, ActorKind kind, bool graphQl)
     {
         if (!payload.TryGetProperty(property, out var identity) || identity.ValueKind != JsonValueKind.Object ||
             !identity.TryGetProperty("login", out var login) || login.ValueKind != JsonValueKind.String ||
             string.IsNullOrWhiteSpace(login.GetString()) ||
-            !identity.TryGetProperty(idProperty, out var identityId) || identityId.ValueKind != JsonValueKind.Number ||
-            !identityId.TryGetInt64(out var numericId) || numericId <= 0)
+            !identity.TryGetProperty(typeProperty, out var type) || type.ValueKind != JsonValueKind.String ||
+            type.GetString() is not ("User" or "Bot") || kind == ActorKind.Human && type.GetString() != "User")
             throw new InvalidDataException("Missing authenticated API author identity.");
-        return new(login.GetString()!, kind, numericId);
+        long? numericId = null;
+        if (identity.TryGetProperty(graphQl ? "databaseId" : "id", out var databaseId) && databaseId.ValueKind != JsonValueKind.Null)
+        {
+            if (databaseId.ValueKind != JsonValueKind.Number || !databaseId.TryGetInt64(out var number) || number <= 0)
+                throw new InvalidDataException("Invalid numeric API author identity.");
+            numericId = number;
+        }
+        if (!graphQl && numericId is null) throw new InvalidDataException("Missing numeric REST author identity.");
+        string? nodeId = null;
+        if (identity.TryGetProperty(graphQl ? "id" : "node_id", out var node))
+        {
+            if (node.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(node.GetString()))
+                throw new InvalidDataException("Invalid API author node identity.");
+            nodeId = node.GetString();
+        }
+        if (graphQl && nodeId is null) throw new InvalidDataException("Missing GraphQL author node identity.");
+        return new(login.GetString()!, kind, numericId, nodeId, type.GetString());
     }
 }

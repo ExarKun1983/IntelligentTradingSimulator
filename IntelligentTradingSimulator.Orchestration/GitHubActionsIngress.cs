@@ -11,7 +11,7 @@ public sealed record ActionsNotification(
 public sealed record IngressEvidence(
     string Repository, long RepositoryId, long ActorId, string ActorType, string Permission,
     long IssueId, int IssueNumber, bool IssueOpen, bool Ready, bool IsPullRequest,
-    IReadOnlySet<long> ProjectionActorIds);
+    HashSet<long> ProjectionActorIds);
 
 /// <summary>Validates notifications; API permission/live-Issue evidence must be supplied by a trusted observer.</summary>
 public static class GitHubActionsIngress
@@ -19,9 +19,40 @@ public static class GitHubActionsIngress
     private static readonly HashSet<string> StageLabels =
         ["agent:working", "agent:ci", "agent:ai-review", "agent:review", "agent:blocked"];
 
+    public static OrchestrationEvent? PrepareEvent(
+        JsonElement payload, string eventName, string runId, IngressEvidence evidence,
+        long repositoryGeneration, long issueGeneration, DateTimeOffset occurredAt)
+    {
+        var notification = Parse(payload, eventName, runId, evidence);
+        if (notification.Kind == NotificationKind.Ignore) return null;
+        if (repositoryGeneration <= 0 || issueGeneration <= 0 ||
+            evidence.ActorType != "User" || evidence.Permission is not ("admin" or "maintain" or "write"))
+            throw new InvalidDataException("A verified human command and explicit workflow generations are required.");
+        EventData data = notification.Kind switch
+        {
+            // Live readiness can defer work, but cannot rewrite an immutable source notification.
+            NotificationKind.Readiness or NotificationKind.WithdrawReadiness =>
+                payload.GetProperty("action").GetString() == "labeled" ? new Ready() : new Withdraw(),
+            NotificationKind.Projection => new StageEdited(),
+            NotificationKind.Closed => new Closure(),
+            NotificationKind.Reopened => new Reopen(),
+            NotificationKind.Resume => new Resume(),
+            NotificationKind.Pause => new Pause(notification.Reason!),
+            NotificationKind.Reactivate => new Reactivate(notification.Reason!),
+            _ => throw new InvalidDataException("Unsupported command.")
+        };
+        return new(notification.SourceId, evidence.Repository, notification.IssueNumber,
+            repositoryGeneration, issueGeneration,
+            new Actor(notification.ActorId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ActorKind.Human, notification.ActorId), occurredAt, data);
+    }
+
     public static ActionsNotification Parse(
         JsonElement payload, string eventName, string runId, IngressEvidence evidence)
     {
+        if (evidence is null || evidence.ProjectionActorIds is null ||
+            evidence.RepositoryId <= 0 || evidence.IssueId <= 0 || evidence.IssueNumber <= 0)
+            throw new InvalidDataException("Verified repository and Issue identities are required.");
         if (!long.TryParse(runId, out var run) || run <= 0)
             throw new InvalidDataException("A stable Actions run ID is required.");
         var repository = payload.GetProperty("repository");
