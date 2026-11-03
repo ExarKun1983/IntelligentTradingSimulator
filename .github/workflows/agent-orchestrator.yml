@@ -31,6 +31,7 @@ env:
   AI_REVIEW_LABEL: agent:ai-review
   REVIEW_LABEL: agent:review
   BLOCKED_LABEL: agent:blocked
+  TERMINAL_PENDING_LABEL: agent:terminal-pending
   BASE_BRANCH: master
   COPILOT_REVIEWER: copilot-pull-request-reviewer[bot]
   REVIEW_TIMEOUT_SECONDS: 1800
@@ -40,9 +41,10 @@ env:
 # default branch so every job runs identical mapping and state logic. Review requires the latest Copilot Agent
 # Task API state to be `completed`; a green CI run alone is not evidence that implementation has finished.
 # GitHub review state APPROVED is explicit acceptance; CHANGES_REQUESTED needs explicitly classified blockers, while all
-# ambiguous reviewer outcomes pause for a human. Repeated blockers use persisted finding/response evidence, not caps.
-# State-changing jobs share a lock. Scheduled reconciliation also recovers closed-PR transitions and human
-# review events from GitHub's durable review APIs if event runs are coalesced.
+# ambiguous reviewer outcomes pause for a human. Repeated blockers require persisted, finding-linked response evidence;
+# fixed outcomes must touch the exact finding path, while rebuttals need a substantive test/file/behavior explanation.
+# State-changing jobs share a lock. A lightweight closure-event job persists pending terminal records before that
+# lock; scheduled reconciliation processes only pending records and durable human review events.
 
 jobs:
   bootstrap:
@@ -60,6 +62,7 @@ jobs:
           gh label create "$AI_REVIEW_LABEL" --repo "$REPO" --color 5319E7 --description "Waiting for Copilot code review" --force
           gh label create "$REVIEW_LABEL" --repo "$REPO" --color 1D76DB --description "Ready for human review" --force
           gh label create "$BLOCKED_LABEL" --repo "$REPO" --color D93F0B --description "Needs human attention" --force
+          gh label create "$TERMINAL_PENDING_LABEL" --repo "$REPO" --color BFD4F2 --description "PR closure transition awaits reconciliation" --force
 
   start-agent:
     if: >-
@@ -102,7 +105,8 @@ jobs:
           fi
           if printf '%s\n' "$issue_labels" | grep -Fxq "$WORKING_LABEL" ||
               printf '%s\n' "$issue_labels" | grep -Fxq "$AI_REVIEW_LABEL" ||
-              printf '%s\n' "$issue_labels" | grep -Fxq "$REVIEW_LABEL"; then
+              printf '%s\n' "$issue_labels" | grep -Fxq "$REVIEW_LABEL" ||
+              printf '%s\n' "$issue_labels" | grep -Fxq "$TERMINAL_PENDING_LABEL"; then
             echo "Issue #$ISSUE already has an active agent state; not starting another task"
             exit 0
           fi
@@ -113,6 +117,10 @@ jobs:
             echo "Another Issue is active; finish or unblock it first." >&2
             gh issue edit "$ISSUE" --repo "$REPO" --remove-label "$READY_LABEL" --add-label "$BLOCKED_LABEL"
             exit 1
+          fi
+          if ! issue_open "$ISSUE"; then
+            echo "Issue #$ISSUE is closed; refusing to launch a coding task"
+            exit 0
           fi
           # A relaunch also clears a stale agent:blocked left by a previous closed-unmerged PR.
           set_state "$ISSUE" "$WORKING_LABEL"
@@ -317,14 +325,11 @@ jobs:
             [ "$rc" -eq 3 ] || exit "$rc"
           fi
 
-  terminal-state:
+  record-terminal-transition:
     if: >-
       github.event_name == 'pull_request' && github.event.action == 'closed' &&
       startsWith(github.event.pull_request.head.ref, 'copilot/')
     runs-on: ubuntu-latest
-    concurrency:
-      group: agent-task-${{ github.repository }}
-      cancel-in-progress: false
     steps:
       - name: Load orchestrator helpers
         uses: actions/checkout@v4
@@ -332,7 +337,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .github/scripts
           persist-credentials: false
-      - name: Close or block mapped Issue
+      - name: Persist PR closure for serialized reconciliation
         env:
           GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
           REPO: ${{ github.repository }}
@@ -345,7 +350,33 @@ jobs:
           source .github/scripts/agent-orchestrator.sh
           issue="$(resolve_issue "$PR" "$BRANCH")"
           if [ -z "$issue" ]; then echo "No Issue mapping; nothing to do"; exit 0; fi
-          handle_pr_closed "$PR" "$issue" "$MERGED" "$CLOSED_AT"
+          record_terminal_transition "$PR" "$issue" "$MERGED" "$CLOSED_AT"
+
+  terminal-state:
+    needs: record-terminal-transition
+    if: >-
+      github.event_name == 'pull_request' && github.event.action == 'closed' &&
+      startsWith(github.event.pull_request.head.ref, 'copilot/') &&
+      needs.record-terminal-transition.result == 'success'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: agent-task-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Load orchestrator helpers
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - name: Process durable terminal transitions
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          source .github/scripts/agent-orchestrator.sh
+          reconcile_terminal_transitions
 
   reconcile-existing-pr:
     # Manual, workflow-file push, and scheduled reconciliation share the eligibility gate. The schedule also
@@ -370,17 +401,7 @@ jobs:
         run: |
           set -euo pipefail
           source .github/scripts/agent-orchestrator.sh
-          closed_prs="$(gh pr list --repo "$REPO" --state closed --limit 1000 --json number,headRefName,body,closedAt,mergedAt)"
-          while IFS= read -r closed_pr; do
-            pr="$(jq -r '.number' <<< "$closed_pr")"
-            branch="$(jq -r '.headRefName' <<< "$closed_pr")"
-            issue="$(issue_from_marker "$(jq -r '.body // ""' <<< "$closed_pr")")"
-            [ -n "$issue" ] || issue="$(issue_from_branch "$branch")"
-            [ -n "$issue" ] || continue
-            merged=false
-            [ -z "$(jq -r '.mergedAt // empty' <<< "$closed_pr")" ] || merged=true
-            handle_pr_closed "$pr" "$issue" "$merged" "$(jq -r '.closedAt // empty' <<< "$closed_pr")"
-          done <<< "$(jq -c '.[] | select(.headRefName | startswith("copilot/"))' <<< "$closed_prs")"
+          reconcile_terminal_transitions
           ready="$(gh issue list --repo "$REPO" --state open --label "$READY_LABEL" --limit 1 --json number,title,body --jq '.[0] // empty')"
           if [ -n "$ready" ]; then
             active_issues="$(gh issue list --repo "$REPO" --state open --limit 200 --json number,labels)"
