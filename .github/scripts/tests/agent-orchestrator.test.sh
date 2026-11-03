@@ -104,6 +104,11 @@ gh_dispatch() {
       local label
       if [[ "$*" == *--remove-label* ]]; then
         label="${all##*--remove-label }"
+        if [ "$label" = "$TERMINAL_PENDING_LABEL" ] && [ -f "$STATE/terminal-record-inject-on-remove" ]; then
+          append_json "$STATE/issue-$n.comments" \
+            '<!-- agent-orchestrator:terminal-pending=146-2026-10-12T13-50-00Z pr=146 merged=false closed-at=2026-10-12T13:50:00Z -->'
+          rm "$STATE/terminal-record-inject-on-remove"
+        fi
         grep -Fxv "$label" "$STATE/issue-$n.labels" > "$STATE/tmp" || true; mv "$STATE/tmp" "$STATE/issue-$n.labels"
       fi
       if [[ "$*" == *--add-label* ]]; then
@@ -364,6 +369,15 @@ check "terminal replay does not repeat the state transition" "1" "$(calls_matchi
 
 reset_state
 add_issue 39 "$WORKING_LABEL"
+record_terminal_transition 145 39 false "2026-10-12T12:50:00Z"
+jq --arg body '<!-- agent-orchestrator:terminal-processed=145-2026-10-12T12-50-00Z -->' \
+  '. + [{body:$body,author:{login:"human"}}]' "$STATE/issue-39.comments" > "$STATE/tmp" \
+  && mv "$STATE/tmp" "$STATE/issue-39.comments"
+process_pending_terminal_issue 39
+check "human-authored processed marker cannot suppress a closure transition" "agent:blocked" "$(labels_of 39)"
+
+reset_state
+add_issue 39 "$WORKING_LABEL"
 record_terminal_transition 145 39 true "2026-10-12T12:50:00Z"
 process_pending_terminal_issue 39
 check "pending merged closure closes the Issue" "CLOSED" "$(cat "$STATE/issue-39.state")"
@@ -413,6 +427,20 @@ record_terminal_transition 145 39 false "2026-10-12T12:50:00Z"
 process_pending_terminal_issue 39
 check "reconciliation recovers a missing latest closure despite an older record" "agent:blocked" "$(labels_of 39)"
 check_contains "reconciliation records the latest mapped closure" "terminal-processed=146-" "$(jq -r '.[]' "$STATE/issue-39.comments")"
+
+reset_state
+add_issue 39 "$WORKING_LABEL" "$TERMINAL_PENDING_LABEL"
+issue_comment_fixture 39 '<!-- agent-orchestrator:pr=145 -->'
+add_pr 145 "closed PR" "2026-10-12T10:00:00Z"
+close_pr 145
+jq '. + {closedAt:"2026-10-12T12:50:00Z",mergedAt:null}' "$STATE/pr-145.json" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.json"
+record_terminal_transition 145 39 false "2026-10-12T12:50:00Z"
+issue_comment_fixture 39 '<!-- agent-orchestrator:terminal-processed=145-2026-10-12T12-50-00Z -->'
+touch "$STATE/terminal-record-inject-on-remove"
+process_pending_terminal_issue 39
+check "new closure racing pending-label removal is retained for reconciliation" \
+  "agent:terminal-pending,agent:working" "$(labels_of 39)"
+check_contains "racing closure remains durably discoverable" "terminal-pending=146-" "$(jq -r '.[]' "$STATE/issue-39.comments")"
 
 # --- start-agent relaunch clears stale blocked state -------------------------------------------------------
 reset_state

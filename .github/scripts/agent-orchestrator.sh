@@ -671,6 +671,10 @@ record_terminal_transition() {
   if ! printf '%s\n' "$comments" | grep -Fq "$marker"; then
     GH_TOKEN="${ACTIONS_TOKEN:-${GH_TOKEN:-}}" gh issue comment "$issue" --repo "$REPO" --body "$marker" >/dev/null || return 1
   fi
+  labels="$(issue_labels "$issue")" || return 1
+  if ! printf '%s\n' "$labels" | grep -Fxq "${TERMINAL_PENDING_LABEL:-agent:terminal-pending}"; then
+    gh issue edit "$issue" --repo "$REPO" --add-label "${TERMINAL_PENDING_LABEL:-agent:terminal-pending}" >/dev/null || return 1
+  fi
 }
 
 recover_terminal_transition_for_issue() {
@@ -697,9 +701,10 @@ recover_terminal_transition_for_issue() {
 }
 
 process_pending_terminal_issue() {
-  local issue="$1" comments record terminal_id pr merged closed_at processed unprocessed=0 found=0 labels
+  local issue="$1" comments comment_bodies record terminal_id pr merged closed_at processed unprocessed=0 found=0 labels
   recover_terminal_transition_for_issue "$issue" || return 1
   comments="$(gh issue view "$issue" --repo "$REPO" --json comments)" || return 1
+  comment_bodies="$(jq -r '.comments[]? | select(.author.login == "github-actions[bot]") | .body // empty' <<< "$comments")" || return 1
   while IFS= read -r record; do
     [ -n "$record" ] || continue
     found=1
@@ -709,7 +714,7 @@ process_pending_terminal_issue() {
     closed_at="$(sed -nE 's/.* closed-at=([^ ]*).*/\1/p' <<< "$record")"
     [ -n "$terminal_id" ] && [ -n "$pr" ] && [ -n "$merged" ] || return 1
     processed="agent-orchestrator:terminal-processed=$terminal_id"
-    if grep -Fq "$processed" <<< "$(jq -r '.comments[]?.body // empty' <<< "$comments")"; then
+    if grep -Fq "$processed" <<< "$comment_bodies"; then
       continue
     fi
     handle_pr_closed "$pr" "$issue" "$merged" "$closed_at" || return 1
@@ -737,6 +742,24 @@ process_pending_terminal_issue() {
     labels="$(issue_labels "$issue")" || return 1
     if printf '%s\n' "$labels" | grep -Fxq "${TERMINAL_PENDING_LABEL:-agent:terminal-pending}"; then
       gh issue edit "$issue" --repo "$REPO" --remove-label "${TERMINAL_PENDING_LABEL:-agent:terminal-pending}" >/dev/null || return 1
+    fi
+    comments="$(gh issue view "$issue" --repo "$REPO" --json comments)" || return 1
+    comment_bodies="$(jq -r '.comments[]? | select(.author.login == "github-actions[bot]") | .body // empty' <<< "$comments")" || return 1
+    while IFS= read -r record; do
+      [ -n "$record" ] || continue
+      terminal_id="$(sed -nE 's/.*agent-orchestrator:terminal-pending=([A-Za-z0-9._-]+).*/\1/p' <<< "$record")"
+      if ! grep -Fq "agent-orchestrator:terminal-processed=$terminal_id" <<< "$comment_bodies"; then
+        unprocessed=1
+        break
+      fi
+    done < <(jq -r '.comments[]? | select(.author.login == "github-actions[bot]") | .body
+      | select(contains("agent-orchestrator:terminal-pending="))
+      | select(test("agent-orchestrator:terminal-pending=[A-Za-z0-9._-]+ pr=[0-9]+ merged=(true|false)"))' <<< "$comments")
+    if [ "$unprocessed" -eq 1 ]; then
+      labels="$(issue_labels "$issue")" || return 1
+      if ! printf '%s\n' "$labels" | grep -Fxq "${TERMINAL_PENDING_LABEL:-agent:terminal-pending}"; then
+        gh issue edit "$issue" --repo "$REPO" --add-label "${TERMINAL_PENDING_LABEL:-agent:terminal-pending}" >/dev/null || return 1
+      fi
     fi
   fi
 }
