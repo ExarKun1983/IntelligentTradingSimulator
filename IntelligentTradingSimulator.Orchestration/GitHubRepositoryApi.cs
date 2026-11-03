@@ -151,6 +151,51 @@ public sealed partial class GitHubRepositoryApi
         return await ReadJsonAsync(response, token);
     }
 
+    internal async Task<int> ResolvePullArtifactAsync(JsonElement artifact, CancellationToken token)
+    {
+        var databaseId = artifact.GetProperty("id").GetInt64();
+        var globalId = artifact.GetProperty("global_id").GetString();
+        if (databaseId <= 0 || string.IsNullOrWhiteSpace(globalId) || globalId.Length > 256)
+            throw new InvalidDataException("Pull artifact requires database and global node identities.");
+        const string query = """
+            query($id: ID!) {
+              node(id: $id) {
+                __typename
+                ... on PullRequest {
+                  fullDatabaseId number
+                  repository { nameWithOwner }
+                }
+              }
+            }
+            """;
+        // GraphQL POST is a read-only query, never a mutation or a decoded/guessed PR number.
+        using var response = await PostGlobalAsync("graphql", new { query, variables = new { id = globalId } }, token);
+        var root = response.RootElement;
+        if (root.TryGetProperty("errors", out var errors) &&
+            (errors.ValueKind != JsonValueKind.Array || errors.GetArrayLength() != 0))
+            throw new InvalidDataException("GraphQL artifact lookup is incomplete.");
+        var node = root.GetProperty("data").GetProperty("node");
+        if (node.ValueKind != JsonValueKind.Object || node.GetProperty("__typename").GetString() != "PullRequest" ||
+            ReadDatabaseId(node.GetProperty("fullDatabaseId")) != databaseId ||
+            node.GetProperty("repository").GetProperty("nameWithOwner").GetString() != Repository)
+            throw new InvalidDataException("Pull artifact node or repository identity mismatch.");
+        var number = node.GetProperty("number").GetInt32();
+        if (number <= 0) throw new InvalidDataException("Invalid resolved PR number.");
+        using var pull = await GetAsync($"pulls/{number}", token);
+        if (pull.RootElement.GetProperty("id").GetInt64() != databaseId ||
+            pull.RootElement.GetProperty("number").GetInt32() != number ||
+            pull.RootElement.GetProperty("base").GetProperty("repo").GetProperty("id").GetInt64() != RepositoryId)
+            throw new InvalidDataException("Resolved PR REST identity mismatch.");
+        return number;
+    }
+
+    private static long ReadDatabaseId(JsonElement value) => value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var numericId)
+        ? numericId
+        : value.ValueKind == JsonValueKind.String &&
+          long.TryParse(value.GetString(), System.Globalization.NumberStyles.None,
+              System.Globalization.CultureInfo.InvariantCulture, out var id)
+            ? id : throw new InvalidDataException("Invalid GraphQL database identity.");
+
     private static async Task<JsonDocument> ReadJsonAsync(HttpResponseMessage response, CancellationToken token)
     {
         response.EnsureSuccessStatusCode();

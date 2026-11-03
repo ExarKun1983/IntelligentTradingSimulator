@@ -1676,8 +1676,8 @@ persisted in the outbox before execution; repair blocker evidence and distinct f
 event IDs/content are included. Do not pass an installation token to the task client.
 
 Completion requires an explicitly completed remote task, a complete nonempty session
-array with completed states, verified task/repository/creator identity, and one
-supported GitHub branch artifact mapping to one open PR. The PR's numeric identity,
+array with completed states, verified task/repository/creator identity, and a
+supported GitHub branch or pull artifact mapping to one open PR. The PR's numeric identity,
 repository, configured base ref, head ref and SHA are rechecked. **Those REST fields
 do not establish the task's final commit:** a later external push could change the
 same branch. Completion additionally requires an independent trusted
@@ -1686,10 +1686,19 @@ PR and final SHA. The adapter compares that evidence with the live head; another
 observation must still confirm it before CI. No production final-head source has
 been verified or implemented, so the default host holds completed tasks rather
 than certifying their live heads. This is an activation blocker, not an API
-guarantee. A pull-only
-artifact without supported branch data currently **blocks**: numeric artifact ID is
-not interpreted as PR number and no guessed association is used. Supporting global
-node-ID artifact resolution remains an independent implementation task.
+guarantee.
+
+Pull artifacts with `data.id` and `data.global_id` now use a bounded, static,
+read-only GraphQL `node(id:)` query. `global_id` is an opaque **candidate** node ID:
+the task schema names the field but does not specify its semantics. Association
+requires a non-null `PullRequest` node, matching `fullDatabaseId` (int64 preserved),
+repository name, positive PR number, and matching REST PR database/repository IDs.
+The numeric artifact ID is never interpreted as a PR number or decoded into a node ID.
+Branch and pull artifacts, when both present, must agree. Missing/unusable global
+IDs, duplicate artifacts, partial GraphQL errors, or mismatches fail closed. No
+historical PR scan or guessed association is used; absent global IDs require
+provider-supported identity evidence before this path can proceed. This resolves
+PR identity, **not** the task's final SHA.
 
 Task failures, waiting/idle/timed-out/cancelled states and unsupported/contradictory
 completion responses produce a durable `TaskStopped` hold. Admission and the remote
@@ -1697,8 +1706,14 @@ task identity are retained; Resume cannot clear this uncertainty. The current op
 recovery surface cannot invent a terminal task resolution—verified external resolution
 is still required before reactivation. HTTP failures/cancellation propagate without
 manufacturing completion. For lost launch responses, lookup can use an already-saved
-external ID only; absent IDs stay unknown rather than searching similar prompts or
-creating another task. No exactly-once upstream API guarantee is asserted.
+external ID only; recovery first validates canonical executing/unknown intent,
+generation, active task, admission and saved external identity, then verifies the
+repository and reads that exact task. Successful lookup confirms launch identity
+only, never terminal completion or clearance of a human hold. Absent IDs stay
+unknown rather than searching similar prompts or creating another task. The API
+provides neither a caller idempotency key nor a unique launch receipt searchable
+by request; one visible prompt/ref/time match cannot establish exactly-once identity.
+No exactly-once upstream API guarantee is asserted.
 
 `GitHubFeedbackSource` fetches current Issue and mapped-PR comments. REST human author
 IDs/logins/types and current collaborator permission are checked; bots and non-writers
@@ -1736,6 +1751,17 @@ priority and reactivation batches. The task REST API alone is not claimed to sat
 the completion/SHA gate. All approvals in these tests apply solely to injected HTTP
 fakes. No live launch or user-work CI was performed.
 
+Additional mocked GraphQL/REST cases cover pull-only and combined-artifact
+resolution, int64 database IDs, absent/contradictory/error responses, current-head
+changes, replay, canonical saved-ID recovery, and preserved hold/admission/effect
+counts. The real documented task schema still lacks any immutable final commit
+field. Session `head_ref`, `base_ref`, `completed_at`, and usage are not SHA evidence;
+current PR/ref heads, synthetic `merge_commit_sha`, UI logs and commit-to-session
+links are not completion-bound attestations. Maintainer action is to obtain a
+documented trusted completion-SHA source (or approve a separate requirement/design
+change), plus account access/cost verification—not to populate this source from
+today's head or turn on the workflow. Until then, completion remains blocked.
+
 #### Verified API contracts versus activation prerequisites
 
 Read-only documentation research on 2026-11-03 establishes public contracts, **not
@@ -1744,7 +1770,7 @@ this account's access, credentials, entitlements, policy or spending configurati
 | Surface | Documented contract | Remaining work / prerequisite |
 | --- | --- | --- |
 | Coding tasks | [`POST /agents/repos/{owner}/{repo}/tasks`, repo/task GETs](https://docs.github.com/en/rest/agent-tasks/agent-tasks). Public preview; launch requires Business/Enterprise. `prompt`, `base_ref`, `head_ref`, `create_pull_request` are documented and implemented with offline HTTP coverage. | Verify eligible existing plan and a user access token with Agent tasks permissions. Installation tokens, including `GITHUB_TOKEN`, are unsupported. No plan upgrade is authorized. Lost creates without a unique saved ID remain blocked. |
-| Task/PR association | Task branch artifacts, session states and live PR/ref identities are implemented and checked. Independent task-bound final-head evidence is mandatory and compared against the live PR. | No production final-head evidence source is verified/implemented; completed REST tasks hold by default. Pull-only global-node artifact resolution also remains unimplemented. Artifact numeric `id` is **not documented as PR number**; never substitute it into `/pulls/{number}`. No title/branch-name guessing. |
+| Task/PR association | Branch lookup and pull-artifact candidate global-node lookup with GraphQL/REST database/repository checks are implemented. Independent task-bound final-head evidence remains mandatory. [Global node guide](https://docs.github.com/en/graphql/guides/using-global-node-ids), [PR fields](https://docs.github.com/en/graphql/reference/pulls#object-pullrequest). | No reviewed task/session/artifact field attests the final commit; production final-head source remains unavailable and completed REST tasks hold. Pull artifacts lacking usable global IDs also hold; no PR-number guessing. |
 | Follow-up coding | A new task can target an existing `head_ref`/`base_ref`; [PR mentions](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-on-github) are a separate interaction. | Preserve child task/round/blocker identity. No supported append-to-existing-task endpoint or bot-mention task-ID response is established. |
 | Review request | [Requested reviewers REST](https://docs.github.com/en/rest/pulls/review-requests#request-reviewers-for-a-pull-request) and [Copilot review guide](https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/copilot-code-review) document `copilot-pull-request-reviewer[bot]`. Response is a PR, not a review-job ID. | Request/result adapter and durable request-to-submitted-review correlation are not implemented. Verify repository policy/auth and account billing first. |
 | Review result | [PR reviews/comments](https://docs.github.com/en/rest/pulls/reviews) expose actor, `commit_id`, review ID and comments. | Match actor/head/current request and paginate. Missing requested-reviewer entry is not success. Prose or `COMMENTED` is not acceptance; ambiguous results require authorized human classification. |
@@ -1762,19 +1788,19 @@ refer to `IntelligentTradingSimulator.Tests/Orchestration`.
 | --- | --- | --- |
 | 1 Legal/illegal transitions and invariants | `OrchestrationCoreTests`, shared reducer | Exhaustive coverage is not claimed; extend with each production contract. |
 | 2 Actual handlers, replay/reorder/concurrency and boundaries | `GitHubActionsIngressTests`, `GitHubHostIntegrationTests`, `GitHubTaskIntegrationTests`, worker/persistence tests | Review/CI HTTP handlers and exhaustive production boundary matrices remain. |
-| 3 Crash after every intent/effect | Persistence/worker crash and CAS tests; projection lost-create and task lost-launch/outcome-write worker recovery | Not yet every production API boundary; no exactly-once upstream guarantee. |
-| 4 Exact effect counts and preserved holds | Worker, core, persistence, task and projection recovery tests | Extend counts to production review/CI adapters. |
+| 3 Crash after every intent/effect | Persistence/worker crash and CAS tests; projection lost-create, task lost-launch/outcome-write worker recovery and canonical saved-ID lookup | Not yet every production API boundary; no exactly-once upstream guarantee. |
+| 4 Exact effect counts and preserved holds | Worker, core, persistence, task and projection recovery tests; pull-node replay/mismatch and saved-ID recovery counts/holds | Extend counts to production review/CI adapters. |
 | 5 Coding-before-exact-SHA CI | Worker initial-unmapped/completion-mismatch and duplicate-Resume tests; reducer guards; HTTP tests reject absent task-final-head evidence and later external pushes | Verified production task-final-head source and actual dispatch/checkout/check routing remain unwired. |
 | 6 Green CI/review and two repair cycles | Worker automatic two-CI-repair/review-repair loop | Offline fakes only for task/CI/review execution. |
 | 7 Stale CI/head checks and unmanaged compatibility | Core task/round/SHA/head-change tests | Required checks on tested SHA and managed/unmanaged workflow routing remain. |
 | 8 Feedback precedence and distinct identical events | Core/command tests; worker paged-input priority; API-authorized ordinary feedback with distinct/edit replay and before/during-task tests | Exhaustive concurrent feedback/service boundary matrices remain. No lossless arbitrary history promised. |
 | 9 Productive rounds/no-progress stop | Core multi-round, evidence/progress and reopened-blocker tests | Production reviewer classification still requires verified typed/human contract. |
-| 10 Closure/reopen/reactivation | Core and command tests; live REST merge/closure and branch-artifact completion observation | Global-node artifact resolution, verified manual uncertain-task resolution and wider HTTP closure matrix remain. |
+| 10 Closure/reopen/reactivation | Core and command tests; live REST merge/closure; branch/pull-node artifact checks reject closed PRs; canonical saved-task lookup preserves holds | Verified manual uncertain-task terminal resolution and wider HTTP closure matrix remain. |
 | 11 Operations documentation | This runbook: state, ownership, failure, migration/rollback and recovery | Cutover runbook must be revalidated against final host/routing before approval. |
 | 12 Human final approval/no auto-merge | `HUMAN_REVIEW` reducer terminal gate; no merge effect/API | Preserve at activation. |
 | 13 Label-controlled start/queue, guarded recovery | Ingress/core/worker tests; API-verified preview and gated write host with replay tests | Live notification ingestion remains disabled; no normal manual Start introduced. |
 | 14 Automatic stages/labels/continuation | Shared bounded worker; task/label/status adapter and gated write-host HTTP tests | Production workflow activation, wake-ups and persisted continuation delivery remain disabled/unimplemented. Resume stays exceptional recovery, not a normal stage button. |
-| 15 Shared C# decision path/real response shapes | Worker/reconciler/reducer; REST/Git/ingress and task/session/artifact/feedback HTTP fixtures | Review/CI shapes still require their concrete adapter tests. |
+| 15 Shared C# decision path/real response shapes | Worker/reconciler/reducer; REST/Git/ingress, task/session/artifact/feedback fixtures and read-only GraphQL PR-node/fullDatabaseId shapes | Review/CI shapes still require their concrete adapter tests. |
 | 16 Repository admission/queue | Core/persistence/worker concurrent admission tests | Verify production ingress/continuation races once wired. |
 | 17 Reviewer behavior/needs-human | Typed core classification and human-handoff tests | No concrete reviewer adapter yet; cannot claim production review readiness. |
 | 18 Comment replay and preserved recovery state | Durable `ProjectStatus`, owned-comment HTTP tests, lost-create worker-ledger recovery | Live status wiring and remote tamper/deletion monitoring are not enabled. |

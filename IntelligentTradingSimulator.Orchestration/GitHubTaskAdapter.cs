@@ -70,11 +70,24 @@ public sealed class GitHubTaskAdapter(
 
     public async Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken token)
     {
-        if (intent.Kind != EffectKind.LaunchTask) throw new InvalidDataException("Not a task effect.");
+        var state = (await store.LoadAsync(token)).State;
+        if (state.Repository != api.Repository || intent.Kind != EffectKind.LaunchTask ||
+            !state.Outbox.TryGetValue(intent.Id, out var persisted) || persisted.Digest != intent.Digest ||
+            persisted.Status is not (DeliveryStatus.Executing or DeliveryStatus.Unknown) ||
+            persisted.TaskId != intent.TaskId || persisted.ExternalId != intent.ExternalId ||
+            persisted.Generation != intent.Generation || persisted.IssueNumber != intent.IssueNumber ||
+            !state.Issues.TryGetValue(persisted.IssueNumber, out var issue) || issue.Generation != persisted.Generation ||
+            state.AdmittedIssue != issue.Number || issue.ActiveTaskId != persisted.TaskId ||
+            !issue.Tasks.TryGetValue(persisted.TaskId!, out var identity) ||
+            identity.Id != persisted.TaskId || identity.Round != persisted.Round ||
+            identity.Status is not (TaskStatus.Executing or TaskStatus.Unknown or TaskStatus.Running) ||
+            identity.ExternalId is not null && identity.ExternalId != persisted.ExternalId)
+            throw new InvalidDataException("Task recovery does not match a canonical uncertain launch.");
         // The API has no caller idempotency key. Prompt/list similarity is not a unique launch identity.
-        if (string.IsNullOrWhiteSpace(intent.ExternalId)) return new(DeliveryStatus.Unknown);
-        using var task = await api.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(intent.ExternalId), token);
-        return new(DeliveryStatus.Succeeded, ValidateTask(task.RootElement, intent.ExternalId));
+        if (string.IsNullOrWhiteSpace(persisted.ExternalId)) return new(DeliveryStatus.Unknown);
+        await api.VerifyRepositoryAsync(token);
+        using var task = await api.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(persisted.ExternalId), token);
+        return new(DeliveryStatus.Succeeded, ValidateTask(task.RootElement, persisted.ExternalId));
     }
 
     public async Task<OrchestrationEvent?> ReadEventAsync(RepositoryState state, IssueState issue, CancellationToken token)
@@ -99,24 +112,38 @@ public sealed class GitHubTaskAdapter(
                     session.TryGetProperty("repository", out var repository) &&
                     repository.GetProperty("id").GetInt64() != api.RepositoryId))
                 return Stopped("Task session completion is incomplete or contradictory.");
-            var branches = root.GetProperty("artifacts").EnumerateArray().Where(artifact =>
+            var artifacts = root.GetProperty("artifacts").EnumerateArray().ToList();
+            if (artifacts.Count > 100) return Stopped("Task artifact capacity exceeded.");
+            var branches = artifacts.Where(artifact =>
                 artifact.GetProperty("provider").GetString() == "github" &&
                 artifact.GetProperty("type").GetString() == "branch").ToList();
-            if (branches.Count != 1) return Stopped("Task artifact mapping requires human reconciliation.");
-            var data = branches[0].GetProperty("data");
-            var head = data.GetProperty("head_ref").GetString();
-            var baseRef = data.GetProperty("base_ref").GetString();
-            if (string.IsNullOrWhiteSpace(head) || baseRef != baseBranch)
-                return Stopped("Task artifact refs do not match the configured repository.");
-            var owner = api.Repository.Split('/')[0];
-            var pulls = await api.ListAsync($"pulls?state=open&head={Uri.EscapeDataString(owner + ":" + head)}&base={Uri.EscapeDataString(baseRef)}", token);
-            if (pulls.Count != 1) return Stopped("Task artifact has no unique open PR.");
-            var number = pulls[0].GetProperty("number").GetInt32();
+            var pulls = artifacts.Where(artifact =>
+                artifact.GetProperty("provider").GetString() == "github" &&
+                artifact.GetProperty("type").GetString() == "pull").ToList();
+            if (branches.Count > 1 || pulls.Count > 1 || branches.Count + pulls.Count == 0)
+                return Stopped("Task artifact mapping requires human reconciliation.");
+            int number;
+            string? head = null;
+            if (branches.Count == 1)
+            {
+                var data = branches[0].GetProperty("data");
+                head = data.GetProperty("head_ref").GetString();
+                var baseRef = data.GetProperty("base_ref").GetString();
+                if (string.IsNullOrWhiteSpace(head) || baseRef != baseBranch)
+                    return Stopped("Task artifact refs do not match the configured repository.");
+                var owner = api.Repository.Split('/')[0];
+                var matches = await api.ListAsync($"pulls?state=open&head={Uri.EscapeDataString(owner + ":" + head)}&base={Uri.EscapeDataString(baseRef)}", token);
+                if (matches.Count != 1) return Stopped("Task artifact has no unique open PR.");
+                number = matches[0].GetProperty("number").GetInt32();
+                if (pulls.Count == 1 && await api.ResolvePullArtifactAsync(pulls[0].GetProperty("data"), token) != number)
+                    return Stopped("Task branch and pull artifacts contradict each other.");
+            }
+            else number = await api.ResolvePullArtifactAsync(pulls[0].GetProperty("data"), token);
             if (issue.PullRequest is { } mapped && mapped != number)
                 return Stopped("Task artifact changed the mapped PR.");
             using var pull = await api.GetAsync($"pulls/{number}", token);
             ValidatePull(pull.RootElement, number);
-            if (pull.RootElement.GetProperty("head").GetProperty("ref").GetString() != head)
+            if (head is not null && pull.RootElement.GetProperty("head").GetProperty("ref").GetString() != head)
                 return Stopped("Task artifact head does not match the live PR.");
             var sha = pull.RootElement.GetProperty("head").GetProperty("sha").GetString()!;
             var evidence = finalHeadSource is null ? null : await finalHeadSource.ReadAsync(task.ExternalId, token);
@@ -132,7 +159,7 @@ public sealed class GitHubTaskAdapter(
                 issue.Number, state.Generation, issue.Generation, new("github-task-api", ActorKind.TaskService),
                 at, new TaskCompleted(task.Id, number, sha));
         }
-        catch (Exception exception) when (exception is InvalidDataException or JsonException or InvalidOperationException or KeyNotFoundException)
+        catch (Exception exception) when (exception is InvalidDataException or JsonException or InvalidOperationException or KeyNotFoundException or FormatException)
         {
             return Stopped("Task API identity or artifact response is unsupported.");
         }
