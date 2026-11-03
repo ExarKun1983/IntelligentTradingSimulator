@@ -30,10 +30,13 @@ public sealed class RepositoryState
     public string Repository { get; set; } = "";
     public string? LastEventId { get; set; }
     public int? AdmittedIssue { get; set; }
+    public WorkerLease? WorkerLease { get; set; }
     public Dictionary<int, IssueState> Issues { get; set; } = [];
     public Dictionary<string, InboxEntry> Inbox { get; set; } = [];
     public Dictionary<string, EffectIntent> Outbox { get; set; } = [];
 }
+
+public sealed record WorkerLease(string Owner, DateTimeOffset ExpiresAt);
 
 public sealed class IssueState
 {

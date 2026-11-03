@@ -48,13 +48,24 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
         throw new InvalidOperationException("State publication conflict limit exceeded.");
     }
 
+    public async Task<RepositoryState?> RecoverInFlightAsync(IStateStore store, IEffectAdapter effects,
+        DateTimeOffset observedAt, ReconcileOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        options ??= new();
+        if (options.MaximumConflicts < 1) throw new ArgumentOutOfRangeException(nameof(options));
+        if (!EffectsEnabled(options)) return null;
+        var snapshot = await store.LoadAsync(cancellationToken);
+        var intent = InFlight(snapshot.State);
+        return intent is null ? null : await RecoverIntentAsync(store, effects, intent, observedAt,
+            options.MaximumConflicts, cancellationToken);
+    }
+
     public async Task<ReconcileResult> RunAsync(IStateStore store, IObservationSource observations, IEffectAdapter effects,
         ReconcileOptions? options = null, CancellationToken cancellationToken = default)
     {
         options ??= new();
         if (options.MaximumConflicts < 1) throw new ArgumentOutOfRangeException(nameof(options));
-        var enabled = !options.DryRun && options.LiveEffectsEnabled &&
-            options.PrerequisiteCapabilitiesVerified && options.CostApproved;
+        var enabled = EffectsEnabled(options);
         for (var attempt = 0; attempt < options.MaximumConflicts; attempt++)
         {
             var snapshot = await store.LoadAsync(cancellationToken);
@@ -68,22 +79,12 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             }
             if (!enabled) return new(snapshot.State, decision.PendingEffects, true);
 
-            var executing = snapshot.State.Outbox.Values.FirstOrDefault(e => e.Status == DeliveryStatus.Executing) ??
-                snapshot.State.Outbox.Values.FirstOrDefault(e => e.Status == DeliveryStatus.Unknown);
+            var executing = InFlight(snapshot.State);
             if (executing is not null)
             {
                 // Both in-flight and uncertain intents are lookup-only; neither can be executed again.
-                EffectOutcome recovered;
-                try
-                {
-                    recovered = await effects.ReconcileAsync(executing, cancellationToken);
-                }
-                catch (Exception exception) when (exception is not OperationCanceledException)
-                {
-                    recovered = new(DeliveryStatus.Unknown);
-                }
-                var resolved = await PublishOutcomeAsync(store, executing.Id, executing.Digest, recovered,
-                    live.ObservedAt, options.MaximumConflicts, cancellationToken);
+                var resolved = await RecoverIntentAsync(store, effects, executing, live.ObservedAt,
+                    options.MaximumConflicts, cancellationToken);
                 return new(resolved, decision.PendingEffects, false);
             }
             var simulateAgents = options.AllowOfflineAgentSimulation && effects is IOfflineEffectAdapter;
@@ -109,6 +110,29 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             return new(final, decision.PendingEffects, false);
         }
         throw new InvalidOperationException("State publication conflict limit exceeded.");
+    }
+
+    private static bool EffectsEnabled(ReconcileOptions options) =>
+        !options.DryRun && options.LiveEffectsEnabled && options.PrerequisiteCapabilitiesVerified && options.CostApproved;
+
+    private static EffectIntent? InFlight(RepositoryState state) =>
+        state.Outbox.Values.FirstOrDefault(effect => effect.Status == DeliveryStatus.Executing) ??
+        state.Outbox.Values.FirstOrDefault(effect => effect.Status == DeliveryStatus.Unknown);
+
+    private async Task<RepositoryState> RecoverIntentAsync(IStateStore store, IEffectAdapter effects,
+        EffectIntent intent, DateTimeOffset observedAt, int maximumConflicts, CancellationToken cancellationToken)
+    {
+        EffectOutcome recovered;
+        try
+        {
+            recovered = await effects.ReconcileAsync(intent, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            recovered = new(DeliveryStatus.Unknown);
+        }
+        return await PublishOutcomeAsync(store, intent.Id, intent.Digest, recovered,
+            observedAt, maximumConflicts, cancellationToken);
     }
 
     private async Task<RepositoryState> PublishOutcomeAsync(IStateStore store, string id, string digest,

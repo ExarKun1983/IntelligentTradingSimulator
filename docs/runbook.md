@@ -1643,6 +1643,63 @@ In particular:
 - Status-comment identity/rendered-content reconciliation must be verified before
   enabling projection writes; labels/comments never become the audit database.
 
+### Bounded worker and exceptional Resume
+
+`OrchestrationWorker` hosts the shared reducer/reconciler; it does not add a second
+decision path or enable the CLI's live effects. Non-dry-run invocations first claim
+a repository-wide worker lease with a CAS state publication. Its expiry is the
+invocation's maximum duration plus a one-minute recovery margin. Concurrent Resume
+returns `LeaseHeld` without inspecting or executing another owner's operation.
+Normal exit/cancellation releases only that invocation's lease using a separately
+bounded cleanup; failed cleanup leaves the recorded expiry intact. Wait for that
+expiry before recovery after an unrecoverable worker/storage crash. Expiry never
+releases repository admission or authorizes repeating an executing operation.
+Production hosts must use this worker for automatic execution rather than calling
+the single-step reconciler concurrently outside its lease.
+
+Its injectable event source returns
+validated, stable-ID events. Before processing notifications, the worker performs
+lookup-only recovery of any executing/uncertain intent so a completion notification
+can refer to the restored task/run/review identity. This step cannot launch an
+operation or clear a hold. Unconfirmed service results remain unacknowledged while
+identity recovery is ambiguous; explicit human commands can still be recorded.
+The worker commits each eligible event through `DispatchAsync` before observing
+fresh lifecycle guards and processing one recorded effect. A
+partial batch failure leaves earlier committed events recoverable; the source must
+redeliver uncommitted events with their original IDs, payloads and timestamps.
+This is not a guarantee of lossless capture before the source recorded an event.
+Each batch reports `HasMore`. While more input pages remain, the worker commits
+events but does not authorize new effects, so later feedback/hold commands take
+priority. Dry-run reports `EventBacklog` without proposing effects for partial input
+or service results still awaiting identity confirmation.
+
+The default bounds are 128 iterations, 128 events per batch and 30 minutes per
+invocation. A caller may lower the duration, but cannot exceed 30 minutes. Progress
+drains immediately; unchanged state polls at 30-second intervals. Unchanged polls
+do not write state or launch replacement tasks. Invalid/oversized batches fail
+closed rather than silently dropping events. A host should page by stable pending
+identities within that bound, not scan all historical PRs.
+
+An iteration/time limit yields without clearing admission, task/round identity,
+retry history, inbox records, or outbox intents. Deadline cancellation during an
+external call leaves the intent executing: the next invocation performs lookup-only
+reconciliation before any new call. Explicit caller cancellation propagates so a
+cancelled Actions job cannot report successful completion. The returned
+`LastReconciliation` is the last completed reconciliation, not proof of the current
+state after cancellation; recovery always reloads canonical storage.
+
+The worker returns immediately in dry-run/effects-disabled mode. Dry-run applies
+events and decisions in memory, without accepting commands or executing effects.
+An ambiguous external outcome stops the invocation as `Blocked`; Resume can look
+up that recorded operation but cannot clear its human hold. Once no authorized
+automatic work remains, the worker reports `Settled` (or `Blocked` when a hold
+remains); neither means that a PR was merged or that live activation was approved.
+Offline tests exercise the worker with fake APIs, including concurrent invocations,
+two CI repairs, review repair/classification, queued admission, and cancellation
+after an external call. Production sources/adapters, wake-up wiring, status-comment
+projection and exact-SHA CI routing remain cutover prerequisites, not capabilities
+enabled by this host loop.
+
 ### Offline replay and validation
 
 The executable supports only `--dry-run`; there is no live execution switch.
