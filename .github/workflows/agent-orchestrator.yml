@@ -42,7 +42,9 @@ env:
 # Task API state to be `completed`; a green CI run alone is not evidence that implementation has finished.
 # GitHub review state APPROVED is explicit acceptance; CHANGES_REQUESTED needs explicitly classified blockers, while all
 # ambiguous reviewer outcomes pause for a human. Repeated blockers require persisted, finding-linked response evidence;
-# fixed outcomes must touch the exact finding path, while rebuttals need a substantive test/file/behavior explanation.
+# each response needs a nonempty Evidence line of at least 40 non-whitespace characters naming a test/spec or source file
+# and explaining its connection to the finding. Fixed outcomes must touch the exact finding path. CI repair attempts have
+# a separate consecutive-failure budget (three by default), reset only after eligible green CI.
 # State-changing jobs share a lock. A lightweight closure-event job persists pending terminal records before that
 # lock; scheduled reconciliation processes only pending records and durable human review events.
 
@@ -161,7 +163,8 @@ jobs:
           persist-credentials: false
       - name: Persist Issue to PR mapping
         env:
-          GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          ACTIONS_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
@@ -339,7 +342,8 @@ jobs:
           persist-credentials: false
       - name: Persist PR closure for serialized reconciliation
         env:
-          GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          ACTIONS_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
@@ -371,7 +375,8 @@ jobs:
           persist-credentials: false
       - name: Process durable terminal transitions
         env:
-          GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          ACTIONS_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
