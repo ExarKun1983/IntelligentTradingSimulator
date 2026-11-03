@@ -296,10 +296,18 @@ public sealed class PaperExecutionSqlServerTests
         ];
         foreach (var input in invalid)
         {
-            await Assert.ThrowsAsync<SqlException>(() => context.Database.ExecuteSqlInterpolatedAsync($"""
+            var error = await Record.ExceptionAsync(() =>
+            context.Database.ExecuteSqlInterpolatedAsync($"""
                 EXEC dbo.AdoptPaperPortfolioUnknownHistory @ExpectedDatabase={input.Database},
-                    @PortfolioId={input.Id}, @CutoffSession={input.Cutoff}, @AuditReference={input.Audit};
+                    @PortfolioId={input.Id}, @CutoffSession={input.Cutoff},
+                    @AuditReference={input.Audit};
                 """));
+
+                    Assert.True(error is SqlException,
+                        $"Invalid input index={Array.IndexOf(invalid, input)}; " +
+                        $"Id={input.Id}; Cutoff={input.Cutoff}; " +
+                        $"Audit={System.Text.Json.JsonSerializer.Serialize(input.Audit)}; " +
+                        $"Actual exception={error?.GetType().FullName ?? "none"}");
             Assert.Equal(before, await PaperExecutionSafetyTests.Fingerprint(context));
         }
         var backtest = new BacktestRun { PortfolioId = id };
@@ -365,14 +373,13 @@ public sealed class PaperExecutionSqlServerTests
         await using var gate = database.Context();
         await using var transaction = await gate.Database.BeginTransactionAsync();
         await HoldAdoptionGate(gate);
-        var reached = await InstallAdoptionGate(first);
+        var adoptionSessionId = await InstallAdoptionGate(first);
         var adoption = Adopt(first, id);
         var observed = new ObserveLock();
         await using var second = database.Context(observed);
         try
         {
-            await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
-            // This signal is emitted inside the INSERT trigger: adoption owns the main lock.
+            await WaitForAdoptionGateAsync(gate, adoptionSessionId, adoption);
             if (competingAdoption)
             {
                 var contender = Adopt(second, id);
@@ -419,14 +426,41 @@ public sealed class PaperExecutionSqlServerTests
             await using var gate = database.Context();
             await using var transaction = await gate.Database.BeginTransactionAsync();
             await HoldAdoptionGate(gate);
-            var reached = await InstallAdoptionGate(context);
+            var adoptionSessionId = await InstallAdoptionGate(context);
             using var cancellation = new CancellationTokenSource();
             var adoption = Adopt(context, id, cancellation.Token);
             try
             {
-                await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                await WaitForAdoptionGateAsync(gate, adoptionSessionId, adoption);
+
                 cancellation.Cancel();
-                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => adoption);
+                //await Assert.ThrowsAnyAsync<OperationCanceledException>(() => adoption);
+                var error = await Record.ExceptionAsync(() => adoption);
+
+                Assert.True(cancellation.IsCancellationRequested);
+
+                if (error is SqlException sql)
+                {
+                    var errors = sql.Errors.Cast<SqlError>().ToArray();
+
+                    Assert.Equal(2, errors.Length);
+                    Assert.All(errors, e =>
+                    {
+                        Assert.Equal(0, e.Number);
+                        Assert.Equal((byte)11, e.Class);
+                        Assert.Equal((byte)0, e.State);
+                    });
+
+                    Assert.Contains(errors, e =>
+                        e.Message == "Operation cancelled by user.");
+
+                    Assert.Contains(errors, e =>
+                        e.Message == "A severe error occurred on the current command.  The results, if any, should be discarded.");
+                }
+                else
+                {
+                    Assert.IsAssignableFrom<OperationCanceledException>(error);
+                }
             }
             finally
             {
@@ -494,25 +528,74 @@ public sealed class PaperExecutionSqlServerTests
         IF @result < 0 THROW 51998, 'Could not hold test gate.', 1;
         """);
 
-    private static async Task<TaskCompletionSource> InstallAdoptionGate(TradingSimulatorDbContext context)
+    private static async Task<int> InstallAdoptionGate(
+    TradingSimulatorDbContext context)
     {
-        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        ((SqlConnection)context.Database.GetDbConnection()).InfoMessage += (_, message) =>
-        {
-            if (message.Message.Contains("Adoption test gate reached", StringComparison.Ordinal))
-                reached.TrySetResult();
-        };
+        // Keep the same SQL session for setup and adoption.
+        await context.Database.OpenConnectionAsync();
+
         await context.Database.ExecuteSqlRawAsync("""
-            CREATE TRIGGER dbo.AdoptionTestGate ON dbo.PaperPortfolioStates AFTER INSERT AS
-            BEGIN
-                RAISERROR ('Adoption test gate reached', 10, 1) WITH NOWAIT;
-                DECLARE @result int;
-                EXEC @result = sys.sp_getapplock @Resource=N'ITS_AdoptionTestGate',
-                    @LockMode=N'Exclusive', @LockOwner=N'Transaction', @LockTimeout=60000;
-                IF @result < 0 THROW 51998, 'Adoption test gate unavailable.', 1;
-            END;
-            """);
-        return reached;
+        CREATE TRIGGER dbo.AdoptionTestGate ON dbo.PaperPortfolioStates AFTER INSERT AS
+        BEGIN
+            DECLARE @result int;
+            EXEC @result = sys.sp_getapplock
+                @Resource=N'ITS_AdoptionTestGate',
+                @LockMode=N'Exclusive',
+                @LockOwner=N'Transaction',
+                @LockTimeout=60000;
+            IF @result < 0
+                THROW 51998, 'Adoption test gate unavailable.', 1;
+        END;
+        """);
+
+        await using var command = context.Database.GetDbConnection().CreateCommand();
+        command.CommandText = "SELECT @@SPID;";
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
+    private static async Task WaitForAdoptionGateAsync(
+    TradingSimulatorDbContext observer,
+    int adoptionSessionId,
+    Task adoption)
+    {
+        await using var command = observer.Database.GetDbConnection().CreateCommand();
+        command.Transaction = observer.Database.CurrentTransaction!.GetDbTransaction();
+        command.CommandTimeout = 5;
+        command.CommandText = """
+        SELECT COUNT(*)
+        FROM sys.dm_exec_requests
+        WHERE session_id = @sessionId
+          AND database_id = DB_ID()
+          AND wait_type = N'LCK_M_X'
+          AND CHARINDEX(N'ITS_AdoptionTestGate', wait_resource) > 0;
+        """;
+
+        var parameter = command.CreateParameter();
+        parameter.ParameterName = "@sessionId";
+        parameter.DbType = System.Data.DbType.Int32;
+        parameter.Value = adoptionSessionId;
+        command.Parameters.Add(parameter);
+
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        while (elapsed.Elapsed < TimeSpan.FromSeconds(30))
+        {
+            if (adoption.IsCompleted)
+            {
+                await adoption;
+                Assert.Fail("Adoption completed before reaching the trigger gate.");
+            }
+
+            if (Convert.ToInt32(await command.ExecuteScalarAsync()) == 1)
+                return;
+
+            await Task.Delay(100);
+        }
+
+        if (adoption.IsCompleted)
+            await adoption;
+
+        throw new TimeoutException(
+            "Adoption did not reach the SQL trigger gate within 30 seconds.");
     }
 
     private static MarketDataWorkflow CreateMarketDataWorkflow(

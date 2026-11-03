@@ -311,7 +311,12 @@ count increases by the remaining position count. Analytical record counts may ch
 Do **not** install SQL Server for this task or point tests at a user/development
 simulation database. On an existing disposable test server, set
 `PAPER_TEST_SQL_CONNECTION` privately to a connection explicitly targeting **master**,
-with permission to create/drop isolated test databases. Then run:
+with permission to create/drop isolated test databases.
+
+Adoption synchronization tests inspect `sys.dm_exec_requests` and require
+permission to observe other sessions: `VIEW SERVER STATE`, or
+`VIEW SERVER PERFORMANCE STATE` on SQL Server 2022 and later.
+Then run:
 
 ```bash
 dotnet test IntelligentTradingSimulator.Tests --configuration Release --filter FullyQualifiedName~PaperExecutionSqlServerTests --verbosity normal

@@ -60,7 +60,10 @@ namespace IntelligentTradingSimulator.Infrastructure.Migrations
                         OR @CutoffSession IS NULL OR @CutoffSession <= CONVERT(date, '00010101', 112)
                         OR @CutoffSession >= CONVERT(date, '99991231', 112)
                         OR @AuditReference IS NULL OR DATALENGTH(@AuditReference) > 2000
-                        OR NULLIF(TRIM(@Whitespace FROM @AuditReference), N'') IS NULL
+                        OR DATALENGTH(TRIM(
+                            @Whitespace COLLATE Latin1_General_100_BIN2
+                            FROM @AuditReference COLLATE Latin1_General_100_BIN2
+                        )) = 0
                         THROW 51022, 'Explicit portfolio, usable cutoff and unknown-history audit reference are required.', 1;
                     SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
                     BEGIN TRY
