@@ -108,7 +108,11 @@ public sealed class CiIdentity
     public string Sha { get; set; } = "";
     public bool? Green { get; set; }
     public List<Finding> Blockers { get; set; } = [];
+    public CiDispatchBoundary? DispatchBoundary { get; set; }
 }
+
+public sealed record CiDispatchBoundary(long WorkflowId, string WorkflowSha, string Ref, string Correlation,
+    DateTimeOffset PreparedAt, long? RunId = null);
 
 public sealed class ReviewIdentity
 {
@@ -180,6 +184,7 @@ public sealed class EffectIntent
 [JsonDerivedType(typeof(TaskStopped), "task-stopped")]
 [JsonDerivedType(typeof(HeadChanged), "head-changed")]
 [JsonDerivedType(typeof(CiResult), "ci-result")]
+[JsonDerivedType(typeof(CiStopped), "ci-stopped")]
 [JsonDerivedType(typeof(ReviewResult), "review-result")]
 [JsonDerivedType(typeof(HumanFeedback), "human-feedback")]
 [JsonDerivedType(typeof(HumanClassification), "human-classification")]
@@ -197,6 +202,7 @@ public sealed record TaskStopped(string TaskId, string Reason) : EventData;
 public sealed record HeadChanged(int PullRequest, string Sha) : EventData;
 public sealed record CiResult(string RunId, string TaskId, int Round, int PullRequest, string Sha, bool Green,
     List<Finding>? Blockers = null) : EventData;
+public sealed record CiStopped(string RunId, string TaskId, int Round, string Sha, string Reason) : EventData;
 public sealed record ReviewResult(string ReviewId, string TaskId, int Round, int PullRequest, string Sha,
     ReviewClassification Classification, List<Finding> Findings, List<FindingResponse> Responses,
     string? SourceEvidence = null) : EventData;

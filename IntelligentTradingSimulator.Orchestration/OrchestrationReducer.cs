@@ -117,6 +117,14 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     }
                 }
                 break;
+            case CiStopped stopped:
+                if (issue.Ci is not { } stoppedCi || stoppedCi.RunId != stopped.RunId ||
+                    stoppedCi.TaskId != stopped.TaskId || stoppedCi.Round != stopped.Round || stoppedCi.Sha != stopped.Sha ||
+                    string.IsNullOrWhiteSpace(stopped.Reason))
+                    throw new InvalidOperationException("CI stop does not match the tracked run.");
+                Hold(issue, stopped.Reason);
+                CancelPendingWork(state, issue);
+                break;
             case CiResult result:
                 CheckMapping(issue, result.PullRequest, result.Sha, requireHead: false);
                 if (string.IsNullOrWhiteSpace(result.RunId) || issue.Ci is not { } ci ||
@@ -514,6 +522,30 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         return state;
     }
 
+    public RepositoryState RecordCiBoundary(RepositoryState input, string id, CiDispatchBoundary boundary)
+    {
+        ValidateState(input);
+        var state = StateJson.Clone(input);
+        var intent = state.Outbox[id];
+        var issue = state.Issues[intent.IssueNumber];
+        if (intent.Kind != EffectKind.RunCi || intent.Status != DeliveryStatus.Executing ||
+            issue.Generation != intent.Generation || issue.Ci?.IntentId != id ||
+            boundary.WorkflowId <= 0 || !IsSha(boundary.WorkflowSha) || string.IsNullOrWhiteSpace(boundary.Ref) ||
+            string.IsNullOrWhiteSpace(boundary.Correlation) || boundary.RunId is <= 0)
+            throw new InvalidOperationException("Invalid executing CI dispatch boundary.");
+        var previous = issue.Ci.DispatchBoundary;
+        if (previous is not null)
+        {
+            if (previous with { RunId = boundary.RunId } != boundary ||
+                previous.RunId is not null && previous.RunId != boundary.RunId)
+                throw new InvalidOperationException("CI dispatch boundary identity changed.");
+        }
+        else if (boundary.RunId is not null) throw new InvalidOperationException("CI must be prepared before run confirmation.");
+        issue.Ci.DispatchBoundary = boundary;
+        Touch(state, issue, state.LastEventId);
+        return state;
+    }
+
     private static RepositoryState ChangeEffect(RepositoryState input, string id, Action<EffectIntent> change, EffectOutcome? outcome = null)
     {
         var state = StateJson.Clone(input);
@@ -593,7 +625,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         message.Data switch
     {
         TaskCompleted or TaskStopped => message.Actor.Kind == ActorKind.TaskService,
-        CiResult => message.Actor.Kind == ActorKind.CiService,
+        CiResult or CiStopped => message.Actor.Kind == ActorKind.CiService,
         ReviewResult => message.Actor.Kind == ActorKind.ReviewService,
         _ => message.Actor.Kind == ActorKind.Human
     };
