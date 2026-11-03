@@ -84,16 +84,16 @@ start_agent_task() {
 
 record_agent_task() {
   local issue="$1" task_id="$2" source_sha="${3:-initial}" review_id="${4:-}" feedback_signature="${5:-}" \
-    launch_id="${6:-}" round_task="${7:-}" human_events="${8:-}"
+    launch_id="${6:-}" round_task="${7:-}" human_events="${8:-}" origin_round="${9:-}"
   GH_TOKEN="${ACTIONS_TOKEN:-${GH_TOKEN:-}}" gh issue comment "$issue" --repo "$REPO" --body \
-    "<!-- agent-orchestrator:task-id=$task_id launch-id=$launch_id source-sha=$source_sha review-id=$review_id feedback=$feedback_signature round-task=$round_task human-events=$human_events -->" >/dev/null
+    "<!-- agent-orchestrator:task-id=$task_id launch-id=$launch_id source-sha=$source_sha review-id=$review_id feedback=$feedback_signature round-task=$round_task human-events=$human_events origin-round=$origin_round -->" >/dev/null
 }
 
 record_agent_task_pending() {
   local issue="$1" launch_id="$2" source_sha="$3" review_id="$4" feedback_signature="$5" \
-    round_task="${6:-}" human_events="${7:-}"
+    round_task="${6:-}" human_events="${7:-}" origin_round="${8:-}"
   GH_TOKEN="${ACTIONS_TOKEN:-${GH_TOKEN:-}}" gh issue comment "$issue" --repo "$REPO" --body \
-    "<!-- agent-orchestrator:task-pending=$launch_id source-sha=$source_sha review-id=$review_id feedback=$feedback_signature round-task=$round_task human-events=$human_events -->" >/dev/null
+    "<!-- agent-orchestrator:task-pending=$launch_id source-sha=$source_sha review-id=$review_id feedback=$feedback_signature round-task=$round_task human-events=$human_events origin-round=$origin_round -->" >/dev/null
 }
 
 agent_task_launch_pending() {
@@ -133,7 +133,10 @@ start_issue_task() {
     echo "Issue #$issue already has an active agent state; not starting another task"
     return 3
   fi
-  set_state "$issue" "$WORKING_LABEL"
+  set_state "$issue" "$WORKING_LABEL" || {
+    echo "Unable to transition Issue #$issue from ready before starting a coding task" >&2
+    return 1
+  }
   launch_id="$(date -u +%s%N)-$$"
   record_agent_task_pending "$issue" "$launch_id" initial "" "" || {
     echo "Unable to persist task launch intent; not starting a coding task" >&2
@@ -379,7 +382,7 @@ completed_round_progress() {
 
 start_pr_fix_task() {
   local pr="$1" issue="$2" sha="$3" prompt="$4" review_id="${5:-}" feedback_signature="${6:-}" \
-    round_task="${7:-}" human_events="${8:-}"
+    round_task="${7:-}" human_events="${8:-}" origin_round="${9:-}"
   local pr_data branch base_ref task_id task_state launch_id labels review_lookup_rc
   pr_data="$(gh pr view "$pr" --repo "$REPO" --json state,headRefOid,headRefName,baseRefName)" || return 1
   if ! jq -e --arg sha "$sha" '.state == "OPEN" and .headRefOid == $sha' <<< "$pr_data" >/dev/null; then
@@ -421,7 +424,7 @@ start_pr_fix_task() {
   esac
   launch_id="$(date -u +%s%N)-$$"
   record_agent_task_pending "$issue" "$launch_id" "$sha" "$review_id" "$feedback_signature" \
-    "$round_task" "$human_events" || {
+    "$round_task" "$human_events" "$origin_round" || {
     echo "Unable to persist task launch intent; not starting another task" >&2
     return 1
   }
@@ -432,7 +435,7 @@ start_pr_fix_task() {
     return 1
   }
   if ! record_agent_task "$issue" "$task_id" "$sha" "$review_id" "$feedback_signature" \
-    "$launch_id" "$round_task" "$human_events"; then
+    "$launch_id" "$round_task" "$human_events" "$origin_round"; then
     block_for_human "$pr" "$issue" \
       "Copilot task $task_id was launched but could not be tracked. Review is disabled until a human verifies the task state." \
       "<!-- agent-orchestrator:untracked-task=$launch_id -->"
@@ -477,7 +480,7 @@ reconcile_human_feedback_events() {
 }
 
 process_human_feedback() {
-  local pr="$1" issue="$2" pr_data sha comments issue_comments task_lines event_ids pending_event_ids="" event_id event_body event_feedback encoded feedback="" signature handoff_id handoff_fingerprint task_id task_result state processed_markers="" labels task_line task_events event_handoff issue_state_rc
+  local pr="$1" issue="$2" pr_data sha comments issue_comments task_lines event_ids pending_event_ids="" event_id event_body event_feedback encoded feedback="" signature handoff_id handoff_fingerprint task_id task_result state processed_markers="" labels task_line task_events event_handoff issue_state_rc origin_task_id origin_task_comment origin_feedback origin_round progress_rc
   pr_data="$(gh pr view "$pr" --repo "$REPO" --json state,headRefOid,comments)" || return 1
   if ! jq -e '.state == "OPEN"' <<< "$pr_data" >/dev/null; then return 0; fi
   if issue_open "$issue"; then :; else
@@ -560,9 +563,35 @@ process_human_feedback() {
         echo "Latest Copilot task has unknown state '$state'; preserving human feedback" >&2
         return 1 ;;
     esac
+    origin_task_id="$(agent_task_id "$issue")" || return 1
+    origin_task_comment="$(jq -cer --arg task "$origin_task_id" \
+      '[.comments[] | select(.author.login == "github-actions[bot]")
+        | select((.body | split("agent-orchestrator:task-id=")[1] // "" | split(" ")[0]) == $task)]
+       | last // empty' <<< "$issue_comments")" || return 1
+    origin_feedback="$(jq -r '.body' <<< "$origin_task_comment" \
+      | sed -nE 's/.*feedback=([A-Za-z0-9]+).*/\1/p')"
+    origin_round=""
+    if [ -n "$origin_feedback" ]; then
+      if completed_round_progress "$pr" "$issue" "$sha"; then
+        :
+      else
+        progress_rc=$?
+        if [ "$progress_rc" -eq 1 ]; then
+          block_for_human "$pr" "$issue" \
+            "The completed Copilot feedback round has no verified finding-linked response. Human feedback is preserved until a person resolves the outstanding round." \
+            "<!-- agent-orchestrator:human-feedback-round-stalled=$origin_task_id -->" || return 1
+          return 0
+        fi
+        echo "Unable to validate the completed Copilot feedback round; preserving human feedback" >&2
+        return 1
+      fi
+      origin_round="$(jq -r '.body' <<< "$origin_task_comment" \
+        | sed -nE 's/.*round-task=([^ ]*).*/\1/p')"
+      origin_round="${origin_round:-$origin_task_id}:$origin_feedback"
+    fi
     task_id="$(start_pr_fix_task "$pr" "$issue" "$sha" \
       "Address only the pending human review events on this PR. Their event IDs are: $(tr '\n' ' ' <<< "$pending_event_ids"). Preserve those identities, implement requested changes, run relevant tests, and resolve addressed threads. For this handoff, post a separate response comment containing the exact marker below, Finding: $signature, Outcome: fixed or Outcome: rebutted, and an Evidence: line of at least 40 non-whitespace characters naming a test/spec or source file. Fixed responses must also name Changed file: <path> in the revision. Do not merge.\n\n<!-- agent-orchestrator:response-feedback=$signature -->\n\n$feedback" \
-      "$handoff_id" "$signature" "" "$(tr '\n' ',' <<< "$pending_event_ids" | sed 's/,$//')")" || {
+      "$handoff_id" "$signature" "" "$(tr '\n' ',' <<< "$pending_event_ids" | sed 's/,$//')" "$origin_round")" || {
       task_result=$?
       [ "$task_result" -eq 3 ] && return 3
       return "$task_result"
@@ -785,30 +814,43 @@ record_terminal_transition() {
 }
 
 recover_terminal_transition_for_issue() {
-  local issue="$1" issue_data issue_comments prs pr pr_data closed_at merged recovered=0
+  local issue="$1" issue_data issue_comments pending_prs latest_pr pr pr_data state closed_at merged labels
   issue_data="$(gh issue view "$issue" --repo "$REPO" --json comments)" || return 1
   issue_comments="$(jq -r '.comments[]? | select(.author.login == "github-actions[bot]") | .body // empty' <<< "$issue_data")" || return 1
-  prs="$(grep -oE 'agent-orchestrator:pr=[0-9]+' <<< "$issue_comments" | sed 's/.*=//' | awk '!seen[$0]++' || true)"
-  [ -n "$prs" ] || return 0
-  while IFS= read -r pr; do
-    [ -n "$pr" ] || continue
-    pr_data="$(gh pr view "$pr" --repo "$REPO" --json state,closedAt,mergedAt)" || return 1
-    jq -e '.state == "CLOSED" or .state == "MERGED"' <<< "$pr_data" >/dev/null || continue
-    closed_at="$(jq -r '.closedAt // empty' <<< "$pr_data")"
-    [ -n "$closed_at" ] || return 1
-    merged=false
-    [ -z "$(jq -r '.mergedAt // empty' <<< "$pr_data")" ] || merged=true
-    record_terminal_transition "$pr" "$issue" "$merged" "$closed_at" || return 1
-    recovered=1
-  done <<< "$prs"
-  if [ "$recovered" -eq 0 ]; then
-    echo "Issue #$issue has no mapped closed PR to reconstruct its pending terminal transition" >&2
+  pending_prs="$(grep -oE 'agent-orchestrator:terminal-pending=[A-Za-z0-9._-]+ pr=[0-9]+' \
+    <<< "$issue_comments" | sed -E 's/.* pr=//' | sort -un || true)"
+  latest_pr="$(grep -oE 'agent-orchestrator:pr=[0-9]+' <<< "$issue_comments" | sed 's/.*=//' | tail -1)"
+  if [ -z "$latest_pr" ]; then
+    [ -n "$pending_prs" ] && return 0
+    echo "Issue #$issue has no trusted mapped PR for its pending terminal state" >&2
     return 1
   fi
+  pr_data="$(gh pr view "$latest_pr" --repo "$REPO" --json state,closedAt,mergedAt)" || return 1
+  state="$(jq -er '.state | select(type == "string")' <<< "$pr_data")" || return 1
+  case "$state" in
+    CLOSED|MERGED)
+      closed_at="$(jq -r '.closedAt // empty' <<< "$pr_data")"
+      [ -n "$closed_at" ] || return 1
+      merged=false
+      [ -z "$(jq -r '.mergedAt // empty' <<< "$pr_data")" ] || merged=true
+      if ! grep -Fq "pr=$latest_pr merged=$merged closed-at=$closed_at -->" <<< "$issue_comments"; then
+        record_terminal_transition "$latest_pr" "$issue" "$merged" "$closed_at" || return 1
+      fi ;;
+    OPEN)
+      if [ -z "$pending_prs" ]; then
+        labels="$(issue_labels "$issue")" || return 1
+        if printf '%s\n' "$labels" | grep -Fxq "${TERMINAL_PENDING_LABEL:-agent:terminal-pending}"; then
+          gh issue edit "$issue" --repo "$REPO" --remove-label "${TERMINAL_PENDING_LABEL:-agent:terminal-pending}" >/dev/null || return 1
+        fi
+      fi ;;
+    *)
+      echo "Mapped PR #$latest_pr has unknown state '$state'; preserving pending terminal state" >&2
+      return 1 ;;
+  esac
 }
 
 process_pending_terminal_issue() {
-  local issue="$1" comments comment_bodies record terminal_id pr merged closed_at processed unprocessed=0 found=0 labels
+  local issue="$1" comments comment_bodies record terminal_id pr merged closed_at processed unprocessed=0 found=0 labels pr_data pr_state retired
   recover_terminal_transition_for_issue "$issue" || return 1
   comments="$(gh issue view "$issue" --repo "$REPO" --json comments)" || return 1
   comment_bodies="$(jq -r '.comments[]? | select(.author.login == "github-actions[bot]") | .body // empty' <<< "$comments")" || return 1
@@ -821,24 +863,38 @@ process_pending_terminal_issue() {
     closed_at="$(sed -nE 's/.* closed-at=([^ ]*).*/\1/p' <<< "$record")"
     [ -n "$terminal_id" ] && [ -n "$pr" ] && [ -n "$merged" ] || return 1
     processed="agent-orchestrator:terminal-processed=$terminal_id"
-    if grep -Fq "$processed" <<< "$comment_bodies"; then
+    retired="agent-orchestrator:terminal-retired=$terminal_id"
+    if grep -Fq "$processed" <<< "$comment_bodies" || grep -Fq "$retired" <<< "$comment_bodies"; then
       continue
     fi
-    handle_pr_closed "$pr" "$issue" "$merged" "$closed_at" || return 1
-    GH_TOKEN="${ACTIONS_TOKEN:-${GH_TOKEN:-}}" gh issue comment "$issue" --repo "$REPO" --body \
-      "<!-- $processed -->" >/dev/null || return 1
+    pr_data="$(gh pr view "$pr" --repo "$REPO" --json state)" || return 1
+    pr_state="$(jq -er '.state | select(type == "string")' <<< "$pr_data")" || return 1
+    if [ "$pr_state" = OPEN ]; then
+      GH_TOKEN="${ACTIONS_TOKEN:-${GH_TOKEN:-}}" gh issue comment "$issue" --repo "$REPO" --body \
+        "<!-- $retired -->" >/dev/null || return 1
+    else
+      handle_pr_closed "$pr" "$issue" "$merged" "$closed_at" || return 1
+      GH_TOKEN="${ACTIONS_TOKEN:-${GH_TOKEN:-}}" gh issue comment "$issue" --repo "$REPO" --body \
+        "<!-- $processed -->" >/dev/null || return 1
+    fi
   done < <(jq -r '.comments[]? | select(.author.login == "github-actions[bot]") | .body
     | select(contains("agent-orchestrator:terminal-pending="))
     | select(test("agent-orchestrator:terminal-pending=[A-Za-z0-9._-]+ pr=[0-9]+ merged=(true|false)"))' <<< "$comments")
-  [ "$found" -eq 1 ] || {
-    echo "Issue #$issue has a pending terminal label but no durable closure record" >&2
-    return 1
-  }
+  if [ "$found" -eq 0 ]; then
+    labels="$(issue_labels "$issue")" || return 1
+    if printf '%s\n' "$labels" | grep -Fxq "${TERMINAL_PENDING_LABEL:-agent:terminal-pending}"; then
+      echo "Issue #$issue has a pending terminal label but no durable closure record" >&2
+      return 1
+    fi
+    return 0
+  fi
   comments="$(gh issue view "$issue" --repo "$REPO" --json comments)" || return 1
+  comment_bodies="$(jq -r '.comments[]? | select(.author.login == "github-actions[bot]") | .body // empty' <<< "$comments")" || return 1
   while IFS= read -r record; do
     [ -n "$record" ] || continue
     terminal_id="$(sed -nE 's/.*agent-orchestrator:terminal-pending=([A-Za-z0-9._-]+).*/\1/p' <<< "$record")"
-    if ! grep -Fq "agent-orchestrator:terminal-processed=$terminal_id" <<< "$(jq -r '.comments[]?.body // empty' <<< "$comments")"; then
+    if ! grep -Fq "agent-orchestrator:terminal-processed=$terminal_id" <<< "$comment_bodies" &&
+       ! grep -Fq "agent-orchestrator:terminal-retired=$terminal_id" <<< "$comment_bodies"; then
       unprocessed=1
       break
     fi
@@ -855,7 +911,8 @@ process_pending_terminal_issue() {
     while IFS= read -r record; do
       [ -n "$record" ] || continue
       terminal_id="$(sed -nE 's/.*agent-orchestrator:terminal-pending=([A-Za-z0-9._-]+).*/\1/p' <<< "$record")"
-      if ! grep -Fq "agent-orchestrator:terminal-processed=$terminal_id" <<< "$comment_bodies"; then
+      if ! grep -Fq "agent-orchestrator:terminal-processed=$terminal_id" <<< "$comment_bodies" &&
+         ! grep -Fq "agent-orchestrator:terminal-retired=$terminal_id" <<< "$comment_bodies"; then
         unprocessed=1
         break
       fi
@@ -889,7 +946,7 @@ reconcile_terminal_transitions() {
 }
 
 current_copilot_review() {
-  local pr="$1" sha="$2" issue="$3" reviews task_json task_updated task_id issue_comments task_comment signature pr_comments response_marker response_at review
+  local pr="$1" sha="$2" issue="$3" reviews task_json task_updated task_id issue_comments task_comment signature pr_comments response_at review
   reviews="$(gh api --paginate -H 'Accept: application/vnd.github+json' \
     "repos/$REPO/pulls/$pr/reviews?per_page=100")" || return 2
   task_json="$(agent_task_json "$issue")" || return 2
@@ -903,9 +960,9 @@ current_copilot_review() {
   signature="$(jq -r '.body' <<< "$task_comment" | sed -nE 's/.*feedback=([A-Za-z0-9]+).*/\1/p')"
   if [ -n "$signature" ]; then
     pr_comments="$(pr_bot_comments "$pr")" || return 2
-    response_marker="$(printf '%s\n' "$pr_comments" | grep -F "agent-orchestrator:response-used-content=" \
-      | grep -F "feedback=$signature " | grep -F "task=$task_id " | tail -1 || true)"
-    response_at="$(sed -nE 's/.*response-at=([^ ]*).*/\1/p' <<< "$response_marker")"
+    response_at="$(printf '%s\n' "$pr_comments" | grep -F "agent-orchestrator:response-used-content=" \
+      | grep -F "feedback=$signature " | grep -F "task=$task_id " \
+      | sed -nE 's/.*response-at=([^ ]*).*/\1/p' | sort | tail -1)"
     [ -n "$response_at" ] || return 1
   else
     response_at="$task_updated"
@@ -973,7 +1030,7 @@ review_eligible() {
     return 1
   fi
   if completed_round_progress "$pr" "$issue" "$sha"; then
-    return 0
+    progress_rc=0
   else
     progress_rc=$?
   fi
@@ -981,10 +1038,24 @@ review_eligible() {
     block_for_human "$pr" "$issue" \
       "The completed coding task did not provide a verified finding-linked fix or new substantive response. Please decide how to resolve the outstanding feedback." \
       "<!-- agent-orchestrator:no-progress-task=$sha -->"
-  else
+    return 1
+  elif [ "$progress_rc" -ne 0 ]; then
     echo "Unable to verify completed response evidence for $sha; deferring review" >&2
+    return 1
   fi
-  return 1
+  local green_comments green_attempts green_run_id green_marker
+  green_comments="$(pr_bot_comments "$pr")" || return 1
+  green_attempts="$(ci_fix_attempt_count "$green_comments")"
+  if [ "$green_attempts" -gt 0 ]; then
+    green_run_id="$(ci_green_run_identity "$sha")" || return 1
+    [ -n "$green_run_id" ] || return 1
+    green_run_id="$(printf '%s' "$green_run_id" | tr -c 'A-Za-z0-9._-' '-')"
+    green_marker="<!-- agent-orchestrator:ci-fix-green=$sha-$green_run_id -->"
+    if ! printf '%s\n' "$green_comments" | grep -Fq "$green_marker"; then
+      GH_TOKEN="${ACTIONS_TOKEN:-${GH_TOKEN:-}}" gh pr comment "$pr" --repo "$REPO" --body "$green_marker" >/dev/null || return 1
+    fi
+  fi
+  return 0
 }
 
 request_review_if_eligible() {
@@ -1080,6 +1151,12 @@ ci_fix_attempt_count() {
   printf '%s' "$attempts"
 }
 
+ci_green_run_identity() {
+  GH_TOKEN="${ACTIONS_TOKEN:-${GH_TOKEN:-}}" gh api -H 'Accept: application/vnd.github+json' \
+    "repos/$REPO/actions/workflows/${CI_WORKFLOW_FILE:-ci.yml}/runs?head_sha=$1&per_page=20" \
+    --jq '[.workflow_runs[]?] | sort_by(.created_at) | last | (.id // .created_at // empty) | tostring'
+}
+
 review_threads() {
   local pr="$1"
   # shellcheck disable=SC2016 # GraphQL variables, not shell expansions.
@@ -1124,13 +1201,6 @@ feedback_path_for_finding() {
     signature="$(printf '%s' "$normalized" | sha256sum | cut -d' ' -f1)"
     if [ "$signature" = "$wanted" ]; then
       printf '%s' "$finding" | sed -nE 's/^- ([^:]+):[0-9]* .*/\1/p'
-      local comments attempts
-      comments="$(pr_bot_comments "$pr")" || return 1
-      attempts="$(ci_fix_attempt_count "$comments")"
-      if [ "$attempts" -gt 0 ] && ! grep -Fq "agent-orchestrator:ci-fix-green=$sha" <<< "$comments"; then
-        GH_TOKEN="${ACTIONS_TOKEN:-${GH_TOKEN:-}}" gh pr comment "$pr" --repo "$REPO" --body \
-          "<!-- agent-orchestrator:ci-fix-green=$sha -->" >/dev/null || return 1
-      fi
       return 0
     fi
   done <<< "$feedback"

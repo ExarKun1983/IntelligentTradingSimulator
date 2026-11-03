@@ -397,7 +397,26 @@ if reconcile_terminal_transitions >/dev/null 2>&1; then r=scheduled; else r=abor
 check "retired closure no longer aborts scheduled reconciliation" "scheduled" "$r"
 
 reset_state
+add_issue 39 "$WORKING_LABEL" "$TERMINAL_PENDING_LABEL"
+issue_comment_fixture 39 '<!-- agent-orchestrator:pr=145 -->'
+issue_comment_fixture 39 '<!-- agent-orchestrator:terminal-pending=145-2026-10-12T12-50-00Z pr=145 merged=false closed-at=2026-10-12T12:50:00Z -->'
+issue_comment_fixture 39 '<!-- agent-orchestrator:terminal-retired=145-2026-10-12T12-50-00Z -->'
+add_pr 145 "closed again after reopen" "2026-10-12T10:00:00Z"
+close_pr 145
+jq '. + {closedAt:"2026-10-12T13:50:00Z",mergedAt:null}' "$STATE/pr-145.json" > "$STATE/tmp" \
+  && mv "$STATE/tmp" "$STATE/pr-145.json"
+process_pending_terminal_issue 39
+check "reopened PR closure recovery sees a later terminal transition on the same mapping" \
+  "agent:blocked" "$(labels_of 39)"
+check_contains "repeated close is recorded with its new closure identity" \
+  "terminal-processed=145-2026-10-12T13-50-00Z" "$(jq -r '.[]' "$STATE/issue-39.comments")"
+
+reset_state
 add_issue 39 "$WORKING_LABEL"
+add_pr 145 "closed PR" "2026-10-12T10:00:00Z"
+close_pr 145
+jq '. + {closedAt:"2026-10-12T12:50:00Z",mergedAt:null}' "$STATE/pr-145.json" > "$STATE/tmp" \
+  && mv "$STATE/tmp" "$STATE/pr-145.json"
 jq --arg body '<!-- agent-orchestrator:terminal-pending=145-2026-10-12T12-50-00Z pr=145 merged=false closed-at=2026-10-12T12:50:00Z -->' \
   '. + [{body:$body,author:{login:"human"}}]' "$STATE/issue-39.comments" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/issue-39.comments"
 record_terminal_transition 145 39 false "2026-10-12T12:50:00Z"
@@ -412,6 +431,10 @@ check "terminal replay does not repeat the state transition" "1" "$(calls_matchi
 
 reset_state
 add_issue 39 "$WORKING_LABEL"
+add_pr 145 "closed PR" "2026-10-12T10:00:00Z"
+close_pr 145
+jq '. + {closedAt:"2026-10-12T12:50:00Z",mergedAt:null}' "$STATE/pr-145.json" > "$STATE/tmp" \
+  && mv "$STATE/tmp" "$STATE/pr-145.json"
 record_terminal_transition 145 39 false "2026-10-12T12:50:00Z"
 jq --arg body '<!-- agent-orchestrator:terminal-processed=145-2026-10-12T12-50-00Z -->' \
   '. + [{body:$body,author:{login:"human"}}]' "$STATE/issue-39.comments" > "$STATE/tmp" \
@@ -421,6 +444,9 @@ check "human-authored processed marker cannot suppress a closure transition" "ag
 
 reset_state
 add_issue 39 "$WORKING_LABEL"
+add_pr 145 "merged PR" "2026-10-12T10:00:00Z"
+jq '.state = "MERGED" | .closedAt = "2026-10-12T12:50:00Z" | .mergedAt = "2026-10-12T12:50:00Z"' \
+  "$STATE/pr-145.json" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.json"
 record_terminal_transition 145 39 true "2026-10-12T12:50:00Z"
 process_pending_terminal_issue 39
 check "pending merged closure closes the Issue" "CLOSED" "$(cat "$STATE/issue-39.state")"
@@ -1257,6 +1283,13 @@ process_human_feedback 145 39 >/dev/null 2>&1 || true
 add_task task-initial completed "2026-10-12T13:25:00Z"
 process_human_feedback 145 39 >/dev/null
 add_task task-1 completed "2026-10-12T13:35:00Z"
+first_human_signature="$(printf '%s\n' review-42 | sort -u | sha256sum | cut -d' ' -f1)"
+jq -n --arg marker "<!-- agent-orchestrator:response-feedback=$first_human_signature -->" \
+  --arg finding "$first_human_signature" \
+  '{id:46,body:($marker + "\nFinding: " + $finding + "\nOutcome: rebutted\nEvidence: Tests/HumanReviewTests.cs verifies the same requested fix is already covered by the current implementation."),author:{login:"Copilot"},createdAt:"2026-10-12T13:36:00Z"}' \
+  > "$STATE/copilot-response.json"
+jq --slurpfile response "$STATE/copilot-response.json" '. + [$response[0]]' "$STATE/pr-145.comments" \
+  > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.comments"
 echo '[{"id":44,"user":{"login":"human","type":"User"},"state":"CHANGES_REQUESTED","commit_id":"abc123","submitted_at":"2026-10-12T13:30:00Z","body":"Please make the same requested fix."}]' > "$STATE/human-reviews.json"
 reconcile_human_feedback_events 145 39
 process_human_feedback 145 39 >/dev/null
@@ -1287,6 +1320,13 @@ check "first handoff is persisted before its acknowledgement retry" "deferred 1"
 check_contains "launched task persists its exact human event identity" "human-events=review-42" "$(jq -r '.[]' "$STATE/issue-39.comments")"
 rm "$STATE/human-feedback-ack-failure"
 add_task task-1 completed "2026-10-12T13:25:00Z"
+first_event_signature="$(printf '%s\n' review-42 | sort -u | sha256sum | cut -d' ' -f1)"
+jq -n --arg marker "<!-- agent-orchestrator:response-feedback=$first_event_signature -->" \
+  --arg finding "$first_event_signature" \
+  '{id:47,body:($marker + "\nFinding: " + $finding + "\nOutcome: rebutted\nEvidence: Tests/HumanReviewTests.cs verifies the completed response addresses the first human feedback event."),author:{login:"Copilot"},createdAt:"2026-10-12T13:26:00Z"}' \
+  > "$STATE/copilot-response.json"
+jq --slurpfile response "$STATE/copilot-response.json" '. + [$response[0]]' "$STATE/pr-145.comments" \
+  > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.comments"
 echo '[{"id":42,"user":{"login":"human","type":"User"},"state":"CHANGES_REQUESTED","commit_id":"abc123","submitted_at":"2026-10-12T13:16:00Z","body":"Feedback A must not be replayed."},{"id":43,"user":{"login":"human","type":"User"},"state":"CHANGES_REQUESTED","commit_id":"abc123","submitted_at":"2026-10-12T13:30:00Z","body":"New feedback B needs one handoff."}]' > "$STATE/human-reviews.json"
 reconcile_human_feedback_events 145 39
 process_human_feedback 145 39 >/dev/null
@@ -1295,6 +1335,8 @@ if [[ "$second_task_prompt" == *"Feedback A must not be replayed"* ]]; then r=re
 check "new human event is delivered without replaying the previously launched event" "excluded 2" \
   "$r $(grep -c '^task create' "$STATE/calls.log")"
 check_contains "new event feedback reaches its own task" "New feedback B needs one handoff." "$second_task_prompt"
+check_contains "new human task retains the validated originating round identity" \
+  "origin-round=task-1:$first_event_signature" "$(jq -r '.[]' "$STATE/issue-39.comments")"
 
 setup_review
 add_task task-initial completed "2026-10-12T13:20:00Z"

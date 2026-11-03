@@ -32,6 +32,34 @@ benchmark calculations, and CSV exports may still be running after the simulatio
 an export is only confirmed after its write succeeds. Snapshot-only report exports do not
 generate summaries or request benchmarks.
 
+## Copilot agent orchestration lifecycle
+
+The GitHub agent orchestrator maps each PR to an Issue using metadata written with the
+Actions token; reconciliation trusts only records authored by `github-actions[bot]`.
+It removes `agent:ready` before recording or launching the initial task, and a failed
+label transition must leave the task unlaunched.
+
+Review is eligible only for an open PR at the expected head SHA after its latest tracked
+Copilot task is complete, current-head CI is green, and any outstanding feedback round has
+finding-linked evidence. Inline findings remain structured per comment, while summary
+findings must appear in the bounded `Blocking findings:` section. A completed fix must name
+the finding and provide substantive evidence; a fixed outcome must identify a changed file
+present in the revision. Rebuttals are consumed by normalized response content as well as
+comment identity, and a review must postdate the latest response in the round.
+
+Human feedback is held until the completed coding round passes the same evidence check.
+Technical CI repairs preserve the originating feedback round and have a separate bounded
+retry budget, reset only after an eligible green transition. Terminal closure records are
+idempotent: closed or merged PRs apply their transition once, while reopened PRs retire stale
+pending closure records without applying them. Mapping, label, and API lookup failures defer
+the transition rather than clearing a human block or promoting work.
+
+The offline lifecycle regressions run with:
+
+```bash
+bash .github/scripts/tests/agent-orchestrator.test.sh
+```
+
 ## Prerequisites
 
 - The .NET SDK version in `global.json` (currently `9.0.318`; its `latestPatch` roll-forward setting permits later patches in that feature band).
