@@ -42,7 +42,7 @@ gh() {
 }
 
 json_comments() {
-  jq '{comments: map(if type == "object" then . else {body: ., author: {login: "github-actions[bot]"}, createdAt:
+  jq '{comments: map(if type == "object" then . else {body: ., author: {login: "github-actions"}, createdAt:
     (if test("task-id=task-2") then "2026-10-12T13:35:00Z" else "2026-10-12T13:15:00Z" end)} end)}' "$1"
 }
 
@@ -70,6 +70,27 @@ gh_dispatch() {
       local body="${all##*--body }"
       if [[ "$body" == *"agent-orchestrator:human-feedback-processed="* ]] && [ -f "$STATE/human-feedback-ack-failure" ]; then
         echo "simulated human event acknowledgement failure" >&2
+        return 1
+      fi
+      if [[ "$body" == *"agent-orchestrator:finding="* ]] && [ -f "$STATE/human-finding-write-failure" ]; then
+        echo "simulated human finding write failure" >&2
+        rm "$STATE/human-finding-write-failure"
+        return 1
+      fi
+      if [[ "$body" == *"agent-orchestrator:review-requested-sha="* ]] && [ -f "$STATE/review-request-marker-failure" ]; then
+        echo "simulated review request marker failure" >&2
+        return 1
+      fi
+      if [[ "$body" == *"agent-orchestrator:ci-fix-attempt="* ]] && [ -f "$STATE/ci-failure-marker-failure" ]; then
+        echo "simulated CI failure metadata write" >&2
+        rm "$STATE/ci-failure-marker-failure"
+        return 1
+      fi
+      if [[ "$body" == *"agent-orchestrator:finding="* && "$body" == *"path-base64="* ]] &&
+         [ -f "$STATE/finding-manifest-write-failure" ] &&
+         [ "$(jq '[.[] | select((if type == "object" then .body else . end) | contains("agent-orchestrator:finding=") and contains("path-base64="))] | length' "$STATE/pr-$n.comments")" -ge 1 ]; then
+        echo "simulated partial finding manifest write" >&2
+        rm "$STATE/finding-manifest-write-failure"
         return 1
       fi
       append_json "$STATE/pr-$n.comments" "$body"
@@ -132,7 +153,7 @@ gh_dispatch() {
       echo CLOSED > "$STATE/issue-$n.state"
       echo "issue close $n" >> "$STATE/calls.log" ;;
     "pr list")
-      echo '[]' ;;
+      cat "$STATE/open-prs.json" 2>/dev/null || echo '[]' ;;
     api*)
       local path
       path="$(printf '%s\n' "$@" | grep -E '^(agents/|repos/|graphql$)' | head -1)"
@@ -171,13 +192,18 @@ gh_dispatch() {
           if [ -f "$STATE/reviews-api-failure" ]; then echo "simulated reviews API failure" >&2; return 1; fi
           if [ -f "$STATE/reviews-invalid" ]; then echo '{invalid json'; else cat "$STATE/reviews.json" 2>/dev/null || echo '[]'; fi ;;
         repos/*/requested_reviewers)
+          local pr_number="${path#repos/"$REPO"/pulls/}" requested_file
+          pr_number="${pr_number%%/*}"
+          requested_file="$STATE/requested-reviewers-$pr_number.json"
           if [[ "$*" == *POST* ]]; then
             [ ! -f "$STATE/request-review-post-failure" ] || { echo "simulated review request failure" >&2; return 1; }
             echo "request review" >> "$STATE/calls.log"
-            echo '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}]}' > "$STATE/requested-reviewers.json"
+            echo '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}]}' > "$requested_file"
           else
             [ ! -f "$STATE/request-review-get-failure" ] || { echo "simulated requested reviewer lookup failure" >&2; return 1; }
-            cat "$STATE/requested-reviewers.json" 2>/dev/null || echo '{"users":[]}'
+            if [ -f "$requested_file" ]; then cat "$requested_file"
+            elif [ -f "$STATE/requested-reviewers.json" ]; then cat "$STATE/requested-reviewers.json"
+            else echo '{"users":[]}'; fi
           fi ;;
         *) echo "unexpected gh api $*" >&2; return 1 ;;
       esac ;;
@@ -240,6 +266,7 @@ check_contains() { # name needle haystack
 
 calls_matching() { grep -c -- "$1" "$STATE/calls.log" || true; }
 pr_views_matching() { grep -c -- "$1" "$STATE/pr-views.log" 2>/dev/null || true; }
+pr_comments() { jq -r '.[] | if type == "object" then .body else . end' "$STATE/pr-145.comments"; }
 
 # --- task prompt -------------------------------------------------------------------------------------------
 prompt="$(build_task_prompt 39 "Add exit reason tracking" "Issue body" master)"
@@ -285,6 +312,13 @@ add_pr 155 "" "2026-10-12T10:00:00Z"
 ACTIONS_TOKEN=actions-token resolve_issue 155 copilot/issue-39-x >/dev/null
 check "mapping writes use the trusted Actions token consumed by the reader" \
   "issue comment 39 token=actions-token" "$(grep '^issue comment 39' "$STATE/calls.log")"
+
+reset_state
+add_issue 39 "$WORKING_LABEL"; add_issue 40 "$WORKING_LABEL"
+issue_comment_fixture 39 $'<!-- agent-orchestrator:pr=155 -->\nMapped automatically to PR #155.'
+add_pr 155 "" "2026-10-12T10:00:00Z" "sha-155" "copilot/featuretrack-exit-reason"
+check "mapping recovery trusts the GraphQL Actions author without an ambiguous fallback" \
+  "39" "$(resolve_issue 155 copilot/featuretrack-exit-reason 2>/dev/null)"
 
 reset_state
 add_issue 39; add_issue 40 "agent:working"; add_issue 41 "agent:working"
@@ -600,6 +634,17 @@ check_contains "fix task targets the existing PR branch" '"head_ref": "copilot/i
 check "duplicate failed CI does not launch a second task" "1" "$(grep -c '^task create' "$STATE/calls.log")"
 
 setup_ci
+touch "$STATE/ci-failure-marker-failure"
+if handle_ci_failure 145 39 abc123 failure https://ci/metadata-failure >/dev/null 2>&1; then r=unexpected; else r=deferred; fi
+add_task task-1 completed "2026-10-12T13:25:00Z"
+handle_ci_failure 145 39 abc123 failure https://ci/metadata-failure >/dev/null
+check "CI metadata write recovery restores failure and attempt state without relaunch" \
+  "deferred 1 agent:blocked yes yes" \
+  "$r $(grep -c '^task create' "$STATE/calls.log") $(labels_of 39) \
+$(if grep -Fq 'ci-failure-sha=abc123' <<< "$(pr_comments)"; then echo yes; else echo no; fi) \
+$(if grep -Fq 'ci-fix-attempt=1' <<< "$(pr_comments)"; then echo yes; else echo no; fi)"
+
+setup_ci
 echo '{"workflow_runs":[{"created_at":"2026-10-12T13:10:00Z","conclusion":"cancelled"}]}' > "$STATE/ci-runs.json"
 handle_ci_failure 145 39 abc123 cancelled https://ci/run/2 >/dev/null
 check "cancelled CI blocks for human attention" "agent:blocked" "$(labels_of 39)"
@@ -655,10 +700,27 @@ request_review_if_eligible 145 39 abc123 >/dev/null
 check "review event backup path uses same eligible gate" "1" "$(calls_matching 'request review')"
 
 setup_review
+record_human_feedback_event 145 review-pending abc123 review "Handle this pending human request."
+request_review_if_eligible 145 39 abc123 >/dev/null 2>&1 || true
+process_review 145 39 abc123 >/dev/null 2>&1 || true
+check "pending human feedback blocks every review and promotion entry point" \
+  "agent:working 0 0 no" \
+  "$(labels_of 39) $(calls_matching 'request review') $(calls_matching 'pr ready') \
+$(if grep -Fq 'review-requested-sha=' <<< "$(pr_comments)"; then echo yes; else echo no; fi)"
+
+setup_review
 echo '[]' > "$STATE/reviews.json"
 touch "$STATE/request-review-get-failure"
 if request_review_if_eligible 145 39 abc123 >/dev/null 2>&1; then r=success; else r=deferred; fi
 check "requested-reviewer lookup failure does not mark review requested" "deferred agent:working 0" "$r $(labels_of 39) $(calls_matching 'pr comment 145')"
+
+setup_review
+echo '[]' > "$STATE/reviews.json"
+touch "$STATE/review-request-marker-failure"
+if request_review_if_eligible 145 39 abc123 >/dev/null 2>&1; then r=success; else r=deferred; fi
+check "review request timestamp write failure prevents state advancement" \
+  "deferred agent:working 1 0" \
+  "$r $(labels_of 39) $(calls_matching 'request review') $(calls_matching 'review-requested-sha=')"
 
 setup_review
 echo '[]' > "$STATE/reviews.json"
@@ -749,7 +811,6 @@ review_fixture() { # body [sha] [submitted_at] [state] -- appends Copilot review
     "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   rm -f "$STATE/requested-reviewers.json"
 }
-pr_comments() { jq -r '.[] | if type == "object" then .body else . end' "$STATE/pr-145.comments"; }
 set_thread() {
   local review_id
   review_id="$(jq -r '.[-1].id' "$STATE/reviews.json")"
@@ -763,7 +824,7 @@ add_copilot_response() {
   finding_id="$(feedback_finding_signatures "$feedback")"
   jq -n --argjson id "$id" --arg marker "<!-- agent-orchestrator:response-feedback=$signature -->" \
     --arg finding "$finding_id" --arg outcome "$outcome" --arg evidence "$evidence" --arg created "$created" \
-    '{id:$id,body:($marker + "\nFinding: " + $finding + "\nOutcome: " + $outcome + "\nEvidence: " + $evidence),author:{login:"Copilot"},createdAt:$created}' \
+    '{id:$id,body:($marker + "\nFinding: " + $finding + "\nOutcome: " + $outcome + "\nEvidence: " + $evidence),author:{login:"copilot-swe-agent"},createdAt:$created}' \
     > "$STATE/copilot-response.json"
   jq --slurpfile response "$STATE/copilot-response.json" '. + [$response[0]]' "$STATE/pr-145.comments" \
     > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.comments"
@@ -854,7 +915,7 @@ feedback="- a.cs:3 Fix the null dereference."
 signature="$(feedback_signature "$feedback")"
 finding_id="$(feedback_finding_signatures "$feedback")"
 jq -n --arg marker "<!-- agent-orchestrator:response-feedback=$signature -->" --arg finding "$finding_id" \
-  '{id:98,body:($marker + "\nFinding: " + $finding + "\nOutcome: rebutted\nEvidence: Tests/NullGuardTests.cs verifies the a.cs dereference returns safely."),author:{login:"Copilot"},createdAt:"2026-10-12T13:30:00Z"}' \
+  '{id:98,body:($marker + "\nFinding: " + $finding + "\nOutcome: rebutted\nEvidence: Tests/NullGuardTests.cs verifies the a.cs dereference returns safely."),author:{login:"copilot-swe-agent"},createdAt:"2026-10-12T13:30:00Z"}' \
   > "$STATE/copilot-response.json"
 jq --slurpfile response "$STATE/copilot-response.json" '. + [$response[0]]' "$STATE/pr-145.comments" \
   > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.comments"
@@ -967,7 +1028,7 @@ process_review 145 39 abc123 >/dev/null
 add_task task-1 completed "2026-10-12T13:25:00Z"
 feedback="$(feedback_signature '- a.cs:3 Fix the null dereference.')"
 jq -n --arg marker "<!-- agent-orchestrator:response-feedback=$feedback -->" \
-  '{id:99,body:($marker + "\nEvidence:   \n   "),author:{login:"Copilot"},createdAt:"2026-10-12T13:26:00Z"}' \
+  '{id:99,body:($marker + "\nEvidence:   \n   "),author:{login:"copilot-swe-agent"},createdAt:"2026-10-12T13:26:00Z"}' \
   > "$STATE/copilot-response.json"
 jq --slurpfile response "$STATE/copilot-response.json" '. + [$response[0]]' "$STATE/pr-145.comments" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.comments"
 review_fixture "Still failing with different wording" abc123 "2026-10-12T13:30:00Z" CHANGES_REQUESTED
@@ -997,7 +1058,7 @@ feedback="$(feedback_signature '- a.cs:3 Fix the null dereference.')"
 finding_id="$(feedback_finding_signatures '- a.cs:3 Fix the null dereference.')"
 jq -n --arg marker "<!-- agent-orchestrator:response-feedback=$feedback -->" \
   --arg finding "$finding_id" \
-  '{id:99,body:($marker + "\nFinding: " + $finding + "\nOutcome: rebutted\nEvidence: Tests/NullGuardTests.cs verifies the a.cs dereference returns safely."),author:{login:"Copilot"},createdAt:"2026-10-12T13:26:00Z"}' \
+  '{id:99,body:($marker + "\nFinding: " + $finding + "\nOutcome: rebutted\nEvidence: Tests/NullGuardTests.cs verifies the a.cs dereference returns safely."),author:{login:"copilot-swe-agent"},createdAt:"2026-10-12T13:26:00Z"}' \
   > "$STATE/copilot-response.json"
 jq --slurpfile response "$STATE/copilot-response.json" '. + [$response[0]]' "$STATE/pr-145.comments" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.comments"
 add_task task-1 completed "2026-10-12T13:28:00Z"
@@ -1020,12 +1081,47 @@ add_task task-1 completed "2026-10-12T13:25:00Z"
 feedback="$(feedback_signature '- a.cs:3 Reconcile a.cs/null-guard behavior.')"
 finding_id="$(feedback_finding_signatures '- a.cs:3 Reconcile a.cs/null-guard behavior.')"
 jq -n --arg marker "<!-- agent-orchestrator:response-feedback=$feedback -->" --arg finding "$finding_id" \
-  '{id:88,body:($marker + "\nFinding: " + $finding + "\nOutcome: rebutted\nEvidence: Tests/NullGuardTests.cs verifies a.cs behavior against the documented edge case."),author:{login:"Copilot"},createdAt:"2026-10-12T13:26:00Z"}' \
+  '{id:88,body:($marker + "\nFinding: " + $finding + "\nOutcome: rebutted\nEvidence: Tests/NullGuardTests.cs verifies a.cs behavior against the documented edge case."),author:{login:"copilot-swe-agent"},createdAt:"2026-10-12T13:26:00Z"}' \
   > "$STATE/copilot-response.json"
 jq --slurpfile response "$STATE/copilot-response.json" '. + [$response[0]]' "$STATE/pr-145.comments" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.comments"
 if request_review_if_eligible 145 39 abc123 >/dev/null; then r=requested; else r=blocked; fi
 check "substantive same-SHA rebuttal unlocks a fresh review" "requested 1" "$r $(calls_matching 'request review')"
 check_contains "response fingerprint is persisted per finding and task" "response-used-content=" "$(pr_comments)"
+
+setup_review
+review_fixture "Changes requested" abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
+set_thread "[blocking] Fix the null dereference." abc123
+process_review 145 39 abc123 >/dev/null
+add_task task-1 completed "2026-10-12T13:25:00Z"
+add_copilot_response '- a.cs:3 Fix the null dereference.' 97 rebutted \
+  "Tests/NullGuardTests.cs. This spec checks the behavior and confirms the reported null dereference at a.cs." \
+  "2026-10-12T13:26:00Z"
+if coder_response_for_feedback 145 "$(feedback_signature '- a.cs:3 Fix the null dereference.')" 39 \
+  "$(feedback_finding_signatures '- a.cs:3 Fix the null dereference.')" >/dev/null; then r=response; else r=missing; fi
+check "GraphQL Copilot response with terminal punctuation is discoverable" "response" "$r"
+if completed_round_progress 145 39 abc123; then r=progress; else r=stalled; fi
+check "punctuation-delimited Evidence paths validate with the GraphQL Copilot author" \
+  "progress" "$r"
+
+setup_review
+review_fixture "Changes requested" abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
+set_thread "[blocking] Fix the null dereference." abc123
+process_review 145 39 abc123 >/dev/null
+add_task task-1 completed "2026-10-12T13:25:00Z"
+new_sha="newsha"
+jq --arg sha "$new_sha" '.headRefOid = $sha' "$STATE/pr-145.json" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.json"
+echo '{"files":[{"filename":"src/Guard.cs"}]}' > "$STATE/compare.json"
+feedback="- a.cs:3 Fix the null dereference."
+response_signature="$(feedback_signature "$feedback")"
+response_finding="$(feedback_finding_signatures "$feedback")"
+jq -n --arg marker "<!-- agent-orchestrator:response-feedback=$response_signature -->" \
+  --arg finding "$response_finding" \
+  '{id:96,body:($marker + "\nFinding: " + $finding + "\nOutcome: fixed\nChanged file: src/Guard.cs\nEvidence: Tests/NullGuardTests.cs verifies the a.cs defect; src/Guard.cs contains the tested correction."),author:{login:"copilot-swe-agent"},createdAt:"2026-10-12T13:26:00Z"}' \
+  > "$STATE/copilot-response.json"
+jq --slurpfile response "$STATE/copilot-response.json" '. + [$response[0]]' "$STATE/pr-145.comments" \
+  > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.comments"
+if completed_round_progress 145 39 "$new_sha"; then r=progress; else r=stalled; fi
+check "finding-linked fix in a different evidence-linked changed file is accepted" "progress" "$r"
 
 setup_review
 review_fixture "Changes requested" abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
@@ -1067,7 +1163,7 @@ for i in 1 2 3 4 5; do
     printf -v response_time '2026-10-12T13:%02d:00Z' "$response_minute"
     jq -n --arg marker "<!-- agent-orchestrator:response-feedback=$response_feedback -->" \
       --arg finding "$response_finding" --arg created "$response_time" \
-      '{id:(1000 + '"$i"'),body:($marker + "\nFinding: " + $finding + "\nOutcome: fixed\nChanged file: a.cs\nEvidence: Tests/DefectTests.cs verifies the targeted behavior after changing a.cs."),author:{login:"Copilot"},createdAt:$created}' \
+      '{id:(1000 + '"$i"'),body:($marker + "\nFinding: " + $finding + "\nOutcome: fixed\nChanged file: a.cs\nEvidence: Tests/DefectTests.cs verifies the targeted behavior after changing a.cs."),author:{login:"copilot-swe-agent"},createdAt:$created}' \
       > "$STATE/copilot-response.json"
     jq --slurpfile response "$STATE/copilot-response.json" '. + [$response[0]]' "$STATE/pr-145.comments" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.comments"
     sha="sha$i"
@@ -1090,11 +1186,25 @@ jq --arg sha "$new_sha" '.headRefOid = $sha' "$STATE/pr-145.json" > "$STATE/tmp"
 echo '{"files":[{"filename":"src/TimeoutHandler.cs"}]}' > "$STATE/compare.json"
 jq -n --arg marker "<!-- agent-orchestrator:response-feedback=$summary_signature -->" \
   --arg finding "$summary_finding" \
-  '{id:77,body:($marker + "\nFinding: " + $finding + "\nOutcome: fixed\nChanged file: src/TimeoutHandler.cs\nEvidence: Tests/TimeoutHandlerTests.cs verifies src/TimeoutHandler.cs fixes the reported reconnect timeout."),author:{login:"Copilot"},createdAt:"2026-10-12T13:26:00Z"}' \
+  '{id:77,body:($marker + "\nFinding: " + $finding + "\nOutcome: fixed\nChanged file: src/TimeoutHandler.cs\nEvidence: Tests/TimeoutHandlerTests.cs verifies src/TimeoutHandler.cs fixes the reported reconnect timeout."),author:{login:"copilot-swe-agent"},createdAt:"2026-10-12T13:26:00Z"}' \
   > "$STATE/copilot-response.json"
 jq --slurpfile response "$STATE/copilot-response.json" '. + [$response[0]]' "$STATE/pr-145.comments" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.comments"
 if completed_round_progress 145 39 "$new_sha"; then r=progress; else r=stalled; fi
 check "summary-only fixed response validates its explicit changed path" "progress" "$r"
+
+setup_review
+echo '[]' > "$STATE/reviews.json"
+review_fixture $'Blocking findings:\n- First required behavior is missing.\n- Second required behavior is missing.' \
+  abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
+touch "$STATE/finding-manifest-write-failure"
+if process_review 145 39 abc123 >/dev/null 2>&1; then r=unexpected; else r=deferred; fi
+check "partial finding manifest failure occurs before task creation" \
+  "deferred 0 1" "$r $(grep -c '^task create' "$STATE/calls.log" || true) \
+$(jq '[.[] | select((if type == "object" then .body else . end) | contains("agent-orchestrator:finding="))] | length' "$STATE/pr-145.comments")"
+process_review 145 39 abc123 >/dev/null
+check "replay completes the full finding manifest before exactly one launch" \
+  "1 2" "$(grep -c '^task create' "$STATE/calls.log") \
+$(jq '[.[] | select((if type == "object" then .body else . end) | contains("agent-orchestrator:finding="))] | length' "$STATE/pr-145.comments")"
 
 setup_review
 review_fixture "Changes requested" abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
@@ -1114,6 +1224,22 @@ set_thread "[blocking] Reverse the earlier null dereference fix." abc123
 process_review 145 39 abc123 >/dev/null
 check "reversal of an earlier same-file recommendation escalates" "agent:blocked 1" "$(labels_of 39) $(grep -c '^task create' "$STATE/calls.log")"
 check_contains "contradictory handoff records its reason" "contradictory-feedback=" "$(pr_comments)"
+
+setup_review
+review_fixture "Changes requested" abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
+set_thread "[blocking] Add the null guard." abc123
+process_review 145 39 abc123 >/dev/null
+add_task task-1 completed "2026-10-12T13:25:00Z"
+add_copilot_response '- a.cs:3 Add the null guard.' 96 rebutted \
+  "Tests/NullGuardTests.cs verifies the null guard behavior and reported a.cs edge case." \
+  "2026-10-12T13:26:00Z"
+review_fixture "Changes requested" abc123 "2026-10-12T13:30:00Z" CHANGES_REQUESTED
+set_thread "[blocking] Remove the null guard." abc123
+process_review 145 39 abc123 >/dev/null
+check "opposite Add and Remove recommendations escalate without undo wording" \
+  "agent:blocked 1" "$(labels_of 39) $(grep -c '^task create' "$STATE/calls.log")"
+check_contains "opposite recommendation escalation records the contradiction" \
+  "contradictory-feedback=" "$(pr_comments)"
 
 setup_review
 review_fixture $'Blocking findings:\n- Add reconnect timeout handling.' abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
@@ -1236,7 +1362,7 @@ check "replayed human event does not launch a duplicate task" "1" "$(grep -c '^t
 add_task task-1 completed "2026-10-12T13:35:00Z"
 human_signature="$(printf '%s\n' review-42 | sort -u | sha256sum | cut -d' ' -f1)"
 jq -n --arg marker "<!-- agent-orchestrator:response-feedback=$human_signature -->" --arg finding "$human_signature" \
-  '{id:45,body:($marker + "\nFinding: " + $finding + "\nOutcome: rebutted\nEvidence: Tests/HumanReviewTests.cs verifies the requested edge case and documents why the existing behavior is correct."),author:{login:"Copilot"},createdAt:"2026-10-12T13:36:00Z"}' \
+  '{id:45,body:($marker + "\nFinding: " + $finding + "\nOutcome: rebutted\nEvidence: Tests/HumanReviewTests.cs verifies the requested edge case and documents why the existing behavior is correct."),author:{login:"copilot-swe-agent"},createdAt:"2026-10-12T13:36:00Z"}' \
   > "$STATE/copilot-response.json"
 jq --slurpfile response "$STATE/copilot-response.json" '. + [$response[0]]' "$STATE/pr-145.comments" > "$STATE/tmp" \
   && mv "$STATE/tmp" "$STATE/pr-145.comments"
@@ -1258,6 +1384,20 @@ check "failed AI round leaves human event pending and preserves finding identity
   "$(if grep -Fq 'human-feedback-processed=review-pending-ai-round' <<< "$(pr_comments)"; then echo yes; else echo no; fi) \
 $(if grep -Fq 'agent-orchestrator:finding=' <<< "$(pr_comments)"; then echo yes; else echo no; fi) \
 $(if grep -Fq 'agent-orchestrator:response-used-content=' <<< "$(pr_comments)"; then echo yes; else echo no; fi)"
+
+setup_review
+add_task task-initial completed "2026-10-12T13:15:00Z"
+record_human_feedback_event 145 review-restore-finding abc123 review "Preserve this event's finding record."
+touch "$STATE/human-finding-write-failure"
+if process_human_feedback 145 39 >/dev/null 2>&1; then r=unexpected; else r=deferred; fi
+check "finding write failure leaves the launched handoff unacknowledged" \
+  "deferred 1 no" "$r $(grep -c '^task create' "$STATE/calls.log") \
+$(if grep -Fq 'human-feedback-processed=review-restore-finding' <<< "$(pr_comments)"; then echo yes; else echo no; fi)"
+process_human_feedback 145 39 >/dev/null
+check "replay restores human finding metadata before acknowledging its task" \
+  "1 yes yes" "$(grep -c '^task create' "$STATE/calls.log") \
+$(if grep -Fq 'agent-orchestrator:finding=' <<< "$(pr_comments)"; then echo yes; else echo no; fi) \
+$(if grep -Fq 'human-feedback-processed=review-restore-finding' <<< "$(pr_comments)"; then echo yes; else echo no; fi)"
 
 setup_review
 add_task task-initial in_progress
@@ -1289,7 +1429,7 @@ add_task task-1 completed "2026-10-12T13:35:00Z"
 first_human_signature="$(printf '%s\n' review-42 | sort -u | sha256sum | cut -d' ' -f1)"
 jq -n --arg marker "<!-- agent-orchestrator:response-feedback=$first_human_signature -->" \
   --arg finding "$first_human_signature" \
-  '{id:46,body:($marker + "\nFinding: " + $finding + "\nOutcome: rebutted\nEvidence: Tests/HumanReviewTests.cs verifies the same requested fix is already covered by the current implementation."),author:{login:"Copilot"},createdAt:"2026-10-12T13:36:00Z"}' \
+  '{id:46,body:($marker + "\nFinding: " + $finding + "\nOutcome: rebutted\nEvidence: Tests/HumanReviewTests.cs verifies the same requested fix is already covered by the current implementation."),author:{login:"copilot-swe-agent"},createdAt:"2026-10-12T13:36:00Z"}' \
   > "$STATE/copilot-response.json"
 jq --slurpfile response "$STATE/copilot-response.json" '. + [$response[0]]' "$STATE/pr-145.comments" \
   > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.comments"
@@ -1326,7 +1466,7 @@ add_task task-1 completed "2026-10-12T13:25:00Z"
 first_event_signature="$(printf '%s\n' review-42 | sort -u | sha256sum | cut -d' ' -f1)"
 jq -n --arg marker "<!-- agent-orchestrator:response-feedback=$first_event_signature -->" \
   --arg finding "$first_event_signature" \
-  '{id:47,body:($marker + "\nFinding: " + $finding + "\nOutcome: rebutted\nEvidence: Tests/HumanReviewTests.cs verifies the completed response addresses the first human feedback event."),author:{login:"Copilot"},createdAt:"2026-10-12T13:26:00Z"}' \
+  '{id:47,body:($marker + "\nFinding: " + $finding + "\nOutcome: rebutted\nEvidence: Tests/HumanReviewTests.cs verifies the completed response addresses the first human feedback event."),author:{login:"copilot-swe-agent"},createdAt:"2026-10-12T13:26:00Z"}' \
   > "$STATE/copilot-response.json"
 jq --slurpfile response "$STATE/copilot-response.json" '. + [$response[0]]' "$STATE/pr-145.comments" \
   > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.comments"
@@ -1350,6 +1490,28 @@ echo '[{"id":42,"user":{"login":"human","type":"User"},"state":"CHANGES_REQUESTE
 echo '[]' > "$STATE/human-inline-comments.json"
 reconcile_human_feedback_events 145 39
 check "human recovery uses PR lifetime after a newer task starts" "yes" "$(if grep -Fq 'human-feedback-event=review-42' <<< "$(pr_comments)"; then echo yes; else echo no; fi)"
+
+reset_state
+add_issue 39 "$WORKING_LABEL"; add_issue 40 "$WORKING_LABEL"
+add_pr 145 '<!-- agent-orchestrator:issue=39 -->' "2026-10-12T12:46:22Z" "sha-145" "copilot/issue-39-test"
+add_pr 146 '<!-- agent-orchestrator:issue=40 -->' "2026-10-12T12:46:23Z" "sha-146" "copilot/issue-40-test"
+issue_comment_fixture 39 '<!-- agent-orchestrator:pr=145 -->'
+issue_comment_fixture 40 '<!-- agent-orchestrator:pr=146 -->'
+add_task task-1 completed
+add_task task-2 completed
+record_agent_task 39 task-1
+record_agent_task 40 task-2
+echo '{"workflow_runs":[{"created_at":"2026-10-12T13:10:00Z","conclusion":"success"}]}' > "$STATE/ci-runs.json"
+echo '[]' > "$STATE/reviews.json"
+jq -n '[{number:145,headRefName:"copilot/issue-39-test",headRefOid:"sha-145"},
+  {number:146,headRefName:"copilot/issue-40-test",headRefOid:"sha-146"}]' > "$STATE/open-prs.json"
+if reconcile_open_copilot_prs >/dev/null 2>&1; then r=reconciled; else r=deferred; fi
+check "scheduled reconciliation processes each eligible mapped Copilot PR independently" \
+  "reconciled 2 agent:ai-review agent:ai-review" \
+  "$r $(calls_matching 'request review') $(labels_of 39) $(labels_of 40)"
+check "each open PR receives its own current-head request marker" "yes yes" \
+  "$(if grep -Fq 'review-requested-sha=sha-145' <<< "$(jq -r '.[]' "$STATE/pr-145.comments")"; then echo yes; else echo no; fi) \
+$(if grep -Fq 'review-requested-sha=sha-146' <<< "$(jq -r '.[]' "$STATE/pr-146.comments")"; then echo yes; else echo no; fi)"
 
 rm -rf "$STATE"
 echo "$passes passed, $failures failed"

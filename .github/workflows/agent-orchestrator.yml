@@ -398,7 +398,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .github/scripts
           persist-credentials: false
-      - name: Repair the single open Copilot PR
+      - name: Reconcile mapped open Copilot PRs
         env:
           GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
           ACTIONS_TOKEN: ${{ github.token }}
@@ -422,35 +422,9 @@ jobs:
                 rc=$?
                 [ "$rc" -eq 3 ] || exit "$rc"
               fi
-              exit 0
             fi
           fi
-          prs="$(gh pr list --repo "$REPO" --state open --limit 100 --json number,headRefName,headRefOid)"
-          copilot_prs="$(jq -c '[.[] | select(.headRefName | startswith("copilot/"))]' <<< "$prs")"
-          if [ "$(jq length <<< "$copilot_prs")" -ne 1 ]; then echo "Need exactly one open Copilot PR; no-op"; exit 0; fi
-          pr="$(jq -r '.[0].number' <<< "$copilot_prs")"
-          branch="$(jq -r '.[0].headRefName' <<< "$copilot_prs")"
-          sha="$(jq -r '.[0].headRefOid' <<< "$copilot_prs")"
-          issue="$(resolve_issue "$pr" "$branch")"
-          if [ -z "$issue" ]; then echo "No Issue mapping for PR #$pr; no-op"; exit 0; fi
-          reconcile_human_feedback_events "$pr" "$issue"
-          if process_human_feedback "$pr" "$issue"; then
-            :
-          else
-            rc=$?
-            [ "$rc" -eq 3 ] || exit "$rc"
-          fi
-          conclusion="$(ci_conclusion "$sha" || true)"
-          case "$conclusion" in
-            failure|timed_out|cancelled|startup_failure)
-              handle_ci_failure "$pr" "$issue" "$sha" "$conclusion" "https://github.com/$REPO/actions"
-              ;;
-          esac
-          request_rc=0
-          request_review_if_eligible "$pr" "$issue" "$sha" || request_rc=$?
-          if [ "$request_rc" -eq 1 ]; then exit 0; elif [ "$request_rc" -ne 0 ]; then exit "$request_rc"; fi
-          echo "PR #$pr -> Issue #$issue, SHA $sha"
-          process_review "$pr" "$issue" "$sha"
+          reconcile_open_copilot_prs
 
   cleanup-closed-issue:
     if: github.event_name == 'issues' && github.event.action == 'closed'
