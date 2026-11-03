@@ -68,10 +68,11 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             }
             if (!enabled) return new(snapshot.State, decision.PendingEffects, true);
 
-            var executing = snapshot.State.Outbox.Values.FirstOrDefault(e => e.Status == DeliveryStatus.Executing);
+            var executing = snapshot.State.Outbox.Values.FirstOrDefault(e => e.Status == DeliveryStatus.Executing) ??
+                snapshot.State.Outbox.Values.FirstOrDefault(e => e.Status == DeliveryStatus.Unknown);
             if (executing is not null)
             {
-                // Recovery is the only permitted operation on an executing intent. Unknown remains held.
+                // Both in-flight and uncertain intents are lookup-only; neither can be executed again.
                 EffectOutcome recovered;
                 try
                 {
@@ -81,9 +82,8 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                 {
                     recovered = new(DeliveryStatus.Unknown);
                 }
-                var resolved = reducer.RecordOutcome(snapshot.State, executing.Id, recovered, live.ObservedAt);
-                if (!await store.TrySaveAsync(snapshot, resolved, cancellationToken))
-                    return new((await store.LoadAsync(cancellationToken)).State, decision.PendingEffects, false);
+                var resolved = await PublishOutcomeAsync(store, executing.Id, executing.Digest, recovered,
+                    live.ObservedAt, options.MaximumConflicts, cancellationToken);
                 return new(resolved, decision.PendingEffects, false);
             }
             var simulateAgents = options.AllowOfflineAgentSimulation && effects is IOfflineEffectAdapter;
@@ -104,19 +104,28 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                 outcome = new(DeliveryStatus.Unknown);
             }
             // Once execution started, a lost result must never cause another Execute call.
-            for (var publish = 0; publish < options.MaximumConflicts; publish++)
-            {
-                var latest = await store.LoadAsync(cancellationToken);
-                if (!latest.State.Outbox.TryGetValue(pending.Id, out var intent) ||
-                    intent.Status != DeliveryStatus.Executing)
-                    return new(latest.State, decision.PendingEffects, false);
-                var final = reducer.RecordOutcome(latest.State, pending.Id, outcome, live.ObservedAt);
-                if (await store.TrySaveAsync(latest, final, cancellationToken))
-                    return new(final, decision.PendingEffects, false);
-            }
-            throw new InvalidOperationException("Effect result publication conflict; executing intent retained for recovery.");
+            var final = await PublishOutcomeAsync(store, pending.Id, pending.Digest, outcome,
+                live.ObservedAt, options.MaximumConflicts, cancellationToken);
+            return new(final, decision.PendingEffects, false);
         }
         throw new InvalidOperationException("State publication conflict limit exceeded.");
+    }
+
+    private async Task<RepositoryState> PublishOutcomeAsync(IStateStore store, string id, string digest,
+        EffectOutcome outcome, DateTimeOffset now, int maximumConflicts, CancellationToken cancellationToken)
+    {
+        for (var publish = 0; publish < maximumConflicts; publish++)
+        {
+            var latest = await store.LoadAsync(cancellationToken);
+            if (!latest.State.Outbox.TryGetValue(id, out var intent) || intent.Digest != digest)
+                throw new InvalidOperationException("Persisted operation identity changed during reconciliation.");
+            if (intent.Status is not (DeliveryStatus.Executing or DeliveryStatus.Unknown or DeliveryStatus.Succeeded))
+                return latest.State;
+            var final = reducer.RecordOutcome(latest.State, id, outcome, now);
+            if (StateJson.Serialize(final) == StateJson.Serialize(latest.State)) return latest.State;
+            if (await store.TrySaveAsync(latest, final, cancellationToken)) return final;
+        }
+        throw new InvalidOperationException("Effect result publication conflict; intent retained for lookup-only recovery.");
     }
 
     private static bool IsSafeToExecute(RepositoryState state, EffectIntent intent, LiveObservation observation)

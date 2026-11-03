@@ -79,7 +79,6 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 issue.ReadyAt = message.OccurredAt;
                 issue.ActiveTaskId = null;
                 issue.Ci = null;
-                issue.Review = null;
                 issue.ClosurePending = false;
                 issue.CurrentHandoffId = null;
                 issue.TerminalOutcome = TerminalOutcome.None;
@@ -153,9 +152,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     review.Findings.Any(finding => finding.Id == response.FindingId) &&
                     !review.Responses.Contains(response));
                 review.Classification = result.Classification;
-                review.Findings = result.Classification == ReviewClassification.NeedsHuman
-                    ? result.Findings.Concat(review.Findings.Where(old => !result.Findings.Any(next => next.Id == old.Id))).ToList()
-                    : result.Findings.ToList();
+                review.Findings = RetainUnresolvedFindings(review, result.Classification, result.Findings, result.Responses);
                 review.Responses.AddRange(result.Responses.Where(response => !review.Responses.Contains(response)));
                 if (!eligibleReview)
                 {
@@ -224,7 +221,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 issue.Handoffs[classification.HandoffId] = classifiedHandoff with { ClassificationEventId = message.Id };
                 issue.CurrentHandoffId = null;
                 issue.Review.Classification = classification.Classification;
-                issue.Review.Findings = classifiedFindings.ToList();
+                issue.Review.Findings = RetainUnresolvedFindings(issue.Review, classification.Classification,
+                    classifiedFindings, classifiedResponses);
                 issue.Review.Responses.AddRange(classifiedResponses.Where(response => !issue.Review.Responses.Contains(response)));
                 issue.PendingReviewProgress = humanFindingProgress;
                 issue.ReactivationRequired = false;
@@ -431,19 +429,32 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             effect.StartedAt = now;
         });
 
-    public RepositoryState RecordOutcome(RepositoryState input, string id, EffectOutcome outcome, DateTimeOffset now) =>
-        ChangeEffect(input, id, effect =>
+    public RepositoryState RecordOutcome(RepositoryState input, string id, EffectOutcome outcome, DateTimeOffset now)
+    {
+        if (outcome.Status is not (DeliveryStatus.Succeeded or DeliveryStatus.Failed or DeliveryStatus.Unknown))
+            throw new InvalidOperationException("Invalid effect outcome.");
+        var existing = input.Outbox[id];
+        if (existing.Status == DeliveryStatus.Succeeded)
         {
-            if (effect.Status != DeliveryStatus.Executing) throw new InvalidOperationException("Effect is not executing.");
-            if (outcome.Status is not (DeliveryStatus.Succeeded or DeliveryStatus.Failed or DeliveryStatus.Unknown))
-                throw new InvalidOperationException("Invalid effect outcome.");
+            if (outcome.Status == DeliveryStatus.Succeeded && existing.ExternalId != outcome.ExternalId)
+                throw new InvalidOperationException("A confirmed operation cannot acquire a different external identity.");
+            return StateJson.Clone(input);
+        }
+        if (existing.Status == DeliveryStatus.Unknown && outcome.Status == DeliveryStatus.Unknown &&
+            (outcome.ExternalId is null || existing.ExternalId == outcome.ExternalId))
+            return StateJson.Clone(input);
+        return ChangeEffect(input, id, effect =>
+        {
+            if (effect.Status is not (DeliveryStatus.Executing or DeliveryStatus.Unknown))
+                throw new InvalidOperationException("Effect is not executing or awaiting reconciliation.");
             effect.Status = outcome.Status;
-            effect.ExternalId = outcome.ExternalId;
+            effect.ExternalId = outcome.ExternalId ?? effect.ExternalId;
             effect.CompletedAt = now;
             if (outcome.Status == DeliveryStatus.Succeeded && effect.Kind != EffectKind.ProjectLabels &&
                 string.IsNullOrWhiteSpace(outcome.ExternalId))
                 throw new InvalidOperationException("Successful remote operation requires an identity.");
         }, outcome);
+    }
 
     private static RepositoryState ChangeEffect(RepositoryState input, string id, Action<EffectIntent> change, EffectOutcome? outcome = null)
     {
@@ -465,7 +476,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 task.Status = outcome.Status == DeliveryStatus.Succeeded ? TaskStatus.Running :
                     outcome.Status == DeliveryStatus.Unknown ? TaskStatus.Unknown : TaskStatus.Failed;
                 task.LaunchConfirmed = outcome.Status == DeliveryStatus.Succeeded;
-                task.ExternalId = outcome.ExternalId;
+                task.ExternalId = effect.ExternalId;
                 if (task.LaunchConfirmed)
                     foreach (var feedbackId in task.FeedbackEventIds)
                     {
@@ -475,9 +486,9 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     }
             }
             else if (effect.Kind == EffectKind.RunCi && issue.Ci?.IntentId == id)
-                issue.Ci.RunId = outcome.ExternalId;
+                issue.Ci.RunId = effect.ExternalId;
             else if (effect.Kind == EffectKind.RequestReview && issue.Review?.IntentId == id)
-                issue.Review.ReviewId = outcome.ExternalId;
+                issue.Review.ReviewId = effect.ExternalId;
             if (outcome.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown)
             {
                 Hold(issue, outcome.Status == DeliveryStatus.Unknown ? "Effect outcome is ambiguous." : "Effect failed.");
@@ -558,6 +569,12 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 !responses.Concat(review.Responses).Any(response => response.FindingId == finding.Id && response.Resolved)))
             throw new InvalidOperationException("Each removed blocker requires finding-specific resolution evidence.");
     }
+
+    private static List<Finding> RetainUnresolvedFindings(ReviewIdentity previous, ReviewClassification classification,
+        List<Finding> findings, List<FindingResponse> responses) =>
+        classification != ReviewClassification.NeedsHuman ? findings.ToList() :
+            findings.Concat(previous.Findings.Where(old => !findings.Any(next => next.Id == old.Id) &&
+                !responses.Concat(previous.Responses).Any(response => response.FindingId == old.Id && response.Resolved))).ToList();
 
     private static void ApplyClassification(IssueState issue, ReviewClassification classification, OrchestrationEvent message,
         bool findingProgress = false)

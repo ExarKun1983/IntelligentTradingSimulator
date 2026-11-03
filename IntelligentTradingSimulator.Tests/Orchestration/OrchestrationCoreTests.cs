@@ -414,6 +414,44 @@ public sealed class OrchestrationCoreTests
     }
 
     [Fact]
+    public void NeedsHumanCannotEraseInheritedBlockerOrAuthorizeAcceptanceWithoutResolutionEvidence()
+    {
+        var reducer = Reducer();
+        var state = FinishCi(CompleteTask(Admitted(), 2), true, "initial-green");
+        state = FinishReview(state, ReviewClassification.Blocking, "blocking",
+            [new Finding("F", "Inherited defect", "Regression F fails.")]);
+        state = reducer.Reconcile(state, Live(state)).State;
+        state = FinishCi(CompleteTask(state, 3), true, "repair-green");
+        state = FinishReview(state, ReviewClassification.NeedsHuman, "ambiguous");
+        state = StateJson.Deserialize(StateJson.Serialize(state));
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+        Assert.Equal("F", Assert.Single(state.Issues[7].Review!.Findings).Id);
+        var newGeneration = reducer.Apply(state, Event(new Reactivate("Start a new generation without discarding unresolved findings."), "new-generation"));
+        newGeneration = reducer.Reconcile(newGeneration, Live(newGeneration)).State;
+        var newTask = newGeneration.Issues[7].Tasks[newGeneration.Issues[7].ActiveTaskId!];
+        Assert.Equal("F", Assert.Single(newTask.ReviewBlockers).Id);
+        var handoff = state.Issues[7].CurrentHandoffId!;
+        var accepted = new HumanClassification(handoff, 1, 11, Sha(3), ReviewClassification.Accepted,
+            "Human decision must supply finding-specific evidence.");
+        Assert.Throws<InvalidOperationException>(() => reducer.Apply(state, Event(accepted, "invalid-accept")));
+        state = reducer.Apply(state, Event(new HumanClassification(handoff, 1, 11, Sha(3),
+            ReviewClassification.NeedsHuman, "The review remains unclassified."), "still-unknown"));
+        Assert.Equal("F", Assert.Single(state.Issues[7].Review!.Findings).Id);
+        var nextHandoff = state.Issues[7].CurrentHandoffId!;
+        Assert.Throws<InvalidOperationException>(() => reducer.Apply(state,
+            Event(accepted with { HandoffId = nextHandoff }, "invalid-accept-again")));
+        state = reducer.Apply(state, Event(accepted with
+        {
+            HandoffId = nextHandoff,
+            Reason = "Verified the specific regression was repaired.",
+            Responses = [new FindingResponse("F", "Regression F now passes with the repaired implementation.", true)]
+        }, "evidenced-accept"));
+        Assert.Equal(Phase.HUMAN_REVIEW, state.Issues[7].Phase);
+        Assert.Empty(state.Issues[7].Review!.Findings);
+        Assert.Equal("F", Assert.Single(state.Issues[7].Review!.Responses).FindingId);
+    }
+
+    [Fact]
     public void SixProductiveReviewRoundsAreNotCappedByNoProgressBudget()
     {
         var reducer = Reducer();

@@ -194,7 +194,7 @@ public sealed class OrchestrationPersistenceTests
     }
 
     [Fact]
-    public async Task UnknownExecutingOutcomeBlocksAndKeepsAdmissionWithoutRetry()
+    public async Task UnknownExecutingOutcomeIsHeldAndLookedUpWithoutExecutingAgain()
     {
         var state = CiPending();
         state.Outbox["ci"].Status = DeliveryStatus.Executing;
@@ -207,14 +207,21 @@ public sealed class OrchestrationPersistenceTests
         Assert.Equal(DeliveryStatus.Unknown, result.State.Outbox["ci"].Status);
         await reconciler.RunAsync(store, new Observations(), adapter, Enabled);
         Assert.Equal(0, adapter.Executions);
-        Assert.Equal(1, adapter.Recoveries);
+        Assert.Equal(2, adapter.Recoveries);
+        adapter.RecoveryOutcome = new(DeliveryStatus.Succeeded, "resolved-run");
+        var resolved = await reconciler.RunAsync(store, new Observations(), adapter, Enabled);
+        Assert.Equal(0, adapter.Executions);
+        Assert.Equal(3, adapter.Recoveries);
+        Assert.Equal(DeliveryStatus.Succeeded, resolved.State.Outbox["ci"].Status);
+        Assert.Equal("resolved-run", resolved.State.Issues[7].Ci!.RunId);
+        Assert.Equal(Phase.BLOCKED, resolved.State.Issues[7].Phase);
     }
 
     [Fact]
     public async Task ThrownExecutionIsAmbiguousNotSafeToRetry()
     {
         var store = new MemoryStore(CiPending());
-        var adapter = new Effects(store) { ThrowOnExecute = true };
+        var adapter = new Effects(store) { ThrowOnExecute = true, RecoveryOutcome = new(DeliveryStatus.Unknown) };
         var reconciler = new OrchestrationReconciler();
         await reconciler.RunAsync(store, new Observations(), adapter, Enabled);
         await reconciler.RunAsync(store, new Observations(), adapter, Enabled);
@@ -243,6 +250,61 @@ public sealed class OrchestrationPersistenceTests
         var result = await new OrchestrationReconciler().RunAsync(store, new Observations(), adapter, Enabled);
         Assert.Equal(1, adapter.Executions);
         Assert.Equal(DeliveryStatus.Succeeded, result.State.Outbox["ci"].Status);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OriginalLaunchSuccessSupersedesConcurrentUnknownWithoutDuplicateExecution(bool conflict)
+    {
+        var store = new MemoryStore(LaunchPending());
+        var adapter = new ControlledEffects(store);
+        var reconciler = new OrchestrationReconciler();
+        var original = reconciler.RunAsync(store, new Observations(), adapter, Simulation);
+        await adapter.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var uncertain = await reconciler.RunAsync(store, new Observations { Ready = false }, adapter, Simulation);
+        Assert.Equal(DeliveryStatus.Unknown, uncertain.State.Outbox["launch"].Status);
+        Assert.Equal(TaskStatus.Unknown, uncertain.State.Issues[7].Tasks["task"].Status);
+        if (conflict) store.Conflicts = 1;
+        adapter.Completion.SetResult(new EffectOutcome(DeliveryStatus.Succeeded, "actual-task-id"));
+        var result = await original;
+        Assert.Equal(1, adapter.Executions);
+        Assert.Equal(1, adapter.Recoveries);
+        Assert.Equal(DeliveryStatus.Succeeded, result.State.Outbox["launch"].Status);
+        Assert.Equal("actual-task-id", result.State.Outbox["launch"].ExternalId);
+        Assert.Equal("actual-task-id", result.State.Issues[7].Tasks["task"].ExternalId);
+        Assert.True(result.State.Issues[7].Tasks["task"].LaunchConfirmed);
+        Assert.Equal(TaskStatus.Running, result.State.Issues[7].Tasks["task"].Status);
+        Assert.Equal(7, result.State.AdmittedIssue);
+        Assert.Equal(0, store.Conflicts);
+        await reconciler.RunAsync(store, new Observations { Ready = false }, adapter, Simulation);
+        Assert.Equal(1, adapter.Executions);
+    }
+
+    [Fact]
+    public async Task RecoveredSuccessSurvivesLateOriginalUnknownAndRejectsConflictingIdentity()
+    {
+        var store = new MemoryStore(LaunchPending());
+        var adapter = new ControlledEffects(store)
+        {
+            LookupOutcome = new(DeliveryStatus.Succeeded, "looked-up-task"),
+            OnLookup = () => store.Conflicts = 1
+        };
+        var reconciler = new OrchestrationReconciler();
+        var original = reconciler.RunAsync(store, new Observations(), adapter, Simulation);
+        await adapter.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var recovered = await reconciler.RunAsync(store, new Observations { Ready = false }, adapter, Simulation);
+        Assert.Equal(DeliveryStatus.Succeeded, recovered.State.Outbox["launch"].Status);
+        adapter.Completion.SetResult(new EffectOutcome(DeliveryStatus.Unknown));
+        var result = await original;
+        Assert.Equal(1, adapter.Executions);
+        Assert.Equal(1, adapter.Recoveries);
+        Assert.Equal(0, store.Conflicts);
+        Assert.Equal(DeliveryStatus.Succeeded, result.State.Outbox["launch"].Status);
+        Assert.Equal("looked-up-task", result.State.Issues[7].Tasks["task"].ExternalId);
+        Assert.True(result.State.Issues[7].Tasks["task"].LaunchConfirmed);
+        Assert.Throws<InvalidOperationException>(() => new OrchestrationReducer().RecordOutcome(result.State,
+            "launch", new(DeliveryStatus.Succeeded, "different-task"), Now));
     }
 
     [Fact]
@@ -375,6 +437,22 @@ public sealed class OrchestrationPersistenceTests
         Assert.Equal(1, transport.Advances);
     }
 
+    private static RepositoryState LaunchPending()
+    {
+        var state = CiPending();
+        state.Issues[7].Ci = null;
+        state.Issues[7].Phase = Phase.CODING;
+        state.Issues[7].Tasks["task"].Status = TaskStatus.Intended;
+        state.Issues[7].Tasks["task"].LaunchConfirmed = false;
+        state.Outbox.Clear();
+        state.Outbox["launch"] = new EffectIntent
+        {
+            Id = "launch", IssueNumber = 7, Generation = 1, Kind = EffectKind.LaunchTask,
+            TaskId = "task", Round = 1, Sha = Head, Status = DeliveryStatus.Pending
+        };
+        return state;
+    }
+
     private static RepositoryState CiPending()
     {
         var state = new RepositoryState { Repository = "owner/repo", AdmittedIssue = 7 };
@@ -442,7 +520,7 @@ public sealed class OrchestrationPersistenceTests
 
         public Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken cancellationToken)
         {
-            Assert.Equal(DeliveryStatus.Executing, intent.Status);
+            Assert.Contains(intent.Status, new[] { DeliveryStatus.Executing, DeliveryStatus.Unknown });
             Recoveries++;
             return Task.FromResult(RecoveryOutcome);
         }
@@ -454,6 +532,30 @@ public sealed class OrchestrationPersistenceTests
             inner.ExecuteAsync(intent, cancellationToken);
         public Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken cancellationToken) =>
             inner.ReconcileAsync(intent, cancellationToken);
+    }
+
+    private sealed class ControlledEffects(MemoryStore store) : IOfflineEffectAdapter
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<EffectOutcome> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public EffectOutcome LookupOutcome { get; set; } = new(DeliveryStatus.Unknown);
+        public Action? OnLookup { get; set; }
+        public int Executions { get; private set; }
+        public int Recoveries { get; private set; }
+        public async Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken cancellationToken)
+        {
+            Assert.Equal(DeliveryStatus.Executing, store.Current.Outbox[intent.Id].Status);
+            Executions++;
+            Started.SetResult();
+            return await Completion.Task.WaitAsync(cancellationToken);
+        }
+        public Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken cancellationToken)
+        {
+            Assert.Contains(intent.Status, new[] { DeliveryStatus.Executing, DeliveryStatus.Unknown });
+            Recoveries++;
+            OnLookup?.Invoke();
+            return Task.FromResult(LookupOutcome);
+        }
     }
 
     private sealed class MemoryStore(RepositoryState state) : IStateStore
