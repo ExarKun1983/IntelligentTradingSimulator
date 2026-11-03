@@ -32,6 +32,40 @@ benchmark calculations, and CSV exports may still be running after the simulatio
 an export is only confirmed after its write succeeds. Snapshot-only report exports do not
 generate summaries or request benchmarks.
 
+## Copilot agent orchestration lifecycle
+
+The GitHub agent orchestrator maps each PR to an Issue using metadata written with the
+Actions token; reconciliation trusts only records authored by the GraphQL login
+`github-actions`. Copilot task responses are accepted only from `copilot-swe-agent`.
+It removes `agent:ready` before recording or launching the initial task, and a failed
+label transition must leave the task unlaunched.
+
+Review is eligible only for an open PR at the expected head SHA after its latest tracked
+Copilot task is complete, current-head CI is green, and any outstanding feedback round has
+finding-linked evidence. Inline findings remain structured per comment, while summary
+findings must appear in the bounded `Blocking findings:` section. A completed fix must name
+the finding and provide substantive evidence; a fixed outcome must identify a changed file
+present in the revision and in the evidence. Inline-finding evidence must also identify
+the finding path, but the implementation may be in a different changed file. Rebuttals
+are consumed by normalized response content as well as comment identity, and a review
+must postdate every response in the round.
+
+Pending human feedback blocks all automated review requests and promotion until its
+event identity is durably acknowledged after handoff. Scheduled reconciliation processes
+each mapped open Copilot PR independently. Finding metadata is persisted before a coding
+task launches, and CI handoffs recover their attempt markers from tracked task metadata.
+Technical CI repairs preserve the originating feedback round and have a separate bounded
+retry budget, reset only after an eligible green transition. Terminal closure records are
+idempotent: closed or merged PRs apply their transition once, while reopened PRs retire stale
+pending closure records without applying them. Mapping, label, and API lookup failures defer
+the transition rather than clearing a human block or promoting work.
+
+The offline lifecycle regressions run with:
+
+```bash
+bash .github/scripts/tests/agent-orchestrator.test.sh
+```
+
 ## Prerequisites
 
 - The .NET SDK version in `global.json` (currently `9.0.318`; its `latestPatch` roll-forward setting permits later patches in that feature band).
@@ -1524,3 +1558,13 @@ dotnet test IntelligentTradingSimulator.sln --configuration Release --verbosity 
 - **A table or schema is missing.** Apply migrations with the `dotnet ef database update` command above before starting the application.
 - **Yahoo Finance returns no data or a request fails.** Check internet access, confirm the symbol/date range is valid, and retry later if the provider is temporarily unavailable. Application simulation and backtest commands depend on this external provider.
 - **The selected strategy cannot be found or fails validation.** Ensure `ActiveStrategy` exactly names an entry under `Strategies`, and check the numeric ranges in the strategy table.
+
+## Copilot review orchestration
+
+The GitHub Actions orchestrator requests review only after the current tracked Copilot Agent Task is completed and CI is green for the current PR head. Review processing also verifies the PR is open and still at that head. Stale reviews, failed lookups, and ambiguous reviewer outcomes do not promote a PR.
+
+Blocking feedback is limited to bullet items in a bounded `Blocking findings:` section and inline comments explicitly marked `[blocking]` or `blocking:`. Advisory sections are not handed to the coder. A `CHANGES_REQUESTED` review with an empty or malformed blocker section, or an `APPROVED` review that also has blockers from that same review, is escalated for a human decision.
+
+Every fix task is given a response contract: for each persisted finding ID, post a separate comment containing the exact `agent-orchestrator:response-feedback` marker, `Finding: <ID>`, `Outcome: fixed` or `Outcome: rebutted`, and an `Evidence:` line of at least 40 non-whitespace characters that names a test/spec or source file and explains the finding-specific evidence. Human-feedback handoffs use a unique fingerprint of their pending event IDs as a finding ID and follow the same contract. A fixed outcome also requires `Changed file: <path>` in the comment and that path to appear in the revision comparison. For inline findings it must match the finding path; for a pathless summary finding, name the relevant changed source file in both `Changed file` and `Evidence`. An unchanged revision requires a substantive rebuttal. Response text is normalized and fingerprinted per finding so changing the comment ID or whitespace cannot manufacture progress. If this evidence cannot be validated, the issue is blocked for human review.
+
+Human review recovery scans from PR creation and persists event IDs. New events with identical wording are still distinct; replayed event IDs are idempotent. PR closures are persisted as pending transitions before the serialized state-changing job. Scheduled reconciliation processes only Issues carrying the pending-terminal label and reconstructs missing records from all mapped closed PRs, rather than rescanning Issues for historical closures. Neither automated acceptance nor any escalation merges a PR.

@@ -16,6 +16,8 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+  schedule:
+    - cron: '*/10 * * * *'
 
 permissions:
   actions: read
@@ -23,25 +25,28 @@ permissions:
   issues: write
   pull-requests: write
 
-concurrency:
-  group: agent-orchestrator-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref || github.event.issue.number || github.ref }}
-  cancel-in-progress: false
-
 env:
   READY_LABEL: agent:ready
   WORKING_LABEL: agent:working
   AI_REVIEW_LABEL: agent:ai-review
   REVIEW_LABEL: agent:review
   BLOCKED_LABEL: agent:blocked
+  TERMINAL_PENDING_LABEL: agent:terminal-pending
   BASE_BRANCH: master
   COPILOT_REVIEWER: copilot-pull-request-reviewer[bot]
-  MAX_FIX_ROUNDS: 3
-  REVIEW_WAIT_SECONDS: 900
-  POLL_SECONDS: 30
+  REVIEW_TIMEOUT_SECONDS: 1800
   LAUNCH_MATCH_WINDOW_SECONDS: 1800
   CI_WORKFLOW_FILE: ci.yml
 # Jobs share resolver/state helpers from .github/scripts/agent-orchestrator.sh, always checked out from the
-# default branch so every job runs identical mapping and state logic.
+# default branch so every job runs identical mapping and state logic. Review requires the latest Copilot Agent
+# Task API state to be `completed`; a green CI run alone is not evidence that implementation has finished.
+# GitHub review state APPROVED is explicit acceptance; CHANGES_REQUESTED needs explicitly classified blockers, while all
+# ambiguous reviewer outcomes pause for a human. Repeated blockers require persisted, finding-linked response evidence;
+# each response needs a nonempty Evidence line of at least 40 non-whitespace characters naming a test/spec or source file
+# and explaining its connection to the finding. Fixed outcomes must touch the exact finding path. CI repair attempts have
+# a separate consecutive-failure budget (three by default), reset only after eligible green CI.
+# State-changing jobs share a lock. A lightweight closure-event job persists pending terminal records before that
+# lock; scheduled reconciliation processes only pending records and durable human review events.
 
 jobs:
   bootstrap:
@@ -59,12 +64,16 @@ jobs:
           gh label create "$AI_REVIEW_LABEL" --repo "$REPO" --color 5319E7 --description "Waiting for Copilot code review" --force
           gh label create "$REVIEW_LABEL" --repo "$REPO" --color 1D76DB --description "Ready for human review" --force
           gh label create "$BLOCKED_LABEL" --repo "$REPO" --color D93F0B --description "Needs human attention" --force
+          gh label create "$TERMINAL_PENDING_LABEL" --repo "$REPO" --color BFD4F2 --description "PR closure transition awaits reconciliation" --force
 
   start-agent:
     if: >-
       github.event_name == 'issues' && github.event.action == 'labeled' &&
       github.event.label.name == 'agent:ready' && github.event.issue.state == 'open'
     runs-on: ubuntu-latest
+    concurrency:
+      group: agent-task-${{ github.repository }}
+      cancel-in-progress: false
     steps:
       - name: Load orchestrator helpers
         uses: actions/checkout@v4
@@ -75,6 +84,7 @@ jobs:
       - name: Validate and start task
         env:
           GH_TOKEN: ${{ github.token }}
+          ACTIONS_TOKEN: ${{ github.token }}
           AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
           REPO: ${{ github.repository }}
           ISSUE: ${{ github.event.issue.number }}
@@ -83,6 +93,25 @@ jobs:
         run: |
           set -euo pipefail
           source .github/scripts/agent-orchestrator.sh
+          if agent_task_launch_pending "$ISSUE"; then
+            echo "An earlier Copilot task launch is untracked; refusing to start another task" >&2
+            exit 1
+          else
+            pending_rc=$?
+            [ "$pending_rc" -eq 1 ] || exit 1
+          fi
+          issue_labels="$(issue_labels "$ISSUE")"
+          if ! printf '%s\n' "$issue_labels" | grep -Fxq "$READY_LABEL"; then
+            echo "Issue #$ISSUE is no longer ready; ignoring the stale label event"
+            exit 0
+          fi
+          if printf '%s\n' "$issue_labels" | grep -Fxq "$WORKING_LABEL" ||
+              printf '%s\n' "$issue_labels" | grep -Fxq "$AI_REVIEW_LABEL" ||
+              printf '%s\n' "$issue_labels" | grep -Fxq "$REVIEW_LABEL" ||
+              printf '%s\n' "$issue_labels" | grep -Fxq "$TERMINAL_PENDING_LABEL"; then
+            echo "Issue #$ISSUE already has an active agent state; not starting another task"
+            exit 0
+          fi
           active="$(gh issue list --repo "$REPO" --state open --limit 200 --json number,labels)"
           count="$(jq --argjson issue "$ISSUE" --arg w "$WORKING_LABEL" --arg a "$AI_REVIEW_LABEL" --arg r "$REVIEW_LABEL" \
             '[.[] | select(.number != $issue) | select(any(.labels[]?.name; . == $w or . == $a or . == $r))] | length' <<< "$active")"
@@ -91,8 +120,14 @@ jobs:
             gh issue edit "$ISSUE" --repo "$REPO" --remove-label "$READY_LABEL" --add-label "$BLOCKED_LABEL"
             exit 1
           fi
+          if ! issue_open "$ISSUE"; then
+            echo "Issue #$ISSUE is closed; refusing to launch a coding task"
+            exit 0
+          fi
           # A relaunch also clears a stale agent:blocked left by a previous closed-unmerged PR.
           set_state "$ISSUE" "$WORKING_LABEL"
+          launch_id="$(date -u +%s%N)-$$"
+          record_agent_task_pending "$ISSUE" "$launch_id" initial "" ""
           payload="$(jq -n --arg prompt "$(build_task_prompt "$ISSUE" "$TITLE" "$BODY" "$BASE_BRANCH")" --arg base "$BASE_BRANCH" \
             '{prompt: $prompt, base_ref: $base, create_pull_request: true}')"
           out="$(mktemp)"
@@ -105,6 +140,14 @@ jobs:
             gh issue edit "$ISSUE" --repo "$REPO" --remove-label "$WORKING_LABEL" --add-label "$BLOCKED_LABEL"
             exit 1
           fi
+          task_id="$(jq -er '.id | select(type == "string" and length > 0)' "$out")"
+          if ! record_agent_task "$ISSUE" "$task_id" initial "" "" "$launch_id"; then
+            gh issue comment "$ISSUE" --repo "$REPO" --body \
+              "Copilot task $task_id was launched but could not be tracked. Review is disabled until a human verifies the task state. <!-- agent-orchestrator:untracked-task=$launch_id -->"
+            set_state "$ISSUE" "$BLOCKED_LABEL"
+            exit 1
+          fi
+          echo "Started Copilot task $task_id for Issue #$ISSUE"
 
   map-pr:
     if: >-
@@ -120,7 +163,8 @@ jobs:
           persist-credentials: false
       - name: Persist Issue to PR mapping
         env:
-          GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          ACTIONS_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
@@ -132,16 +176,16 @@ jobs:
           echo "PR #$PR mapped to Issue #$issue"
 
   review-after-ci:
-    # After green CI: request Copilot review, wait for it in this job, then hand off findings or promote.
-    # Unresolved inline findings are handed off as before. With none, a current-SHA review summary that says
-    # "Changes recommended" (not "Needs a closer look", "Approval recommended", or the could-not-review-files
-    # notice) is handed off once per SHA, capped at MAX_FIX_ROUNDS, before promotion to human review.
+    # CI runs act only on the completed current task and latest green head. Scheduled reconciliation recovers
+    # either event ordering; review requests remain idempotent and no job waits while the coder or reviewer works.
     if: >-
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success' &&
       startsWith(github.event.workflow_run.head_branch, 'copilot/')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    concurrency:
+      group: agent-task-${{ github.repository }}
+      cancel-in-progress: false
     steps:
       - name: Load orchestrator helpers
         uses: actions/checkout@v4
@@ -149,14 +193,13 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .github/scripts
           persist-credentials: false
-      - name: Request review, wait, process
+      - name: Reconcile review eligibility and process
         env:
           GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
           ACTIONS_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           SHA: ${{ github.event.workflow_run.head_sha }}
-          CI_CONFIRMED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           source .github/scripts/agent-orchestrator.sh
@@ -164,11 +207,11 @@ jobs:
           if [ -z "$pr" ]; then echo "No open PR for $BRANCH"; exit 0; fi
           issue="$(resolve_issue "$pr" "$BRANCH")"
           if [ -z "$issue" ]; then echo "No Issue mapping for PR #$pr" >&2; exit 1; fi
+          request_rc=0
+          request_review_if_eligible "$pr" "$issue" "$SHA" || request_rc=$?
+          if [ "$request_rc" -eq 1 ]; then exit 0; elif [ "$request_rc" -ne 0 ]; then exit "$request_rc"; fi
           echo "PR #$pr -> Issue #$issue, SHA $SHA"
-          request_copilot_review "$pr" "$SHA"
-          set_state "$issue" "$AI_REVIEW_LABEL"
-          rc=0; wait_for_review "$pr" "$SHA" || rc=$?
-          if [ "$rc" -eq 0 ]; then process_review "$pr" "$issue" "$SHA"; fi
+          process_review "$pr" "$issue" "$SHA"
 
   ci-failure:
     # After failed, timed-out, or cancelled CI: never promote; hand the failure to Copilot or ask a human.
@@ -177,6 +220,9 @@ jobs:
       contains(fromJSON('["failure","timed_out","cancelled","startup_failure"]'), github.event.workflow_run.conclusion) &&
       startsWith(github.event.workflow_run.head_branch, 'copilot/')
     runs-on: ubuntu-latest
+    concurrency:
+      group: agent-task-${{ github.repository }}
+      cancel-in-progress: false
     steps:
       - name: Load orchestrator helpers
         uses: actions/checkout@v4
@@ -187,6 +233,7 @@ jobs:
       - name: Route CI failure
         env:
           GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
+          ACTIONS_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           SHA: ${{ github.event.workflow_run.head_sha }}
@@ -203,11 +250,15 @@ jobs:
           handle_ci_failure "$pr" "$issue" "$SHA" "$CONCLUSION" "$RUN_URL"
 
   process-ai-review:
-    # Backup path, in case GitHub delivers the Copilot review event to Actions.
+    # Backup path, in case GitHub delivers the Copilot review event to Actions. process_review repeats the
+    # implementation-complete, open/current-head, green-CI, and current-review checks before doing anything.
     if: >-
       github.event_name == 'pull_request_review' &&
       startsWith(github.event.review.user.login, 'copilot-pull-request-reviewer')
     runs-on: ubuntu-latest
+    concurrency:
+      group: agent-task-${{ github.repository }}
+      cancel-in-progress: false
     steps:
       - name: Load orchestrator helpers
         uses: actions/checkout@v4
@@ -227,9 +278,12 @@ jobs:
         run: |
           set -euo pipefail
           source .github/scripts/agent-orchestrator.sh
-          if [ "$REVIEW_SHA" != "$HEAD_SHA" ]; then echo "Stale review; ignoring"; exit 0; fi
           issue="$(resolve_issue "$PR" "$BRANCH")"
           if [ -z "$issue" ]; then echo "No Issue mapping for PR #$PR" >&2; exit 1; fi
+          if [ "$REVIEW_SHA" != "$HEAD_SHA" ] || ! review_eligible "$PR" "$issue" "$HEAD_SHA"; then
+            echo "Review is stale or the implementation/CI gate is not satisfied; ignoring"
+            exit 0
+          fi
           process_review "$PR" "$issue" "$HEAD_SHA"
 
   human-feedback:
@@ -239,6 +293,9 @@ jobs:
       ((github.event_name == 'pull_request_review' && github.event.review.user.type != 'Bot' && github.event.review.state != 'approved') ||
        (github.event_name == 'pull_request_review_comment' && github.event.comment.user.type != 'Bot'))
     runs-on: ubuntu-latest
+    concurrency:
+      group: agent-task-${{ github.repository }}
+      cancel-in-progress: false
     steps:
       - name: Load orchestrator helpers
         uses: actions/checkout@v4
@@ -249,25 +306,29 @@ jobs:
       - name: Hand off human feedback to Copilot
         env:
           GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
+          ACTIONS_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_ID: ${{ github.event_name == 'pull_request_review' && format('review-{0}', github.event.review.id) || format('comment-{0}', github.event.comment.id) }}
+          EVENT_KIND: ${{ github.event_name == 'pull_request_review' && 'review' || 'inline review' }}
+          EVENT_BODY: ${{ github.event.review.body || github.event.comment.body }}
         run: |
           set -euo pipefail
           source .github/scripts/agent-orchestrator.sh
           issue="$(resolve_issue "$PR" "$BRANCH")"
           if [ -z "$issue" ]; then echo "No Issue mapping; nothing to do"; exit 0; fi
-          marker="<!-- agent-orchestrator:human-handoff-sha=$HEAD_SHA -->"
-          existing="$(gh pr view "$PR" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
-          if ! printf '%s\n' "$existing" | grep -Fq "$marker"; then
-            gh pr comment "$PR" --repo "$REPO" --body "$(printf '%s\n\n%s' \
-              '@copilot Please address all unresolved human review comments on this PR branch. Run all tests, push the fix, and resolve the addressed threads. Do not merge.' \
-              "$marker")"
+          record_human_feedback_event "$PR" "$EVENT_ID" "$HEAD_SHA" "$EVENT_KIND" "$EVENT_BODY"
+          reconcile_human_feedback_events "$PR" "$issue"
+          if process_human_feedback "$PR" "$issue"; then
+            :
+          else
+            rc=$?
+            [ "$rc" -eq 3 ] || exit "$rc"
           fi
-          set_state "$issue" "$WORKING_LABEL"
 
-  terminal-state:
+  record-terminal-transition:
     if: >-
       github.event_name == 'pull_request' && github.event.action == 'closed' &&
       startsWith(github.event.pull_request.head.ref, 'copilot/')
@@ -279,9 +340,10 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .github/scripts
           persist-credentials: false
-      - name: Close or block mapped Issue
+      - name: Persist PR closure for serialized reconciliation
         env:
-          GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          ACTIONS_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
@@ -292,20 +354,18 @@ jobs:
           source .github/scripts/agent-orchestrator.sh
           issue="$(resolve_issue "$PR" "$BRANCH")"
           if [ -z "$issue" ]; then echo "No Issue mapping; nothing to do"; exit 0; fi
-          if [ "$MERGED" = "true" ]; then
-            set_state "$issue" ""
-            gh issue close "$issue" --repo "$REPO" --reason completed
-          elif issue_superseded "$issue" "$PR" "$CLOSED_AT"; then
-            echo "Issue #$issue was relaunched or mapped to a newer PR; leaving its state unchanged"
-          else
-            set_state "$issue" "$BLOCKED_LABEL"
-          fi
+          record_terminal_transition "$PR" "$issue" "$MERGED" "$CLOSED_AT"
 
-  reconcile-existing-pr:
-    # Runs on push of this file or manual "Run workflow": repairs a PR stuck in agent:ai-review.
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+  terminal-state:
+    needs: record-terminal-transition
+    if: >-
+      github.event_name == 'pull_request' && github.event.action == 'closed' &&
+      startsWith(github.event.pull_request.head.ref, 'copilot/') &&
+      needs.record-terminal-transition.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    concurrency:
+      group: agent-task-${{ github.repository }}
+      cancel-in-progress: false
     steps:
       - name: Load orchestrator helpers
         uses: actions/checkout@v4
@@ -313,7 +373,32 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .github/scripts
           persist-credentials: false
-      - name: Repair the single open Copilot PR
+      - name: Process durable terminal transitions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTIONS_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          source .github/scripts/agent-orchestrator.sh
+          reconcile_terminal_transitions
+
+  reconcile-existing-pr:
+    # Manual, workflow-file push, and scheduled reconciliation share the eligibility gate. The schedule also
+    # recovers ready labels and deferred CI failures without requiring a manual rerun.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: agent-task-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Load orchestrator helpers
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - name: Reconcile mapped open Copilot PRs
         env:
           GH_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
           ACTIONS_TOKEN: ${{ github.token }}
@@ -321,19 +406,25 @@ jobs:
         run: |
           set -euo pipefail
           source .github/scripts/agent-orchestrator.sh
-          prs="$(gh pr list --repo "$REPO" --state open --limit 100 --json number,headRefName,headRefOid)"
-          copilot_prs="$(jq -c '[.[] | select(.headRefName | startswith("copilot/"))]' <<< "$prs")"
-          if [ "$(jq length <<< "$copilot_prs")" -ne 1 ]; then echo "Need exactly one open Copilot PR; no-op"; exit 0; fi
-          pr="$(jq -r '.[0].number' <<< "$copilot_prs")"
-          branch="$(jq -r '.[0].headRefName' <<< "$copilot_prs")"
-          sha="$(jq -r '.[0].headRefOid' <<< "$copilot_prs")"
-          issue="$(resolve_issue "$pr" "$branch")"
-          if [ -z "$issue" ]; then echo "No Issue mapping for PR #$pr; no-op"; exit 0; fi
-          echo "PR #$pr -> Issue #$issue, SHA $sha"
-          request_copilot_review "$pr" "$sha"
-          set_state "$issue" "$AI_REVIEW_LABEL"
-          rc=0; wait_for_review "$pr" "$sha" || rc=$?
-          if [ "$rc" -eq 0 ]; then process_review "$pr" "$issue" "$sha"; fi
+          reconcile_terminal_transitions
+          ready="$(gh issue list --repo "$REPO" --state open --label "$READY_LABEL" --limit 1 --json number,title,body --jq '.[0] // empty')"
+          if [ -n "$ready" ]; then
+            active_issues="$(gh issue list --repo "$REPO" --state open --limit 200 --json number,labels)"
+            active_count="$(jq --arg w "$WORKING_LABEL" --arg a "$AI_REVIEW_LABEL" --arg r "$REVIEW_LABEL" \
+              '[.[] | select(any(.labels[]?.name; . == $w or . == $a or . == $r))] | length' <<< "$active_issues")"
+            if [ "$active_count" -eq 0 ]; then
+              issue="$(jq -r '.number' <<< "$ready")"
+              title="$(jq -r '.title' <<< "$ready")"
+              body="$(jq -r '.body // ""' <<< "$ready")"
+              if start_issue_task "$issue" "$title" "$body" "$BASE_BRANCH"; then
+                :
+              else
+                rc=$?
+                [ "$rc" -eq 3 ] || exit "$rc"
+              fi
+            fi
+          fi
+          reconcile_open_copilot_prs
 
   cleanup-closed-issue:
     if: github.event_name == 'issues' && github.event.action == 'closed'
