@@ -9,8 +9,8 @@ source "$SCRIPT_DIR/../agent-orchestrator.sh"
 
 export REPO="owner/repo" READY_LABEL="agent:ready" WORKING_LABEL="agent:working" AI_REVIEW_LABEL="agent:ai-review" \
   REVIEW_LABEL="agent:review" BLOCKED_LABEL="agent:blocked" COPILOT_REVIEWER="copilot-pull-request-reviewer[bot]" \
-  MAX_FIX_ROUNDS=3 REVIEW_WAIT_SECONDS=0 POLL_SECONDS=0 LAUNCH_MATCH_WINDOW_SECONDS=1800 CI_WORKFLOW_FILE=ci.yml
-unset CI_CONFIRMED_SHA ACTIONS_TOKEN || true
+  REVIEW_TIMEOUT_SECONDS=999999999 LAUNCH_MATCH_WINDOW_SECONDS=1800 CI_WORKFLOW_FILE=ci.yml
+unset ACTIONS_TOKEN || true
 
 STATE=""
 failures=0
@@ -41,7 +41,7 @@ gh() {
 }
 
 json_comments() {
-  jq '{comments: map(if type == "object" then . else {body: ., author: {login: "github-actions[bot]"}} end)}' "$1"
+  jq '{comments: map(if type == "object" then . else {body: ., author: {login: "github-actions[bot]"}, createdAt: "2026-10-12T13:30:00Z"} end)}' "$1"
 }
 
 append_json() { local f="$1" v="$2"; jq --arg v "$v" '. + [$v]' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; }
@@ -119,7 +119,13 @@ gh_dispatch() {
         repos/*/reviews|repos/*/reviews\?*)
           if [ -f "$STATE/reviews-api-failure" ]; then echo "simulated reviews API failure" >&2; return 1; fi
           if [ -f "$STATE/reviews-invalid" ]; then echo '{invalid json'; else cat "$STATE/reviews.json" 2>/dev/null || echo '[]'; fi ;;
-        repos/*/requested_reviewers) if [[ "$*" == *POST* ]]; then echo "request review" >> "$STATE/calls.log"; else echo '{"users":[]}'; fi ;;
+        repos/*/requested_reviewers)
+          if [[ "$*" == *POST* ]]; then
+            echo "request review" >> "$STATE/calls.log"
+            echo '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}]}' > "$STATE/requested-reviewers.json"
+          else
+            cat "$STATE/requested-reviewers.json" 2>/dev/null || echo '{"users":[]}'
+          fi ;;
         *) echo "unexpected gh api $*" >&2; return 1 ;;
       esac ;;
     *) echo "unexpected gh $*" >&2; return 1 ;;
@@ -135,7 +141,7 @@ reset_state() {
 
 add_pr() { # number body createdAt [head] [branch]
   jq -n --arg b "$2" --arg c "$3" --arg h "${4:-sha-$1}" --arg branch "${5:-copilot/issue-39-test}" \
-    '{body: $b, createdAt: $c, state: "OPEN", headRefOid: $h, headRefName: $branch, baseRefName: "master"}' > "$STATE/pr-$1.json"
+    '{body: $b, createdAt: $c, state: "OPEN", isDraft: true, headRefOid: $h, headRefName: $branch, baseRefName: "master"}' > "$STATE/pr-$1.json"
   echo '[]' > "$STATE/pr-$1.comments"
   echo pr > "$STATE/issue-$1.kind"
 }
@@ -151,7 +157,10 @@ add_issue() { # number [labels...]
   echo '[]' > "$STATE/issue-$n.events"
 }
 
-add_task() { jq -n --arg id "$1" --arg state "$2" '{id: $id, state: $state}' > "$STATE/$1.json"; }
+add_task() {
+  jq -n --arg id "$1" --arg state "$2" --arg updated "${3:-2026-10-12T13:15:00Z}" \
+    '{id: $id, state: $state, updated_at: $updated}' > "$STATE/$1.json"
+}
 
 add_closed_issue() { echo issue > "$STATE/issue-$1.kind"; }
 
@@ -296,86 +305,97 @@ add_issue 39 "agent:blocked" "agent:ready"
 set_state 39 "$WORKING_LABEL"
 check "relaunch leaves only agent:working" "agent:working" "$(labels_of 39)"
 
-# --- CI failure routing ------------------------------------------------------------------------------------
+# --- CI failure routing and lifecycle coalescing ------------------------------------------------------------
 setup_ci() {
   reset_state
-  add_issue 39 "agent:ai-review"
+  add_issue 39 "agent:working"
   add_pr 145 $'<!-- agent-orchestrator:issue=39 -->' "2026-10-12T12:46:22Z" "abc123"
   add_task task-initial completed
   record_agent_task 39 task-initial
+  echo '{"workflow_runs":[{"created_at":"2026-10-12T13:10:00Z","conclusion":"failure"}]}' > "$STATE/ci-runs.json"
 }
 
-setup_ci
-handle_ci_failure 145 39 abc123 failure https://ci/run/1 >/dev/null
-check "failed CI moves Issue out of ai-review to working" "agent:working" "$(labels_of 39)"
-check_contains "failed CI starts a Copilot task" "Started Copilot cloud agent task" "$(jq -r '.[]' "$STATE/pr-145.comments")"
-check_contains "failed CI task names the failed commit" "CI failed for commit abc123" "$(jq -r '.[]' "$STATE/pr-145.comments")"
-check_contains "fix task targets the existing PR branch" '"head_ref": "copilot/issue-39-test"' "$(cat "$STATE/calls.log")"
-check_contains "handoff carries the SHA marker" "agent-orchestrator:ci-failure-sha=abc123" "$(jq -r '.[]' "$STATE/pr-145.comments")"
-handle_ci_failure 145 39 abc123 failure https://ci/run/1 >/dev/null
-check "no duplicate comment for the same SHA" "1" "$(calls_matching 'pr comment 145')"
-check "failed CI never promotes to review" "0" "$(calls_matching 'pr ready')"
-
-setup_ci
-handle_ci_failure 145 39 abc123 cancelled https://ci/run/2 >/dev/null
-check "cancelled CI blocks for human attention" "agent:blocked" "$(labels_of 39)"
-check_contains "cancelled CI explains why" 'concluded "cancelled"' "$(jq -r '.[]' "$STATE/pr-145.comments")"
-handle_ci_failure 145 39 abc123 cancelled https://ci/run/2 >/dev/null
-check "no duplicate blocked comment" "1" "$(calls_matching 'pr comment 145')"
-
-setup_ci
-for sha in s1 s2 s3; do
-  append_json "$STATE/pr-145.comments" "$(printf 'Copilot task for CI failure\n\n<!-- agent-orchestrator:ci-failure-sha=%s --><!-- agent-orchestrator:ci-fix-task-sha=%s -->' "$sha" "$sha")"
-done
-handle_ci_failure 145 39 abc123 failure https://ci/run/3 >/dev/null
-check "CI fix rounds are capped" "agent:blocked" "$(labels_of 39)"
-check_contains "cap is explained" "stopped after 3 automatic CI fix rounds" "$(jq -r '.[]' "$STATE/pr-145.comments")"
-
-setup_ci
-for sha in c1 c2 c3; do
-  append_json "$STATE/pr-145.comments" "$(printf 'Agent orchestrator: CI for %s concluded "cancelled".\n\n<!-- agent-orchestrator:ci-failure-sha=%s -->' "$sha" "$sha")"
-done
-handle_ci_failure 145 39 abc123 failure https://ci/run/3 >/dev/null
-check "cancelled-CI notices do not use up fix rounds" "agent:working" "$(labels_of 39)"
-
-setup_ci
-handle_ci_failure 145 39 old-sha failure https://ci/run/4 >/dev/null
-check "outdated CI result is ignored" "agent:ai-review" "$(labels_of 39)"
-check "outdated CI result posts nothing" "0" "$(calls_matching 'pr comment')"
-
-setup_ci
-printf 'agent:blocked\n' > "$STATE/issue-39.labels"
-handle_ci_failure 145 39 abc123 failure https://ci/run/5 >/dev/null
-check "already blocked Issue is left for a human" "agent:blocked 0" "$(labels_of 39) $(calls_matching 'pr comment')"
-
-# --- review promotion requires a completed task, current head, current review, and green CI -----------------
 setup_review() {
   setup_ci
   echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}' > "$STATE/threads.json"
   echo '{"workflow_runs":[{"created_at":"2026-10-12T13:10:00Z","conclusion":"success"}]}' > "$STATE/ci-runs.json"
-  echo '[{"user":{"login":"copilot-pull-request-reviewer[bot]"},"commit_id":"abc123","submitted_at":"2026-10-12T13:20:00Z","state":"COMMENTED","body":"Approval recommended."}]' > "$STATE/reviews.json"
+  echo '[{"id":1,"user":{"login":"copilot-pull-request-reviewer[bot]"},"commit_id":"abc123","submitted_at":"2026-10-12T13:20:00Z","state":"APPROVED","body":"Approved."}]' > "$STATE/reviews.json"
 }
 
 setup_ci
+handle_ci_failure 145 39 abc123 failure https://ci/run/1 >/dev/null
+check "failed CI moves Issue to working" "agent:working" "$(labels_of 39)"
+check_contains "failed CI starts a tracked Copilot task" "Started Copilot cloud agent task" "$(jq -r '.[]' "$STATE/pr-145.comments")"
+check_contains "fix task targets the existing PR branch" '"head_ref": "copilot/issue-39-test"' "$(cat "$STATE/calls.log")"
+check "duplicate failed CI does not launch a second task" "1" "$(grep -c '^task create' "$STATE/calls.log")"
+
+setup_ci
+echo '{"workflow_runs":[{"created_at":"2026-10-12T13:10:00Z","conclusion":"cancelled"}]}' > "$STATE/ci-runs.json"
+handle_ci_failure 145 39 abc123 cancelled https://ci/run/2 >/dev/null
+check "cancelled CI blocks for human attention" "agent:blocked" "$(labels_of 39)"
+check_contains "cancelled CI explains why" 'concluded "cancelled"' "$(jq -r '.[]' "$STATE/pr-145.comments")"
+
+setup_ci
+handle_ci_failure 145 39 abc123 failure https://ci/run/3 >/dev/null
+add_task task-1 completed "2026-10-12T13:25:00Z"
+handle_ci_failure 145 39 abc123 failure https://ci/run/3 >/dev/null
+check "failed CI after a completed fix escalates as no progress" "agent:blocked" "$(labels_of 39)"
+check_contains "CI no-progress comment explains escalation" "still fails for abc123" "$(jq -r '.[]' "$STATE/pr-145.comments")"
+
+setup_ci
+for i in 1 2 3 4; do
+  sha="sha$i"
+  jq --arg sha "$sha" '.headRefOid = $sha' "$STATE/pr-145.json" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.json"
+  handle_ci_failure 145 39 "$sha" failure "https://ci/run/$i" >/dev/null
+  add_task "task-$i" completed "2026-10-12T13:2${i}:00Z"
+done
+check "CI fix flow has no fixed three-round cap" "4" "$(grep -c '^task create' "$STATE/calls.log")"
+
+setup_ci
+echo '{"workflow_runs":[{"created_at":"2026-10-12T13:20:00Z","conclusion":"success"}]}' > "$STATE/ci-runs.json"
+handle_ci_failure 145 39 abc123 failure https://ci/stale-same-sha >/dev/null
+check "delayed failed CI for a now-green SHA is ignored" "0 0" "$(grep -c '^task create' "$STATE/calls.log" || true) $(calls_matching 'pr comment')"
+
+# --- review request waits for both lifecycle signals without polling ----------------------------------------
+setup_review
+add_task task-initial in_progress
+echo '[]' > "$STATE/reviews.json"
+if request_review_if_eligible 145 39 abc123 >/dev/null; then r=yes; else r=no; fi
+check "successful intermediate CI does not request review during coding" "no" "$r"
+check "intermediate CI causes no request or comment" "0 0" "$(calls_matching 'request review') $(calls_matching 'pr comment 145')"
+add_task task-initial completed
+request_review_if_eligible 145 39 abc123 >/dev/null
+check "completion after CI is reconciled on the next event" "1" "$(calls_matching 'request review')"
+request_review_if_eligible 145 39 abc123 >/dev/null
+check "unchanged reconciliation does not duplicate review requests" "1" "$(calls_matching 'request review')"
+check "unchanged reconciliation does not duplicate request comments" "1" "$(calls_matching 'pr comment 145')"
+
+setup_review
+add_task task-initial in_progress
+echo '{"workflow_runs":[{"created_at":"2026-10-12T13:00:00Z","conclusion":"failure"}]}' > "$STATE/ci-runs.json"
+echo '[]' > "$STATE/reviews.json"
+if request_review_if_eligible 145 39 abc123 >/dev/null; then r=yes; else r=no; fi
+check "manual reconciliation requires green CI" "no" "$r"
+check "manual ineligible reconciliation has zero side effects" "0 0" "$(calls_matching 'request review') $(calls_matching 'pr comment 145')"
+
+setup_review
+echo '[]' > "$STATE/reviews.json"
+request_review_if_eligible 145 39 abc123 >/dev/null
+check "review event backup path uses same eligible gate" "1" "$(calls_matching 'request review')"
+
+# --- task completion, current head, and review classification ------------------------------------------------
+setup_review
 task_id="$(start_agent_task "Add a feature" master "" true)"
 record_agent_task 39 "$task_id"
 add_task "$task_id" completed
 check_contains "initial task ID is recorded for completion checks" "agent-orchestrator:task-id=task-1" "$(jq -r '.[]' "$STATE/issue-39.comments")"
 check "completed task state is read from the Agent Tasks API" "completed" "$(agent_task_state 39)"
-check "completed task is accepted as the implementation signal" "yes" "$(wait_for_agent_task 39 >/dev/null && echo yes)"
 check_contains "initial API task requests a PR" '"create_pull_request": true' "$(cat "$STATE/calls.log")"
-
-setup_review
-echo '{"workflow_runs":[{"created_at":"2026-10-12T13:00:00Z","conclusion":"failure"}]}' > "$STATE/ci-runs.json"
-process_review 145 39 abc123 >/dev/null
-check "clean review with failed CI is not promoted" "agent:ai-review 0" "$(labels_of 39) $(calls_matching 'pr ready')"
 
 setup_review
 echo '[]' > "$STATE/issue-39.comments"
 if review_eligible 145 39 abc123 >/dev/null; then r=yes; else r=no; fi
 check "missing task completion metadata fails closed" "no" "$r"
-process_review 145 39 abc123 >/dev/null
-check "missing task ID cannot promote a PR" "agent:ai-review 0" "$(labels_of 39) $(calls_matching 'pr ready')"
 
 setup_review
 echo '[]' > "$STATE/issue-39.comments"
@@ -385,182 +405,151 @@ if review_eligible 145 39 abc123 >/dev/null; then r=yes; else r=no; fi
 check "user-authored task markers cannot satisfy completion" "no" "$r"
 
 setup_review
-add_task task-initial in_progress
-if request_review_if_eligible 145 39 abc123 >/dev/null; then r=yes; else r=no; fi
-check "green intermediate CI cannot request review while the task is running" "no" "$r"
-check "running task does not request Copilot review" "0" "$(calls_matching 'request review')"
-process_review 145 39 abc123 >/dev/null
-check "running task cannot request promotion" "agent:ai-review 0" "$(labels_of 39) $(calls_matching 'pr ready')"
-
-setup_review
-add_task task-fix queued
-record_agent_task 39 task-fix abc123
-if review_eligible 145 39 abc123 >/dev/null; then r=yes; else r=no; fi
-check "new fix task supersedes the completed implementation task" "no" "$r"
-process_review 145 39 abc123 >/dev/null
-check "previous task completion cannot promote during a fix" "agent:ai-review 0" "$(labels_of 39) $(calls_matching 'pr ready')"
-add_task task-fix completed
-process_review 145 39 abc123 >/dev/null
-check "completed fix task can be reviewed" "agent:review 1" "$(labels_of 39) $(calls_matching 'pr ready')"
-
-setup_review
-echo '{"workflow_runs":[{"created_at":"2026-10-12T13:00:00Z","conclusion":"failure"}]}' > "$STATE/ci-runs.json"
-if request_review_if_eligible 145 39 abc123 >/dev/null; then r=yes; else r=no; fi
-check "manual reconciliation guard rejects missing green CI" "no" "$r"
-check "manual reconciliation does not request review without green CI" "0" "$(calls_matching 'request review')"
-
-setup_review
-echo '[]' > "$STATE/reviews.json"
-request_review_if_eligible 145 39 abc123 >/dev/null
-check "completed task with green CI can request Copilot review" "1" "$(calls_matching 'request review')"
-check "eligible review request marks the Issue ai-review" "agent:ai-review" "$(labels_of 39)"
-
-setup_review
 jq '.headRefOid = "newsha"' "$STATE/pr-145.json" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.json"
 process_review 145 39 abc123 >/dev/null
-check "delayed review for an old SHA is ignored" "agent:ai-review 0" "$(labels_of 39) $(calls_matching 'pr ready')"
+check "stale review cannot promote a newer head" "agent:working 0" "$(labels_of 39) $(calls_matching 'pr ready')"
 
 setup_review
 close_pr 145
 process_review 145 39 abc123 >/dev/null
-check "closed PR review is ignored" "agent:ai-review 0" "$(labels_of 39) $(calls_matching 'pr ready')"
+check "closed PR review is ignored" "agent:working 0" "$(labels_of 39) $(calls_matching 'pr ready')"
 
-setup_review
-touch "$STATE/reviews-api-failure"
-if process_review 145 39 abc123 >/dev/null 2>"$STATE/error.log"; then r=0; else r=$?; fi
-check "review API failure defers processing" "1" "$r"
-check "review API failure does not promote" "agent:ai-review 0" "$(labels_of 39) $(calls_matching 'pr ready')"
-check_contains "review API failure is logged" "Unable to fetch Copilot reviews" "$(cat "$STATE/error.log")"
-
-setup_review
-touch "$STATE/reviews-invalid"
-if process_review 145 39 abc123 >/dev/null 2>"$STATE/error.log"; then r=0; else r=$?; fi
-check "invalid review JSON defers processing" "1" "$r"
-check "invalid review JSON does not promote" "agent:ai-review 0" "$(labels_of 39) $(calls_matching 'pr ready')"
-check_contains "invalid review JSON is logged" "Unable to fetch Copilot reviews" "$(cat "$STATE/error.log")"
-
-setup_review
-process_review 145 39 abc123 >/dev/null
-check "clean review with green CI is promoted" "agent:review 1" "$(labels_of 39) $(calls_matching 'pr ready')"
-
-setup_review
-process_review 145 39 abc123 >/dev/null
-check "completed implementation with green CI is promoted" "agent:review" "$(labels_of 39)"
-
-setup_review
-echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false,"comments":{"nodes":[{"body":"Old finding","path":"a.cs","line":3,"commit":{"oid":"oldsha"},"author":{"login":"copilot-pull-request-reviewer"}}]}}]}}}}}' > "$STATE/threads.json"
-process_review 145 39 abc123 >/dev/null
-check "stale inline findings on an older commit are ignored" "agent:review 1 0" "$(labels_of 39) $(calls_matching 'pr ready') $(calls_matching 'pr comment 145')"
-
-setup_review
-echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false,"comments":{"nodes":[{"body":"Bug","path":"a.cs","line":3,"commit":{"oid":"abc123"},"author":{"login":"copilot-pull-request-reviewer"}}]}}]}}}}}' > "$STATE/threads.json"
-process_review 145 39 abc123 >/dev/null
-check "current-SHA review findings are still handed to Copilot" "agent:working" "$(labels_of 39)"
-check_contains "findings handoff lists the finding" "a.cs:3 Bug" "$(jq -r '.[]' "$STATE/pr-145.comments")"
-
-# --- summary-only review recommendations -------------------------------------------------------------------
-review_fixture() { # body [commit_id] [submitted_at] -- appends a Copilot review summary
-  local f="$STATE/reviews.json"
+review_fixture() { # body [sha] [submitted_at] [state] -- appends Copilot review summary
+  local f="$STATE/reviews.json" id
   [ -f "$f" ] || echo '[]' > "$f"
-  jq --arg b "$1" --arg c "${2:-abc123}" --arg t "${3:-2026-10-12T13:20:00Z}" \
-    '. + [{user: {login: "copilot-pull-request-reviewer[bot]"}, commit_id: $c, submitted_at: $t, state: "COMMENTED", body: $b}]' \
+  id="$(($(jq 'length' "$f") + 1))"
+  jq --argjson id "$id" --arg b "$1" --arg c "${2:-abc123}" --arg t "${3:-2026-10-12T13:20:00Z}" --arg s "${4:-APPROVED}" \
+    '. + [{id: $id, user: {login: "copilot-pull-request-reviewer[bot]"}, commit_id: $c, submitted_at: $t, state: $s, body: $b}]' \
     "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  rm -f "$STATE/requested-reviewers.json"
 }
-pr_comments() { jq -r '.[]' "$STATE/pr-145.comments"; }
-GREEN_RUNS='{"workflow_runs":[{"created_at":"2026-10-12T13:10:00Z","conclusion":"success"}]}'
-PR148_SUMMARY=$'## Pull request overview\n\n**Changes recommended** - 0 open findings.\n\nThe WIP checklist does not document a successful Release build or full test-suite run.'
+pr_comments() { jq -r '.[] | if type == "object" then .body else . end' "$STATE/pr-145.comments"; }
+set_thread() {
+  jq -n --arg body "$1" --arg sha "${2:-abc123}" \
+    '{data:{repository:{pullRequest:{reviewThreads:{nodes:[{isResolved:false,comments:{nodes:[{body:$body,path:"a.cs",line:3,commit:{oid:$sha},author:{login:"copilot-pull-request-reviewer"}}]}}]}}}}}' \
+    > "$STATE/threads.json"
+}
 
 setup_review
-echo "$GREEN_RUNS" > "$STATE/ci-runs.json"
-review_fixture "$PR148_SUMMARY"
 process_review 145 39 abc123 >/dev/null
-check "summary-only Changes recommended hands off once" "agent:working 1 0" "$(labels_of 39) $(calls_matching 'pr comment 145') $(calls_matching 'pr ready')"
-check_contains "summary handoff starts a tracked Copilot task" "Started Copilot cloud agent task" "$(pr_comments)"
-check_contains "summary handoff explains the task" "The Copilot review summary for commit abc123" "$(pr_comments)"
-check_contains "summary handoff quotes the review summary" "> The WIP checklist does not document a successful Release build" "$(pr_comments)"
-check_contains "summary handoff asks to validate against CI" "validate this recommendation against the actual CI and check results" "$(pr_comments)"
-check_contains "summary handoff reports the CI result" "The latest CI run for abc123 succeeded." "$(pr_comments)"
-check_contains "summary handoff limits code changes to real issues" "Change code only if you identify a real issue" "$(pr_comments)"
-check_contains "summary handoff forbids merging" "Do not merge." "$(pr_comments)"
-check_contains "summary handoff carries its own SHA marker" "<!-- agent-orchestrator:summary-handoff-sha=abc123 -->" "$(pr_comments)"
-if pr_comments | grep -Fq 'agent-orchestrator:handoff-sha='; then r=yes; else r=no; fi
-check "summary handoff does not use the inline finding marker" "no" "$r"
+check "explicit approval promotes completed green head" "agent:review 1" "$(labels_of 39) $(calls_matching 'pr ready')"
 process_review 145 39 abc123 >/dev/null
-check "same SHA is not handed off twice" "agent:working 1 0" "$(labels_of 39) $(calls_matching 'pr comment 145') $(calls_matching 'pr ready')"
+check "replayed approval event has no duplicate side effect" "1 2" "$(calls_matching 'pr ready') $(calls_matching 'issue comment 39')"
 
 setup_review
-echo "$GREEN_RUNS" > "$STATE/ci-runs.json"
-review_fixture "$PR148_SUMMARY" "old-sha" "2026-10-12T13:30:00Z"
-review_fixture "Approval recommended. Looks good." "abc123" "2026-10-12T13:20:00Z"
+set_thread "Advisory: consider renaming this helper." abc123
 process_review 145 39 abc123 >/dev/null
-check "stale summary for another SHA is ignored" "agent:review 0 1" "$(labels_of 39) $(calls_matching 'pr comment') $(calls_matching 'pr ready')"
+check "explicit approval treats inline suggestion as advisory" "agent:review 0" "$(labels_of 39) $(grep -c '^task create' "$STATE/calls.log" || true)"
 
 setup_review
-echo "$GREEN_RUNS" > "$STATE/ci-runs.json"
-review_fixture "$PR148_SUMMARY" "abc123" "2026-10-12T13:00:00Z"
-review_fixture "Approval recommended. The checklist is now complete." "abc123" "2026-10-12T13:40:00Z"
+review_fixture "Changes recommended but no explicit outcome." abc123 "2026-10-12T13:20:00Z" COMMENTED
 process_review 145 39 abc123 >/dev/null
-check "latest summary for the SHA decides" "agent:review 0" "$(labels_of 39) $(calls_matching 'pr comment')"
+check "generic summary is ambiguous and escalates" "agent:blocked 0 0" "$(labels_of 39) $(grep -c '^task create' "$STATE/calls.log" || true) $(calls_matching 'pr ready')"
+check_contains "ambiguous result explains human decision" "not an explicit acceptance" "$(pr_comments)"
 
 setup_review
-echo "$GREEN_RUNS" > "$STATE/ci-runs.json"
-review_fixture $'**Needs a closer look** - the retry logic is complex.\n\n0 open findings.'
+review_fixture "Blocking findings:\n- CI failure is incorrectly ignored." abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
 process_review 145 39 abc123 >/dev/null
-check "Needs a closer look alone does not hand off" "agent:review 0 1" "$(labels_of 39) $(calls_matching 'pr comment') $(calls_matching 'pr ready')"
+check "explicit blocking summary starts one tracked fix task" "agent:working 1" "$(labels_of 39) $(grep -c '^task create' "$STATE/calls.log")"
+check_contains "summary handoff records review round" "review-feedback=2" "$(pr_comments)"
 
 setup_review
-echo "$GREEN_RUNS" > "$STATE/ci-runs.json"
-review_fixture "**Approval recommended** - 0 open findings."
+review_fixture "Changes recommended" abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
 process_review 145 39 abc123 >/dev/null
-check "Approval recommended does not hand off" "agent:review 0" "$(labels_of 39) $(calls_matching 'pr comment')"
+check "generic changes-recommended phrase is not an actionable blocker" "agent:blocked 0" "$(labels_of 39) $(grep -c '^task create' "$STATE/calls.log" || true)"
 
 setup_review
-echo "$GREEN_RUNS" > "$STATE/ci-runs.json"
-review_fixture $'Changes recommended\n\nCopilot wasn\'t able to review any files in this pull request.'
+review_fixture "Approved with conflicting Blocking findings: remove prior fix." abc123 "2026-10-12T13:20:00Z" APPROVED
 process_review 145 39 abc123 >/dev/null
-check "cannot-review-files boilerplate does not loop" "agent:review 0" "$(labels_of 39) $(calls_matching 'pr comment')"
+check "contradictory review outcome escalates" "agent:blocked 0" "$(labels_of 39) $(calls_matching 'pr ready')"
+
+# --- inline blocker repetition, substantive rebuttal, and uncapped progress ----------------------------------
+setup_review
+review_fixture "Changes requested" abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
+set_thread "Fix the null dereference." abc123
+process_review 145 39 abc123 >/dev/null
+check "current-SHA blocking finding starts a task" "agent:working 1" "$(labels_of 39) $(grep -c '^task create' "$STATE/calls.log")"
+check_contains "blocking finding is preserved in handoff" "a.cs:3 Fix the null dereference." "$(pr_comments)"
+process_review 145 39 abc123 >/dev/null
+check "same review event does not launch a duplicate task" "1" "$(grep -c '^task create' "$STATE/calls.log")"
 
 setup_review
-echo "$GREEN_RUNS" > "$STATE/ci-runs.json"
-review_fixture $'Changes recommended\n\nCopilot wasn’t able to review any files in this pull request.'
+review_fixture "Changes requested" abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
+set_thread "Fix the null dereference." abc123
 process_review 145 39 abc123 >/dev/null
-check "boilerplate with a typographic apostrophe does not loop" "agent:review 0" "$(labels_of 39) $(calls_matching 'pr comment')"
+add_task task-1 completed "2026-10-12T13:25:00Z"
+review_fixture "Still failing" abc123 "2026-10-12T13:30:00Z" CHANGES_REQUESTED
+process_review 145 39 abc123 >/dev/null
+check "repeated blocker without progress pauses for human" "agent:blocked 1" "$(labels_of 39) $(grep -c '^task create' "$STATE/calls.log")"
+check_contains "no-progress escalation names the repeated feedback" "without a new evidence-based rebuttal" "$(pr_comments)"
+process_review 145 39 abc123 >/dev/null
+check "blocked replay does not restart the coder" "1" "$(grep -c '^task create' "$STATE/calls.log")"
 
 setup_review
-review_fixture "$PR148_SUMMARY"
-for sha in r1 r2 r3; do
-  append_json "$STATE/pr-145.comments" "$(printf '@copilot summary\n\n<!-- agent-orchestrator:summary-handoff-sha=%s -->' "$sha")"
+review_fixture "Changes requested" abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
+set_thread "Fix the null dereference." abc123
+process_review 145 39 abc123 >/dev/null
+add_task task-1 completed "2026-10-12T13:25:00Z"
+feedback="$(feedback_signature '- a.cs:3 Fix the null dereference.')"
+jq -n --arg marker "<!-- agent-orchestrator:response-feedback=$feedback -->" \
+  '{id:99,body:($marker + "\nEvidence: The null guard is covered by test X and the relevant path now returns safely."),author:{login:"Copilot"},createdAt:"2026-10-12T13:26:00Z"}' \
+  > "$STATE/copilot-response.json"
+jq --slurpfile response "$STATE/copilot-response.json" '. + [$response[0]]' "$STATE/pr-145.comments" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.comments"
+review_fixture "Changes requested" abc123 "2026-10-12T13:30:00Z" CHANGES_REQUESTED
+process_review 145 39 abc123 >/dev/null
+check "substantive evidence-based rebuttal gets reviewed on same SHA" "2" "$(grep -c '^task create' "$STATE/calls.log")"
+check_contains "response round is consumed exactly once" "response-used=99" "$(pr_comments)"
+add_task task-2 completed "2026-10-12T13:35:00Z"
+review_fixture "Still failing" abc123 "2026-10-12T13:40:00Z" CHANGES_REQUESTED
+process_review 145 39 abc123 >/dev/null
+check "same rebuttal cannot sustain a no-progress loop" "agent:blocked 2" "$(labels_of 39) $(grep -c '^task create' "$STATE/calls.log")"
+
+setup_review
+for i in 1 2 3 4 5; do
+  review_minute=$((19 + i * 2))
+  task_minute=$((20 + i * 2))
+  printf -v review_time '2026-10-12T13:%02d:00Z' "$review_minute"
+  printf -v task_time '2026-10-12T13:%02d:00Z' "$task_minute"
+  review_fixture "Blocking finding $i" abc123 "$review_time" CHANGES_REQUESTED
+  set_thread "Distinct defect $i." abc123
+  process_review 145 39 abc123 >/dev/null
+  add_task "task-$i" completed "$task_time"
 done
+check "productive feedback supports more than three rounds" "5" "$(grep -c '^task create' "$STATE/calls.log")"
+check "productive rounds do not trigger arbitrary escalation" "agent:working" "$(labels_of 39)"
+
+# --- stale review/CI, task completion in either order, and timeout safeguards --------------------------------
+setup_review
+jq '.headRefOid = "newsha"' "$STATE/pr-145.json" > "$STATE/tmp" && mv "$STATE/tmp" "$STATE/pr-145.json"
 process_review 145 39 abc123 >/dev/null
-check "summary handoffs are capped" "agent:blocked 0" "$(labels_of 39) $(calls_matching 'pr ready')"
-check_contains "summary cap is explained" "stopped after 3 automatic review-summary fix rounds" "$(pr_comments)"
-check_contains "summary cap asks for a human" "needs a human decision" "$(pr_comments)"
-process_review 145 39 abc123 >/dev/null
-check "summary cap is not announced twice" "agent:blocked 1" "$(labels_of 39) $(calls_matching 'pr comment 145')"
+check "delayed review for earlier SHA is ignored" "agent:working 0" "$(labels_of 39) $(calls_matching 'pr ready')"
 
 setup_review
-review_fixture "$PR148_SUMMARY"
-for sha in i1 i2 i3; do
-  append_json "$STATE/pr-145.comments" "$(printf '@copilot findings\n\n<!-- agent-orchestrator:handoff-sha=%s -->' "$sha")"
-done
-process_review 145 39 abc123 >/dev/null
-check "inline rounds do not exhaust summary rounds" "agent:working" "$(labels_of 39)"
-check_contains "summary handoff still posted" "agent-orchestrator:summary-handoff-sha=abc123" "$(pr_comments)"
-check_contains "summary handoff runs only after green CI" "The latest CI run for abc123 succeeded." "$(pr_comments)"
+handle_ci_failure 145 39 old-sha failure https://ci/stale >/dev/null
+check "delayed CI for earlier SHA is ignored" "0 0" "$(grep -c '^task create' "$STATE/calls.log" || true) $(calls_matching 'pr comment')"
 
 setup_review
-review_fixture "$PR148_SUMMARY"
-echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false,"comments":{"nodes":[{"body":"Bug","path":"a.cs","line":3,"commit":{"oid":"abc123"},"author":{"login":"copilot-pull-request-reviewer"}}]}}]}}}}}' > "$STATE/threads.json"
-process_review 145 39 abc123 >/dev/null
-check "inline findings keep the existing path" "agent:working 1" "$(labels_of 39) $(calls_matching 'pr comment 145')"
-check_contains "inline path uses the inline marker" "<!-- agent-orchestrator:handoff-sha=abc123 -->" "$(pr_comments)"
-if pr_comments | grep -Fq 'summary-handoff-sha'; then r=yes; else r=no; fi
-check "inline path posts no summary handoff" "no" "$r"
-for sha in s1 s2 s3; do
-  append_json "$STATE/pr-145.comments" "$(printf '@copilot summary\n\n<!-- agent-orchestrator:summary-handoff-sha=%s -->' "$sha")"
-done
-process_review 145 39 newsha >/dev/null
-check "summary rounds do not exhaust inline rounds" "agent:working" "$(labels_of 39)"
+echo '{"workflow_runs":[{"created_at":"2026-10-12T13:00:00Z","conclusion":"failure"}]}' > "$STATE/ci-runs.json"
+echo '[]' > "$STATE/reviews.json"
+if request_review_if_eligible 145 39 abc123 >/dev/null; then r=yes; else r=no; fi
+check "CI-before-completion remains pending without external actions" "no" "$r"
+check "failed CI causes no review request" "0" "$(calls_matching 'request review')"
+echo '{"workflow_runs":[{"created_at":"2026-10-12T13:10:00Z","conclusion":"success"}]}' > "$STATE/ci-runs.json"
+request_review_if_eligible 145 39 abc123 >/dev/null
+check "later green CI unlocks completed task" "1" "$(calls_matching 'request review')"
+
+setup_review
+echo '[]' > "$STATE/reviews.json"
+request_review_if_eligible 145 39 abc123 >/dev/null
+REVIEW_TIMEOUT_SECONDS=0 request_review_if_eligible 145 39 abc123 >/dev/null
+check "timed-out review is escalated visibly" "agent:blocked 2" "$(labels_of 39) $(calls_matching 'pr comment 145')"
+check_contains "review timeout asks for a human decision" "did not arrive before the review timeout" "$(pr_comments)"
+
+setup_review
+add_task task-initial queued
+record_agent_task 39 task-initial abc123
+if start_pr_fix_task 145 39 abc123 "duplicate" >/dev/null; then r=launched; else r=blocked; fi
+check "active coding session suppresses a duplicate launch" "blocked 0" "$r $(grep -c '^task create' "$STATE/calls.log" || true)"
 
 rm -rf "$STATE"
 echo "$passes passed, $failures failed"

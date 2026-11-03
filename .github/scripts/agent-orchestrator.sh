@@ -4,7 +4,7 @@
 # Issue/PR mapping and state transitions behave identically everywhere.
 #
 # Required environment: REPO, READY_LABEL, WORKING_LABEL, AI_REVIEW_LABEL, REVIEW_LABEL, BLOCKED_LABEL,
-# COPILOT_REVIEWER, MAX_FIX_ROUNDS, REVIEW_WAIT_SECONDS, POLL_SECONDS, and GH_TOKEN for the gh CLI.
+# COPILOT_REVIEWER, and GH_TOKEN for the gh CLI.
 # Optional environment:
 #   LAUNCH_MATCH_WINDOW_SECONDS  Max delay between an agent launch and its PR creation (default 1800).
 #   CI_WORKFLOW_FILE             Workflow file whose result gates human review (default ci.yml).
@@ -79,49 +79,84 @@ start_agent_task() {
 }
 
 record_agent_task() {
-  local issue="$1" task_id="$2" source_sha="${3:-initial}"
+  local issue="$1" task_id="$2" source_sha="${3:-initial}" review_id="${4:-}" feedback_signature="${5:-}"
   GH_TOKEN="${ACTIONS_TOKEN:-${GH_TOKEN:-}}" gh issue comment "$issue" --repo "$REPO" --body \
-    "<!-- agent-orchestrator:task-id=$task_id source-sha=$source_sha -->" >/dev/null
+    "<!-- agent-orchestrator:task-id=$task_id source-sha=$source_sha review-id=$review_id feedback=$feedback_signature -->" >/dev/null
 }
 
-agent_task_state() {
+agent_task_id() {
   local issue="$1" task_id
   task_id="$(gh issue view "$issue" --repo "$REPO" --json comments \
     --jq '.comments[] | select(.author.login == "github-actions[bot]") | .body' \
     | grep -oE 'agent-orchestrator:task-id=[A-Za-z0-9._-]+' \
     | tail -1 | sed 's/.*=//')"
   [ -n "$task_id" ] || return 1
-  gh api -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' \
-    "agents/repos/$REPO/tasks/$task_id" --jq '.state // empty'
+  printf '%s' "$task_id"
 }
 
-wait_for_agent_task() {
-  local issue="$1" deadline state
-  deadline=$(( $(date +%s) + REVIEW_WAIT_SECONDS ))
-  while :; do
-    state="$(agent_task_state "$issue")" || {
-      echo "No readable Copilot task status for Issue #$issue; deferring review" >&2
-      return 1
-    }
-    if [ "$state" = "completed" ]; then
-      echo "Copilot task for Issue #$issue is complete"
-      return 0
-    fi
-    case "$state" in
-      failed|timed_out|cancelled|waiting_for_user|idle)
-        echo "Copilot task for Issue #$issue is $state; deferring review" >&2
-        return 1 ;;
-    esac
-    if [ "$(date +%s)" -ge "$deadline" ]; then
-      echo "Copilot task for Issue #$issue is still $state; deferring review" >&2
-      return 1
-    fi
-    sleep "$POLL_SECONDS"
-  done
+agent_task_json() {
+  local task_id
+  task_id="$(agent_task_id "$1")" || return 1
+  gh api -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' \
+    "agents/repos/$REPO/tasks/$task_id"
+}
+
+agent_task_state() {
+  agent_task_json "$1" | jq -er '.state | select(type == "string" and length > 0)'
+}
+
+issue_has_review_task() {
+  local issue="$1" review_id="$2" comments
+  comments="$(gh issue view "$issue" --repo "$REPO" --json comments \
+    --jq '.comments[] | select(.author.login == "github-actions[bot]") | .body')"
+  printf '%s\n' "$comments" | grep -Fq "review-id=$review_id "
+}
+
+issue_has_processed_review() {
+  local issue="$1" review_id="$2" comments
+  comments="$(gh issue view "$issue" --repo "$REPO" --json comments \
+    --jq '.comments[] | select(.author.login == "github-actions[bot]") | .body')"
+  printf '%s\n' "$comments" | grep -Fq "agent-orchestrator:review-processed=$review_id"
+}
+
+record_review_processed() {
+  gh issue comment "$2" --repo "$REPO" --body \
+    "<!-- agent-orchestrator:review-processed=$1 -->" >/dev/null
+}
+
+pr_bot_comments() {
+  gh pr view "$1" --repo "$REPO" --json comments \
+    --jq '.comments[] | select(.author.login == "github-actions[bot]") | .body'
+}
+
+block_for_human() {
+  local pr="$1" issue="$2" reason="$3" marker="$4" existing
+  if printf '%s\n' "$(issue_labels "$issue")" | grep -Fxq "$BLOCKED_LABEL"; then
+    echo "Issue #$issue is already blocked; leaving it for a human"
+    return 0
+  fi
+  existing="$(pr_bot_comments "$pr")"
+  if ! printf '%s\n' "$existing" | grep -Fq "$marker"; then
+    gh pr comment "$pr" --repo "$REPO" --body "$(printf '%s\n\n%s' "$reason" "$marker")" >/dev/null
+  fi
+  set_state "$issue" "$BLOCKED_LABEL"
+}
+
+coder_response_for_feedback() {
+  local pr="$1" signature="$2" task_json task_updated comments response
+  task_json="$(agent_task_json "$3")" || return 1
+  task_updated="$(jq -er '.updated_at | select(type == "string" and length > 0)' <<< "$task_json")" || return 1
+  comments="$(gh pr view "$pr" --repo "$REPO" --json comments)"
+  response="$(jq -cer --arg marker "<!-- agent-orchestrator:response-feedback=$signature -->" --arg updated "$task_updated" \
+    '[.comments[] | select(.author.login == "Copilot" or .author.login == "copilot-swe-agent[bot]")
+      | select(.createdAt >= $updated) | select(.body | contains($marker))
+      | select(.body | contains("Evidence:"))] | last // empty' <<< "$comments")" || return 1
+  printf '%s' "$response"
 }
 
 start_pr_fix_task() {
-  local pr="$1" issue="$2" sha="$3" prompt="$4" pr_data branch base_ref task_id
+  local pr="$1" issue="$2" sha="$3" prompt="$4" review_id="${5:-}" feedback_signature="${6:-}"
+  local pr_data branch base_ref task_id task_state
   pr_data="$(gh pr view "$pr" --repo "$REPO" --json state,headRefOid,headRefName,baseRefName)" || return 1
   if ! jq -e --arg sha "$sha" '.state == "OPEN" and .headRefOid == $sha' <<< "$pr_data" >/dev/null; then
     echo "PR #$pr is closed or its head moved; not starting a fix task for $sha" >&2
@@ -129,8 +164,23 @@ start_pr_fix_task() {
   fi
   branch="$(jq -er '.headRefName | select(type == "string" and length > 0)' <<< "$pr_data")" || return 1
   base_ref="$(jq -er '.baseRefName | select(type == "string" and length > 0)' <<< "$pr_data")" || return 1
+  if printf '%s\n' "$(issue_labels "$issue")" | grep -Fxq "$BLOCKED_LABEL"; then
+    echo "Issue #$issue is blocked for human attention; not starting a coding task"
+    return 3
+  fi
+  if [ -n "$review_id" ] && issue_has_review_task "$issue" "$review_id"; then
+    echo "Review $review_id was already handed off"
+    return 3
+  fi
+  if task_state="$(agent_task_state "$issue" 2>/dev/null)"; then
+    case "$task_state" in
+      queued|in_progress)
+        echo "Copilot task for Issue #$issue is already $task_state; not starting another task"
+        return 3 ;;
+    esac
+  fi
   task_id="$(start_agent_task "$prompt" "$base_ref" "$branch" false)" || return 1
-  record_agent_task "$issue" "$task_id" "$sha"
+  record_agent_task "$issue" "$task_id" "$sha" "$review_id" "$feedback_signature"
   printf '%s' "$task_id"
 }
 
@@ -255,25 +305,29 @@ issue_superseded() {
     <<< "$events" >/dev/null 2>&1
 }
 
-copilot_reviewed() {
-  local reviews
-  reviews="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$1/reviews")" || return 2
-  if jq -e --arg sha "$2" 'any(.[]?; (.user.login // "" | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha)' \
-      <<< "$reviews" >/dev/null; then
-    return 0
-  else
-    local status=$?
-    [ "$status" -eq 1 ] && return 1
-    return 2
-  fi
+current_copilot_review() {
+  local pr="$1" sha="$2" issue="$3" reviews task_json task_updated review
+  reviews="$(gh api --paginate -H 'Accept: application/vnd.github+json' \
+    "repos/$REPO/pulls/$pr/reviews?per_page=100")" || return 2
+  task_json="$(agent_task_json "$issue")" || return 2
+  task_updated="$(jq -er '.updated_at | select(type == "string" and length > 0)' <<< "$task_json")" || return 2
+  jq -se 'add // [] | type == "array"' <<< "$reviews" >/dev/null 2>&1 || return 2
+  review="$(jq -sc --arg sha "$sha" --arg updated "$task_updated" \
+    'add // [] | map(select((.user.login // "" | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha and (.submitted_at // "") >= $updated))
+     | sort_by(.submitted_at // "") | last // empty' <<< "$reviews")" || return 2
+  [ -n "$review" ] && [ "$review" != "null" ] || return 1
+  printf '%s' "$review"
 }
 
 request_copilot_review() {
-  local pr="$1" sha="$2" requested review_status
-  if copilot_reviewed "$pr" "$sha"; then echo "Copilot already reviewed $sha"; return 0; else
-    review_status=$?
-    [ "$review_status" -eq 2 ] && return 1
+  local pr="$1" issue="$2" sha="$3" requested result
+  if current_copilot_review "$pr" "$sha" "$issue" >/dev/null 2>&1; then
+    echo "Copilot already reviewed current task response for $sha"
+    return 0
+  else
+    result=$?
   fi
+  [ "$result" -eq 2 ] && return 1
   requested="$(gh api -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/requested_reviewers")"
   if jq -e 'any(.users[]?; .login | startswith("copilot-pull-request-reviewer"))' <<< "$requested" >/dev/null; then
     echo "Copilot review already pending"; return 0
@@ -284,16 +338,31 @@ request_copilot_review() {
 }
 
 review_eligible() {
-  local pr="$1" issue="$2" sha="$3" pr_data
+  local pr="$1" issue="$2" sha="$3" pr_data task_state
   pr_data="$(gh pr view "$pr" --repo "$REPO" --json state,headRefOid)" || return 1
   if ! jq -e --arg sha "$sha" '.state == "OPEN" and .headRefOid == $sha' <<< "$pr_data" >/dev/null; then
     echo "PR #$pr is closed or its head no longer matches $sha; ignoring review event"
     return 1
   fi
-  if ! agent_task_state "$issue" | grep -Fxq completed; then
-    echo "Copilot implementation for Issue #$issue is not complete; not reviewing $sha"
+  if printf '%s\n' "$(issue_labels "$issue")" | grep -Fxq "$BLOCKED_LABEL"; then
+    echo "Issue #$issue is blocked for human attention; ignoring automated review"
     return 1
   fi
+  task_state="$(agent_task_state "$issue")" || {
+    echo "Unable to read Copilot task state for Issue #$issue; not reviewing"
+    return 1
+  }
+  case "$task_state" in
+    completed) ;;
+    queued|in_progress)
+      echo "Copilot implementation for Issue #$issue is not complete; not reviewing $sha"
+      return 1 ;;
+    *)
+      block_for_human "$pr" "$issue" \
+        "Copilot task for Issue #$issue ended in state '$task_state'. Please inspect the task and decide how to proceed." \
+        "<!-- agent-orchestrator:task-failure=$task_state -->"
+      return 1 ;;
+  esac
   if ! ci_green "$sha"; then
     echo "CI for current PR head $sha is not green; not reviewing"
     return 1
@@ -301,164 +370,205 @@ review_eligible() {
 }
 
 request_review_if_eligible() {
-  local pr="$1" issue="$2" sha="$3"
+  local pr="$1" issue="$2" sha="$3" task_id marker existing result
   review_eligible "$pr" "$issue" "$sha" || return 1
-  request_copilot_review "$pr" "$sha" || return 2
+  task_id="$(agent_task_id "$issue")" || return 1
+  marker="<!-- agent-orchestrator:review-requested-sha=$sha task-id=$task_id -->"
+  existing="$(pr_bot_comments "$pr")"
+  if printf '%s\n' "$existing" | grep -Fq "$marker" && review_request_expired "$pr" "$sha" "$task_id"; then
+    block_for_human "$pr" "$issue" \
+      "Copilot review did not arrive before the review timeout for $sha. Please review the PR manually or re-enable automated review." \
+      "<!-- agent-orchestrator:review-timeout=$sha task-id=$task_id -->"
+    return 0
+  fi
+  if current_copilot_review "$pr" "$sha" "$issue" >/dev/null 2>&1; then
+    :
+  else
+    result=$?
+    [ "$result" -eq 2 ] && return 2
+    request_copilot_review "$pr" "$issue" "$sha" || return 2
+    existing="$(pr_bot_comments "$pr")"
+    if ! printf '%s\n' "$existing" | grep -Fq "$marker"; then
+      gh pr comment "$pr" --repo "$REPO" --body \
+        "Requested Copilot review for the completed task on $sha. $marker" >/dev/null
+    fi
+  fi
   set_state "$issue" "$AI_REVIEW_LABEL"
 }
 
-wait_for_review() {
-  # 0 = review for sha exists, 1 = timeout, 2 = PR head moved on (newer commit will be handled by its own CI run)
-  local pr="$1" sha="$2" deadline head review_status
-  deadline=$(( $(date +%s) + REVIEW_WAIT_SECONDS ))
-  while :; do
-    if copilot_reviewed "$pr" "$sha"; then
-      echo "Copilot review for $sha is available"
-      return 0
-    else
-      review_status=$?
-    fi
-    if [ "$review_status" -eq 2 ]; then echo "Unable to fetch Copilot reviews for $sha" >&2; return 1; fi
-    head="$(gh pr view "$pr" --repo "$REPO" --json headRefOid --jq '.headRefOid')"
-    if [ "$head" != "$sha" ]; then echo "PR head moved to $head; leaving it to the next CI run"; return 2; fi
-    if [ "$(date +%s)" -ge "$deadline" ]; then echo "Copilot review did not arrive in time"; return 1; fi
-    sleep "$POLL_SECONDS"
-  done
+review_request_expired() {
+  local pr="$1" sha="$2" task_id="$3" comments created_at requested_at
+  comments="$(gh pr view "$pr" --repo "$REPO" --json comments)" || return 1
+  created_at="$(jq -r --arg sha "$sha" --arg task "$task_id" \
+    '[.comments[] | select(.author.login == "github-actions[bot]")
+      | select(.body | contains("agent-orchestrator:review-requested-sha=" + $sha + " task-id=" + $task))
+      | .createdAt] | last // empty' <<< "$comments")"
+  [ -n "$created_at" ] || return 1
+  requested_at="$(date -u -d "$created_at" +%s)" || return 1
+  [ "$(( $(date -u +%s) - requested_at ))" -ge "${REVIEW_TIMEOUT_SECONDS:-1800}" ]
 }
 
-# Succeeds only when the latest CI run for the SHA concluded successfully. A successful event is not, by itself,
-# proof that the Copilot implementation is complete.
-ci_green() {
-  local sha="$1" conclusion
-  conclusion="$(GH_TOKEN="${ACTIONS_TOKEN:-${GH_TOKEN:-}}" gh api -H 'Accept: application/vnd.github+json' \
+# Returns the latest CI conclusion for the exact SHA.
+ci_conclusion() {
+  local sha="$1"
+  GH_TOKEN="${ACTIONS_TOKEN:-${GH_TOKEN:-}}" gh api -H 'Accept: application/vnd.github+json' \
     "repos/$REPO/actions/workflows/${CI_WORKFLOW_FILE:-ci.yml}/runs?head_sha=$sha&per_page=20" \
-    --jq '[.workflow_runs[]?] | sort_by(.created_at) | last | .conclusion // empty' 2>/dev/null || true)"
-  [ "$conclusion" = "success" ]
+    --jq '[.workflow_runs[]?] | sort_by(.created_at) | last | .conclusion // empty' 2>/dev/null
 }
 
-# Body of the latest Copilot review summary submitted for exactly this commit (empty when there is none).
-copilot_review_summary() {
-  local pr="$1" sha="$2"
-  gh api --paginate -H 'Accept: application/vnd.github+json' "repos/$REPO/pulls/$pr/reviews?per_page=100" \
-    | jq -s -r --arg sha "$sha" '[add // [] | .[] | select((.user.login // "" | startswith("copilot-pull-request-reviewer")) and .commit_id == $sha)]
-        | sort_by(.submitted_at // "") | last | .body // ""'
+# Green CI is necessary but is never evidence by itself that the coding session has completed.
+ci_green() {
+  [ "$(ci_conclusion "$1" || true)" = "success" ]
 }
 
-# Succeeds only when a review summary explicitly recommends changes. Generic status such as "Needs a closer look",
-# "Approval recommended", and the "wasn't able to review any files" boilerplate are not change requests.
-summary_requests_changes() {
-  local body="$1"
-  grep -Fq 'Changes recommended' <<< "$body" || return 1
-  ! grep -Eqi "(wasn('|’)t|was not) able to review any files" <<< "$body"
+review_threads() {
+  local pr="$1"
+  # shellcheck disable=SC2016 # GraphQL variables, not shell expansions.
+  gh api graphql \
+    -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body path line commit{oid} author{login}}}}}}}}' \
+    -F owner="${REPO%%/*}" -F repo="${REPO#*/}" -F number="$pr"
 }
 
-# Summary-only recommendation (no unresolved inline findings): hand the summary to the coding agent once per SHA,
-# capped at MAX_FIX_ROUNDS summary handoffs per PR, after which the Issue is blocked for a human.
-handoff_review_summary() {
-  local pr="$1" issue="$2" sha="$3" summary="$4" existing marker blocked_marker rounds ci_status quoted task_id prompt
-  existing="$(gh pr view "$pr" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
-  marker="<!-- agent-orchestrator:summary-handoff-sha=$sha -->"
-  blocked_marker="<!-- agent-orchestrator:summary-blocked-sha=$sha -->"
+review_findings() {
+  local threads="$1" sha="$2"
+  jq -c --arg sha "$sha" \
+    '[.data.repository.pullRequest.reviewThreads.nodes[]?
+      | select(.isResolved == false)
+      | .comments.nodes[]?
+      | select((.author.login // "" | startswith("copilot-pull-request-reviewer")) and .commit.oid == $sha)
+      | {path: (.path // "general"), line: (.line // ""), body: (.body // "")}]' <<< "$threads"
+}
+
+feedback_signature() {
+  printf '%s' "$1" | sha256sum | cut -d' ' -f1
+}
+
+handoff_blocking_feedback() {
+  local pr="$1" issue="$2" sha="$3" review_id="$4" feedback="$5" summary="${6:-}"
+  local signature existing response response_id response_used="" prompt task_id rc marker
+  signature="$(feedback_signature "$feedback")"
+  marker="<!-- agent-orchestrator:feedback=$signature -->"
+  existing="$(pr_bot_comments "$pr")"
   if printf '%s\n' "$existing" | grep -Fq "$marker"; then
-    echo "Review summary for $sha already handed off"; set_state "$issue" "$WORKING_LABEL"; return 0
+    response="$(coder_response_for_feedback "$pr" "$signature" "$issue" || true)"
+    if [ -z "$response" ]; then
+      block_for_human "$pr" "$issue" \
+        "Blocking feedback repeated after a completed coding response without a new evidence-based rebuttal. Please decide how to resolve the finding." \
+        "<!-- agent-orchestrator:no-progress=$signature -->"
+      return 0
+    fi
+    response_id="$(jq -r '.id' <<< "$response")"
+    if printf '%s\n' "$existing" | grep -Fq "<!-- agent-orchestrator:response-used=$response_id "; then
+      block_for_human "$pr" "$issue" \
+        "The same blocking feedback repeated after the coding response was already reviewed. Please decide how to proceed." \
+        "<!-- agent-orchestrator:no-progress=$signature -->"
+      return 0
+    fi
+    response_used="<!-- agent-orchestrator:response-used=$response_id feedback=$signature -->"
   fi
-  if printf '%s\n' "$existing" | grep -Fq "$blocked_marker"; then
-    echo "Review summary for $sha already escalated to a human"; set_state "$issue" "$BLOCKED_LABEL"; return 0
-  fi
-  rounds="$(printf '%s\n' "$existing" | grep -c 'agent-orchestrator:summary-handoff-sha=' || true)"
-  if [ "$rounds" -ge "$MAX_FIX_ROUNDS" ]; then
-    gh pr comment "$pr" --repo "$REPO" --body "$(printf 'Agent orchestrator stopped after %s automatic review-summary fix rounds. The Copilot review summary for %s still says "Changes recommended" without inline findings and needs a human decision.\n\n%s' \
-      "$rounds" "$sha" "$blocked_marker")" >/dev/null
-    echo "Review-summary fix rounds exhausted for PR #$pr -> human attention"
-    set_state "$issue" "$BLOCKED_LABEL"
+  if printf '%s\n' "$feedback" | grep -Eiq '\b(undo|revert|reverse|restore the previous|contradictory)\b'; then
+    block_for_human "$pr" "$issue" \
+      "The review feedback appears to reverse or contradict an earlier requested change. Please resolve the conflicting recommendations." \
+      "<!-- agent-orchestrator:contradictory-feedback=$signature -->"
     return 0
   fi
-  if ci_green "$sha"; then ci_status="succeeded"; else ci_status="is not confirmed green"; fi
-  # Drop HTML comments so quoted text cannot carry orchestrator markers; keep the handoff concise.
-  quoted="$(sed -E 's/<!--.*-->//g; s/^/> /' <<< "${summary:0:6000}")"
-  prompt="$(printf '%s\n\n%s\n\n%s' \
-    "The Copilot review summary for commit $sha says \"Changes recommended\" but has no inline findings. The latest CI run for $sha $ci_status." \
-    "$quoted" \
-    'Please validate this recommendation against the actual CI and check results for this commit. If it is stale (for example, an unchecked validation checklist although CI passed), update the PR description or checklist to match the real results. Change code only if you identify a real issue. Run the relevant validation and push any fix to this PR branch. Do not merge.')"
   if ! review_eligible "$pr" "$issue" "$sha"; then return 0; fi
-  task_id="$(start_pr_fix_task "$pr" "$issue" "$sha" "$prompt")" || return 1
-  gh pr comment "$pr" --repo "$REPO" --body "$(printf '%s\n\n%s\n\n%s\n\n%s' \
-    "Started Copilot cloud agent task $task_id to validate the review summary for commit $sha. The latest CI run for $sha $ci_status." \
-    "$quoted" \
-    "$prompt" \
-    "$marker")" >/dev/null
-  echo "Handed off review summary for $sha to Copilot (round $((rounds + 1)) of $MAX_FIX_ROUNDS)"
+  prompt="$(printf '%s\n\n%s\n\n%s' \
+    'Address only these explicitly blocking review findings. If you change code, run relevant tests and resolve the addressed threads. If you believe a finding is incorrect and do not change code, post a PR comment containing this exact marker and an Evidence: section with the relevant test, file, or behavior:' \
+    "<!-- agent-orchestrator:response-feedback=$signature -->" \
+    "$feedback")"
+  task_id="$(start_pr_fix_task "$pr" "$issue" "$sha" "$prompt" "$review_id" "$signature")" || {
+    rc=$?
+    [ "$rc" -eq 3 ] && return 0
+    return "$rc"
+  }
+  gh pr comment "$pr" --repo "$REPO" --body "$(printf 'Started Copilot task %s for blocking review feedback on %s.\n\n%s\n\n%s\n\n<!-- agent-orchestrator:review-feedback=%s -->\n%s' \
+    "$task_id" "$sha" "$feedback" "$summary" "$review_id" "$marker $response_used")" >/dev/null
   set_state "$issue" "$WORKING_LABEL"
 }
 
+# The reviewer integration exposes GitHub's review state, so APPROVED is explicit acceptance and CHANGES_REQUESTED
+# is a blocker only with current inline findings or a structured "Blocking findings:" summary. COMMENTED and other
+# outcomes are ambiguous and go to a human. Repeated finding signatures require a new evidence-marked coder response;
+# repeated blockers, contradictory language, and unclassifiable outcomes pause automation without a round cap.
 process_review() {
-  # Decide after Copilot reviewed the current head: hand inline findings or a summary-only "Changes recommended"
-  # review to the coding agent, or promote to human review.
-  local pr="$1" issue="$2" sha="$3" threads open_threads count findings marker existing rounds summary task_id prompt review_status
+  local pr="$1" issue="$2" sha="$3" review review_id state body threads findings count feedback is_draft result
   if ! review_eligible "$pr" "$issue" "$sha"; then return 0; fi
-  if copilot_reviewed "$pr" "$sha"; then
+  if review="$(current_copilot_review "$pr" "$sha" "$issue")"; then
     :
   else
-    review_status=$?
-    if [ "$review_status" -eq 2 ]; then
-      echo "Unable to fetch Copilot reviews for $sha; deferring review processing" >&2
+    result=$?
+    if [ "$result" -eq 2 ]; then
+      echo "Unable to fetch current-task Copilot review for $sha; deferring" >&2
       return 1
     fi
-    echo "No Copilot review exists for current head $sha; deferring processing"
+    echo "No current-task Copilot review for $sha; leaving review processing unchanged"
     return 0
   fi
-  # shellcheck disable=SC2016 # GraphQL variables, not shell expansions.
-  threads="$(gh api graphql \
-    -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body path line commit{oid} author{login}}}}}}}}' \
-    -F owner="${REPO%%/*}" -F repo="${REPO#*/}" -F number="$pr")"
-  # shellcheck disable=SC2016 # jq variable, not a shell expansion.
-  open_threads='[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved == false) | select(any(.comments.nodes[]?; (.author.login | startswith("copilot-pull-request-reviewer")) and .commit.oid == $sha))]'
-  count="$(jq --arg sha "$sha" "$open_threads | length" <<< "$threads")"
-  if [ "$count" -eq 0 ]; then
-    if ! summary="$(copilot_review_summary "$pr" "$sha")"; then
-      echo "Unable to fetch or parse Copilot review summary for $sha; deferring review processing" >&2
-      return 1
-    fi
-    if summary_requests_changes "$summary"; then
-      handoff_review_summary "$pr" "$issue" "$sha" "$summary"
-      return 0
-    fi
-    if ! review_eligible "$pr" "$issue" "$sha"; then return 0; fi
-    if ! copilot_reviewed "$pr" "$sha"; then return 0; fi
-    echo "No unresolved Copilot findings; CI is green -> human review"
-    gh pr ready "$pr" --repo "$REPO" >/dev/null 2>&1 || true
-    set_state "$issue" "$REVIEW_LABEL"
+  review_id="$(jq -er '.id | tostring' <<< "$review")" || return 1
+  if issue_has_processed_review "$issue" "$review_id" || issue_has_review_task "$issue" "$review_id"; then
+    echo "Review $review_id was already processed"
     return 0
   fi
-  existing="$(gh pr view "$pr" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
-  marker="<!-- agent-orchestrator:handoff-sha=$sha -->"
-  if printf '%s\n' "$existing" | grep -Fq "$marker"; then
-    echo "Findings for $sha already handed off"; set_state "$issue" "$WORKING_LABEL"; return 0
-  fi
-  rounds="$(printf '%s\n' "$existing" | grep -c 'agent-orchestrator:handoff-sha=' || true)"
-  if [ "$rounds" -ge "$MAX_FIX_ROUNDS" ]; then
-    gh pr comment "$pr" --repo "$REPO" --body "Agent orchestrator stopped after $rounds automatic fix rounds. $count Copilot finding(s) remain unresolved and need a human decision." >/dev/null
-    set_state "$issue" "$BLOCKED_LABEL"
-    return 0
-  fi
-  findings="$(jq -r --arg sha "$sha" "$open_threads | map(.comments.nodes[] | select((.author.login | startswith(\"copilot-pull-request-reviewer\")) and .commit.oid == \$sha) | \"- \(.path // \"general\"):\(.line // \"\") \(.body)\") | join(\"\n\")" <<< "$threads")"
-  prompt="$(printf '%s\n\n%s' \
-    'Please address all unresolved Copilot code review findings below on this PR branch. Update tests and documentation as needed, run all tests, push the fix, and resolve the addressed threads. Do not merge.' \
-    "$findings")"
-  if ! review_eligible "$pr" "$issue" "$sha"; then return 0; fi
-  task_id="$(start_pr_fix_task "$pr" "$issue" "$sha" "$prompt")" || return 1
-  gh pr comment "$pr" --repo "$REPO" --body "$(printf 'Started Copilot cloud agent task %s to address the review findings for %s.\n\n%s\n\n%s' \
-    "$task_id" "$sha" "$findings" "$marker")" >/dev/null
-  echo "Handed off $count finding(s) to Copilot (round $((rounds + 1)) of $MAX_FIX_ROUNDS)"
-  set_state "$issue" "$WORKING_LABEL"
+  state="$(jq -r '.state // empty' <<< "$review")"
+  body="$(jq -r '.body // ""' <<< "$review")"
+  threads="$(review_threads "$pr")" || {
+    echo "Unable to fetch review threads; deferring review processing" >&2
+    return 1
+  }
+  findings="$(review_findings "$threads" "$sha")" || return 1
+  count="$(jq 'length' <<< "$findings")"
+
+  case "$state" in
+    APPROVED)
+      if grep -Fq 'Blocking findings:' <<< "$body"; then
+        block_for_human "$pr" "$issue" \
+          "The Copilot review both approved the PR and declared blocking findings. Please resolve the contradictory outcome." \
+          "<!-- agent-orchestrator:ambiguous-review=$review_id -->"
+        return 0
+      fi
+      if ! review_eligible "$pr" "$issue" "$sha"; then return 0; fi
+      is_draft="$(gh pr view "$pr" --repo "$REPO" --json isDraft --jq '.isDraft')" || return 1
+      if [ "$is_draft" = "true" ]; then gh pr ready "$pr" --repo "$REPO" >/dev/null || return 1; fi
+      set_state "$issue" "$REVIEW_LABEL"
+      record_review_processed "$review_id" "$issue"
+      return 0 ;;
+    CHANGES_REQUESTED)
+      if [ "$count" -gt 0 ]; then
+        feedback="$(jq -r '.[] | "- \(.path):\(.line) \(.body)"' <<< "$findings")"
+        handoff_blocking_feedback "$pr" "$issue" "$sha" "$review_id" "$feedback" "$body"
+        return 0
+      fi
+      if grep -Fq 'Blocking findings:' <<< "$body"; then
+        feedback="${body#*Blocking findings:}"
+        if [ -n "$(sed '/^[[:space:]]*$/d' <<< "$feedback")" ]; then
+          handoff_blocking_feedback "$pr" "$issue" "$sha" "$review_id" "$feedback" "$body"
+          return 0
+        fi
+      fi
+      block_for_human "$pr" "$issue" \
+        "Copilot requested changes but did not provide explicitly actionable blocking findings. Please clarify the required decision." \
+        "<!-- agent-orchestrator:ambiguous-review=$review_id -->"
+      return 0 ;;
+    *)
+      block_for_human "$pr" "$issue" \
+        "Copilot review outcome '$state' is not an explicit acceptance or actionable blocking result. Please classify the feedback." \
+        "<!-- agent-orchestrator:ambiguous-review=$review_id -->"
+      return 0 ;;
+  esac
 }
 
 handle_ci_failure() {
   # Failed CI is never a review result: hand it back to Copilot (agent:working) or ask a human (agent:blocked).
-  local pr="$1" issue="$2" sha="$3" conclusion="$4" run_url="$5" pr_data labels existing marker rounds task_id prompt
+  local pr="$1" issue="$2" sha="$3" conclusion="$4" run_url="$5" pr_data labels existing marker task_id prompt task_state rc latest_conclusion
   pr_data="$(gh pr view "$pr" --repo "$REPO" --json state,headRefOid)" || return 0
   if ! jq -e --arg sha "$sha" '.state == "OPEN" and .headRefOid == $sha' <<< "$pr_data" >/dev/null; then
     echo "PR #$pr is closed or its head moved; CI result for $sha is outdated"
+    return 0
+  fi
+  latest_conclusion="$(ci_conclusion "$sha" || true)"
+  if [ "$latest_conclusion" != "$conclusion" ]; then
+    echo "CI event for $sha concluded $conclusion, but the latest conclusion is $latest_conclusion; ignoring stale event"
     return 0
   fi
   labels="$(issue_labels "$issue")"
@@ -468,7 +578,15 @@ handle_ci_failure() {
   existing="$(gh pr view "$pr" --repo "$REPO" --json comments --jq '.comments[]?.body // empty')"
   marker="<!-- agent-orchestrator:ci-failure-sha=$sha -->"
   if printf '%s\n' "$existing" | grep -Fq "$marker"; then
-    echo "CI result for $sha already handed off"; set_state "$issue" "$WORKING_LABEL"; return 0
+    task_state="$(agent_task_state "$issue" 2>/dev/null || true)"
+    if [ "$task_state" = "completed" ]; then
+      block_for_human "$pr" "$issue" \
+        "CI still fails for $sha after the completed coding response. Please inspect the failure and decide how to proceed." \
+        "<!-- agent-orchestrator:ci-no-progress-sha=$sha -->"
+    else
+      echo "CI result for $sha already handed off; no duplicate action"
+    fi
+    return 0
   fi
   if [ "$conclusion" != "failure" ] && [ "$conclusion" != "timed_out" ]; then
     gh pr comment "$pr" --repo "$REPO" --body "$(printf 'Agent orchestrator: CI for %s concluded "%s" (%s). This cannot be handled automatically; re-run CI or decide how to proceed.\n\n%s' \
@@ -477,19 +595,15 @@ handle_ci_failure() {
     set_state "$issue" "$BLOCKED_LABEL"
     return 0
   fi
-  # Only actual Copilot fix tasks count as fix rounds; cancelled/startup-failure notices do not.
-  rounds="$(printf '%s\n' "$existing" | grep -c 'agent-orchestrator:ci-fix-task-sha=' || true)"
-  if [ "$rounds" -ge "$MAX_FIX_ROUNDS" ]; then
-    gh pr comment "$pr" --repo "$REPO" --body "$(printf 'Agent orchestrator stopped after %s automatic CI fix rounds. CI still fails for %s (%s) and needs a human decision.\n\n%s' \
-      "$rounds" "$sha" "$run_url" "$marker")" >/dev/null
-    set_state "$issue" "$BLOCKED_LABEL"
-    return 0
-  fi
   prompt="$(printf 'CI failed for commit %s: %s\nPlease investigate the failing build or tests on this PR branch, fix the cause, run all tests, and push the fix. Do not merge.' \
     "$sha" "$run_url")"
-  task_id="$(start_pr_fix_task "$pr" "$issue" "$sha" "$prompt")" || return 1
+  task_id="$(start_pr_fix_task "$pr" "$issue" "$sha" "$prompt")" || {
+    rc=$?
+    [ "$rc" -eq 3 ] && return 0
+    return "$rc"
+  }
   gh pr comment "$pr" --repo "$REPO" --body "$(printf 'Started Copilot cloud agent task %s to fix CI for commit %s: %s\n\n%s\n\n%s' \
     "$task_id" "$sha" "$run_url" "$prompt" "$marker <!-- agent-orchestrator:ci-fix-task-sha=$sha -->")" >/dev/null
-  echo "Handed off CI failure for $sha to Copilot (round $((rounds + 1)) of $MAX_FIX_ROUNDS)"
+  echo "Started Copilot task $task_id for CI failure on $sha"
   set_state "$issue" "$WORKING_LABEL"
 }
