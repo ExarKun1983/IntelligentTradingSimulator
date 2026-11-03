@@ -163,7 +163,7 @@ public sealed class OrchestrationPersistenceTests
     public async Task GitStoreWritesOneCommitWithObservedTipParentAndNonforceCas()
     {
         var transport = new GitTransport();
-        var store = new GitStateStore(transport, "owner/repo");
+        var store = new GitStateStore(transport, "owner/repo", allowInitialization: true);
         var initial = await store.LoadAsync(default);
         Assert.Null(initial.Revision);
         initial.State.Version++;
@@ -184,7 +184,7 @@ public sealed class OrchestrationPersistenceTests
     public async Task GitConflictDoesNotPublishOrPretendSuccess()
     {
         var transport = new GitTransport { RejectAdvance = true };
-        var store = new GitStateStore(transport, "owner/repo");
+        var store = new GitStateStore(transport, "owner/repo", allowInitialization: true);
         var initial = await store.LoadAsync(default);
         Assert.False(await store.TrySaveAsync(initial, initial.State, default));
         Assert.Null(transport.Tip);
@@ -197,7 +197,7 @@ public sealed class OrchestrationPersistenceTests
     public async Task LostGitPublishResponseUsesExactCommitOrAncestry(bool descendant)
     {
         var transport = new GitTransport { LosePublishResponse = true, AddDescendant = descendant };
-        var store = new GitStateStore(transport, "owner/repo");
+        var store = new GitStateStore(transport, "owner/repo", allowInitialization: true);
         var initial = await store.LoadAsync(default);
         initial.State.Version = 42;
         Assert.True(await store.TrySaveAsync(initial, initial.State, default));
@@ -207,12 +207,12 @@ public sealed class OrchestrationPersistenceTests
     }
 
     [Fact]
-    public async Task LostUnpublishedGitResponseDoesNotCountAsSuccess()
+    public async Task LostUnpublishedBootstrapResponseFailsClosed()
     {
         var transport = new GitTransport { LoseBeforePublish = true };
-        var store = new GitStateStore(transport, "owner/repo");
+        var store = new GitStateStore(transport, "owner/repo", allowInitialization: true);
         var initial = await store.LoadAsync(default);
-        Assert.False(await store.TrySaveAsync(initial, initial.State, default));
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.TrySaveAsync(initial, initial.State, default));
         Assert.Null(transport.Tip);
     }
 
@@ -220,7 +220,7 @@ public sealed class OrchestrationPersistenceTests
     public async Task GitStoreRejectsCrossRepositoryOrUnsupportedSchema()
     {
         var transport = new GitTransport();
-        var store = new GitStateStore(transport, "owner/repo");
+        var store = new GitStateStore(transport, "owner/repo", allowInitialization: true);
         var initial = await store.LoadAsync(default);
         initial.State.Repository = "other/repo";
         await Assert.ThrowsAsync<InvalidDataException>(() => store.TrySaveAsync(initial, initial.State, default));
@@ -228,6 +228,41 @@ public sealed class OrchestrationPersistenceTests
         initial.State.SchemaVersion = 2;
         await Assert.ThrowsAsync<InvalidDataException>(() => store.TrySaveAsync(initial, initial.State, default));
         Assert.Empty(transport.Commits);
+    }
+
+    [Fact]
+    public async Task MissingCanonicalRefFailsClosedWithoutExplicitInitialization()
+    {
+        var transport = new GitTransport();
+        var store = new GitStateStore(transport, "owner/repo");
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.LoadAsync(default));
+        var empty = RepositoryState.Create("owner/repo");
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.TrySaveAsync(new(null, empty), empty, default));
+        Assert.Empty(transport.Commits);
+        Assert.Equal(0, transport.Advances);
+    }
+
+    [Fact]
+    public async Task DeletedRefCannotEraseAdmissionOrHoldsEvenForOriginalBootstrapStore()
+    {
+        var transport = new GitTransport();
+        var bootstrap = new GitStateStore(transport, "owner/repo", allowInitialization: true);
+        var initial = await bootstrap.LoadAsync(default);
+        var admitted = CiPending();
+        admitted.Issues[7].Phase = Phase.BLOCKED;
+        admitted.Issues[7].ReactivationRequired = true;
+        admitted.Outbox["ci"].Status = DeliveryStatus.Unknown;
+        Assert.True(await bootstrap.TrySaveAsync(initial, admitted, default));
+        var store = new GitStateStore(transport, "owner/repo");
+        var loaded = await store.LoadAsync(default);
+        Assert.Equal(7, loaded.State.AdmittedIssue);
+        Assert.Equal(Phase.BLOCKED, loaded.State.Issues[7].Phase);
+        transport.DeleteRef();
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.LoadAsync(default));
+        await Assert.ThrowsAsync<InvalidDataException>(() => bootstrap.LoadAsync(default));
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.TrySaveAsync(loaded, loaded.State, default));
+        Assert.Single(transport.Commits);
+        Assert.Equal(1, transport.Advances);
     }
 
     private static RepositoryState CiPending()
@@ -358,6 +393,7 @@ public sealed class OrchestrationPersistenceTests
         public bool LosePublishResponse { get; set; }
         public bool LoseBeforePublish { get; set; }
         public bool AddDescendant { get; set; }
+        public void DeleteRef() => Tip = null;
         public Task<string?> ReadRefAsync(string reference, CancellationToken cancellationToken) => Task.FromResult(Tip);
         public Task<GitCommitObject> ReadCommitAsync(string commit, CancellationToken cancellationToken) => Task.FromResult(Commits[commit]);
         public Task<string> CreateBlobAsync(string content, CancellationToken cancellationToken)
