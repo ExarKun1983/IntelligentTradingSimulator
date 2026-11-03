@@ -138,9 +138,16 @@ public sealed partial class GitHubRepositoryApi
         return await ReadJsonAsync(response, token);
     }
 
-    private async Task<JsonDocument> GetGlobalAsync(string path, CancellationToken token)
+    internal async Task<JsonDocument> GetGlobalAsync(string path, CancellationToken token)
     {
         using var response = await client.GetAsync(path, HttpCompletionOption.ResponseHeadersRead, token);
+        return await ReadJsonAsync(response, token);
+    }
+
+    internal async Task<JsonDocument> PostGlobalAsync(string path, object payload, CancellationToken token)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(payload) };
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
         return await ReadJsonAsync(response, token);
     }
 

@@ -50,6 +50,7 @@ public sealed class IssueState
     public bool Ready { get; set; }
     public bool ActiveAuthorized { get; set; }
     public DateTimeOffset? ReadyAt { get; set; }
+    public DateTimeOffset? FeedbackSince { get; set; }
     public bool ReactivationRequired { get; set; }
     public bool Paused { get; set; }
     public string? HoldReason { get; set; }
@@ -160,6 +161,7 @@ public sealed class EffectIntent
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
     public string? StatusBody { get; set; }
+    public string? TaskPrompt { get; set; }
 }
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
@@ -170,6 +172,7 @@ public sealed class EffectIntent
 [JsonDerivedType(typeof(Pause), "pause")]
 [JsonDerivedType(typeof(Reactivate), "reactivate")]
 [JsonDerivedType(typeof(TaskCompleted), "task-completed")]
+[JsonDerivedType(typeof(TaskStopped), "task-stopped")]
 [JsonDerivedType(typeof(HeadChanged), "head-changed")]
 [JsonDerivedType(typeof(CiResult), "ci-result")]
 [JsonDerivedType(typeof(ReviewResult), "review-result")]
@@ -185,6 +188,7 @@ public sealed record Resume : EventData;
 public sealed record Pause(string Reason) : EventData;
 public sealed record Reactivate(string Reason) : EventData;
 public sealed record TaskCompleted(string TaskId, int PullRequest, string Sha) : EventData;
+public sealed record TaskStopped(string TaskId, string Reason) : EventData;
 public sealed record HeadChanged(int PullRequest, string Sha) : EventData;
 public sealed record CiResult(string RunId, string TaskId, int Round, int PullRequest, string Sha, bool Green,
     List<Finding>? Blockers = null) : EventData;

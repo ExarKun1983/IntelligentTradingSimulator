@@ -18,6 +18,10 @@ public interface IEffectAdapter
 
 // Only deliberately injected offline fakes may simulate agent launch effects.
 public interface IOfflineEffectAdapter : IEffectAdapter { }
+public interface IVerifiedAgentEffectAdapter : IEffectAdapter
+{
+    bool AgentEffectsAuthorized { get; }
+}
 
 public sealed record ReconcileOptions(
     bool DryRun = true,
@@ -87,7 +91,8 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                     options.MaximumConflicts, cancellationToken);
                 return new(resolved, decision.PendingEffects, false);
             }
-            var simulateAgents = options.AllowOfflineAgentSimulation && effects is IOfflineEffectAdapter;
+            var simulateAgents = options.AllowOfflineAgentSimulation && effects is IOfflineEffectAdapter ||
+                effects is IVerifiedAgentEffectAdapter { AgentEffectsAuthorized: true };
             var pending = snapshot.State.Outbox.Values.FirstOrDefault(e => e.Status == DeliveryStatus.Pending &&
                 (e.Kind is not (EffectKind.LaunchTask or EffectKind.RequestReview) || simulateAgents) &&
                 !snapshot.State.Outbox.Values.Any(other => other.Status == DeliveryStatus.Unknown) &&
