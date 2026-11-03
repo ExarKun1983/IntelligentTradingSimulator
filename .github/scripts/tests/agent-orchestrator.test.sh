@@ -106,11 +106,15 @@ gh_dispatch() {
         return 1
       fi
       append_json "$STATE/issue-$n.comments" "${all##*--body }"
-      echo "issue comment $n" >> "$STATE/calls.log" ;;
+      echo "issue comment $n token=${GH_TOKEN:-}" >> "$STATE/calls.log" ;;
     "issue edit")
       local label
       if [[ "$*" == *--remove-label* ]]; then
         label="${all##*--remove-label }"
+        if [ "$label" = "$READY_LABEL" ] && [ -f "$STATE/remove-ready-failure" ]; then
+          echo "simulated ready-label removal failure" >&2
+          return 1
+        fi
         if [ "$label" = "$TERMINAL_PENDING_LABEL" ] && [ -f "$STATE/terminal-record-inject-on-remove" ]; then
           append_json "$STATE/issue-$n.comments" \
             '<!-- agent-orchestrator:terminal-pending=146-2026-10-12T13-50-00Z pr=146 merged=false closed-at=2026-10-12T13:50:00Z -->'
@@ -274,6 +278,13 @@ check_contains "mapping persisted as marker in PR body" "<!-- agent-orchestrator
 check_contains "mapping comment posted on the Issue" "agent-orchestrator:pr=151" "$(jq -r '.[]' "$STATE/issue-39.comments")"
 
 reset_state
+add_issue 39
+add_pr 155 "" "2026-10-12T10:00:00Z"
+ACTIONS_TOKEN=actions-token resolve_issue 155 copilot/issue-39-x >/dev/null
+check "mapping writes use the trusted Actions token consumed by the reader" \
+  "issue comment 39 token=actions-token" "$(grep '^issue comment 39' "$STATE/calls.log")"
+
+reset_state
 add_issue 39; add_issue 40 "agent:working"; add_issue 41 "agent:working"
 add_pr 152 "Implement GitHub Issue #39: Track exits" "2026-10-12T10:00:00Z"
 check "body reference maps without branch number or single active Issue" "39" "$(resolve_issue 152 copilot/featuretrack-exit-reason 2>/dev/null)"
@@ -370,6 +381,20 @@ jq '. + [{event:"reopened",created_at:"2026-10-12T12:51:00Z"}]' "$STATE/issue-39
   && mv "$STATE/tmp" "$STATE/issue-39.events"
 handle_pr_closed 145 39 true "2026-10-12T12:50:00Z"
 check "terminal reconciliation preserves a human-reopened Issue" "OPEN" "$(cat "$STATE/issue-39.state")"
+
+reset_state
+add_issue 39 "$WORKING_LABEL" "$TERMINAL_PENDING_LABEL"
+issue_comment_fixture 39 '<!-- agent-orchestrator:pr=145 -->'
+issue_comment_fixture 39 '<!-- agent-orchestrator:terminal-pending=145-2026-10-12T12-50-00Z pr=145 merged=false closed-at=2026-10-12T12:50:00Z -->'
+add_pr 145 "reopened PR" "2026-10-12T10:00:00Z"
+if process_pending_terminal_issue 39 >/dev/null 2>&1; then r=reconciled; else r=stuck; fi
+check "reopened mapped PR retires stale closure without applying it" \
+  "reconciled agent:working" "$r $(labels_of 39)"
+check_contains "reopened closure is retired durably" "terminal-retired=145-" "$(jq -r '.[]' "$STATE/issue-39.comments")"
+check "reopened closure does not close or block the Issue" "OPEN 0" \
+  "$(cat "$STATE/issue-39.state") $(calls_matching 'issue close 39')"
+if reconcile_terminal_transitions >/dev/null 2>&1; then r=scheduled; else r=aborted; fi
+check "retired closure no longer aborts scheduled reconciliation" "scheduled" "$r"
 
 reset_state
 add_issue 39 "$WORKING_LABEL"
@@ -496,6 +521,13 @@ check "initial task launch clears ready state" "agent:working" "$(labels_of 39)"
 check "initial task launch persists its completion marker" "task-1" "$(agent_task_id 39)"
 if start_issue_task 39 "Add a feature" "Issue body" master >/dev/null 2>&1; then r=launched; else r=blocked; fi
 check "active initial task cannot be launched twice" "blocked 1" "$r $(grep -c '^task create' "$STATE/calls.log")"
+
+reset_state
+add_issue 39 "$READY_LABEL"
+touch "$STATE/remove-ready-failure"
+if start_issue_task 39 "Add a feature" "Issue body" master >/dev/null 2>&1; then r=launched; else r=blocked; fi
+check "failed ready-state transition prevents task creation and tracking" \
+  "blocked 0 0 agent:ready" "$r $(grep -c '^task create' "$STATE/calls.log" || true) $(grep -c 'task-id=' "$STATE/issue-39.comments" || true) $(labels_of 39)"
 
 reset_state
 add_issue 39 "$READY_LABEL"
@@ -715,6 +747,17 @@ process_review 145 39 abc123 >/dev/null
 check "replayed approval event has no duplicate side effect" "1 2" "$(calls_matching 'pr ready') $(calls_matching 'issue comment 39')"
 
 setup_review
+append_json "$STATE/pr-145.comments" \
+  '<!-- agent-orchestrator:ci-fix-attempt=3 -->'
+process_review 145 39 abc123 >/dev/null
+check "clean approved green transition resets the CI retry budget" \
+  "agent:review 0 1" "$(labels_of 39) $(ci_fix_attempt_count "$(pr_comments)") \
+$(grep -o 'ci-fix-green=abc123' <<< "$(pr_comments)" | wc -l)"
+process_review 145 39 abc123 >/dev/null
+check "replayed green approval does not duplicate its retry reset" "1" \
+  "$(grep -o 'ci-fix-green=abc123' <<< "$(pr_comments)" | wc -l)"
+
+setup_review
 set_thread "Advisory: consider renaming this helper." abc123
 process_review 145 39 abc123 >/dev/null
 check "explicit approval treats inline suggestion as advisory" "agent:review 0" "$(labels_of 39) $(grep -c '^task create' "$STATE/calls.log" || true)"
@@ -793,6 +836,18 @@ check "review submitted before rebuttal evidence cannot satisfy the new round" "
 review_fixture "Approved after rebuttal" abc123 "2026-10-12T13:31:00Z" APPROVED
 if current_copilot_review 145 abc123 39 >/dev/null 2>&1; then r=fresh-review; else r=no-review; fi
 check "review submitted after rebuttal evidence remains eligible" "fresh-review" "$r"
+
+setup_review
+add_task task-1 completed "2026-10-12T13:25:00Z"
+feedback="feedbackmultipleresponses"
+record_agent_task 39 task-1 abc123 44 "$feedback"
+append_json "$STATE/pr-145.comments" \
+  "<!-- agent-orchestrator:response-used-content=hash-a finding=aaa feedback=$feedback task=task-1 response=45 response-at=2026-10-12T13:30:00Z -->"
+append_json "$STATE/pr-145.comments" \
+  "<!-- agent-orchestrator:response-used-content=hash-z finding=zzz feedback=$feedback task=task-1 response=46 response-at=2026-10-12T13:26:00Z -->"
+review_fixture "Approved before the latest rebuttal" abc123 "2026-10-12T13:27:00Z" APPROVED
+if current_copilot_review 145 abc123 39 >/dev/null 2>&1; then r=accepted; else r=rejected; fi
+check "review freshness uses the maximum response timestamp for the task" "rejected" "$r"
 
 setup_review
 review_fixture $'Blocking findings: None\n\nAdvisory: consider renaming this helper.' abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
@@ -1158,6 +1213,22 @@ jq --slurpfile response "$STATE/copilot-response.json" '. + [$response[0]]' "$ST
   && mv "$STATE/tmp" "$STATE/pr-145.comments"
 if completed_round_progress 145 39 abc123; then r=progress; else r=stalled; fi
 check "completed human feedback handoff can submit substantive review evidence" "progress" "$r"
+
+setup_review
+review_fixture "Changes requested" abc123 "2026-10-12T13:20:00Z" CHANGES_REQUESTED
+set_thread "[blocking] Fix the null dereference." abc123
+process_review 145 39 abc123 >/dev/null
+add_task task-1 completed "2026-10-12T13:25:00Z"
+record_human_feedback_event 145 review-pending-ai-round abc123 review \
+  "Please also handle this separate edge case."
+if process_human_feedback 145 39 >/dev/null 2>&1; then r=handed-off; else rc=$?; [ "$rc" -eq 3 ] && r=deferred || r=failed; fi
+check "pending human feedback cannot bypass an unsubstantiated AI-fix round" \
+  "handed-off 1 agent:blocked" "$r $(grep -c '^task create' "$STATE/calls.log") $(labels_of 39)"
+check "failed AI round leaves human event pending and preserves finding identity" \
+  "no yes no" \
+  "$(if grep -Fq 'human-feedback-processed=review-pending-ai-round' <<< "$(pr_comments)"; then echo yes; else echo no; fi) \
+$(if grep -Fq 'agent-orchestrator:finding=' <<< "$(pr_comments)"; then echo yes; else echo no; fi) \
+$(if grep -Fq 'agent-orchestrator:response-used-content=' <<< "$(pr_comments)"; then echo yes; else echo no; fi)"
 
 setup_review
 add_task task-initial in_progress
