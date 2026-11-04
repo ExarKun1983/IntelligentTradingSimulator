@@ -111,7 +111,7 @@ public static class GitHubLiveCommand
             output.WriteLine(JsonSerializer.Serialize(new { Mode = "github-live", Result = result?.Reason.ToString() }, StateJson.Options));
             return 0;
         }
-        catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException or
+        catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or InvalidOperationException or
             ArgumentException or UnauthorizedAccessException or KeyNotFoundException or HttpRequestException or
             OperationCanceledException or FormatException or OverflowException)
         {

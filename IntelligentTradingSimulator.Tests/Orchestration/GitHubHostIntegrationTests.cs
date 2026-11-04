@@ -37,6 +37,27 @@ public sealed class GitHubHostIntegrationTests
         Assert.Empty(fixture.State.Inbox);
     }
 
+    [Fact]
+    public async Task ActionsBotProjectionIsIgnoredWithoutRequiringBotCollaboratorPermission()
+    {
+        var fixture = new ApiFixture { BotNotification = true };
+        using var client = fixture.Client();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1),
+            new GitStateStore(new GitHubGitTransport(client, "owner/repo"), "owner/repo"), new FixedClock());
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            sender = new { id = GitHubLiveCredentials.ProjectionActorId, login = GitHubLiveCredentials.ProjectionLogin, type = "Bot" },
+            issue = new { id = 70, number = 7 }, action = "labeled", label = new { name = "agent:ready" }
+        });
+        var result = await host.PreviewAsync(payload, "issues", "44", 1, 1, Now,
+            [GitHubLiveCredentials.ProjectionActorId]);
+        Assert.Empty(result.LastReconciliation!.State.Inbox);
+        Assert.Empty(result.LastReconciliation.State.Issues);
+        Assert.DoesNotContain(fixture.Requests, request => request.Path.Contains("/collaborators/"));
+        Assert.All(fixture.Requests, request => Assert.Equal("GET", request.Method));
+    }
+
     [Theory]
     [InlineData("repository")]
     [InlineData("actor")]
@@ -345,6 +366,7 @@ public sealed class GitHubHostIntegrationTests
         public List<string> Labels { get; } = ["agent:ready"];
         public string? Corruption { get; init; }
         public bool MissingState { get; init; }
+        public bool BotNotification { get; init; }
         public bool LoseWriteResponse { get; init; }
         public bool AddConcurrentLabel { get; set; }
         public bool Closed { get; set; }
@@ -373,8 +395,10 @@ public sealed class GitHubHostIntegrationTests
             else if (path == prefix + "actions/runs/44") result = new
             {
                 @event = "issues", path = Corruption == "workflow" ? "untrusted.yml" : ".github/workflows/agent-state-machine.yml",
-                actor = new { id = Corruption == "run-actor" ? 66 : 55 }
+                actor = new { id = BotNotification ? GitHubLiveCredentials.ProjectionActorId : Corruption == "run-actor" ? 66 : 55 }
             };
+            else if (Uri.UnescapeDataString(path) == "/users/github-actions[bot]")
+                result = new { id = GitHubLiveCredentials.ProjectionActorId, type = "Bot" };
             else if (path == "/users/maintainer") result = new { id = Corruption == "actor" ? 66 : 55, type = "User" };
             else if (path == prefix + "collaborators/maintainer/permission")
                 result = new { permission = Corruption == "permission" ? "read" : "write", user = new { id = Corruption == "permission-user" ? 66 : 55 } };
