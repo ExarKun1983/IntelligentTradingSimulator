@@ -99,6 +99,15 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 if (issue.ActiveTaskId != completed.TaskId || !issue.Tasks.TryGetValue(completed.TaskId, out var task) ||
                     !task.LaunchConfirmed || task.Status != TaskStatus.Running)
                     throw new InvalidOperationException("Completion does not match a confirmed active task.");
+                try
+                {
+                    TaskTerminalRecovery.ValidateCandidateSha(completed.Evidence, task, completed.PullRequest, completed.Sha);
+                }
+                catch (InvalidDataException exception)
+                {
+                    throw new InvalidOperationException("Completion lacks valid bounded candidate-SHA evidence.", exception);
+                }
+                task.CandidateShaEvidence = completed.Evidence;
                 task.FinalSha = completed.Sha;
                 task.Status = TaskStatus.AwaitingHeadConfirmation;
                 break;
@@ -737,9 +746,21 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         issue.Ready = false;
         CancelPendingWork(state, issue);
     }
-    private static bool CompletedTaskMatches(IssueState issue, string taskId, int round, string sha) =>
-        issue.ActiveTaskId == taskId && issue.Tasks.TryGetValue(taskId, out var task) && task.LaunchConfirmed &&
-        task.Status == TaskStatus.Completed && task.Round == round && task.FinalSha == sha;
+    private static bool CompletedTaskMatches(IssueState issue, string taskId, int round, string sha)
+    {
+        if (issue.ActiveTaskId != taskId || !issue.Tasks.TryGetValue(taskId, out var task) ||
+            !task.LaunchConfirmed || task.Status != TaskStatus.Completed || task.Round != round ||
+            task.FinalSha != sha || issue.PullRequest is not { } pullRequest) return false;
+        try
+        {
+            TaskTerminalRecovery.ValidateCandidateSha(task.CandidateShaEvidence, task, pullRequest, sha);
+            return true;
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
+    }
 
     private static void ValidateReview(ReviewClassification classification, List<Finding> findings, List<FindingResponse> responses)
     {

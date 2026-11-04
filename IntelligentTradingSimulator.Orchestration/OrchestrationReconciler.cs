@@ -179,7 +179,8 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                     : intent.StatusBody == StatusProjection.Render(issue));
         var matchesCompletedTask = intent.TaskId is { } taskId && issue.ActiveTaskId == taskId &&
             issue.Tasks.TryGetValue(taskId, out var task) && task.LaunchConfirmed && task.Status == TaskStatus.Completed &&
-            task.FinalSha == intent.Sha && task.Round == intent.Round;
+            task.FinalSha == intent.Sha && task.Round == intent.Round &&
+            CandidateShaMatches(issue, task, intent.Sha);
         var eligible = intent.Kind switch
         {
             EffectKind.LaunchTask => issue.ActiveTaskId == intent.TaskId && intent.TaskId is { } launchTaskId &&
@@ -211,6 +212,20 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                 task.SourceSha is { Length: 40 or 64 } sha && sha.All(Uri.IsHexDigit) && sha == intent.Sha,
             _ => false
         };
+
+    private static bool CandidateShaMatches(IssueState issue, TaskIdentity task, string? sha)
+    {
+        if (issue.PullRequest is not { } pullRequest || sha is null) return false;
+        try
+        {
+            TaskTerminalRecovery.ValidateCandidateSha(task.CandidateShaEvidence, task, pullRequest, sha);
+            return true;
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
+    }
 }
 
 public static class UpstreamIdentity

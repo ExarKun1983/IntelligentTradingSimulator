@@ -13,7 +13,8 @@ public sealed record GitHubCiRoute(long WorkflowId, string Ref, string WorkflowS
 
 /// <summary>Dispatches the trusted workflow, never a workflow definition from the coding branch.</summary>
 public sealed class GitHubCiAdapter(GitHubRepositoryApi api, IStateStore store, GitHubCiRoute route,
-    TimeProvider? clock = null, GitHubCiApproval? approval = null) : IEffectAdapter
+    TimeProvider? clock = null, GitHubCiApproval? approval = null,
+    ICandidateShaValidator? candidateShaValidator = null) : IEffectAdapter
 {
     public const string WorkflowPath = ".github/workflows/agent-managed-ci.yml";
     private readonly TimeProvider clock = clock ?? TimeProvider.System;
@@ -27,13 +28,16 @@ public sealed class GitHubCiAdapter(GitHubRepositoryApi api, IStateStore store, 
         ValidateEligibility(state, issue, intent);
         if (issue.Ci!.DispatchBoundary is not null) throw new InvalidDataException("Prepared CI dispatch is lookup-only.");
         await VerifyRouteAsync(token);
+        await ValidateCandidateShaAsync(state, issue, token);
         if (!await LiveEligibleAsync(issue, token)) throw new InvalidDataException("CI head or open mapping changed.");
         var boundary = new CiDispatchBoundary(route.WorkflowId, route.WorkflowSha, route.Ref, Correlation(intent), clock.GetUtcNow());
         await SaveBoundaryAsync(intent, boundary, token);
         var latest = (await store.LoadAsync(token)).State;
-        ValidateEligibility(latest, ValidateIntent(latest, intent), intent);
+        var latestIssue = ValidateIntent(latest, intent);
+        ValidateEligibility(latest, latestIssue, intent);
         await VerifyRouteAsync(token);
-        if (!await LiveEligibleAsync(issue, token)) throw new InvalidDataException("CI head changed before dispatch.");
+        await ValidateCandidateShaAsync(latest, latestIssue, token);
+        if (!await LiveEligibleAsync(latestIssue, token)) throw new InvalidDataException("CI head changed before dispatch.");
         latest = (await store.LoadAsync(token)).State;
         ValidateEligibility(latest, ValidateIntent(latest, intent), intent);
         using var response = await api.WriteAsync(HttpMethod.Post, $"actions/workflows/{route.WorkflowId}/dispatches",
@@ -66,6 +70,7 @@ public sealed class GitHubCiAdapter(GitHubRepositoryApi api, IStateStore store, 
             !state.Outbox.TryGetValue(ci.IntentId, out var intent) || intent.Status != DeliveryStatus.Succeeded)
             return null;
         await api.VerifyRepositoryAsync(token);
+        await ValidateCandidateShaAsync(state, issue, token);
         var eligibleHead = await LiveEligibleAsync(issue, token) && issue.HeadSha == ci.Sha;
         using var run = await api.GetAsync($"actions/runs/{runId}", token);
         var root = run.RootElement;
@@ -141,6 +146,10 @@ public sealed class GitHubCiAdapter(GitHubRepositoryApi api, IStateStore store, 
             !task.LaunchConfirmed || task.Round != intent.Round || task.FinalSha != intent.Sha)
             throw new InvalidDataException("CI requires explicit completed task/final SHA with no feedback or hold.");
     }
+
+    private Task ValidateCandidateShaAsync(RepositoryState state, IssueState issue, CancellationToken token) =>
+        candidateShaValidator?.ValidateCandidateShaAsync(state, issue, token) ??
+        throw new InvalidDataException("Candidate SHA validator is unavailable.");
 
     private async Task VerifyRouteAsync(CancellationToken token)
     {

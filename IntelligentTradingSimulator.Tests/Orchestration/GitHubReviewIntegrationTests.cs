@@ -11,6 +11,8 @@ public sealed class GitHubReviewIntegrationTests
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
     private static readonly string Sha = new('a', 40);
     private static readonly GitHubReviewApproval Approved = new(true, true, true, true);
+    private static GitHubReviewAdapter CreateAdapter(HttpClient client, Store store) =>
+        new(new(client, "owner/repo", 1), store, new Clock(), Approved, new CandidateValidator());
 
     [Fact]
     public async Task ConcurrentAdapterExecutorsCannotRepeatNonIdempotentRequest()
@@ -18,7 +20,7 @@ public sealed class GitHubReviewIntegrationTests
         var store = new Store(Eligible());
         var handler = new Api { ConcurrentPreflight = true };
         using var client = handler.Client();
-        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         async Task<bool> Execute()
         {
             try { await adapter.ExecuteAsync(store.State.Outbox["review"], default); return true; }
@@ -38,7 +40,7 @@ public sealed class GitHubReviewIntegrationTests
         var handler = new Api();
         using var client = handler.Client();
         await Assert.ThrowsAsync<InvalidDataException>(() =>
-            new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(), Approved)
+            CreateAdapter(client, store)
                 .ExecuteAsync(store.State.Outbox["review"], default));
         Assert.False(store.State.Issues[7].Review!.RequestBoundary!.Confirmed);
         Assert.Equal(0, handler.Posts);
@@ -50,7 +52,7 @@ public sealed class GitHubReviewIntegrationTests
         var store = new Store(Eligible());
         var handler = new Api { Paginated = true };
         using var client = handler.Client();
-        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
         Assert.Equal(100, store.State.Issues[7].Review!.RequestBoundary!.ExistingReviewIds.Count);
         store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
@@ -61,6 +63,35 @@ public sealed class GitHubReviewIntegrationTests
         Assert.Contains(handler.Requests, request => request.Contains("page=2"));
     }
 
+    [Fact]
+    public async Task CandidateChangePreventsReviewResultAcceptance()
+    {
+        var dispatchStore = new Store(Eligible());
+        var dispatchHandler = new Api();
+        using var dispatchClient = dispatchHandler.Client();
+        var dispatchAdapter = new GitHubReviewAdapter(new(dispatchClient, "owner/repo", 1), dispatchStore,
+            new Clock(), Approved, new CandidateValidator { Reject = true });
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            dispatchAdapter.ExecuteAsync(dispatchStore.State.Outbox["review"], default));
+        Assert.Equal(0, dispatchHandler.Posts);
+
+        var state = Eligible();
+        var issue = state.Issues[7];
+        issue.Review!.ReviewId = "review-request:review";
+        issue.Review.RequestBoundary = new(55, "BOT_node", Now, [], Confirmed: true);
+        state.Outbox["review"].Status = DeliveryStatus.Succeeded;
+        state.Outbox["review"].ExternalId = "review-request:review";
+        var store = new Store(state);
+        var handler = new Api { HasOutput = true };
+        using var client = handler.Client();
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(), Approved,
+            new CandidateValidator { Reject = true });
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => adapter.ReadEventAsync(store.State, issue, default));
+        Assert.Null(issue.Review.Classification);
+        Assert.DoesNotContain(handler.Requests, request => request.EndsWith("/reviews", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -69,7 +100,7 @@ public sealed class GitHubReviewIntegrationTests
         var store = new Store(Eligible());
         var handler = new Api { Paginated = true };
         using var client = handler.Client();
-        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         if (afterRequest)
         {
             var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
@@ -94,7 +125,7 @@ public sealed class GitHubReviewIntegrationTests
         var store = new Store(Eligible());
         var handler = new Api();
         using var client = handler.Client();
-        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
         store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
         handler.HasOutput = true;
@@ -119,7 +150,7 @@ public sealed class GitHubReviewIntegrationTests
         store.State.Outbox["review"].Status = DeliveryStatus.Pending;
         var handler = new Api { PublishOutputAfterPost = true };
         using var client = handler.Client();
-        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         var worker = new OrchestrationWorker(new(new Allow()), new Clock());
         var result = await worker.RunAsync(store, new Events(adapter, feedback), new Observations(),
             new Effects(adapter), new(false, true, true, true),
@@ -189,7 +220,7 @@ public sealed class GitHubReviewIntegrationTests
         var handler = new Api();
         using var client = handler.Client();
         await Assert.ThrowsAsync<InvalidDataException>(() =>
-            new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(), Approved).ExecuteAsync(candidate, default));
+            CreateAdapter(client, store).ExecuteAsync(candidate, default));
         Assert.Empty(handler.Requests);
         Assert.Null(store.State.Issues[7].Review!.RequestBoundary);
     }
@@ -207,7 +238,7 @@ public sealed class GitHubReviewIntegrationTests
         var handler = new Api { Corruption = corruption };
         using var client = handler.Client();
         await Assert.ThrowsAsync<InvalidDataException>(() =>
-            new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(), Approved)
+            CreateAdapter(client, store)
                 .ExecuteAsync(store.State.Outbox["review"], default));
         Assert.Equal(0, handler.Posts);
         Assert.Null(store.State.Issues[7].Review!.RequestBoundary);
@@ -226,7 +257,7 @@ public sealed class GitHubReviewIntegrationTests
             Assert.Equal(new long[] { 100 }, boundary.ExistingReviewIds);
         };
         using var client = handler.Client();
-        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
         Assert.Equal("review-request:review", outcome.ExternalId);
         Assert.True(store.State.Issues[7].Review!.RequestBoundary!.Confirmed);
@@ -252,7 +283,7 @@ public sealed class GitHubReviewIntegrationTests
         var handler = new Api { Corruption = corruption };
         if (corruption == "save-confirmation") handler.BeforePost = () => store.FailWrites = true;
         using var client = handler.Client();
-        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         await Assert.ThrowsAnyAsync<Exception>(() => adapter.ExecuteAsync(store.State.Outbox["review"], default));
         store.FailWrites = false;
         store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", new(DeliveryStatus.Unknown), Now);
@@ -272,7 +303,7 @@ public sealed class GitHubReviewIntegrationTests
         var handler = new Api();
         using var client = handler.Client();
         await Assert.ThrowsAsync<IOException>(() =>
-            new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(), Approved)
+            CreateAdapter(client, store)
                 .ExecuteAsync(store.State.Outbox["review"], default));
         Assert.Equal(0, handler.Posts);
     }
@@ -287,7 +318,7 @@ public sealed class GitHubReviewIntegrationTests
         var store = new Store(Eligible());
         var handler = new Api { ReviewState = reviewState };
         using var client = handler.Client();
-        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
         store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
         handler.HasOutput = true;
@@ -321,7 +352,7 @@ public sealed class GitHubReviewIntegrationTests
         var store = new Store(Eligible());
         var handler = new Api();
         using var client = handler.Client();
-        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
         store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
         handler.HasOutput = true;
@@ -341,7 +372,7 @@ public sealed class GitHubReviewIntegrationTests
         var store = new Store(Eligible());
         var handler = new Api();
         using var client = handler.Client();
-        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
         store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
         handler.HasOutput = true;
@@ -361,7 +392,9 @@ public sealed class GitHubReviewIntegrationTests
             Number = 7, Phase = Phase.REVIEW_PENDING, ActiveAuthorized = true, PullRequest = 17, HeadSha = Sha,
             ActiveTaskId = "task", Round = 1,
             Tasks = new() { ["task"] = new() { Id = "task", Status = TaskStatus.Completed, LaunchConfirmed = true,
-                FinalSha = Sha, Round = 1 } },
+                ExternalId = "remote-task", FinalSha = Sha, Round = 1,
+                CandidateShaEvidence = new(TaskTerminalRecovery.CandidateShaEvidenceVersion,
+                    TaskTerminalRecovery.CandidateShaPolicy, "task", "remote-task", ["session"], 17, Sha) } },
             Ci = new() { IntentId = "ci", TaskId = "task", Sha = Sha, Round = 1, Green = true, RunId = "run" },
             Review = new() { IntentId = "review", TaskId = "task", Sha = Sha, Round = 1 }
         };
@@ -405,6 +438,18 @@ public sealed class GitHubReviewIntegrationTests
                 ? Task.FromResult(new EffectOutcome(DeliveryStatus.Succeeded, "offline-projection"))
                 : throw new InvalidOperationException("No additional coding/CI effects allowed.");
         public Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken token) => adapter.ReconcileAsync(intent, token);
+    }
+    private sealed class CandidateValidator : ICandidateShaValidator
+    {
+        public bool Reject { get; init; }
+
+        public Task ValidateCandidateShaAsync(RepositoryState state, IssueState issue, CancellationToken token)
+        {
+            if (Reject) throw new InvalidDataException("Candidate is no longer current.");
+            var task = issue.Tasks[issue.ActiveTaskId!];
+            TaskTerminalRecovery.ValidateCandidateSha(task.CandidateShaEvidence, task, issue.PullRequest!.Value, task.FinalSha!);
+            return Task.CompletedTask;
+        }
     }
     private sealed class Allow : IAuthorizationPolicy { public bool IsAuthorized(OrchestrationEvent message) => true; }
     private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now; }

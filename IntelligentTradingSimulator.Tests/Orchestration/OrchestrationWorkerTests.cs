@@ -621,7 +621,14 @@ public sealed class OrchestrationWorkerTests
                         issue.Tasks[id].Status is TaskStatus.Executing or TaskStatus.Unknown &&
                         outcomes.ContainsKey(state.Outbox.Values.Single(effect =>
                             effect.Kind == EffectKind.LaunchTask && effect.TaskId == id).Id)))
-                    Add(new TaskCompleted(id, number + 10, Head(number)), $"completed:{id}", number);
+                {
+                    var task = issue.Tasks[id];
+                    var launch = state.Outbox.Values.Single(effect => effect.Kind == EffectKind.LaunchTask && effect.TaskId == id);
+                    var evidence = new CandidateShaEvidence(TaskTerminalRecovery.CandidateShaEvidenceVersion,
+                        TaskTerminalRecovery.CandidateShaPolicy, id, task.ExternalId ?? $"external:{launch.Id}",
+                        [$"session:{id}"], number + 10, Head(number));
+                    Add(new TaskCompleted(id, number + 10, Head(number), evidence), $"completed:{id}", number);
+                }
                 if (issue.Ci is { Green: null } ci &&
                     (ci.RunId ?? UnpublishedId(ci.IntentId)) is { } runId)
                 {

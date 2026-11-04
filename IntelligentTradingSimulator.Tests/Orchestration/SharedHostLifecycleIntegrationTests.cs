@@ -163,7 +163,7 @@ public sealed class SharedHostLifecycleIntegrationTests
     }
 
     [Fact]
-    public async Task ScheduledWakeWithoutIndependentFinalShaRemainsBlockedAndCannotDispatchCi()
+    public async Task ScheduledWakeDispatchesOnlyThePersistedBoundedCandidateSha()
     {
         using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
         using var fixture = new PipelineApi(taskApi);
@@ -179,13 +179,13 @@ public sealed class SharedHostLifecycleIntegrationTests
             new(10, Definition), new(true, true, true, true), 99, "master", 55, TaskApproval, Bounded,
             reviewApproval: ReviewApproval, ciRoute: CiRoute, ciApproval: CiApproval,
             statusPublisher: Publisher, statusApproval: StatusApproval);
-        var held = store.State.Issues[7];
-        Assert.Equal(Phase.BLOCKED, held.Phase);
+        var issue = store.State.Issues[7];
+        var task = Assert.Single(issue.Tasks.Values);
+        Assert.Equal(Phase.CI_PENDING, issue.Phase);
         Assert.Equal(7, store.State.AdmittedIssue);
-        Assert.Contains("authoritative task-bound evidence", held.HoldReason!);
-        Assert.Null(held.Ci);
-        Assert.Null(Assert.Single(held.Tasks.Values).FinalSha);
-        Assert.Equal(0, fixture.CiDispatches);
+        Assert.Equal(Head, task.CandidateShaEvidence!.ObservedHeadSha);
+        Assert.Equal(task.CandidateShaEvidence.ObservedHeadSha, issue.Ci!.Sha);
+        Assert.Equal(1, fixture.CiDispatches);
         Assert.Equal(0, fixture.ReviewRequests);
         Assert.DoesNotContain(fixture.Statuses, status => status.GetProperty("state").GetString() == "success");
         Assert.Single(taskApi.Writes, write => write.Path.StartsWith("/agents/"));

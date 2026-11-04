@@ -50,9 +50,15 @@ public sealed class OrchestrationCoreTests
     {
         var reducer = Reducer();
         state = SucceedEffect(state, EffectKind.LaunchTask, $"remote-task-{head}");
-        state = reducer.Apply(state, Event(new TaskCompleted(state.Issues[7].ActiveTaskId!, 11, Sha(head)), $"completed:{head}"));
+        var taskId = state.Issues[7].ActiveTaskId!;
+        state = reducer.Apply(state, Event(Completion(state.Issues[7], taskId, 11, Sha(head)), $"completed:{head}"));
         return reducer.Reconcile(state, Live(state, Sha(head))).State;
     }
+
+    private static TaskCompleted Completion(IssueState issue, string taskId, int pullRequest, string sha) =>
+        new(taskId, pullRequest, sha, new(TaskTerminalRecovery.CandidateShaEvidenceVersion,
+            TaskTerminalRecovery.CandidateShaPolicy, taskId, issue.Tasks[taskId].ExternalId!,
+            [$"session:{taskId}"], pullRequest, sha));
 
     private static RepositoryState FinishCi(RepositoryState state, bool green, string run)
     {
@@ -180,7 +186,7 @@ public sealed class OrchestrationCoreTests
         var reducer = Reducer();
         var state = SucceedEffect(Admitted(), EffectKind.LaunchTask, "task");
         var taskId = state.Issues[7].ActiveTaskId!;
-        state = reducer.Apply(state, Event(new TaskCompleted(taskId, 11, Sha(2)), "complete"));
+        state = reducer.Apply(state, Event(Completion(state.Issues[7], taskId, 11, Sha(2)), "complete"));
         Assert.Null(state.Issues[7].Ci);
         var mismatch = reducer.Reconcile(state, Live(state, Sha(3))).State;
         Assert.Equal(Phase.BLOCKED, mismatch.Issues[7].Phase);
@@ -189,6 +195,58 @@ public sealed class OrchestrationCoreTests
         Assert.Equal(Phase.CI_PENDING, matched.Issues[7].Phase);
         Assert.Equal(Sha(2), matched.Issues[7].Ci!.Sha);
         Assert.Equal(TaskStatus.Completed, matched.Issues[7].Tasks[taskId].Status);
+        Assert.Equal(TaskTerminalRecovery.CandidateShaPolicy,
+            matched.Issues[7].Tasks[taskId].CandidateShaEvidence!.Policy);
+        Assert.Equal(StateJson.Serialize(matched),
+            StateJson.Serialize(StateJson.Deserialize(StateJson.Serialize(matched))));
+
+        var raced = reducer.Reconcile(matched, Live(matched, Sha(3))).State;
+        var racedHead = raced.Issues[7];
+        Assert.Equal(Phase.BLOCKED, racedHead.Phase);
+        Assert.All(raced.Outbox.Values.Where(effect => effect.Kind == EffectKind.RunCi),
+            effect => Assert.NotEqual(DeliveryStatus.Pending, effect.Status));
+        Assert.Equal(Sha(2), racedHead.Tasks[taskId].CandidateShaEvidence!.ObservedHeadSha);
+    }
+
+    [Theory]
+    [InlineData("task")]
+    [InlineData("external-task")]
+    [InlineData("session")]
+    [InlineData("pull-request")]
+    [InlineData("sha")]
+    [InlineData("policy")]
+    public void CandidateShaEvidenceRejectsIdentityAndMappingMismatches(string mismatch)
+    {
+        var state = SucceedEffect(Admitted(), EffectKind.LaunchTask, "remote-task");
+        var taskId = state.Issues[7].ActiveTaskId!;
+        var candidate = new CandidateShaEvidence(TaskTerminalRecovery.CandidateShaEvidenceVersion,
+            TaskTerminalRecovery.CandidateShaPolicy, taskId, "remote-task", ["session"], 11, Sha(2));
+        candidate = mismatch switch
+        {
+            "task" => candidate with { TaskId = "other-task" },
+            "external-task" => candidate with { ExternalTaskId = "other-remote-task" },
+            "session" => candidate with { SessionIds = [] },
+            "pull-request" => candidate with { PullRequest = 12 },
+            "sha" => candidate with { ObservedHeadSha = Sha(3) },
+            "policy" => candidate with { Policy = "unknown-policy" },
+            _ => candidate
+        };
+        Assert.Throws<InvalidOperationException>(() => Reducer().Apply(state,
+            Event(new TaskCompleted(taskId, 11, Sha(2), candidate), "candidate-mismatch")));
+    }
+
+    [Fact]
+    public void CompletionEvidenceReplayIsIdempotentAndConflictingReplayIsRejected()
+    {
+        var state = SucceedEffect(Admitted(), EffectKind.LaunchTask, "remote-task");
+        var taskId = state.Issues[7].ActiveTaskId!;
+        var completed = Completion(state.Issues[7], taskId, 11, Sha(2));
+        var message = Event(completed, "completed");
+        var reducer = Reducer();
+        var recorded = reducer.Apply(state, message);
+        Assert.Equal(StateJson.Serialize(recorded), StateJson.Serialize(reducer.Apply(recorded, message)));
+        Assert.Throws<InvalidOperationException>(() => reducer.Apply(recorded,
+            message with { Data = completed with { Sha = Sha(3) } }));
     }
 
     [Fact]
@@ -269,7 +327,7 @@ public sealed class OrchestrationCoreTests
         Assert.Equal(Phase.FIX_PENDING, state.Issues[7].Phase);
         Assert.False(state.Issues[7].ReactivationRequired);
         Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.RunCi);
-        state = reducer.Apply(state, Event(new TaskCompleted(state.Issues[7].ActiveTaskId!, 11, Sha(3)), "repair-done"));
+        state = reducer.Apply(state, Event(Completion(state.Issues[7], state.Issues[7].ActiveTaskId!, 11, Sha(3)), "repair-done"));
         state = reducer.Reconcile(state, Live(state, Sha(3))).State;
         Assert.Equal(Phase.CI_PENDING, state.Issues[7].Phase);
         Assert.Equal(2, state.Outbox.Values.Count(effect => effect.Kind == EffectKind.RunCi));
@@ -758,7 +816,7 @@ public sealed class OrchestrationCoreTests
         var initialTask = state.Issues[7].ActiveTaskId!;
         state = reducer.Apply(state, Event(new HumanFeedback("Address this regression."), "comment:1"));
         state = reducer.Apply(state, Event(new HumanFeedback("Address this regression."), "comment:2"));
-        state = reducer.Apply(state, Event(new TaskCompleted(initialTask, 11, Sha(2)), "initial-complete"));
+        state = reducer.Apply(state, Event(Completion(state.Issues[7], initialTask, 11, Sha(2)), "initial-complete"));
         state = reducer.Reconcile(state, Live(state, Sha(2), ready: false)).State;
         Assert.DoesNotContain(state.Outbox.Values, effect => effect.Kind is EffectKind.RunCi or EffectKind.RequestReview);
         var child = state.Issues[7].Tasks[state.Issues[7].ActiveTaskId!];

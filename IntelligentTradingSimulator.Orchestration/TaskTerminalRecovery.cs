@@ -3,6 +3,8 @@ namespace IntelligentTradingSimulator.Orchestration;
 public static class TaskTerminalRecovery
 {
     public const string Documentation = "https://docs.github.com/en/rest/agent-tasks/agent-tasks#get-a-task-by-repo";
+    public const int CandidateShaEvidenceVersion = 1;
+    public const string CandidateShaPolicy = "bounded-candidate-sha-v1";
     public const string Limitation =
         "The preview API documents session state and completed_at, not irreversible task terminality. " +
         "Evidence records an ended-session snapshot only; operator resolution ends local tracking without " +
@@ -51,5 +53,19 @@ public static class TaskTerminalRecovery
             evidence.UpdatedAt < launch.CreatedAt || evidence.UpdatedAt > evidence.ObservedAt ||
             evidence.ResponseDigest is not { Length: 64 } || !evidence.ResponseDigest.All(Uri.IsHexDigit))
             throw new InvalidDataException("Task/session ended evidence is incomplete or contradictory.");
+    }
+
+    public static void ValidateCandidateSha(CandidateShaEvidence? evidence, TaskIdentity task,
+        int pullRequest, string sha)
+    {
+        if (evidence is null || evidence.Version != CandidateShaEvidenceVersion ||
+            evidence.Policy != CandidateShaPolicy || evidence.TaskId != task.Id ||
+            string.IsNullOrWhiteSpace(task.ExternalId) || evidence.ExternalTaskId != task.ExternalId ||
+            evidence.PullRequest != pullRequest || evidence.ObservedHeadSha != sha ||
+            sha is not { Length: 40 } || !sha.All(Uri.IsHexDigit) ||
+            evidence.SessionIds is null || evidence.SessionIds.Count is < 1 or > 100 ||
+            evidence.SessionIds.Any(id => string.IsNullOrWhiteSpace(id) || id.Length > 256) ||
+            evidence.SessionIds.Distinct(StringComparer.Ordinal).Count() != evidence.SessionIds.Count)
+            throw new InvalidDataException("Candidate SHA evidence is incomplete or mismatched.");
     }
 }

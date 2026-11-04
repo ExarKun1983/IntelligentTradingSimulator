@@ -17,6 +17,10 @@ public sealed class OrchestrationPersistenceTests
             ReviewResult => new Actor("review-service", ActorKind.ReviewService),
             _ => new Actor("maintainer", ActorKind.Human)
         }, Now, data);
+    private static TaskCompleted Completion(IssueState issue, string taskId, int pullRequest, string sha) =>
+        new(taskId, pullRequest, sha, new(TaskTerminalRecovery.CandidateShaEvidenceVersion,
+            TaskTerminalRecovery.CandidateShaPolicy, taskId, issue.Tasks[taskId].ExternalId!,
+            [$"session:{taskId}"], pullRequest, sha));
 
     [Theory]
     [InlineData(true, true, true, true)]
@@ -125,7 +129,7 @@ public sealed class OrchestrationPersistenceTests
         Assert.DoesNotContain("agent:ready", OrchestrationReducer.ProjectLabels(issue));
         observations.Ready = false;
         observations.HeadOverride = new string('b', 40);
-        await reconciler.DispatchAsync(store, Message(new TaskCompleted(taskId, 11, observations.HeadOverride), "completed"));
+        await reconciler.DispatchAsync(store, Message(Completion(issue, taskId, 11, observations.HeadOverride), "completed"));
         var ci = await reconciler.RunAsync(store, observations, adapter, Simulation);
         Assert.Equal(Phase.CI_PENDING, ci.State.Issues[7].Phase);
         Assert.Equal("external", ci.State.Issues[7].Ci!.RunId);
@@ -232,6 +236,28 @@ public sealed class OrchestrationPersistenceTests
         Assert.Equal(1, adapter.Executions);
         Assert.Equal(1, adapter.Recoveries);
         Assert.Equal(DeliveryStatus.Succeeded, recovered.State.Outbox["ci"].Status);
+    }
+
+    [Fact]
+    public async Task CandidateEvidenceSurvivesCrashBetweenCiIntentAndEffectAndRecoveryIsLookupOnly()
+    {
+        var store = new MemoryStore(CiPending());
+        var snapshot = await store.LoadAsync(default);
+        var executing = new OrchestrationReducer().MarkExecuting(snapshot.State, "ci", Now);
+        Assert.True(await store.TrySaveAsync(snapshot, executing, default));
+        var persisted = StateJson.Deserialize(StateJson.Serialize(store.Current));
+        var evidence = Assert.IsType<CandidateShaEvidence>(persisted.Issues[7].Tasks["task"].CandidateShaEvidence);
+        var adapter = new Effects(store);
+
+        var recovered = await new OrchestrationReconciler().RecoverInFlightAsync(store, adapter, Now, Enabled);
+
+        Assert.Equal(0, adapter.Executions);
+        Assert.Equal(1, adapter.Recoveries);
+        var recoveredEvidence = Assert.IsType<CandidateShaEvidence>(recovered!.Issues[7].Tasks["task"].CandidateShaEvidence);
+        Assert.Equal(evidence.ObservedHeadSha, recoveredEvidence.ObservedHeadSha);
+        Assert.Equal(evidence.Policy, recoveredEvidence.Policy);
+        Assert.Equal(evidence.SessionIds, recoveredEvidence.SessionIds);
+        Assert.Equal(Head, recovered.Outbox["ci"].Sha);
     }
 
     [Fact]
@@ -506,6 +532,9 @@ public sealed class OrchestrationPersistenceTests
                 ["task"] = new TaskIdentity
                 {
                     Id = "task", Status = TaskStatus.Completed, FinalSha = Head, SourceSha = Head,
+                    ExternalId = "remote-task",
+                    CandidateShaEvidence = new(TaskTerminalRecovery.CandidateShaEvidenceVersion,
+                        TaskTerminalRecovery.CandidateShaPolicy, "task", "remote-task", ["session"], 11, Head),
                     LaunchConfirmed = true, Round = 1
                 }
             },

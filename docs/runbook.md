@@ -1684,15 +1684,16 @@ event IDs/content are included. Do not pass an installation token to the task cl
 Completion requires an explicitly completed remote task, a complete nonempty session
 array with completed states, verified task/repository/creator identity, and a
 supported GitHub branch or pull artifact mapping to one open PR. The PR's numeric identity,
-repository, configured base ref, head ref and SHA are rechecked. **Those REST fields
-do not establish the task's final commit:** a later external push could change the
-same branch. Completion additionally requires an independent trusted
-`ITaskFinalHeadSource` matching the external task ID, complete session identities,
-PR and final SHA. The adapter compares that evidence with the live head; another
-observation must still confirm it before CI. No production final-head source has
-been verified or implemented, so the default host holds completed tasks rather
-than certifying their live heads. This is an activation blocker, not an API
-guarantee.
+repository, configured base ref, head ref and SHA are rechecked. The adapter persists
+version-1 `bounded-candidate-sha-v1` evidence with the local and remote task IDs,
+session IDs, PR number and observed PR head. A trusted `ITaskFinalHeadSource`, when
+available, must agree with this snapshot. Otherwise, the snapshot is only a bounded
+candidate: **these REST fields do not establish that the task produced the observed
+commit**, and a later push could change the same branch. Before CI dispatch/result
+acceptance and review-result acceptance, the remote task/session terminal state,
+task-artifact-to-PR mapping and exact saved head are revalidated. A mismatch or
+ambiguous response cannot authorize the next stage; it remains held or is observed
+again. CI dispatch uses only the saved candidate SHA.
 
 Pull artifacts with `data.id` and `data.global_id` now use a bounded, static,
 read-only GraphQL `node(id:)` query. `global_id` is an opaque **candidate** node ID:
@@ -1753,12 +1754,12 @@ described below and does not establish a lossless-delivery guarantee.
 `GitHubTaskIntegrationTests` uses mocked REST responses for approved/disabled host
 invocations, launch deduplication/replay, coding-only sequencing, session/artifact/PR
 contradictions, lost response and failed outcome-write recovery, repair prompt content,
-distinct/edited/unauthorized feedback and feedback priority. Completion fixtures
-additionally supply independent mocked task-final-head evidence. Coverage includes
-missing evidence, a later external push, user-token projection loops, new-PR feedback
-priority and reactivation batches. The task REST API alone is not claimed to satisfy
-the completion/SHA gate. All approvals in these tests apply solely to injected HTTP
-fakes. No live launch or user-work CI was performed.
+distinct/edited/unauthorized feedback and feedback priority. Completion fixtures persist
+the candidate record and cover changed task/session state, PR mapping, and head. Reducer
+tests cover evidence identity/policy validation and replay idempotency; persistence tests
+cover crash recovery from the saved CI intent without re-execution. All approvals in
+these tests apply solely to injected HTTP fakes. No live launch or user-work CI was
+performed.
 
 Additional mocked GraphQL/REST cases cover pull-only and combined-artifact
 resolution, int64 database IDs, absent/contradictory/error responses, current-head
@@ -1766,10 +1767,12 @@ changes, replay, canonical saved-ID recovery, and preserved hold/admission/effec
 counts. The real documented task schema still lacks any immutable final commit
 field. Session `head_ref`, `base_ref`, `completed_at`, and usage are not SHA evidence;
 current PR/ref heads, synthetic `merge_commit_sha`, UI logs and commit-to-session
-links are not completion-bound attestations. Maintainer action is to obtain a
-documented trusted completion-SHA source (or approve a separate requirement/design
-change), plus account access/cost verification—not to populate this source from
-today's head or turn on the workflow. Until then, completion remains blocked.
+links are not completion-bound attestations. The approved bounded fallback therefore
+records the live PR head only after the task and sessions are observed completed and
+the task artifacts uniquely map to that PR; it does not prove who produced that
+commit. Maintainers must retain that provenance limitation and independently verify
+account access/cost controls before any activation. It must not be described as a
+provider-attested task final SHA.
 
 PR association is now observed **independently of completion** through
 `ReadMappingEventAsync`/`TaskPrMapped`: confirmed task receipt, repository/creator,
@@ -2063,9 +2066,9 @@ managed run can authorize lifecycle progress.
   Attestation values are maintainer decisions, not capabilities established by code.
 - Require the dedicated managed status plus independent human approvals before
   approving managed ordinary-CI routing. Verify unmanaged/manual compatibility.
-- Obtain a documented authoritative task/session-bound final commit source, or
-  explicitly approve a separate requirement/design change. The live CLI supplies
-  **no** such source and therefore stops completed REST tasks before CI.
+- Preserve the bounded candidate-SHA policy and its provenance limitation. Verify
+  terminal task/session, mapping and exact-head revalidation before CI dispatch/result
+  and review-result acceptance; this fallback is not task-produced-commit attestation.
 - Keep ambiguous review output human-gated. Use exact handoff classification
   inputs, not a separately billed or guessed prose classifier.
 - Validate oldest continuation-ticket monitoring, expired leases, dropped/disabled
@@ -2080,12 +2083,12 @@ this account's access, credentials, entitlements, policy or spending configurati
 | Surface | Documented contract | Remaining work / prerequisite |
 | --- | --- | --- |
 | Coding tasks | [`POST /agents/repos/{owner}/{repo}/tasks`, repo/task GETs](https://docs.github.com/en/rest/agent-tasks/agent-tasks). Public preview; launch requires Business/Enterprise. `prompt`, `base_ref`, `head_ref`, `create_pull_request` are documented and implemented with offline HTTP coverage. | Verify eligible existing plan and a user access token with Agent tasks permissions. Installation tokens, including `GITHUB_TOKEN`, are unsupported. No plan upgrade is authorized. Lost creates without a unique saved ID remain blocked. |
-| Task/PR association | Branch lookup and pull-artifact candidate global-node lookup with GraphQL/REST database/repository checks are implemented. Independent task-bound final-head evidence remains mandatory. [Global node guide](https://docs.github.com/en/graphql/guides/using-global-node-ids), [PR fields](https://docs.github.com/en/graphql/reference/pulls#object-pullrequest). | No reviewed task/session/artifact field attests the final commit; production final-head source remains unavailable and completed REST tasks hold. Pull artifacts lacking usable global IDs also hold; no PR-number guessing. |
+| Task/PR association | Branch lookup and pull-artifact candidate global-node lookup with GraphQL/REST database/repository checks are implemented. After a completed task and all its sessions are verified terminal, the bounded candidate-SHA policy persists a versioned record of task/session IDs, the mapped PR, and its observed head. [Global node guide](https://docs.github.com/en/graphql/guides/using-global-node-ids), [PR fields](https://docs.github.com/en/graphql/reference/pulls#object-pullrequest). | This snapshot is not provider attestation: the task API does not prove that the observed head was produced by that task. Revalidate task/session state, task↔PR mapping, and exact head before CI dispatch/result and review-result acceptance; any mismatch holds or requires a fresh observation. Pull artifacts lacking usable global IDs also hold; no PR-number guessing. |
 | Follow-up coding | A new task can target an existing `head_ref`/`base_ref`; [PR mentions](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-on-github) are a separate interaction. | Preserve child task/round/blocker identity. No supported append-to-existing-task endpoint or bot-mention task-ID response is established. |
 | Review request | [Requested reviewers REST](https://docs.github.com/en/rest/pulls/review-requests#request-reviewers-for-a-pull-request) and [Copilot review guide](https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/copilot-code-review) document `copilot-pull-request-reviewer[bot]`. Gated request/boundary/receipt and lookup-only recovery are implemented. | Response is a PR, not a review-job ID. Verify repository policy/auth, automatic-review settings and account billing. Missing confirmed receipts remain uncertain; no speculative retry. |
 | Review result | [PR reviews/comments](https://docs.github.com/en/rest/pulls/reviews) expose actor, `commit_id`, review ID and comments; bounded validated raw capture is implemented. | No request-round token or dependable prose classifier; captured output is `needs-human`, never guessed promotion/repair. Authorized classification or independently verified provider evidence is required. |
 | Lost mutation response | Neither task launch nor review request documents a caller-supplied idempotency key or exactly-once creation. | Persist intent before call; retain returned identity; if no unique operation can be established, hold for human reconciliation, never repeat a speculative create. |
-| CI/status | [Workflow dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event), [runs](https://docs.github.com/en/rest/actions/workflow-runs), [jobs](https://docs.github.com/en/rest/actions/workflow-jobs) and [commit statuses](https://docs.github.com/en/rest/commits/statuses) contracts; gated adapters, exact tested-head status, disabled exact-SHA workflow and default-disabled managed push routing. | Verify credential/publisher/context policy, immutable trusted tag/revision and no-added-charge enforcement; obtain authoritative completed-task SHA. No branch protection or workflow activation changed. |
+| CI/status | [Workflow dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event), [runs](https://docs.github.com/en/rest/actions/workflow-runs), [jobs](https://docs.github.com/en/rest/actions/workflow-jobs) and [commit statuses](https://docs.github.com/en/rest/commits/statuses) contracts; gated adapters, exact persisted candidate-SHA testing/status, disabled exact-SHA workflow and default-disabled managed push routing. | Verify credential/publisher/context policy, immutable trusted tag/revision and no-added-charge enforcement. The bounded candidate SHA is only the terminal-task-time observed PR head, not an authoritative task-produced commit. No branch protection or workflow activation changed. |
 | Continuation | Documented default-branch schedule/workflow-run/comment/PR wakes; durable canonical ticket and leased shared host, disabled workflow wiring. | GitHub may drop/delay schedules or disable inactive public schedules; monitor and use exceptional guarded Resume. Trusted definition/default-branch placement and account cost controls require maintainer verification. No lossless SLA. |
 | Operator recovery | Saved task GET/session snapshot plus authorized `resolve-task`; local tracking ends Failed, with durable evidence and replay. `classify-review` references exact current handoff/head/round. | Task API does not promise irreversible remote termination. Verify quiescence before Reactivate; missing saved launch ID remains unresolved without an authoritative operation identity/design decision. No completion-SHA inference. |
 | Charges | [Organization billing](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing), [budgets](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/budgets), and [review pricing](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing) describe paid usage and review attribution. | Maintainer/admin must verify existing entitlement, attribution, disable paid overages, and enforce stop-usage controls for AI and Actions. Alerts alone are not caps; public Actions compute does not establish free AI use. No per-operation included-only billing field was established. |
@@ -2102,7 +2105,7 @@ refer to `IntelligentTradingSimulator.Tests/Orchestration`.
 | 2 Actual handlers/replay/reorder/concurrency | Ingress/Host/task/review/CI HTTP suites; `SharedHostLifecycleIntegrationTests`, status/routing/continuation, independent task-PR mapping and operator Host tests | Live account/contracts and activation remain unverified; transient unobserved events are not lossless. |
 | 3 Intent/effect crash boundaries | Persistence/worker CAS; task/review/CI/status boundary/POST/receipt/outcome failures; ticket-before-work and stable operator evidence replay | No exactly-once upstream guarantee; lost task/review IDs remain human-blocked. |
 | 4 Exact counts/preserved holds | Single-create/concurrent/recovery tests; duplicate wakes keep one launch; operator replay never looks up/relaunches committed resolution | Unknown projection writes require context inspection; no speculative retries. |
-| 5 Coding before exact-SHA CI | Concrete completed-task guards; in-progress PR mapping without completion; task REST missing-evidence regression; Host missing-finalSHA block; disabled exact checkout/verification | **Authoritative production final-task-SHA source unavailable.** Fixtures are not production evidence. |
+| 5 Coding before exact-SHA CI | Completed task/session and unique PR mapping; versioned bounded candidate-SHA evidence; revalidation at CI dispatch/result and review-result acceptance; exact persisted-SHA checkout/verification; offline head/task/mapping/replay/crash tests | The preview task API cannot attest that the observed candidate commit was produced by the task. Mismatches fail closed or require re-observation; this fallback does not establish final-commit provenance. |
 | 6 Green/review and two repair cycles | Worker multi-repair loops; actual Host task→CI→review→classification→status and repair coverage | Autonomous review correlation/classification unavailable; explicit human classification supported. |
 | 7 Stale heads/checks/unmanaged compatibility | Exact tested-head status and run/step tests; head/feedback revocation; `ManagedPushRoutingTests`; default-disabled trusted CI router | Publisher/required-context/human-approval policy must be verified at cutover; no settings changed. |
 | 8 Feedback priority/distinct identical events | Paged worker, authorized distinct/edit feedback tests; HumanReview feedback ingestion and current-status revocation | No recovery of revisions deleted before observation; API/capture uncertainty escalates. |
@@ -2133,12 +2136,14 @@ completion-SHA capability, account billing/access, credential protection or acti
 An initial coding task may use the explicit `UnmappedIssue` launch source only when
 both PR and head are absent and no parent task exists. Mapped coding and all repair
 tasks use `PullRequestHead` and require the exact valid source SHA. Launch confirmation
-persists the external task identity; completion records its proposed PR/final SHA.
-Live PR, final head and completed-task identity must all match before CI is created.
+persists the external task identity; completion records its versioned candidate PR-head
+evidence. Live PR, candidate head and completed-task identity must all match before CI
+is created.
 Duplicate readiness notifications or Resume do not create another task.
 
 Only explicit completion of the current confirmed task plus a matching live head
-permits CI. Store the completed task, response round, final SHA, CI intent and run.
+permits CI. Store the completed task, response round, candidate SHA evidence, CI intent
+and run.
 Intermediate pushes, early/unrelated green CI, labels and Resume cannot open this
 gate. Eligible green CI alone can authorize the current review request. A failed
 build/test creates a tracked child coding repair on the same PR; complete it before

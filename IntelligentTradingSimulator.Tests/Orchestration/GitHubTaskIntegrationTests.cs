@@ -101,7 +101,7 @@ public sealed class GitHubTaskIntegrationTests
     }
 
     [Fact]
-    public async Task PullNodeIdentityAloneCannotCertifyFinalHead()
+    public async Task CompletedTaskSnapshotsCurrentHeadWithExplicitBoundedPolicy()
     {
         var fixture = new ApiFixture { PullArtifact = true };
         var store = new Store();
@@ -109,11 +109,38 @@ public sealed class GitHubTaskIntegrationTests
         var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
         await Run(host, fixture.Notification());
         fixture.RemoteState = "completed";
-        await host.ReconcileAsync(fixture.Notification(), "issues", "44", 1, 1, Now,
-            [], 99, "master", 55, ApprovedFixture, Bounded);
-        Assert.Contains("authoritative task-bound evidence", store.State.Issues[7].HoldReason!);
-        Assert.Null(store.State.Issues[7].Ci);
-        Assert.NotEmpty(fixture.GraphQueries);
+        await Run(host, fixture.Notification());
+        var task = Assert.Single(store.State.Issues[7].Tasks.Values);
+        Assert.Equal(Head, task.CandidateShaEvidence!.ObservedHeadSha);
+        Assert.Equal(TaskTerminalRecovery.CandidateShaPolicy, task.CandidateShaEvidence.Policy);
+        Assert.Equal(task.Id, task.CandidateShaEvidence.TaskId);
+        Assert.Equal(17, task.CandidateShaEvidence.PullRequest);
+        Assert.Equal(new[] { "session" }, task.CandidateShaEvidence.SessionIds);
+        Assert.NotNull(store.State.Issues[7].Ci);
+    }
+
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("session")]
+    [InlineData("task")]
+    [InlineData("multiple-prs")]
+    [InlineData("later-push")]
+    public async Task CandidateEvidenceIsRevalidatedAgainstTaskMappingAndHead(string corruption)
+    {
+        var fixture = new ApiFixture();
+        var store = new Store();
+        using var client = fixture.Client();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        await Run(host, fixture.Notification());
+        fixture.RemoteState = "completed";
+        await Run(host, fixture.Notification());
+        await Run(host, fixture.Notification());
+        Assert.NotNull(store.State.Issues[7].Tasks.Values.Single().CandidateShaEvidence);
+
+        fixture.Corruption = corruption;
+        var validator = new GitHubTaskAdapter(new(client, "owner/repo", 1), store, "master", 55);
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            validator.ValidateCandidateShaAsync(store.State, store.State.Issues[7], default));
     }
 
     [Theory]
@@ -206,7 +233,7 @@ public sealed class GitHubTaskIntegrationTests
     }
 
     [Fact]
-    public async Task CompletedRestTaskWithoutIndependentFinalHeadEvidenceCannotAuthorizeCi()
+    public async Task CompletedRestTaskUsesBoundedCandidateHeadWithoutClaimingProvenance()
     {
         var fixture = new ApiFixture();
         var store = new Store();
@@ -214,11 +241,11 @@ public sealed class GitHubTaskIntegrationTests
         var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
         await Run(host, fixture.Notification());
         fixture.RemoteState = "completed";
-        var result = await host.ReconcileAsync(fixture.Notification(), "issues", "44", 1, 1, Now,
-            [], 99, "master", 55, ApprovedFixture, Bounded); // No authoritative final-head source.
-        Assert.Equal(WorkerStopReason.Blocked, result.Reason);
-        Assert.Null(store.State.Issues[7].Ci);
-        Assert.Contains("authoritative task-bound evidence", store.State.Issues[7].HoldReason!);
+        await host.ReconcileAsync(fixture.Notification(), "issues", "44", 1, 1, Now,
+            [], 99, "master", 55, ApprovedFixture, Bounded);
+        var task = Assert.Single(store.State.Issues[7].Tasks.Values);
+        Assert.Equal(Head, task.CandidateShaEvidence!.ObservedHeadSha);
+        Assert.Equal(Head, store.State.Issues[7].Ci!.Sha);
         Assert.Single(fixture.Writes, write => write.Path.StartsWith("/agents/"));
     }
 
@@ -459,7 +486,9 @@ public sealed class GitHubTaskIntegrationTests
         var first = state.Outbox.Values.Single(effect => effect.Kind == EffectKind.LaunchTask);
         state = reducer.MarkExecuting(state, first.Id, Now);
         state = reducer.RecordOutcome(state, first.Id, new(DeliveryStatus.Succeeded, "initial-task"), Now);
-        state = reducer.Apply(state, Message(new TaskCompleted(first.TaskId!, 17, Head), "done", ActorKind.TaskService));
+        state = reducer.Apply(state, Message(new TaskCompleted(first.TaskId!, 17, Head,
+            new(TaskTerminalRecovery.CandidateShaEvidenceVersion, TaskTerminalRecovery.CandidateShaPolicy,
+                first.TaskId!, "initial-task", ["session"], 17, Head)), "done", ActorKind.TaskService));
         live.Issues[7].CompletedTaskId = first.TaskId;
         state = reducer.Reconcile(state, live).State;
         var ci = state.Issues[7].Ci!;

@@ -13,6 +13,8 @@ public sealed class GitHubCiIntegrationTests
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
     private static readonly GitHubCiRoute Route = new(10, "refs/tags/ci-trusted", Definition);
     private static readonly GitHubCiApproval Approved = new(true, true, true, true);
+    private static GitHubCiAdapter CreateAdapter(HttpClient client, Store store, GitHubCiRoute? route = null) =>
+        new(new(client, "owner/repo", 1), store, route ?? Route, new Clock(), Approved, new CandidateValidator());
 
     [Fact]
     public async Task FeedbackCommittedAfterBoundaryAndDuringFinalLiveCheckDefersDispatch()
@@ -25,7 +27,7 @@ public sealed class GitHubCiIntegrationTests
                 store.Value.Issues[7].PendingFeedbackEventIds.Add("authorized-feedback");
         };
         using var client = api.Client();
-        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         await Assert.ThrowsAsync<InvalidDataException>(() => adapter.ExecuteAsync(store.Value.Outbox["ci"], default));
         Assert.NotNull(store.Value.Issues[7].Ci!.DispatchBoundary);
         Assert.Null(store.Value.Issues[7].Ci!.DispatchBoundary!.RunId);
@@ -43,7 +45,7 @@ public sealed class GitHubCiIntegrationTests
         var store = new Store(State());
         var api = new Api();
         using var client = api.Client();
-        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route with { Ref = reference }, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store, Route with { Ref = reference });
         await Assert.ThrowsAsync<InvalidDataException>(() => adapter.ExecuteAsync(store.Value.Outbox["ci"], default));
         Assert.Empty(api.Requests);
     }
@@ -58,7 +60,7 @@ public sealed class GitHubCiIntegrationTests
         store.Value.Outbox["ci"].Status = DeliveryStatus.Pending;
         var api = new Api { Result = result };
         using var client = api.Client();
-        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         var worker = new OrchestrationWorker(new(new Allow()), new Clock());
         var outcome = await worker.RunAsync(store, new Events(adapter), new Observations(), new Effects(adapter),
             new(false, true, true, true), new() { MaximumIterations = 2, PollInterval = TimeSpan.Zero });
@@ -74,13 +76,34 @@ public sealed class GitHubCiIntegrationTests
     }
 
     [Fact]
+    public async Task CandidateChangePreventsCiDispatchAndResultAcceptance()
+    {
+        var store = new Store(State());
+        var api = new Api();
+        using var client = api.Client();
+        var validator = new CandidateValidator { Reject = true };
+        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved, validator);
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            adapter.ExecuteAsync(store.Value.Outbox["ci"], default));
+        Assert.Equal(0, api.Posts);
+
+        var issue = store.Value.Issues[7];
+        issue.Ci!.RunId = "90";
+        issue.Ci.DispatchBoundary = new(10, Definition, Route.Ref, "correlation", Now, 90);
+        store.Value.Outbox["ci"].Status = DeliveryStatus.Succeeded;
+        store.Value.Outbox["ci"].ExternalId = "90";
+        await Assert.ThrowsAsync<InvalidDataException>(() => adapter.ReadEventAsync(store.Value, issue, default));
+        Assert.Null(issue.Ci.Green);
+    }
+
+    [Fact]
     public async Task InterruptBeforeBoundaryWriteNeverDispatches()
     {
         var store = new Store(State()) { Fail = true };
         var api = new Api();
         using var client = api.Client();
         await Assert.ThrowsAsync<IOException>(() =>
-            new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved)
+            CreateAdapter(client, store)
                 .ExecuteAsync(store.Value.Outbox["ci"], default));
         Assert.Equal(0, api.Posts);
         Assert.Null(store.Value.Issues[7].Ci!.DispatchBoundary);
@@ -92,7 +115,7 @@ public sealed class GitHubCiIntegrationTests
         var store = new Store(State());
         var api = new Api { SynchronizePreflight = true };
         using var client = api.Client();
-        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         async Task<bool> Execute()
         {
             try { await adapter.ExecuteAsync(store.Value.Outbox["ci"], default); return true; }
@@ -146,7 +169,7 @@ public sealed class GitHubCiIntegrationTests
         var api = new Api();
         using var client = api.Client();
         await Assert.ThrowsAsync<InvalidDataException>(() =>
-            new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved)
+            CreateAdapter(client, store)
                 .ExecuteAsync(store.Value.Outbox["ci"], default));
         Assert.Empty(api.Requests);
     }
@@ -163,7 +186,7 @@ public sealed class GitHubCiIntegrationTests
         var api = new Api { Corruption = corruption };
         using var client = api.Client();
         await Assert.ThrowsAsync<InvalidDataException>(() =>
-            new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved)
+            CreateAdapter(client, store)
                 .ExecuteAsync(store.Value.Outbox["ci"], default));
         Assert.Equal(0, api.Posts);
     }
@@ -175,7 +198,7 @@ public sealed class GitHubCiIntegrationTests
         var api = new Api();
         api.BeforePost = () => Assert.Null(store.Value.Issues[7].Ci!.DispatchBoundary!.RunId);
         using var client = api.Client();
-        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         var outcome = await adapter.ExecuteAsync(store.Value.Outbox["ci"], default);
         Assert.Equal("90", outcome.ExternalId);
         Assert.Equal(90, store.Value.Issues[7].Ci!.DispatchBoundary!.RunId);
@@ -201,7 +224,7 @@ public sealed class GitHubCiIntegrationTests
         var api = new Api { Corruption = corruption };
         if (corruption == "save-run") api.BeforePost = () => store.Fail = true;
         using var client = api.Client();
-        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         await Assert.ThrowsAnyAsync<Exception>(() => adapter.ExecuteAsync(store.Value.Outbox["ci"], default));
         store.Fail = false;
         store.Value = new OrchestrationReducer().RecordOutcome(store.Value, "ci", new(DeliveryStatus.Unknown), Now);
@@ -221,7 +244,7 @@ public sealed class GitHubCiIntegrationTests
         var store = new Store(State());
         var api = new Api();
         using var client = api.Client();
-        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         var outcome = await adapter.ExecuteAsync(store.Value.Outbox["ci"], default);
         store.Value = new OrchestrationReducer().RecordOutcome(store.Value, "ci", outcome, Now);
         api.Result = result;
@@ -253,7 +276,7 @@ public sealed class GitHubCiIntegrationTests
         var store = new Store(State());
         var api = new Api();
         using var client = api.Client();
-        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         var outcome = await adapter.ExecuteAsync(store.Value.Outbox["ci"], default);
         store.Value = new OrchestrationReducer().RecordOutcome(store.Value, "ci", outcome, Now);
         api.Corruption = corruption;
@@ -276,7 +299,7 @@ public sealed class GitHubCiIntegrationTests
         var store = new Store(State());
         var api = new Api();
         using var client = api.Client();
-        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         var outcome = await adapter.ExecuteAsync(store.Value.Outbox["ci"], default);
         store.Value = new OrchestrationReducer().RecordOutcome(store.Value, "ci", outcome, Now);
         api.Corruption = corruption;
@@ -294,7 +317,7 @@ public sealed class GitHubCiIntegrationTests
         var store = new Store(State());
         var api = new Api();
         using var client = api.Client();
-        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         var outcome = await adapter.ExecuteAsync(store.Value.Outbox["ci"], default);
         store.Value = new OrchestrationReducer().RecordOutcome(store.Value, "ci", outcome, Now);
         api.Corruption = "head-changed";
@@ -315,7 +338,7 @@ public sealed class GitHubCiIntegrationTests
         var store = new Store(State());
         var api = new Api { Corruption = "cancelled" };
         using var client = api.Client();
-        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved);
+        var adapter = CreateAdapter(client, store);
         var outcome = await adapter.ExecuteAsync(store.Value.Outbox["ci"], default);
         store.Value = new OrchestrationReducer().RecordOutcome(store.Value, "ci", outcome, Now);
         var message = (await adapter.ReadEventAsync(store.Value, store.Value.Issues[7], default))!;
@@ -362,13 +385,27 @@ public sealed class GitHubCiIntegrationTests
         state.Issues[7] = new() { Number = 7, Phase = Phase.CI_PENDING, ActiveAuthorized = true,
             PullRequest = 17, HeadSha = Sha, ActiveTaskId = "task", Round = 1,
             Tasks = new() { ["task"] = new() { Id = "task", Status = TaskStatus.Completed, LaunchConfirmed = true,
-                Round = 1, FinalSha = Sha } },
+                ExternalId = "remote-task", Round = 1, FinalSha = Sha,
+                CandidateShaEvidence = new(TaskTerminalRecovery.CandidateShaEvidenceVersion,
+                    TaskTerminalRecovery.CandidateShaPolicy, "task", "remote-task", ["session"], 17, Sha) } },
             Ci = new() { IntentId = "ci", TaskId = "task", Round = 1, Sha = Sha } };
         state.Outbox["ci"] = new() { Id = "ci", Digest = "digest", Kind = EffectKind.RunCi,
             Status = DeliveryStatus.Executing, IssueNumber = 7, Generation = 1, TaskId = "task", Round = 1, Sha = Sha };
         return state;
     }
     private sealed class Allow : IAuthorizationPolicy { public bool IsAuthorized(OrchestrationEvent message) => true; }
+    private sealed class CandidateValidator : ICandidateShaValidator
+    {
+        public bool Reject { get; init; }
+
+        public Task ValidateCandidateShaAsync(RepositoryState state, IssueState issue, CancellationToken token)
+        {
+            if (Reject) throw new InvalidDataException("Candidate is no longer current.");
+            var task = issue.Tasks[issue.ActiveTaskId!];
+            TaskTerminalRecovery.ValidateCandidateSha(task.CandidateShaEvidence, task, issue.PullRequest!.Value, task.FinalSha!);
+            return Task.CompletedTask;
+        }
+    }
     private sealed class Events(GitHubCiAdapter adapter) : IWorkerEventSource
     {
         public async Task<WorkerEventBatch> ReadAsync(RepositoryState state, CancellationToken token)

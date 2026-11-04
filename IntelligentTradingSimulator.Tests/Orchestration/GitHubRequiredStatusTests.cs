@@ -597,7 +597,9 @@ public sealed class GitHubRequiredStatusTests
         state.Issues[7] = new() { Number = 7, Phase = Phase.REVIEW_PENDING, ActiveAuthorized = true,
             PullRequest = 17, HeadSha = Sha, Round = 1, ActiveTaskId = "task",
             Tasks = new() { ["task"] = new() { Id = "task", Status = TaskStatus.Completed, LaunchConfirmed = true,
-                Round = 1, FinalSha = Sha } },
+            ExternalId = "remote-task", Round = 1, FinalSha = Sha,
+            CandidateShaEvidence = new(TaskTerminalRecovery.CandidateShaEvidenceVersion,
+                TaskTerminalRecovery.CandidateShaPolicy, "task", "remote-task", ["session"], 17, Sha) } },
             Ci = new() { IntentId = "ci", TaskId = "task", Round = 1, Sha = Sha, Green = true, RunId = "90",
                 DispatchBoundary = new(10, Definition, "refs/tags/trusted", "managed-correlation", Now, 90) },
             Review = new() { ReviewId = "review90", TaskId = "task", Round = 1, Sha = Sha } };

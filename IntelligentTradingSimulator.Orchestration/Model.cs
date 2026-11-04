@@ -99,6 +99,7 @@ public sealed class TaskIdentity
     public string? ExternalId { get; set; }
     public TaskTerminalRecord? TerminalEvidence { get; set; }
     public TaskOperatorResolution? OperatorResolution { get; set; }
+    public CandidateShaEvidence? CandidateShaEvidence { get; set; }
     public List<Finding> ReviewBlockers { get; set; } = [];
     public List<Finding> CiBlockers { get; set; } = [];
     public List<string> FeedbackEventIds { get; set; } = [];
@@ -164,6 +165,8 @@ public sealed record TaskTerminalEvidence(string LaunchIntentId, string External
     List<TaskSessionTerminalEvidence> Sessions, DateTimeOffset UpdatedAt, DateTimeOffset ObservedAt,
     string ResponseDigest);
 public sealed record TaskTerminalRecord(string EventId, TaskTerminalEvidence Evidence);
+public sealed record CandidateShaEvidence(int Version, string Policy, string TaskId, string ExternalTaskId,
+    List<string> SessionIds, int PullRequest, string ObservedHeadSha);
 public sealed record TaskOperatorResolution(string EventId, string EvidenceEventId, Actor Author,
     string Reason, DateTimeOffset OccurredAt);
 
@@ -222,7 +225,8 @@ public sealed record StageEdited : EventData;
 public sealed record Resume : EventData;
 public sealed record Pause(string Reason) : EventData;
 public sealed record Reactivate(string Reason) : EventData;
-public sealed record TaskCompleted(string TaskId, int PullRequest, string Sha) : EventData;
+public sealed record TaskCompleted(string TaskId, int PullRequest, string Sha,
+    CandidateShaEvidence? Evidence = null) : EventData;
 public sealed record TaskPrMapped(string TaskId, int PullRequest, string ObservedHead) : EventData;
 public sealed record TaskStopped(string TaskId, string Reason) : EventData;
 public sealed record TaskTerminalObserved(string TaskId, TaskTerminalEvidence Evidence) : EventData;

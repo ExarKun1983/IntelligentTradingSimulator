@@ -102,8 +102,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             // Persist a verified command before unrelated service reads can fail or the invocation yields.
             await new OrchestrationReconciler(new(authorization)).DispatchAsync(store, message, token);
         }
-        var reviews = new GitHubReviewAdapter(api, store, clock, reviewApproval);
-        var ci = ciRoute is null ? null : new GitHubCiAdapter(api, store, ciRoute, clock, ciApproval);
+        var reviews = new GitHubReviewAdapter(api, store, clock, reviewApproval, tasks);
+        var ci = ciRoute is null ? null : new GitHubCiAdapter(api, store, ciRoute, clock, ciApproval, tasks);
         var events = new ProductionEvents(message, api, tasks, reviews, ci, authorization, projectionActorId);
         var statuses = statusPublisher is null ? null : new GitHubRequiredStatusAdapter(api, store, statusPublisher, statusApproval, clock);
         var effects = new ProductionEffects(tasks, reviews, ci, statuses, new GitHubProjectionAdapter(api, projectionActorId, true));

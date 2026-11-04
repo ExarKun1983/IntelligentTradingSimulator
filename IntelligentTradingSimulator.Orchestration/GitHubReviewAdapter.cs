@@ -12,7 +12,7 @@ public sealed record GitHubReviewApproval(bool ActivationApproved = false, bool 
 
 /// <summary>Requests Copilot review; REST observations require human round/classification confirmation.</summary>
 public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore store, TimeProvider? clock = null,
-    GitHubReviewApproval? approval = null) : IEffectAdapter
+    GitHubReviewApproval? approval = null, ICandidateShaValidator? candidateShaValidator = null) : IEffectAdapter
 {
     private const string Reviewer = "copilot-pull-request-reviewer[bot]";
     private readonly TimeProvider clock = clock ?? TimeProvider.System;
@@ -26,6 +26,7 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
         if (issue.Review!.RequestBoundary is not null)
             throw new InvalidDataException("Prepared review requests are lookup-only, never re-created.");
         ValidateEligibility(state, issue, intent);
+        await ValidateCandidateShaAsync(state, issue, token);
         if (!await LiveEligibleAsync(issue, token)) throw new InvalidDataException("Review live Issue/PR/head is ineligible.");
         using var user = await api.GetGlobalAsync("users/" + Uri.EscapeDataString(Reviewer), token);
         var actor = user.RootElement;
@@ -48,11 +49,13 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
         await SaveBoundaryAsync(intent, boundary, token);
         // Revalidate after persistence and immediately before the non-idempotent mutation.
         var latest = (await store.LoadAsync(token)).State;
-        ValidateEligibility(latest, ValidateIntent(latest, intent), intent);
-        if (!await LiveEligibleAsync(issue, token)) throw new InvalidDataException("Review live Issue/PR/head is ineligible.");
-        using var response = await api.WriteAsync(HttpMethod.Post, $"pulls/{issue.PullRequest}/requested_reviewers",
+        var latestIssue = ValidateIntent(latest, intent);
+        ValidateEligibility(latest, latestIssue, intent);
+        await ValidateCandidateShaAsync(latest, latestIssue, token);
+        if (!await LiveEligibleAsync(latestIssue, token)) throw new InvalidDataException("Review live Issue/PR/head is ineligible.");
+        using var response = await api.WriteAsync(HttpMethod.Post, $"pulls/{latestIssue.PullRequest}/requested_reviewers",
             new { reviewers = new[] { Reviewer } }, token);
-        ValidatePull(response.RootElement, issue);
+        ValidatePull(response.RootElement, latestIssue);
         var requested = response.RootElement.GetProperty("requested_reviewers").EnumerateArray().ToList();
         if (!requested.Any(candidate => ActorMatches(candidate, boundary)))
             throw new InvalidDataException("Review request acknowledgement lacks the verified reviewer.");
@@ -81,6 +84,7 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
             !issue.Tasks.TryGetValue(review.TaskId, out var task) || task.Status != TaskStatus.Completed ||
             task.FinalSha != review.Sha || issue.HeadSha != review.Sha)
             return null;
+        await ValidateCandidateShaAsync(state, issue, token);
         if (!await LiveEligibleAsync(issue, token)) return null;
         var reviews = await api.ListAsync($"pulls/{number}/reviews", token);
         var observed = new List<JsonElement>();
@@ -157,6 +161,10 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
             ciEffect.ExternalId != ci.RunId || string.IsNullOrWhiteSpace(ci.RunId))
             throw new InvalidDataException("Review requires completed coding and exact-SHA green CI with no feedback or hold.");
     }
+
+    private Task ValidateCandidateShaAsync(RepositoryState state, IssueState issue, CancellationToken token) =>
+        candidateShaValidator?.ValidateCandidateShaAsync(state, issue, token) ??
+        throw new InvalidDataException("Candidate SHA validator is unavailable.");
 
     private async Task<bool> LiveEligibleAsync(IssueState issue, CancellationToken token)
     {
