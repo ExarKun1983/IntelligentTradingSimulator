@@ -71,7 +71,11 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+  statuses: write
 
 jobs:
   reconcile:
@@ -96,6 +100,7 @@ jobs:
           global-json-file: global.json
       - name: Run guarded shared reconciler
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           ORCHESTRATION_USER_TOKEN: ${{ secrets.ORCHESTRATION_USER_TOKEN }}
           ORCHESTRATION_ACTIVATION_APPROVED: ${{ vars.ORCHESTRATION_ACTIVATION_APPROVED }}
           ORCHESTRATION_USER_TOKEN_VERIFIED: ${{ vars.ORCHESTRATION_USER_TOKEN_VERIFIED }}

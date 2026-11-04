@@ -56,9 +56,14 @@ public sealed partial class GitHubRepositoryApi
         if (user.RootElement.GetProperty("id").GetInt64() != senderId ||
             user.RootElement.GetProperty("type").GetString() != sender.GetProperty("type").GetString())
             throw new InvalidDataException("API actor identity mismatch.");
-        using var permission = await GetAsync($"collaborators/{Uri.EscapeDataString(login)}/permission", token);
-        if (permission.RootElement.GetProperty("user").GetProperty("id").GetInt64() != senderId)
-            throw new InvalidDataException("Permission identity mismatch.");
+        var actorPermission = "";
+        if (!projectionActorIds.Contains(senderId))
+        {
+            using var permission = await GetAsync($"collaborators/{Uri.EscapeDataString(login)}/permission", token);
+            if (permission.RootElement.GetProperty("user").GetProperty("id").GetInt64() != senderId)
+                throw new InvalidDataException("Permission identity mismatch.");
+            actorPermission = permission.RootElement.GetProperty("permission").GetString()!;
+        }
         var number = eventName == "issues" ? payload.GetProperty("issue").GetProperty("number").GetInt32() :
             int.Parse(payload.GetProperty("inputs").GetProperty("issue").GetString()!,
                 System.Globalization.CultureInfo.InvariantCulture);
@@ -68,7 +73,7 @@ public sealed partial class GitHubRepositoryApi
         if (root.GetProperty("number").GetInt32() != number)
             throw new InvalidDataException("API Issue identity mismatch.");
         return new(Repository, RepositoryId, senderId, user.RootElement.GetProperty("type").GetString()!,
-            permission.RootElement.GetProperty("permission").GetString()!, root.GetProperty("id").GetInt64(),
+            actorPermission, root.GetProperty("id").GetInt64(),
             number, root.GetProperty("state").GetString() == "open",
             Labels(root).Contains("agent:ready"), root.TryGetProperty("pull_request", out _), projectionActorIds);
     }

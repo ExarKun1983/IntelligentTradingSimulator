@@ -1935,10 +1935,20 @@ retires its ticket; the next periodic observation still applies status revocatio
 The production job checks out only `ORCHESTRATION_DEFINITION_SHA`, never PR code,
 and exposes the user credential only to the trusted reconciler step in the
 `agent-orchestration` environment. The credential must be environment-only, never
-a repository-wide secret accessible to unrelated PR workflows. Its Actions
-token remains read-only. No downloaded PR artifacts/caches are executed. The
-live CLI verifies `/user`, the current workflow definition SHA and canonical
-generations. Stable API run timestamps and saved events handle replay; recovery
+a repository-wide secret accessible to unrelated PR workflows. The user PAT is
+used only for Agent tasks and its startup `/user` identity check. The separate
+workflow `GITHUB_TOKEN` performs repository observations, review requests,
+projections, state writes, CI dispatch and status publication. No downloaded PR
+artifacts/caches are executed. Before loading/writing state or executing effects,
+the live CLI verifies the PAT's configured human ID and the workflow token's
+authenticated GraphQL `viewer` against `github-actions[bot]` / `41898282`, then
+cross-checks the bot's REST ID, login, type and node ID. Missing credentials,
+identical credentials, API/GraphQL errors or either identity mismatch stop execution.
+The bot, not the PAT owner, is the projection actor and status publisher. An
+authorized PAT owner's label command therefore works without a second account.
+Bot projection labels remain ignored, without requiring the bot to be a collaborator.
+The current workflow definition SHA and canonical generations are also verified.
+Stable API run timestamps and saved events handle replay; recovery
 inputs require explicit expected repository/Issue generations. All library effects,
 status publication and the live CLI have default-false activation/policy/cost gates.
 
@@ -2038,46 +2048,199 @@ canonical state or failed approved routing must stop rather than guess ownership
 Skipped ordinary build jobs are not managed green proof; only the exact saved
 managed run can authorize lifecycle progress.
 
-#### Activation checklist (not performed)
+#### Split-credential contracts and permissions
 
-- Keep both literal-false workflow guards and legacy disablement until separately
-  approved cutover; rollback disables effects, not the legacy orchestrator.
-- Bootstrap/protect `agent-state`; review the initial canonical state. Never
-  reconstruct a missing branch from labels or auto-create it in the live CLI.
-- Verify the documented task user-token/plan permissions and no-added-charge
-  enforcement for AI and Actions. The live CLI's verified user-token actor is also
-  its projection actor, whose label events are ignored. Use an **already eligible**
-  distinct automation identity while other authorized humans issue label commands;
-  no additional account/seat/plan purchase is authorized. If that identity cannot
-  be provided at zero additional charge, leave this composition blocked and obtain
-  a separately approved credential-separation design instead.
-- Verify/pin the orchestration workflow/code SHA and immutably protect the CI
-  definition tag against update/deletion/bypass. Workflow drift fails closed.
-- Provision the approved user credential only in the protected `agent-orchestration`
-  environment, with deployment-branch policy restricted to the reviewed default
-  branch. Do not create a repository-level secret of that name or allow PR merge/
-  arbitrary refs to request it. Verify this protection before setting
-  `ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED`; no environment or
-  secret has been provisioned here. Normal automatic wakes do not require per-stage
-  approval clicks; branch policy supplies credential isolation after cutover approval.
-  `GitHubLiveSettings` requires activation, user-token, task-entitlement, cost,
-  trusted-definition, trusted-status-publisher and required-context attestations
-  before any live path; review and CI have their own additional default-false gates.
-  Attestation values are maintainer decisions, not capabilities established by code.
-- Require the dedicated managed status plus independent human approvals before
-  approving managed ordinary-CI routing. Verify unmanaged/manual compatibility.
-- Preserve the bounded candidate-SHA policy and its provenance limitation. Verify
-  terminal task/session, mapping and exact-head revalidation before CI dispatch/result
-  and review-result acceptance; this fallback is not task-produced-commit attestation.
-- Keep ambiguous review output human-gated. Use exact handoff classification
-  inputs, not a separately billed or guessed prose classifier.
-- Validate oldest continuation-ticket monitoring, expired leases, dropped/disabled
-  schedules and exceptional Resume; do not interpret wake delivery as lifecycle
-  evidence or assume every transient/edited/deleted event was captured.
+The [Agent tasks authentication guide](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-via-the-api#authentication)
+and [start/get/list REST contracts](https://docs.github.com/en/rest/agent-tasks/agent-tasks)
+explicitly support user-to-server tokens, **not installation tokens**. A
+repository-selected fine-grained PAT needs **Agent tasks: read and write** for
+start (read for get/list), plus implicit Metadata read. It does not need Contents,
+Issues, Actions, Commit statuses or Pull requests permissions for this composition.
+Task listing is not used to guess the identity of a lost launch.
+
+Conversely, the [Copilot review guide](https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/copilot-code-review)
+directs callers to request `copilot-pull-request-reviewer[bot]` through the
+[requested-reviewers endpoint](https://docs.github.com/en/rest/pulls/review-requests#request-reviewers-for-a-pull-request).
+The [GitHub App permissions matrix](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps#repository-permissions-for-pull-requests)
+documents installation-token support with Pull requests write. No documented
+Copilot-specific user-token-only exception was found; the PAT is **not** used
+for review requests or review observations. Policy, entitlement and billing still
+require separate verification; no live request was made to establish them.
+
+[`GITHUB_TOKEN` is a repository-scoped installation access token](https://docs.github.com/en/actions/concepts/security/github_token).
+The [installation-authentication guide](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation#using-octokitjs-to-authenticate-with-an-installation-id)
+demonstrates authenticated GraphQL `viewer`; REST `/user` is used only for the PAT.
+Public `/users/github-actions[bot]` alone would **not** prove credential identity.
+The bot ID/login are also documented in [actions/checkout](https://github.com/actions/checkout#push-a-commit-using-the-built-in-token);
+this composition targets GitHub.com, not GHES.
+
+The reconciler workflow declares only these permissions (write includes reads;
+Metadata read is implicit). The managed CI workflow retains Contents read only.
+
+| Workflow permission | Supported installation-token operations |
+| --- | --- |
+| `issues: write` | Label add/remove and status-comment create/update; Issue/label/comment/timeline reads. [Issues matrix](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps#repository-permissions-for-issues). |
+| `contents: write` | Canonical Git blob/tree/commit creation and state-ref fast-forward; commit/ref/compare reads. [Contents matrix](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps#repository-permissions-for-contents). |
+| `actions: write` | Managed CI `workflow_dispatch`, workflow/run/job observations. [Actions matrix](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps#repository-permissions-for-actions). |
+| `statuses: write` | Exact-SHA status create/list/combined reads. [Commit-status matrix](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps#repository-permissions-for-commit-statuses). |
+| `pull-requests: write` | Copilot requested-reviewer mutation and PR/review/comment observations. [Pull-request matrix](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps#repository-permissions-for-pull-requests). |
+
+Repository/collaborator identity reads use implicit Metadata read. No Checks API,
+administration, secrets, deployments, workflow-file write or token-minting permission
+is requested. `contents: write` is necessary for the Git database API, **not a
+GitHub-enforced branch-scoped grant**. It is safe only within this reviewed, isolated
+trusted-code composition: checkout credentials are not persisted; untrusted PR code
+never runs with these credentials; the transport only builds `state.json` trees,
+requires an existing parent, and permits only `refs/heads/agent-state`. It verifies
+the expected parent/tip and sends `force: false`; competing children cannot both
+fast-forward. The REST ref endpoint has no native expected-old-SHA parameter.
+Protect code branches and the state branch against unauthorized writers, force
+updates and deletion. This application restriction does not contain arbitrary
+compromised workflow code; protect the workflow/definition and environment too.
+
+Bot-generated label/comment events normally do not retrigger Actions under the
+`GITHUB_TOKEN` event-suppression rule. Actor filtering still protects replay and
+other ingress paths. **`workflow_dispatch` is an explicit exception**, so managed
+CI dispatch with `GITHUB_TOKEN` is supported without restoring PAT projections.
+
+#### Solo-maintainer activation guide (not performed)
+
+This PR does **not** activate anything. Both replacement jobs keep literal
+`if: ${{ false }}`; legacy disablement remains. The following are future operator
+steps after separate approval, not instructions to execute during this issue.
+No second account/seat is needed. A sole maintainer who cannot independently satisfy
+entitlement, cost controls or repository protection must leave activation blocked.
+
+1. **Verify eligibility and spending first.** Confirm the PAT owner already has the
+   documented Business/Enterprise task entitlement and repository access. Verify
+   Copilot review availability/attribution, disable paid overages, and enforce
+   stop-usage budgets for AI and Actions (alerts alone are insufficient). Do not
+   buy another seat/plan or launch a task/review as a permission probe.
+2. **Create the narrow PAT.** In Settings → Developer settings → Personal access
+   tokens → Fine-grained tokens, select the existing maintainer as resource owner
+   (the repository owner here), select only `IntelligentTradingSimulator`, set an
+   expiry, and grant repository **Agent tasks: Read and write**. Metadata read is
+   implicit; leave every other selectable permission unset. Obtain any required
+   organization approval. With that credential in a private local session, read
+   `GET /user` (for example `gh api user --jq '{id,login,type}'` with `GH_TOKEN`
+   supplied securely) and record the numeric human ID, never the token, for
+   `ORCHESTRATION_ACTOR_ID`. Do not reuse the PAT as `GITHUB_TOKEN`.
+3. **Protect the credential environment.** Create repository environment
+   `agent-orchestration`; restrict deployment branches/tags to the exact default
+   branch `master` only, excluding PR refs and all tags. Add the PAT as the
+   **environment secret** `ORCHESTRATION_USER_TOKEN`, not a repository/organization
+   secret of that name. Verify unrelated workflows cannot use it from untrusted
+   refs. Configure available protection rules without purchasing seats. Per-run
+   required-reviewer gates would require repeated clicks; if policy requires them,
+   do not promise unattended stages. `GITHUB_TOKEN` is issued by Actions; never
+   create a stored secret for it.
+4. **Review and bootstrap canonical state exactly once.** Disable admission/effects
+   while preparing state. If `agent-state` already exists, inspect its full state
+   and outstanding tasks/effects; **do not overwrite or reset it**. For a genuinely
+   new installation only, verify `GET /repos/ExarKun1983/IntelligentTradingSimulator/git/ref/heads/agent-state`
+   returns a confirmed missing-ref response, not an auth/network error. Using a
+   separately authorized operator session with Contents write (not the narrow task
+   PAT), the following standard CLI commands create an isolated root tree:
+
+   ```bash
+   REPO=ExarKun1983/IntelligentTradingSimulator
+   STATE=$(jq -nc --arg repository "$REPO" \
+     '{SchemaVersion:1,Generation:1,Version:0,Repository:$repository,Issues:{},Inbox:{},Outbox:{}}')
+   BLOB=$(gh api --method POST "repos/$REPO/git/blobs" \
+     -f content="$STATE" -f encoding=utf-8 --jq .sha)
+   TREE=$(jq -nc --arg blob "$BLOB" \
+     '{tree:[{path:"state.json",mode:"100644",type:"blob",sha:$blob}]}' |
+     gh api --method POST "repos/$REPO/git/trees" --input - --jq .sha)
+   COMMIT=$(gh api --method POST "repos/$REPO/git/commits" \
+     -f tree="$TREE" -f message='Bootstrap reviewed agent state' --jq .sha)
+   gh api --method POST "repos/$REPO/git/refs" \
+     -f ref=refs/heads/agent-state -f sha="$COMMIT"
+   ```
+
+   Run each command only after its predecessor succeeds; stop on any error. The
+   final create must fail rather than replace an existing ref. Review `state.json`
+   and its repository/generation; protect `agent-state` against deletion/force-push
+   and unauthorized writes, while permitting the Actions app's state-only
+   fast-forwards. Do not require code-PR checks/reviews on this isolated state
+   branch that prevent its intended writer. Protect normal code branches separately.
+   Never recreate missing state from labels or copy an active installation to a
+   fresh generation to escape uncertain effects.
+5. **Prepare the reviewed definitions and immutable CI tag.** Keep all workflows
+   disabled until the separately reviewed cutover. At that cutover, a human must
+   approve a code revision containing the intentionally enabled replacement and
+   managed-CI jobs on the default branch; legacy stays disabled. Record that full
+   40-character orchestration revision. Create a fresh immutable tag such as
+   `agent-managed-ci-v1` at the reviewed CI revision, which must contain the
+   approved executable managed-CI job. Set `ORCHESTRATION_CI_REF` to
+   `refs/tags/agent-managed-ci-v1`, not a mutable branch. Tag rules must prevent
+   updates/deletion/bypass; verify the resolved commit, not only an annotated tag
+   object's ID. Never retag to repair drift: review a new tag/revision.
+6. **Set every variable below, initially leaving activation/routing false.**
+   Put shared values in repository Actions variables (ordinary CI routing also
+   reads them); avoid conflicting environment overrides. Obtain numeric IDs with
+   an operator's read-only API session:
+
+   ```bash
+   gh api repos/ExarKun1983/IntelligentTradingSimulator --jq '{id,default_branch}'
+   gh api repos/ExarKun1983/IntelligentTradingSimulator/actions/workflows/agent-state-machine.yml --jq '{id,path}'
+   gh api repos/ExarKun1983/IntelligentTradingSimulator/actions/workflows/agent-managed-ci.yml --jq '{id,path}'
+   gh api repos/ExarKun1983/IntelligentTradingSimulator/commits/master --jq .sha
+   gh api repos/ExarKun1983/IntelligentTradingSimulator/commits/refs/tags/agent-managed-ci-v1 --jq .sha
+   ```
+
+   | `vars.*` name | Value and how to obtain/verify it |
+   | --- | --- |
+   | `ORCHESTRATION_ACTOR_ID` | Numeric PAT-owner ID from authenticated `/user` in step 2; **not** the bot ID. |
+   | `ORCHESTRATION_BASE_BRANCH` | `master`, verified from repository `default_branch`. |
+   | `ORCHESTRATION_WORKFLOW_ID` | Numeric ID for `agent-state-machine.yml` from workflow GET. |
+   | `ORCHESTRATION_DEFINITION_SHA` | Reviewed full commit SHA from step 5; must equal the triggering run's definition/head revision. Default-branch drift fails closed; review/update the pin when the branch changes. |
+   | `ORCHESTRATION_CI_WORKFLOW_ID` | Numeric ID for `agent-managed-ci.yml` from workflow GET. |
+   | `ORCHESTRATION_CI_REF` | Protected `refs/tags/agent-managed-ci-v1` from step 5. |
+   | `ORCHESTRATION_CI_DEFINITION_SHA` | Full resolved CI tag commit SHA from step 5. |
+   | `ORCHESTRATION_USER_TOKEN_VERIFIED` | Literal `true` only after PAT permissions, owner and repository selection are verified; runtime still authenticates its ID. |
+   | `ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED` | `true` only after environment-secret isolation/default-branch policy in step 3 is checked. |
+   | `ORCHESTRATION_TASK_ENTITLEMENT_VERIFIED` | `true` only after existing task plan/access is confirmed in step 1. |
+   | `ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED` | `true` only after enforced no-overage AI/Actions controls are confirmed in step 1. |
+   | `ORCHESTRATION_TRUSTED_DEFINITION_VERIFIED` | `true` only after trusted default-branch workflow/code pin and checkout isolation are reviewed. |
+   | `ORCHESTRATION_REVIEW_POLICY_VERIFIED` | `true` only after documented installation-token review permissions and repository Copilot policy/attribution are verified. |
+   | `ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED` | `true` only after automatic Copilot reviews/new-push re-reviews are disabled to prevent duplicate untracked reviews. |
+   | `ORCHESTRATION_TRUSTED_CI_VERIFIED` | `true` only after exact-SHA checkout/test steps and immutable executable CI tag are verified. |
+   | `ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED` | `true` only after workflow-token bot publisher permissions/provenance are checked; runtime verifies its authenticated ID. |
+   | `ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED` | `true` only after branch protection requires `Agent managed CI` and independent human final approval; review other writers/spoofing risk. |
+   | `ORCHESTRATION_ACTIVATION_APPROVED` | Keep `false`; set `true` **last**, only at separately approved cutover after all prerequisites. |
+   | `ORCHESTRATION_MANAGED_ROUTING_APPROVED` | Keep `false` until managed status/protection and unmanaged/manual-CI compatibility are verified; then separately approve `true` for ordinary CI's read-only router. |
+
+   All booleans require the exact lowercase string `true`; missing/other values do
+   not attest approval. `GITHUB_REPOSITORY`, `GITHUB_REPOSITORY_ID`, event path/name
+   and run ID are supplied by Actions, not `vars.*`. The projection login/ID are
+   fixed and authenticated at startup, not operator-supplied variables.
+7. **Approve cutover, then command work as yourself.** After the separate guard
+   change/review, protected environment/state/tag, all attestations, and explicit
+   approval, enable activation last. Add `agent:ready` to an open Issue as the
+   same PAT-owning human with write/maintain/admin permission. No normal Start
+   button or second identity is required. Watch canonical admission/queue and the
+   single bot-owned status comment. Keep the bounded candidate-SHA policy:
+   completed terminal tasks/sessions plus observed task↔PR/head association are
+   revalidated, **not** provider attestation of a task-produced commit. Ambiguous
+   reviews require exact handoff classification, not guessed prose. Monitor old
+   tickets, lease expiry and delayed/dropped/disabled schedules; guarded Resume
+   is exceptional recovery, not a lifecycle override.
+8. **Rollback without forgetting operations.** Set activation and managed routing
+   false, disable the replacement and managed-CI workflows, and restore both
+   literal-false guards in a reviewed change; never enable legacy orchestration.
+   Cancel in-flight reconciler runs and remove/revoke the environment PAT if
+   isolation is in doubt (changing a variable does not retract a running token).
+   Inspect already-dispatched tasks/reviews/CI independently: cancellation or PAT
+   revocation does not prove remote termination. Preserve `agent-state`, receipts,
+   generations, leases, uncertain effects and human holds; never reset/force-push
+   state to retry. Check the exact-SHA required status for stale success and require
+   authorized correction/human review before any merge. Ordinary CI resumes with
+   routing disabled. Reconcile saved remote identities lookup-only, verify
+   quiescence, then obtain fresh approval before reactivation.
 
 #### Verified API contracts versus activation prerequisites
 
-Read-only documentation research on 2026-11-03 establishes public contracts, **not
+Read-only documentation research on 2026-11-03/04 establishes public contracts, **not
 this account's access, credentials, entitlements, policy or spending configuration**:
 
 | Surface | Documented contract | Remaining work / prerequisite |
@@ -2113,7 +2276,7 @@ refer to `IntelligentTradingSimulator.Tests/Orchestration`.
 | 10 Closure/reopen/reactivation | Core/REST closure checks; verified ended-session/operator evidence with release/no-release/replay tests; human holds remain | Snapshot is not irreversible task termination; missing launch ID requires external identity/design decision. |
 | 11 Operations documentation | This runbook: trust/cost/cutover/rollback, continuation monitoring, status provenance and operator procedures | Maintainer must verify account/prerequisites and approve activation separately. |
 | 12 Human final approval/no auto-merge | Core `HUMAN_REVIEW`; Host classification leaves final approval hold; no merge effect/API | CI status alone is not approval; preserve independent human branch protection. |
-| 13 Label start/queue/guarded recovery | Verified command committed before service reads; ingress/queue/replay tests; live CLI and disabled workflow wiring | Authorized user and distinct already-eligible automation identity/prerequisites unverified. No normal Start button. |
+| 13 Label start/queue/guarded recovery | Verified command committed before service reads; split-credential PAT-owner/bot ingress, identity and replay tests; live CLI and disabled workflow wiring | Solo maintainer uses the existing human PAT only for task APIs; Actions bot owns projections/state. Account/prerequisites remain unverified. No normal Start button. |
 | 14 Automatic stages/labels/continuation | Leased host, durable ticket, scheduled/event wake verification, bounded automatic polls and status projections | Default-disabled; GitHub schedule delays/drop/inactivity require monitoring and exceptional Resume, not a delivery SLA. |
 | 15 Shared C#/real response shapes | One reducer/reconciler; REST task/session/GraphQL/review/CI/status fixtures, trusted routing/wake adapters and production composition | Public contracts/offline fixtures do not establish this account's eligibility, credentials, spending or final-SHA capability. |
 | 16 Repository admission/queue | Core/CAS/worker concurrent admission; duplicate/expired-lease continuation tests; task recovery retains other unfinished work | Requires protected canonical branch; no paid database/external worker or premature lease release. |

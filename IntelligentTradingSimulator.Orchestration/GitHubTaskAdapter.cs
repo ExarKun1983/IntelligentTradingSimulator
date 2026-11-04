@@ -26,10 +26,12 @@ public interface ICandidateShaValidator
 /// <summary>Documented agent-task API. Lost launch responses without an ID remain unknown, never re-created.</summary>
 public sealed class GitHubTaskAdapter(
     GitHubRepositoryApi api, IStateStore store, string baseBranch, long taskCreatorId,
-    GitHubExecutionApproval? approval = null, ITaskFinalHeadSource? finalHeadSource = null) :
+    GitHubExecutionApproval? approval = null, ITaskFinalHeadSource? finalHeadSource = null,
+    GitHubRepositoryApi? taskApi = null) :
     IVerifiedAgentEffectAdapter, ICandidateShaValidator
 {
     public bool AgentEffectsAuthorized => approval?.AllowsTasks == true;
+    private readonly GitHubRepositoryApi taskApi = taskApi ?? api;
     private string TaskPath => $"agents/repos/{api.Repository}/tasks";
 
     public async Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken token)
@@ -68,7 +70,7 @@ public sealed class GitHubTaskAdapter(
             headRef = pr.RootElement.GetProperty("head").GetProperty("ref").GetString();
         }
         else throw new InvalidDataException("Invalid task launch source.");
-        using var result = await api.PostGlobalAsync(TaskPath,
+        using var result = await taskApi.PostGlobalAsync(TaskPath,
             new { prompt = intent.TaskPrompt, base_ref = baseBranch, head_ref = headRef, create_pull_request = headRef is null }, token);
         var id = ValidateTask(result.RootElement, null);
         return new(DeliveryStatus.Succeeded, id);
@@ -92,7 +94,7 @@ public sealed class GitHubTaskAdapter(
         // The API has no caller idempotency key. Prompt/list similarity is not a unique launch identity.
         if (string.IsNullOrWhiteSpace(persisted.ExternalId)) return new(DeliveryStatus.Unknown);
         await api.VerifyRepositoryAsync(token);
-        using var task = await api.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(persisted.ExternalId), token);
+        using var task = await taskApi.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(persisted.ExternalId), token);
         return new(DeliveryStatus.Succeeded, ValidateTask(task.RootElement, persisted.ExternalId));
     }
 
@@ -107,7 +109,7 @@ public sealed class GitHubTaskAdapter(
         if (launch.Status != DeliveryStatus.Succeeded || launch.ExternalId != task.ExternalId)
             throw new InvalidDataException("PR mapping requires a confirmed canonical launch receipt.");
         await api.VerifyRepositoryAsync(token);
-        using var response = await api.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(task.ExternalId), token);
+        using var response = await taskApi.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(task.ExternalId), token);
         var root = response.RootElement;
         try
         {
@@ -177,7 +179,7 @@ public sealed class GitHubTaskAdapter(
             throw new InvalidDataException("Recovery repository or saved task identity is missing.");
         var launch = TaskTerminalRecovery.RequireSavedLaunch(state, issue, taskId);
         await api.VerifyRepositoryAsync(token);
-        using var result = await api.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(launch.ExternalId!), token);
+        using var result = await taskApi.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(launch.ExternalId!), token);
         try
         {
             var root = result.RootElement;
@@ -211,7 +213,7 @@ public sealed class GitHubTaskAdapter(
             task.Status is not (TaskStatus.Running or TaskStatus.AwaitingHeadConfirmation) ||
             string.IsNullOrWhiteSpace(task.ExternalId))
             return null;
-        using var result = await api.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(task.ExternalId), token);
+        using var result = await taskApi.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(task.ExternalId), token);
         var root = result.RootElement;
         try
         {
@@ -273,7 +275,7 @@ public sealed class GitHubTaskAdapter(
             throw new InvalidDataException("Candidate SHA has no exact completed task launch receipt.");
 
         await api.VerifyRepositoryAsync(token);
-        using var remote = await api.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(evidence.ExternalTaskId), token);
+        using var remote = await taskApi.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(evidence.ExternalTaskId), token);
         var root = remote.RootElement;
         ValidateTask(root, evidence.ExternalTaskId);
         var sessions = root.GetProperty("sessions").EnumerateArray().ToList();
