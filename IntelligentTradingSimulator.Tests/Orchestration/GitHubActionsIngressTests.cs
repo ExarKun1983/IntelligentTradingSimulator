@@ -35,6 +35,44 @@ public class GitHubActionsIngressTests
     }
 
     [Theory]
+    [InlineData("write")]
+    [InlineData("maintain")]
+    [InlineData("admin")]
+    public void PatOwnerReadyIsAcceptedAndReplayDoesNotLaunchAgain(string permission)
+    {
+        const long patOwner = 6195946;
+        var context = Context() with
+        {
+            Evidence = Evidence(actor: patOwner, permission: permission) with
+            {
+                ProjectionActorIds = [GitHubLiveCredentials.ProjectionActorId]
+            }
+        };
+        var payload = Issue(actor: patOwner);
+        var first = OfflineNotificationReplay.Run(payload, "issues", context);
+        var replay = OfflineNotificationReplay.Run(payload, "issues", context with { State = first.State });
+        Assert.Equal(Phase.CODING, replay.State.Issues[7].Phase);
+        Assert.Equal(patOwner, Assert.Single(replay.State.Inbox.Values).Event!.Actor.Id);
+        Assert.Single(replay.State.Issues[7].Tasks);
+        Assert.Single(replay.State.Outbox.Values, intent => intent.Kind == EffectKind.LaunchTask);
+    }
+
+    [Theory]
+    [InlineData("agent:ready")]
+    [InlineData("agent:working")]
+    [InlineData("agent:review")]
+    public void VerifiedActionsBotProjectionIsIgnored(string label)
+    {
+        var evidence = Evidence(actor: GitHubLiveCredentials.ProjectionActorId, actorType: "Bot") with
+        {
+            ProjectionActorIds = [GitHubLiveCredentials.ProjectionActorId]
+        };
+        Assert.Null(GitHubActionsIngress.PrepareEvent(
+            Issue(label: label, actor: GitHubLiveCredentials.ProjectionActorId, actorType: "Bot"),
+            "issues", "123", evidence, 1, 1, DateTimeOffset.UnixEpoch));
+    }
+
+    [Theory]
     [InlineData(false, true)]
     [InlineData(true, false)]
     public void DelayedReadyCannotOverrideLiveWithdrawalOrClosure(bool ready, bool open)

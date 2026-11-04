@@ -27,10 +27,18 @@ public sealed class SharedHostLifecycleIntegrationTests
     public async Task SharedHostWakeDrainsTaskCiReviewHumanClassificationAndPublishesOnlyExactSafeStatus(string afterApproval)
     {
         using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
-        using var fixture = new PipelineApi(taskApi);
-        using var client = new HttpClient(fixture) { BaseAddress = new("https://api.github.com/") };
+        using var fixture = new PipelineApi(taskApi) { VerifyCredentials = true };
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        client.DefaultRequestHeaders.Authorization = new("Bearer", "offline-workflow");
+        using var userClient = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        userClient.DefaultRequestHeaders.Authorization = new("Bearer", "offline-user");
         var store = new GitHubTaskIntegrationTests.Store();
-        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock(),
+            new(userClient, "owner/repo", 1));
+        await host.ReconcileAsync(taskApi.Notification(), "issues", "44", 1, 1, Now, [],
+            99, "master", 55, TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(),
+            reviewApproval: ReviewApproval, ciRoute: CiRoute, ciApproval: CiApproval,
+            statusPublisher: Publisher, statusApproval: StatusApproval);
         await host.ReconcileAsync(taskApi.Notification(), "issues", "44", 1, 1, Now, [],
             99, "master", 55, TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(),
             reviewApproval: ReviewApproval, ciRoute: CiRoute, ciApproval: CiApproval,
@@ -299,6 +307,7 @@ public sealed class SharedHostLifecycleIntegrationTests
         private readonly HttpMessageInvoker tasks;
         public bool CiCompleted { get; set; }
         public bool ReviewSubmitted { get; set; }
+        public bool VerifyCredentials { get; init; }
         public string WakeEvent { get; set; } = "schedule";
         public int CiDispatches { get; private set; }
         public int ReviewRequests { get; private set; }
@@ -311,6 +320,9 @@ public sealed class SharedHostLifecycleIntegrationTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             var path = request.RequestUri!.AbsolutePath;
+            if (VerifyCredentials)
+                Assert.Equal(path.StartsWith("/agents/") ? "offline-user" : "offline-workflow",
+                    request.Headers.Authorization?.Parameter);
             const string prefix = "/repos/owner/repo/";
             object response;
             if (path == prefix + "actions/runs/90")

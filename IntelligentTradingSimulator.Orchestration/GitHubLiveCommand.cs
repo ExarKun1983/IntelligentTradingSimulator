@@ -51,6 +51,9 @@ public static class GitHubLiveCommand
             var settings = GitHubLiveSettings.Read(Environment.GetEnvironmentVariable);
             var credential = Environment.GetEnvironmentVariable("ORCHESTRATION_USER_TOKEN");
             if (string.IsNullOrWhiteSpace(credential)) throw new InvalidOperationException("Verified user credential unavailable.");
+            var workflowCredential = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+            if (string.IsNullOrWhiteSpace(workflowCredential) || workflowCredential == credential)
+                throw new InvalidOperationException("Separate workflow credential unavailable.");
             var path = Environment.GetEnvironmentVariable("GITHUB_EVENT_PATH");
             if (string.IsNullOrWhiteSpace(path) || new FileInfo(path).Length > 2 * 1024 * 1024)
                 throw new InvalidDataException("Missing or oversized Actions notification.");
@@ -59,16 +62,17 @@ public static class GitHubLiveCommand
             {
                 BaseAddress = new("https://api.github.com/"), Timeout = TimeSpan.FromSeconds(30)
             };
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", credential);
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", workflowCredential);
+            using var userClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+            {
+                BaseAddress = new("https://api.github.com/"), Timeout = TimeSpan.FromSeconds(30)
+            };
+            userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", credential);
             var api = new GitHubRepositoryApi(client, settings.Repository, settings.RepositoryId);
-            using var user = await api.GetGlobalAsync("user", default);
-            if (user.RootElement.GetProperty("id").GetInt64() != settings.ActorId ||
-                user.RootElement.GetProperty("type").GetString() != "User")
-                throw new InvalidDataException("User credential identity mismatch.");
-            var publisher = new GitHubStatusPublisher(settings.ActorId, user.RootElement.GetProperty("login").GetString()!,
-                user.RootElement.GetProperty("node_id").GetString()!, "User");
+            var taskApi = new GitHubRepositoryApi(userClient, settings.Repository, settings.RepositoryId);
+            var publisher = await GitHubLiveCredentials.VerifyAsync(api, taskApi, settings.ActorId);
             var store = new GitStateStore(new GitHubGitTransport(client, settings.Repository, allowMutations: true), settings.Repository);
-            var host = new GitHubOrchestrationHost(api, store);
+            var host = new GitHubOrchestrationHost(api, store, taskApi: taskApi);
             var eventName = Environment.GetEnvironmentVariable("GITHUB_EVENT_NAME") ?? throw new InvalidDataException("Missing event.");
             var runId = Environment.GetEnvironmentVariable("GITHUB_RUN_ID") ?? throw new InvalidDataException("Missing run ID.");
             WorkerResult? result;
@@ -95,13 +99,13 @@ public static class GitHubLiveCommand
                 }
                 result = await host.ReconcileAsync(payload.RootElement, eventName, runId, repositoryGeneration,
                     issueGeneration, occurredAt,
-                    [settings.ActorId], settings.ActorId, settings.BaseBranch, settings.ActorId,
+                    [publisher.ActorId], publisher.ActorId, settings.BaseBranch, settings.ActorId,
                     settings.Tasks, ciRoute: settings.CiRoute, ciApproval: settings.Ci, reviewApproval: settings.Review,
                     statusPublisher: publisher, statusApproval: settings.Status);
             }
             else
                 result = await host.ReconcileWakeAsync(payload.RootElement, eventName, runId, settings.WakeRoute,
-                    settings.Wake, settings.ActorId, settings.BaseBranch, settings.ActorId, settings.Tasks,
+                    settings.Wake, publisher.ActorId, settings.BaseBranch, settings.ActorId, settings.Tasks,
                     ciRoute: settings.CiRoute, ciApproval: settings.Ci, reviewApproval: settings.Review,
                     statusPublisher: publisher, statusApproval: settings.Status);
             output.WriteLine(JsonSerializer.Serialize(new { Mode = "github-live", Result = result?.Reason.ToString() }, StateJson.Options));
