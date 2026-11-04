@@ -45,7 +45,7 @@ env:
 
 jobs:
   bootstrap:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
       - name: Create labels
@@ -61,9 +61,7 @@ jobs:
           gh label create "$BLOCKED_LABEL" --repo "$REPO" --color D93F0B --description "Needs human attention" --force
 
   start-agent:
-    if: >-
-      github.event_name == 'issues' && github.event.action == 'labeled' &&
-      github.event.label.name == 'agent:ready' && github.event.issue.state == 'open'
+    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
       - name: Load orchestrator helpers
@@ -107,9 +105,7 @@ jobs:
           fi
 
   map-pr:
-    if: >-
-      github.event_name == 'pull_request' && github.event.action == 'opened' &&
-      startsWith(github.event.pull_request.head.ref, 'copilot/')
+    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
       - name: Load orchestrator helpers
@@ -136,10 +132,7 @@ jobs:
     # Unresolved inline findings are handed off as before. With none, a current-SHA review summary that says
     # "Changes recommended" (not "Needs a closer look", "Approval recommended", or the could-not-review-files
     # notice) is handed off once per SHA, capped at MAX_FIX_ROUNDS, before promotion to human review.
-    if: >-
-      github.event_name == 'workflow_run' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      startsWith(github.event.workflow_run.head_branch, 'copilot/')
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -172,10 +165,7 @@ jobs:
 
   ci-failure:
     # After failed, timed-out, or cancelled CI: never promote; hand the failure to Copilot or ask a human.
-    if: >-
-      github.event_name == 'workflow_run' &&
-      contains(fromJSON('["failure","timed_out","cancelled","startup_failure"]'), github.event.workflow_run.conclusion) &&
-      startsWith(github.event.workflow_run.head_branch, 'copilot/')
+    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
       - name: Load orchestrator helpers
@@ -204,9 +194,7 @@ jobs:
 
   process-ai-review:
     # Backup path, in case GitHub delivers the Copilot review event to Actions.
-    if: >-
-      github.event_name == 'pull_request_review' &&
-      startsWith(github.event.review.user.login, 'copilot-pull-request-reviewer')
+    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
       - name: Load orchestrator helpers
@@ -233,11 +221,7 @@ jobs:
           process_review "$PR" "$issue" "$HEAD_SHA"
 
   human-feedback:
-    if: >-
-      github.event.pull_request.state == 'open' &&
-      startsWith(github.event.pull_request.head.ref, 'copilot/') &&
-      ((github.event_name == 'pull_request_review' && github.event.review.user.type != 'Bot' && github.event.review.state != 'approved') ||
-       (github.event_name == 'pull_request_review_comment' && github.event.comment.user.type != 'Bot'))
+    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
       - name: Load orchestrator helpers
@@ -268,9 +252,7 @@ jobs:
           set_state "$issue" "$WORKING_LABEL"
 
   terminal-state:
-    if: >-
-      github.event_name == 'pull_request' && github.event.action == 'closed' &&
-      startsWith(github.event.pull_request.head.ref, 'copilot/')
+    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
       - name: Load orchestrator helpers
@@ -303,7 +285,7 @@ jobs:
 
   reconcile-existing-pr:
     # Runs on push of this file or manual "Run workflow": repairs a PR stuck in agent:ai-review.
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -336,7 +318,7 @@ jobs:
           if [ "$rc" -eq 0 ]; then process_review "$pr" "$issue" "$sha"; fi
 
   cleanup-closed-issue:
-    if: github.event_name == 'issues' && github.event.action == 'closed'
+    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
       - name: Remove state labels

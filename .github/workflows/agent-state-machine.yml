@@ -1,0 +1,126 @@
+name: Agent state machine (not activated)
+
+on:
+  issues:
+    types: [labeled, unlabeled, closed, reopened]
+  issue_comment:
+    types: [created, edited, deleted]
+  pull_request_target:
+    types: [synchronize, closed, reopened]
+  workflow_run:
+    workflows: ["Agent managed CI (disabled)"]
+    types: [completed]
+  schedule:
+    - cron: "7/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number for guarded recovery (not a normal Start)
+        required: true
+        type: string
+      operation:
+        description: Resume never clears a hold; reactivation requires a reason
+        required: true
+        default: resume
+        type: choice
+        options: [resume, pause, reactivate, resolve-task, classify-review]
+      reason:
+        description: Required for pause/reactivation
+        required: false
+        type: string
+      repository_generation:
+        description: Expected canonical repository generation
+        required: true
+        type: string
+      issue_generation:
+        description: Expected canonical Issue generation
+        required: true
+        type: string
+      task:
+        description: Canonical task ID for lookup-only terminal resolution
+        required: false
+        type: string
+      handoff:
+        description: Exact review handoff ID for authorized classification
+        required: false
+        type: string
+      round:
+        description: Exact review round
+        required: false
+        type: string
+      pull:
+        description: Mapped PR number
+        required: false
+        type: string
+      sha:
+        description: Exact eligible review head SHA
+        required: false
+        type: string
+      classification:
+        description: Explicit human decision, never inferred from prose
+        required: false
+        type: choice
+        options: [needs-human, accepted, blocking]
+      findings:
+        description: JSON array of classified findings with stable IDs and evidence
+        required: false
+        type: string
+      responses:
+        description: JSON array of finding-specific responses
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+  statuses: write
+
+jobs:
+  reconcile:
+    # Implementation/offline validation approval is NOT activation approval.
+    # Keep a literal false, not a mutable repository variable, until reviewed cutover.
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: agent-orchestration
+    steps:
+      - name: Require an explicitly reviewed immutable code revision
+        env:
+          DEFINITION_SHA: ${{ vars.ORCHESTRATION_DEFINITION_SHA }}
+        run: |
+          [[ "$DEFINITION_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ vars.ORCHESTRATION_DEFINITION_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Run guarded shared reconciler
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ORCHESTRATION_USER_TOKEN: ${{ secrets.ORCHESTRATION_USER_TOKEN }}
+          ORCHESTRATION_ACTIVATION_APPROVED: ${{ vars.ORCHESTRATION_ACTIVATION_APPROVED }}
+          ORCHESTRATION_USER_TOKEN_VERIFIED: ${{ vars.ORCHESTRATION_USER_TOKEN_VERIFIED }}
+          ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED: ${{ vars.ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED }}
+          ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED: ${{ vars.ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED }}
+          ORCHESTRATION_TASK_ENTITLEMENT_VERIFIED: ${{ vars.ORCHESTRATION_TASK_ENTITLEMENT_VERIFIED }}
+          ORCHESTRATION_TRUSTED_DEFINITION_VERIFIED: ${{ vars.ORCHESTRATION_TRUSTED_DEFINITION_VERIFIED }}
+          ORCHESTRATION_ACTOR_ID: ${{ vars.ORCHESTRATION_ACTOR_ID }}
+          ORCHESTRATION_BASE_BRANCH: ${{ vars.ORCHESTRATION_BASE_BRANCH }}
+          ORCHESTRATION_WORKFLOW_ID: ${{ vars.ORCHESTRATION_WORKFLOW_ID }}
+          ORCHESTRATION_DEFINITION_SHA: ${{ vars.ORCHESTRATION_DEFINITION_SHA }}
+          ORCHESTRATION_REVIEW_POLICY_VERIFIED: ${{ vars.ORCHESTRATION_REVIEW_POLICY_VERIFIED }}
+          ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED: ${{ vars.ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED }}
+          ORCHESTRATION_TRUSTED_CI_VERIFIED: ${{ vars.ORCHESTRATION_TRUSTED_CI_VERIFIED }}
+          ORCHESTRATION_CI_WORKFLOW_ID: ${{ vars.ORCHESTRATION_CI_WORKFLOW_ID }}
+          ORCHESTRATION_CI_REF: ${{ vars.ORCHESTRATION_CI_REF }}
+          ORCHESTRATION_CI_DEFINITION_SHA: ${{ vars.ORCHESTRATION_CI_DEFINITION_SHA }}
+          ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED: ${{ vars.ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED }}
+          ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED: ${{ vars.ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED }}
+        run: >-
+          dotnet run --project IntelligentTradingSimulator.Orchestration
+          --configuration Release --
+          --github-live --execute
