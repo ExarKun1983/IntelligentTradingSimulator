@@ -1,0 +1,135 @@
+name: One-time Agent Tasks API smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Explicit authorization to start one bounded Copilot task
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: agent-task-smoke-224
+  cancel-in-progress: false
+
+jobs:
+  start-one-task:
+    if: github.ref == 'refs/heads/master' && inputs.confirmation == 'START-ONE-TASK-224'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: agent-orchestration
+    steps:
+      - name: Start exactly one bounded documentation task
+        env:
+          WORKFLOW_TOKEN: ${{ github.token }}
+          TASK_TOKEN: ${{ secrets.ORCHESTRATION_USER_TOKEN }}
+        shell: python
+        run: |
+          import http.client
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          expected_repository = "ExarKun1983/IntelligentTradingSimulator"
+          issue_number = 224
+          expected_user_id = 6195946
+
+          def require(condition, message):
+              if not condition:
+                  raise RuntimeError(message)
+
+          require(repository == expected_repository, "Unexpected repository.")
+          workflow_token = os.environ["WORKFLOW_TOKEN"]
+          task_token = os.environ["TASK_TOKEN"]
+          require(bool(task_token) and task_token != workflow_token,
+                  "Separate Agent tasks PAT is missing.")
+
+          def api(path, credential, method="GET", body=None):
+              data = None if body is None else json.dumps(body).encode()
+              request = urllib.request.Request(
+                  "https://api.github.com/" + path,
+                  data=data,
+                  method=method,
+                  headers={
+                      "Authorization": "Bearer " + credential,
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2026-03-10",
+                      "User-Agent": "ITS-agent-task-smoke-test",
+                      "Content-Type": "application/json",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      result = json.load(response)
+              except urllib.error.HTTPError as error:
+                  if method == "POST" and error.code >= 500:
+                      raise RuntimeError(
+                          f"Task creation returned HTTP {error.code}; outcome is uncertain. "
+                          "Do not retry or rerun; reconcile the Agent tasks list first."
+                      ) from None
+                  raise RuntimeError(
+                      f"{method} {path}: HTTP {error.code}; no retry was attempted."
+                  ) from None
+              except (urllib.error.URLError, TimeoutError, OSError,
+                      http.client.HTTPException, json.JSONDecodeError, UnicodeDecodeError) as error:
+                  if method == "POST":
+                      raise RuntimeError(
+                          "Task creation outcome is uncertain because the response could not be read "
+                          "or decoded; do not retry or rerun this workflow. Reconcile the Agent tasks "
+                          "list first."
+                      ) from error
+                  raise RuntimeError(f"{method} {path} failed.") from error
+              if method == "POST" and (
+                  not isinstance(result, dict) or not isinstance(result.get("id"), str) or not result["id"]
+              ):
+                  raise RuntimeError(
+                      "Task creation may have been accepted, but its response did not contain a valid task ID. "
+                      "Do not retry or rerun; reconcile the Agent tasks list first."
+                  )
+              return result
+
+          user = api("user", task_token)
+          require(user["id"] == expected_user_id and user["type"] == "User",
+                  "Task PAT owner does not match the authorized maintainer.")
+          issue = api(f"repos/{repository}/issues/{issue_number}", workflow_token)
+          require(issue["state"] == "open" and issue["title"] ==
+                  "[Agent API smoke test] One bounded documentation task",
+                  "The dedicated test Issue is not open or its identity changed.")
+
+          prompt = (
+              "This is one bounded Agent Tasks API integration smoke test for Issue #224. "
+              "Create exactly one file named docs/agent-api-smoke-test-224.md containing "
+              "only this sentence: 'Temporary documentation file created by the bounded Agent Tasks API smoke test.' "
+              "Do not modify any other file, workflow, setting, branch protection, or issue. "
+              "Commit the file on the task's branch, but do not open a pull request. Stop after the commit. "
+              "Do not start another task."
+          )
+          task = api(
+              f"agents/repos/{repository}/tasks",
+              task_token,
+              method="POST",
+              body={"prompt": prompt, "base_ref": "master", "create_pull_request": False},
+          )
+          require(isinstance(task.get("id"), str) and bool(task["id"]),
+                  "Task API returned no task ID. Do not retry; reconcile first.")
+          task_url = task.get("html_url") or task.get("url") or "(URL unavailable)"
+          print(f"Agent task created: {task['id']} state={task.get('state', 'unknown')}")
+          print(f"Task URL: {task_url}")
+          print("No PR was requested. No CI, review, labels, or orchestration state was triggered here.")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(
+                  "## One bounded Agent Tasks API call completed\n\n"
+                  f"- Issue: #{issue_number}\n"
+                  f"- Task: `{task['id']}`\n"
+                  f"- State: `{task.get('state', 'unknown')}`\n"
+                  f"- URL: {task_url}\n\n"
+                  "One task-creation POST was issued. Do not rerun this workflow. "
+                  "No PR was requested, so PR CI and automatic PR review are not expected. "
+                  "The legacy and state-machine workflows remain disabled.\n"
+              )

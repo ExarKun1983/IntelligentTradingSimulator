@@ -2114,6 +2114,15 @@ tasks, request reviews, dispatch CI, publish status, or change labels/state. Pas
 this check proves read access only, not task-start permission, entitlement, billing
 controls or mutation capabilities. Keep the replacement workflows disabled.
 
+For a separately authorized one-task API smoke test, use **One-time Agent Tasks API
+smoke test** on `master` and enter exactly `START-ONE-TASK-224`. It issues one POST
+for Issue #224, creates a documentation-only task on `master`, and explicitly does
+not request a PR. The task API has no caller idempotency key: if the workflow reports
+an uncertain POST result, do not rerun it; reconcile the Agent tasks list first.
+The branch may contain one temporary documentation commit, but no PR checks or
+review are expected. This proves task-start capability only, not end-to-end state
+machine correctness. Both orchestrators remain disabled.
+
 This PR does **not** activate anything. Both replacement jobs keep literal
 `if: ${{ false }}`; legacy disablement remains. The following are future operator
 steps after separate approval, not instructions to execute during this issue.
