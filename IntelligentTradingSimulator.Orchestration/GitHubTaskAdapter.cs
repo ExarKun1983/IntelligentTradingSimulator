@@ -178,11 +178,12 @@ public sealed class GitHubTaskAdapter(
         {
             var at = root.TryGetProperty("updated_at", out var updated) && updated.TryGetDateTimeOffset(out var value)
                 ? value : issue.ReadyAt ?? DateTimeOffset.UnixEpoch;
-            return new($"task-pr-mapping-stopped:v2:{api.RepositoryId}:{issue.Generation}:{task.ExternalId}:{StateJson.Digest(root.GetRawText())}",
+            var failureCode = $"mapping/{stage}/{exception.GetType().Name}";
+            return new($"task-pr-mapping-stopped:v2:{api.RepositoryId}:{issue.Generation}:{task.ExternalId}:{failureCode}:{StateJson.Digest(root.GetRawText())}",
                 api.Repository, issue.Number, state.Generation, issue.Generation,
                 new("github-task-api", ActorKind.TaskService), at,
                 new TaskStopped(taskId,
-                    $"Task PR mapping is unsupported or contradictory; code=mapping/{stage}/{exception.GetType().Name}; admission retained."));
+                    $"Task PR mapping is unsupported or contradictory; code={failureCode}; admission retained."));
         }
     }
 
