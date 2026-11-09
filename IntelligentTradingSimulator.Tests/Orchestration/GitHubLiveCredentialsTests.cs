@@ -88,6 +88,32 @@ public sealed class GitHubLiveCredentialsTests
     }
 
     [Fact]
+    public void GateDiagnosticsAreManualAndDoNotExposeLiveCapabilities()
+    {
+        var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-gate-diagnostics.yml"));
+        Assert.Contains("on:\n  workflow_dispatch:\n", workflow);
+        Assert.Contains("permissions: {}", workflow);
+        Assert.Contains("timeout-minutes: 2", workflow);
+        Assert.Contains("github.workflow_ref == format('{0}/.github/workflows/agent-gate-diagnostics.yml@refs/heads/master', github.repository)", workflow);
+        Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '227'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_DEFINITION_SHA == github.sha", workflow);
+        Assert.Contains("vars.ORCHESTRATION_CI_REF == 'refs/tags/agent-managed-ci-test-227-v2'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_CI_DEFINITION_SHA == '5d122e64ea5eafc51eba1fd150ec33f7869b5731'", workflow);
+        Assert.Contains("GITHUB_STEP_SUMMARY", workflow);
+        Assert.DoesNotContain("if:", workflow);
+        Assert.DoesNotContain("environment:", workflow);
+        Assert.DoesNotContain("secrets.", workflow);
+        Assert.DoesNotContain("github.token", workflow);
+        Assert.DoesNotContain("uses:", workflow);
+        Assert.DoesNotContain("--github-live", workflow);
+        Assert.DoesNotContain("gh ", workflow);
+        Assert.DoesNotContain("curl ", workflow);
+        Assert.DoesNotContain("contents: write", workflow);
+    }
+
+    [Fact]
     public void BoundedTestModeRequiresOneIssueAndExactlyOneRepairTask()
     {
         var values = LiveSettingsValues();

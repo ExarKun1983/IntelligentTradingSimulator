@@ -1,0 +1,46 @@
+name: Agent gate diagnostics (read-only)
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Report gate comparisons without running orchestration
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_ON_MASTER: ${{ github.workflow_ref == format('{0}/.github/workflows/agent-gate-diagnostics.yml@refs/heads/master', github.repository) }}
+          ACTIVATION_MATCH: ${{ vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true' }}
+          ISSUE_MATCH: ${{ vars.ORCHESTRATION_TEST_ISSUE == '227' }}
+          REPAIR_CAP_MATCH: ${{ vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1' }}
+          DEFINITION_MATCH: ${{ vars.ORCHESTRATION_DEFINITION_SHA == github.sha }}
+          CI_REF_MATCH: ${{ vars.ORCHESTRATION_CI_REF == 'refs/tags/agent-managed-ci-test-227-v2' }}
+          CI_DEFINITION_MATCH: ${{ vars.ORCHESTRATION_CI_DEFINITION_SHA == '5d122e64ea5eafc51eba1fd150ec33f7869b5731' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf '%s\n' '## Read-only gate diagnostics' ''
+            printf 'Event: `%s`\n\n' "$EVENT_NAME"
+            printf 'Event ref: `%s`\n\n' "$EVENT_REF"
+            printf 'Diagnostic workflow ref: `%s`\n\n' "$WORKFLOW_REF"
+            printf '%s\n' '| Comparison | Match |' '| --- | --- |'
+            printf '| Diagnostic workflow definition is on master | %s |\n' "$WORKFLOW_ON_MASTER"
+            printf '| ORCHESTRATION_ACTIVATION_APPROVED == true | %s |\n' "$ACTIVATION_MATCH"
+            printf '| ORCHESTRATION_TEST_ISSUE == 227 | %s |\n' "$ISSUE_MATCH"
+            printf '| ORCHESTRATION_TEST_MAX_REPAIR_TASKS == 1 | %s |\n' "$REPAIR_CAP_MATCH"
+            printf '| ORCHESTRATION_DEFINITION_SHA == this run SHA | %s |\n' "$DEFINITION_MATCH"
+            printf '| ORCHESTRATION_CI_REF == protected test tag v2 | %s |\n' "$CI_REF_MATCH"
+            printf '| ORCHESTRATION_CI_DEFINITION_SHA == reviewed CI commit | %s |\n' "$CI_DEFINITION_MATCH"
+            printf '\n%s\n' \
+              'These comparisons use repository/organization variables, without an environment.' \
+              'This is a manual diagnostic run, not the context or variable snapshot of an earlier Issue event.' \
+              'A false comparison is diagnostic output; a successful job does not approve activation.' \
+              'Keep live workflows disabled and activation false while diagnosing. No task, CI, or state write was requested.'
+          } | tee "$GITHUB_STEP_SUMMARY"
