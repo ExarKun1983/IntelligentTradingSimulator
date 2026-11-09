@@ -1525,6 +1525,29 @@ dotnet test IntelligentTradingSimulator.sln --configuration Release --verbosity 
 - **Yahoo Finance returns no data or a request fails.** Check internet access, confirm the symbol/date range is valid, and retry later if the provider is temporarily unavailable. Application simulation and backtest commands depend on this external provider.
 - **The selected strategy cannot be found or fails validation.** Ensure `ActiveStrategy` exactly names an entry under `Strategies`, and check the numeric ranges in the strategy table.
 
+## Read-only diagnosis of skipped orchestration jobs
+
+Keep both live workflows manually disabled, remove `agent:ready` from the test
+Issue, and keep `ORCHESTRATION_ACTIVATION_APPROVED=false` while diagnosing.
+Run **Agent gate diagnostics (read-only)** manually from `master` in Actions.
+It has no token permissions, checkout, credential environment, secret references,
+or live orchestration commands. It writes only its own logs and job summary.
+
+The summary reports each repository-variable comparison separately, including
+the activation/Issue/cap gates and the test CI pins. It also shows this diagnostic
+run's event and workflow refs. It does not reconstruct the context or variable
+values of a previous Issue-triggered run, and its own workflow ref names the
+diagnostic file, not the reconciler file. A successful diagnostic job means only
+that reporting completed; false comparisons do not fail it or authorize a start.
+The activation comparison should be false while the test is stopped.
+
+The definition-SHA comparison uses this run's commit. A newly merged PR changes
+that SHA, so a previously valid `ORCHESTRATION_DEFINITION_SHA` can report false.
+Before a separately approved live start, pin the reconciler to the reviewed
+current `master` commit; do not move the protected CI tag or change its SHA just
+to make this diagnostic green. Do not retry the live start until the discrepancy
+is understood.
+
 ## Agent state machine: implementation and temporary test activation gates
 
 The replacement orchestration component is separate from the trading application:
