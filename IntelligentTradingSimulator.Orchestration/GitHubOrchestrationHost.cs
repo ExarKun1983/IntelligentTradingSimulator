@@ -13,17 +13,19 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         long taskCreatorId, GitHubExecutionApproval? approval = null, WorkerOptions? options = null,
         ITaskFinalHeadSource? finalHeadSource = null, CancellationToken token = default,
         GitHubReviewApproval? reviewApproval = null, GitHubCiRoute? ciRoute = null, GitHubCiApproval? ciApproval = null,
-        GitHubStatusPublisher? statusPublisher = null, GitHubRequiredStatusApproval? statusApproval = null)
+        GitHubStatusPublisher? statusPublisher = null, GitHubRequiredStatusApproval? statusApproval = null,
+        BoundedOrchestrationScope? boundedScope = null)
     {
         if (!wakeApproval.AllowsWake || approval?.AllowsTasks != true)
             throw new InvalidOperationException("Automatic live execution prerequisites are not verified.");
-        var state = (await store.LoadAsync(token)).State;
+        var scopedStore = ScopeStore(store, boundedScope);
+        var state = (await scopedStore.LoadAsync(token)).State;
         if (!await new GitHubWakeSource(api, wakeRoute).VerifyAsync(trustedActionsPayload, eventName, runId, state, token))
             return null;
         if (eventName == "schedule" && !OrchestrationContinuation.IsDue(state, clock.GetUtcNow()) &&
             !OrchestrationContinuation.HasWork(state) && !OrchestrationContinuation.RequiresObservation(state))
             return null;
-        return await RunVerifiedAsync(null, projectionActorId, baseBranch, taskCreatorId, approval, options,
+        return await RunVerifiedAsync(scopedStore, null, projectionActorId, baseBranch, taskCreatorId, approval, options,
             finalHeadSource, token, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval);
     }
 
@@ -34,30 +36,38 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         ITaskFinalHeadSource? finalHeadSource = null, CancellationToken token = default,
         GitHubReviewApproval? reviewApproval = null, GitHubCiRoute? ciRoute = null, GitHubCiApproval? ciApproval = null,
         GitHubStatusPublisher? statusPublisher = null, GitHubRequiredStatusApproval? statusApproval = null,
-        int? maxRepairTasks = null)
+        int? maxRepairTasks = null, BoundedOrchestrationScope? boundedScope = null)
     {
         if (approval?.AllowsTasks != true) throw new InvalidOperationException("Live activation prerequisites are not verified.");
-        var snapshot = await store.LoadAsync(token);
+        if (boundedScope is not null && maxRepairTasks is not null &&
+            boundedScope.MaxRepairTasks != maxRepairTasks)
+            throw new InvalidDataException("Command repair-task cap does not match the bounded scope.");
+        var scopedStore = ScopeStore(store, boundedScope);
+        var snapshot = await scopedStore.LoadAsync(token);
+        var issueNumber = IssueNumber(trustedActionsPayload, eventName);
+        if (boundedScope is { } scope && issueNumber != scope.IssueNumber)
+            throw new InvalidDataException("Bounded scope rejected a command for another Issue.");
         var evidence = await api.ReadIngressEvidenceAsync(trustedActionsPayload, eventName, runId, projectionActorIds, token);
         var message = GitHubActionsIngress.PrepareEvent(trustedActionsPayload, eventName, runId, evidence,
-            repositoryGeneration, issueGeneration, occurredAt, maxRepairTasks);
-        ValidateGeneration(snapshot.State, IssueNumber(trustedActionsPayload, eventName),
+            repositoryGeneration, issueGeneration, occurredAt, boundedScope?.MaxRepairTasks ?? maxRepairTasks);
+        message = RestoreCommittedReadyReplay(snapshot.State, message);
+        ValidateGeneration(snapshot.State, issueNumber,
             repositoryGeneration, issueGeneration, message);
-        return await RunVerifiedAsync(message, projectionActorId, baseBranch, taskCreatorId, approval, options,
+        return await RunVerifiedAsync(scopedStore, message, projectionActorId, baseBranch, taskCreatorId, approval, options,
             finalHeadSource, token, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval);
     }
 
-    private async Task<WorkerResult> RunVerifiedAsync(OrchestrationEvent? message,
+    private async Task<WorkerResult> RunVerifiedAsync(IStateStore stateStore, OrchestrationEvent? message,
         long projectionActorId, string baseBranch, long taskCreatorId, GitHubExecutionApproval approval,
         WorkerOptions? options, ITaskFinalHeadSource? finalHeadSource, CancellationToken token,
         GitHubReviewApproval? reviewApproval, GitHubCiRoute? ciRoute, GitHubCiApproval? ciApproval,
         GitHubStatusPublisher? statusPublisher, GitHubRequiredStatusApproval? statusApproval)
     {
         var authorization = new VerifiedEvents();
-        var tasks = new GitHubTaskAdapter(api, store, baseBranch, taskCreatorId, approval, finalHeadSource, taskApi);
+        var tasks = new GitHubTaskAdapter(api, stateStore, baseBranch, taskCreatorId, approval, finalHeadSource, taskApi);
         if (message?.Data is HumanClassification classification)
         {
-            var state = (await store.LoadAsync(token)).State;
+            var state = (await stateStore.LoadAsync(token)).State;
             if (!state.Inbox.ContainsKey(message.Id))
             {
                 var live = await api.ObserveAsync(state, clock.GetUtcNow(), token);
@@ -68,7 +78,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         }
         if (message?.Data is ResolveTaskTerminal resolution)
         {
-            var snapshot = (await store.LoadAsync(token)).State;
+            var snapshot = (await stateStore.LoadAsync(token)).State;
             if (snapshot.Inbox.GetValueOrDefault(message.Id)?.Event is { Data: ResolveTaskTerminal previous } saved)
             {
                 if (previous.TaskId != resolution.TaskId || previous.Reason != resolution.Reason ||
@@ -93,7 +103,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                     terminal = priorEvent;
                 }
                 authorization.Grant(terminal);
-                await new OrchestrationReconciler(new(authorization)).DispatchAsync(store, terminal, token);
+                await new OrchestrationReconciler(new(authorization)).DispatchAsync(stateStore, terminal, token);
                 message = message with { OccurredAt = observed.OccurredAt,
                     Data = resolution with { EvidenceEventId = terminal.Id } };
             }
@@ -102,15 +112,15 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         {
             authorization.Grant(message);
             // Persist a verified command before unrelated service reads can fail or the invocation yields.
-            await new OrchestrationReconciler(new(authorization)).DispatchAsync(store, message, token);
+            await new OrchestrationReconciler(new(authorization)).DispatchAsync(stateStore, message, token);
         }
-        var reviews = new GitHubReviewAdapter(api, store, clock, reviewApproval, tasks);
-        var ci = ciRoute is null ? null : new GitHubCiAdapter(api, store, ciRoute, clock, ciApproval, tasks);
+        var reviews = new GitHubReviewAdapter(api, stateStore, clock, reviewApproval, tasks);
+        var ci = ciRoute is null ? null : new GitHubCiAdapter(api, stateStore, ciRoute, clock, ciApproval, tasks);
         var events = new ProductionEvents(message, api, tasks, reviews, ci, authorization, projectionActorId);
-        var statuses = statusPublisher is null ? null : new GitHubRequiredStatusAdapter(api, store, statusPublisher, statusApproval, clock);
+        var statuses = statusPublisher is null ? null : new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher, statusApproval, clock);
         var effects = new ProductionEffects(tasks, reviews, ci, statuses, new GitHubProjectionAdapter(api, projectionActorId, true));
         return await new OrchestrationWorker(new OrchestrationReducer(authorization, statuses is not null &&
-            statusApproval?.AllowsPublication == true), clock).RunAsync(store, events,
+            statusApproval?.AllowsPublication == true), clock).RunAsync(stateStore, events,
             new TaskObservations(tasks, clock), effects, new ReconcileOptions(false, true, true, true),
             options, token);
     }
@@ -139,6 +149,47 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         if (state.Generation != repositoryGeneration ||
             state.Issues.TryGetValue(issueNumber, out var issue) && issue.Generation != issueGeneration && !committedReplay)
             throw new InvalidDataException("Expected workflow generation does not match canonical state.");
+    }
+
+    private static OrchestrationEvent? RestoreCommittedReadyReplay(RepositoryState state, OrchestrationEvent? message)
+    {
+        if (message?.Data is not Ready || state.Inbox.GetValueOrDefault(message.Id)?.Event is not
+            { Data: Ready } committed)
+            return message;
+        if ((message with { Data = new Ready() }).Digest != (committed with { Data = new Ready() }).Digest)
+            throw new InvalidDataException("Replayed Ready command changed its immutable event content.");
+        return committed;
+    }
+
+    private static IStateStore ScopeStore(IStateStore target, BoundedOrchestrationScope? scope) =>
+        scope is null ? target : new ScopedStateStore(target, scope);
+
+    private sealed class ScopedStateStore(IStateStore target, BoundedOrchestrationScope scope) : IStateStore
+    {
+        public async Task<StateSnapshot> LoadAsync(CancellationToken cancellationToken)
+        {
+            var snapshot = await target.LoadAsync(cancellationToken);
+            Validate(snapshot.State);
+            return snapshot;
+        }
+
+        public Task<bool> TrySaveAsync(StateSnapshot expected, RepositoryState state, CancellationToken cancellationToken)
+        {
+            Validate(expected.State);
+            Validate(state);
+            return target.TrySaveAsync(expected, state, cancellationToken);
+        }
+
+        private void Validate(RepositoryState state)
+        {
+            if (scope.IssueNumber <= 0 || scope.MaxRepairTasks != 1 ||
+                state.Issues.Keys.Any(number => number != scope.IssueNumber) ||
+                state.AdmittedIssue is { } admitted && admitted != scope.IssueNumber ||
+                state.Outbox.Values.Any(effect => effect.IssueNumber != scope.IssueNumber) ||
+                state.Issues.TryGetValue(scope.IssueNumber, out var issue) &&
+                issue.MaxRepairTasks != scope.MaxRepairTasks)
+                throw new InvalidDataException("Canonical state or effect snapshot exceeds the bounded test scope.");
+        }
     }
 
     private static int IssueNumber(JsonElement payload, string eventName) => eventName switch

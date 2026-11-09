@@ -220,7 +220,9 @@ public sealed record RequiredStatusBoundary(long ActorId, string ActorLogin, str
 [JsonDerivedType(typeof(Closure), "closure")]
 [JsonDerivedType(typeof(Reopen), "reopen")]
 public abstract record EventData;
-public sealed record Ready(int? MaxRepairTasks = null) : EventData;
+public sealed record Ready([property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? MaxRepairTasks = null) : EventData;
+public sealed record BoundedOrchestrationScope(int IssueNumber, int MaxRepairTasks);
 public sealed record Withdraw : EventData;
 public sealed record StageEdited : EventData;
 public sealed record Resume : EventData;

@@ -111,8 +111,8 @@ public static class GitHubLiveCommand
                     [publisher.ActorId], publisher.ActorId, settings.BaseBranch, settings.ActorId,
                     settings.Tasks, ciRoute: settings.CiRoute, ciApproval: settings.Ci, reviewApproval: settings.Review,
                     statusPublisher: publisher, statusApproval: settings.Status,
-                    maxRepairTasks: eventName == "issues" && issue == settings.TestIssue
-                        ? settings.TestMaxRepairTasks : null);
+                    boundedScope: settings.TestIssue is { } testIssue
+                        ? new BoundedOrchestrationScope(testIssue, settings.TestMaxRepairTasks!.Value) : null);
             }
             else
             {
@@ -121,7 +121,9 @@ public static class GitHubLiveCommand
                 result = await host.ReconcileWakeAsync(payload.RootElement, eventName, runId, settings.WakeRoute,
                     settings.Wake, publisher.ActorId, settings.BaseBranch, settings.ActorId, settings.Tasks,
                     ciRoute: settings.CiRoute, ciApproval: settings.Ci, reviewApproval: settings.Review,
-                    statusPublisher: publisher, statusApproval: settings.Status);
+                    statusPublisher: publisher, statusApproval: settings.Status,
+                    boundedScope: settings.TestIssue is { } testIssue
+                        ? new BoundedOrchestrationScope(testIssue, settings.TestMaxRepairTasks!.Value) : null);
             }
             output.WriteLine(JsonSerializer.Serialize(new { Mode = "github-live", Result = result?.Reason.ToString() }, StateJson.Options));
             return 0;
