@@ -1525,20 +1525,27 @@ dotnet test IntelligentTradingSimulator.sln --configuration Release --verbosity 
 - **Yahoo Finance returns no data or a request fails.** Check internet access, confirm the symbol/date range is valid, and retry later if the provider is temporarily unavailable. Application simulation and backtest commands depend on this external provider.
 - **The selected strategy cannot be found or fails validation.** Ensure `ActiveStrategy` exactly names an entry under `Strategies`, and check the numeric ranges in the strategy table.
 
-## Agent state machine: offline implementation, not activated
+## Agent state machine: implementation and temporary test activation gates
 
 The replacement orchestration component is separate from the trading application:
 `IntelligentTradingSimulator.Orchestration`. Issue #213's approved reduced-scope
 contract uses **label-controlled initiation**, not a mandatory Start button.
 Implementation/testing approval is not activation approval. The legacy workflow
 remains disabled in GitHub; never restart it for comparison, shadow mode, or rollback.
-The replacement workflow retains a literal `if: false` job guard and read-only
-Actions-token permissions. Its production step references a separately approved
-user credential, but cannot run while disabled. Offline/read-only modes remain the
+The replacement jobs are **conditionally gated, not unconditionally disabled**.
+Both require `ORCHESTRATION_ACTIVATION_APPROVED=true`,
+`ORCHESTRATION_TEST_ISSUE=227`, and `ORCHESTRATION_TEST_MAX_REPAIR_TASKS=1`.
+The reconciler additionally requires `refs/heads/master`; managed CI requires
+the configured `refs/tags/` ref. Matching configuration can therefore enable
+these jobs without another code change. Keep activation explicitly `false`
+until the separate test approval and all runtime prerequisites are satisfied.
+The reconciler has write permissions for state, projections, CI, and statuses;
+its task API step uses a separate protected user credential. Managed CI grants
+only `contents: read`. Offline/read-only modes remain the
 CLI default; the new `--github-live --execute` path additionally requires explicit
-default-false prerequisite attestations. Removing the workflow guard alone is **not**
-a supported activation procedure. No credential, repository variable or setting
-has been provisioned or changed by this implementation.
+default-false prerequisite attestations. Satisfying the workflow guard alone is
+**not** a supported activation procedure. Check live repository/environment
+configuration rather than inferring disablement from workflow names or this text.
 
 ### Ownership and labels
 
@@ -1745,10 +1752,10 @@ It feeds the same leased bounded worker and CAS store as existing reducer tests.
 Ordinary feedback during coding is queued for a child task; no review may bypass it.
 The library host can publish state and perform authorized task/projection effects,
 but **CI effects return unknown without a configured, separately approved route**,
-producing an explicit hold. The disabled managed route is described below.
+producing an explicit hold. The conditionally gated managed route is described below.
 Review requests have their own default-false approval gates and
 the conservative integration below. This is not a finished coding/CI/review deployment. CLI, replacement
-workflow activation remains disabled. Scheduled/event continuation wiring is
+workflow execution requires the temporary test gates and runtime approvals. Scheduled/event continuation wiring is
 described below and does not establish a lossless-delivery guarantee.
 
 `GitHubTaskIntegrationTests` uses mocked REST responses for approved/disabled host
@@ -1838,11 +1845,11 @@ shared-worker feedback precedence. Closed/changed-head live PRs stop review
 polling without preventing shared closure/head reconciliation. Full automatic
 approval/repair remains blocked pending either a supported trustworthy round and
 classification contract or authorized human classification. CLI and workflow
-execution remain disabled; this library wiring cannot resolve the separate
+execution require explicit runtime approvals; this library wiring cannot resolve the separate
 task-final-SHA blocker. Required-status publication, guarded push routing and
 cross-invocation wake-up wiring are implemented below, still default-disabled.
 
-#### Managed exact-SHA CI implementation (disabled)
+#### Managed exact-SHA CI implementation (conditionally gated)
 
 `GitHubCiAdapter` implements the documented workflow dispatch, run lookup and
 paginated jobs APIs. The library host accepts an optional `GitHubCiRoute` and
@@ -1876,8 +1883,9 @@ coding SHA.** The isolated workflow receives the completed task's final SHA as
 input, checks out exactly it with `persist-credentials: false`, verifies HEAD,
 then runs the repository-required restore/Release build/test commands. It grants
 only `contents: read`; it has no state writes, orchestration credentials or secret
-inputs. Its only trigger is `workflow_dispatch`, and its job has literal
-`if: ${{ false }}`. Nothing can execute until separately reviewed activation.
+inputs. Its only trigger is `workflow_dispatch`. Its job requires activation
+`true`, test Issue `227`, cap `1`, and a tag ref equal to `ORCHESTRATION_CI_REF`.
+These are configuration-dependent gates, not a literal-false safety guarantee.
 
 Result correlation checks provider run/workflow/repository/path/event/revision,
 intent-derived display title and first attempt, plus the exact run's unique job
@@ -1905,7 +1913,7 @@ trusted required-status publisher below targets the tested PR SHA; branch
 protection is unchanged. Final task-SHA evidence and account prerequisites remain
 external blockers, not capabilities supplied by these CI fixtures.
 
-#### Durable continuation and production command routing (disabled)
+#### Durable continuation and production command routing (conditionally gated)
 
 `OrchestrationContinuation` stores one canonical repository-generation ticket
 before a leased invocation reads services or executes effects. An unfinished
@@ -1915,7 +1923,7 @@ recovery. Verified human commands are committed before unrelated service reads,
 so a service failure cannot lose an already-verified ready/pause/reactivation.
 Ticket expiry/due time is not task completion or permission to recreate an effect.
 
-The disabled replacement workflow defines periodic `schedule`, exact managed
+The conditionally gated replacement workflow defines periodic `schedule`, exact managed
 `workflow_run` completion, PR synchronization/closure and ordinary feedback wakes.
 Review results use trusted worker/periodic API polling. Direct `pull_request_review`
 wakes are deliberately excluded: their PR merge revision is not the approved
@@ -2121,11 +2129,14 @@ not request a PR. The task API has no caller idempotency key: if the workflow re
 an uncertain POST result, do not rerun it; reconcile the Agent tasks list first.
 The branch may contain one temporary documentation commit, but no PR checks or
 review are expected. This proves task-start capability only, not end-to-end state
-machine correctness. Both orchestrators remain disabled.
+machine correctness. Legacy remains disabled; replacement execution depends on
+the current temporary test configuration and runtime approvals.
 
-This PR does **not** activate anything. Both replacement jobs keep literal
-`if: ${{ false }}`; legacy disablement remains. The following are future operator
-steps after separate approval, not instructions to execute during this issue.
+The temporary test gate change does not set activation variables or grant runtime
+approvals, but it removes unconditional job disablement. Existing matching
+configuration can permit execution as soon as that change is available on the
+required ref. Legacy disablement remains. The following are operator steps after
+separate approval; keep activation `false` throughout preparation.
 No second account/seat is needed. A sole maintainer who cannot independently satisfy
 entitlement, cost controls or repository protection must leave activation blocked.
 
@@ -2287,8 +2298,8 @@ this account's access, credentials, entitlements, policy or spending configurati
 | Review request | [Requested reviewers REST](https://docs.github.com/en/rest/pulls/review-requests#request-reviewers-for-a-pull-request) and [Copilot review guide](https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/copilot-code-review) document `copilot-pull-request-reviewer[bot]`. Gated request/boundary/receipt and lookup-only recovery are implemented. | Response is a PR, not a review-job ID. Verify repository policy/auth, automatic-review settings and account billing. Missing confirmed receipts remain uncertain; no speculative retry. |
 | Review result | [PR reviews/comments](https://docs.github.com/en/rest/pulls/reviews) expose actor, `commit_id`, review ID and comments; bounded validated raw capture is implemented. | No request-round token or dependable prose classifier; captured output is `needs-human`, never guessed promotion/repair. Authorized classification or independently verified provider evidence is required. |
 | Lost mutation response | Neither task launch nor review request documents a caller-supplied idempotency key or exactly-once creation. | Persist intent before call; retain returned identity; if no unique operation can be established, hold for human reconciliation, never repeat a speculative create. |
-| CI/status | [Workflow dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event), [runs](https://docs.github.com/en/rest/actions/workflow-runs), [jobs](https://docs.github.com/en/rest/actions/workflow-jobs) and [commit statuses](https://docs.github.com/en/rest/commits/statuses) contracts; gated adapters, exact persisted candidate-SHA testing/status, disabled exact-SHA workflow and default-disabled managed push routing. | Verify credential/publisher/context policy, immutable trusted tag/revision and no-added-charge enforcement. The bounded candidate SHA is only the terminal-task-time observed PR head, not an authoritative task-produced commit. No branch protection or workflow activation changed. |
-| Continuation | Documented default-branch schedule/workflow-run/comment/PR wakes; durable canonical ticket and leased shared host, disabled workflow wiring. | GitHub may drop/delay schedules or disable inactive public schedules; monitor and use exceptional guarded Resume. Trusted definition/default-branch placement and account cost controls require maintainer verification. No lossless SLA. |
+| CI/status | [Workflow dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event), [runs](https://docs.github.com/en/rest/actions/workflow-runs), [jobs](https://docs.github.com/en/rest/actions/workflow-jobs) and [commit statuses](https://docs.github.com/en/rest/commits/statuses) contracts; gated adapters, exact persisted candidate-SHA testing/status, conditionally gated exact-SHA workflow and default-disabled managed push routing. | Verify credential/publisher/context policy, immutable trusted tag/revision and no-added-charge enforcement. The bounded candidate SHA is only the terminal-task-time observed PR head, not an authoritative task-produced commit. Workflow execution depends on configuration; branch protection must be checked independently. |
+| Continuation | Documented default-branch schedule/workflow-run/comment/PR wakes; durable canonical ticket and leased shared host, conditionally gated workflow wiring. | GitHub may drop/delay schedules or disable inactive public schedules; monitor and use exceptional guarded Resume. Trusted definition/default-branch placement and account cost controls require maintainer verification. No lossless SLA. |
 | Operator recovery | Saved task GET/session snapshot plus authorized `resolve-task`; local tracking ends Failed, with durable evidence and replay. `classify-review` references exact current handoff/head/round. | Task API does not promise irreversible remote termination. Verify quiescence before Reactivate; missing saved launch ID remains unresolved without an authoritative operation identity/design decision. No completion-SHA inference. |
 | Charges | [Organization billing](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing), [budgets](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/budgets), and [review pricing](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing) describe paid usage and review attribution. | Maintainer/admin must verify existing entitlement, attribution, disable paid overages, and enforce stop-usage controls for AI and Actions. Alerts alone are not caps; public Actions compute does not establish free AI use. No per-operation included-only billing field was established. |
 
@@ -2312,8 +2323,8 @@ refer to `IntelligentTradingSimulator.Tests/Orchestration`.
 | 10 Closure/reopen/reactivation | Core/REST closure checks; verified ended-session/operator evidence with release/no-release/replay tests; human holds remain | Snapshot is not irreversible task termination; missing launch ID requires external identity/design decision. |
 | 11 Operations documentation | This runbook: trust/cost/cutover/rollback, continuation monitoring, status provenance and operator procedures | Maintainer must verify account/prerequisites and approve activation separately. |
 | 12 Human final approval/no auto-merge | Core `HUMAN_REVIEW`; Host classification leaves final approval hold; no merge effect/API | CI status alone is not approval; preserve independent human branch protection. |
-| 13 Label start/queue/guarded recovery | Verified command committed before service reads; split-credential PAT-owner/bot ingress, identity and replay tests; live CLI and disabled workflow wiring | Solo maintainer uses the existing human PAT only for task APIs; Actions bot owns projections/state. Account/prerequisites remain unverified. No normal Start button. |
-| 14 Automatic stages/labels/continuation | Leased host, durable ticket, scheduled/event wake verification, bounded automatic polls and status projections | Default-disabled; GitHub schedule delays/drop/inactivity require monitoring and exceptional Resume, not a delivery SLA. |
+| 13 Label start/queue/guarded recovery | Verified command committed before service reads; split-credential PAT-owner/bot ingress, identity and replay tests; live CLI and conditionally gated workflow wiring | Solo maintainer uses the existing human PAT only for task APIs; Actions bot owns projections/state. Account/prerequisites remain unverified. No normal Start button. |
+| 14 Automatic stages/labels/continuation | Leased host, durable ticket, scheduled/event wake verification, bounded automatic polls and status projections | Configuration-dependent test gates and runtime approvals; GitHub schedule delays/drop/inactivity require monitoring and exceptional Resume, not a delivery SLA. |
 | 15 Shared C#/real response shapes | One reducer/reconciler; REST task/session/GraphQL/review/CI/status fixtures, trusted routing/wake adapters and production composition | Public contracts/offline fixtures do not establish this account's eligibility, credentials, spending or final-SHA capability. |
 | 16 Repository admission/queue | Core/CAS/worker concurrent admission; duplicate/expired-lease continuation tests; task recovery retains other unfinished work | Requires protected canonical branch; no paid database/external worker or premature lease release. |
 | 17 Reviewer needs-human | Raw output/handoff capture, explicit authorized live-head classification, unresolved finding regression and status revocation | Autonomous request-round/classification evidence absent; human gating remains intentional. |
