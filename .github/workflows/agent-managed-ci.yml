@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   test:
-    if: ${{ false }}
+    if: ${{ startsWith(github.ref, 'refs/tags/') && github.ref == vars.ORCHESTRATION_CI_REF && vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true' && vars.ORCHESTRATION_TEST_ISSUE == '227' && vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1' }}
     name: Test ${{ inputs.sha }}
     runs-on: ubuntu-latest
     timeout-minutes: 15

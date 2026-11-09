@@ -79,9 +79,8 @@ permissions:
 
 jobs:
   reconcile:
-    # Implementation/offline validation approval is NOT activation approval.
-    # Keep a literal false, not a mutable repository variable, until reviewed cutover.
-    if: ${{ false }}
+    # Temporary opt-in for the single reviewed test Issue; not production cutover.
+    if: ${{ github.ref == 'refs/heads/master' && vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true' && vars.ORCHESTRATION_TEST_ISSUE == '227' && vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     environment: agent-orchestration

@@ -64,6 +64,7 @@ public sealed class IssueState
     public int CiBudget { get; set; } = 3;
     public int ReviewBudget { get; set; } = 5;
     public int? MaxRepairTasks { get; set; }
+    public bool SinglePassTest { get; set; }
     public string? ActiveTaskId { get; set; }
     public Dictionary<string, TaskIdentity> Tasks { get; set; } = [];
     public CiIdentity? Ci { get; set; }
@@ -221,7 +222,9 @@ public sealed record RequiredStatusBoundary(long ActorId, string ActorLogin, str
 [JsonDerivedType(typeof(Reopen), "reopen")]
 public abstract record EventData;
 public sealed record Ready([property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    int? MaxRepairTasks = null) : EventData;
+    int? MaxRepairTasks = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    bool? SinglePassTest = null) : EventData;
 public sealed record BoundedOrchestrationScope(int IssueNumber, int MaxRepairTasks);
 public sealed record Withdraw : EventData;
 public sealed record StageEdited : EventData;

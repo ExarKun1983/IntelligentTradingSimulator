@@ -316,6 +316,73 @@ public sealed class OrchestrationCoreTests
     }
 
     [Fact]
+    public void SinglePassTestStopsAfterFailedCiAndCannotBeReactivated()
+    {
+        var reducer = Reducer();
+        var state = Admitted();
+        state.Issues[7].SinglePassTest = true;
+        state = CompleteTask(state, 2);
+        state = FinishCi(state, false, "failed-single-ci");
+        state = StateJson.Deserialize(StateJson.Serialize(state));
+        state = reducer.Apply(state, Event(new Resume(), "resume-single"));
+        state = reducer.Apply(state, Event(new Ready(), "ready-single"));
+        state = reducer.Reconcile(state, Live(state)).State;
+
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+        Assert.Equal("Single-pass test stopped after CI failure.", state.Issues[7].HoldReason);
+        Assert.Null(state.AdmittedIssue);
+        Assert.Single(state.Issues[7].Tasks);
+        Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.RunCi);
+        Assert.DoesNotContain(state.Outbox.Values, effect => effect.Kind == EffectKind.RequestReview);
+        Assert.Throws<InvalidOperationException>(() =>
+            reducer.Apply(state, Event(new Reactivate("try again"), "reactivate-single")));
+    }
+
+    [Fact]
+    public void SinglePassTestAllowsOneReviewAfterGreenCiButNeverRepairsReviewFindings()
+    {
+        var reducer = Reducer();
+        var state = Admitted();
+        state.Issues[7].SinglePassTest = true;
+        state = CompleteTask(state, 2);
+        state = FinishCi(state, true, "single-green");
+        state = reducer.Reconcile(state, Live(state)).State;
+        Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.RequestReview);
+        state = FinishReview(state, ReviewClassification.Blocking, "single-review",
+            [new("f", "Fix this", "evidence")], []);
+        state = reducer.Reconcile(state, Live(state)).State;
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+        Assert.Single(state.Issues[7].Tasks);
+        Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.RunCi);
+        Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.RequestReview);
+    }
+
+    [Fact]
+    public void SinglePassTestRejectsSecondCiAndReviewPlanning()
+    {
+        var reducer = Reducer();
+        var state = Admitted();
+        state.Issues[7].SinglePassTest = true;
+        state = CompleteTask(state, 2);
+        state = FinishCi(state, true, "first-ci");
+        state = reducer.Reconcile(state, Live(state)).State;
+        state = SucceedEffect(state, EffectKind.RequestReview, "first-review");
+        var original = StateJson.Serialize(state);
+
+        state.Issues[7].Review = null;
+        state = reducer.Reconcile(state, Live(state)).State;
+        Assert.Equal("Single-pass test review limit reached.", state.Issues[7].HoldReason);
+        Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.RequestReview);
+
+        state = StateJson.Deserialize(original);
+        state.Issues[7].Tasks[state.Issues[7].ActiveTaskId!].Status =
+            IntelligentTradingSimulator.Orchestration.TaskStatus.AwaitingHeadConfirmation;
+        state = reducer.Reconcile(state, Live(state)).State;
+        Assert.Equal("Single-pass test CI limit reached.", state.Issues[7].HoldReason);
+        Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.RunCi);
+    }
+
+    [Fact]
     public void BoundedRepairTaskCapAllowsOneRepairAndBlocksTheNext()
     {
         var reducer = Reducer();
@@ -872,6 +939,112 @@ public sealed class OrchestrationCoreTests
         });
         Assert.Equal(Phase.CI_PENDING, state.Issues[7].Phase);
         Assert.Equal(child.Id, state.Issues[7].Ci!.TaskId);
+    }
+
+    [Theory]
+    [InlineData("coding")]
+    [InlineData("ci-pending")]
+    [InlineData("ci-confirmed")]
+    [InlineData("review-pending")]
+    [InlineData("review-confirmed")]
+    public void SinglePassFeedbackCancelsPendingWorkAndWaitsForTrackedOperationsBeforePersistentHold(string stage)
+    {
+        var reducer = Reducer();
+        var state = Admitted();
+        state.Issues[7].SinglePassTest = true;
+        EventData? settlement = null;
+        string operationId;
+        if (stage == "coding")
+        {
+            state = SucceedEffect(state, EffectKind.LaunchTask, "coding");
+            var taskId = state.Issues[7].ActiveTaskId!;
+            operationId = state.Outbox.Values.Single(effect => effect.Kind == EffectKind.LaunchTask).Id;
+            settlement = Completion(state.Issues[7], taskId, 11, Sha(2));
+        }
+        else
+        {
+            state = CompleteTask(state, 2);
+            var kind = EffectKind.RunCi;
+            if (stage.StartsWith("review", StringComparison.Ordinal))
+            {
+                state = FinishCi(state, true, "green");
+                state = reducer.Reconcile(state, Live(state)).State;
+                kind = EffectKind.RequestReview;
+            }
+            operationId = state.Outbox.Values.Single(effect => effect.Kind == kind).Id;
+            if (stage.EndsWith("confirmed", StringComparison.Ordinal))
+            {
+                state = SucceedEffect(state, kind, "operation");
+                var issue = state.Issues[7];
+                settlement = kind == EffectKind.RunCi
+                    ? new CiResult("operation", issue.Ci!.TaskId, issue.Ci.Round, 11, issue.Ci.Sha, true)
+                    : new ReviewResult("operation", issue.Review!.TaskId, issue.Review.Round, 11,
+                        issue.Review.Sha, ReviewClassification.Accepted, [], []);
+            }
+        }
+        var taskIdBeforeFeedback = state.Issues[7].ActiveTaskId;
+        var agentIntents = state.Outbox.Values.Where(effect =>
+            effect.Kind is EffectKind.LaunchTask or EffectKind.RunCi or EffectKind.RequestReview)
+            .Select(effect => effect.Id).Order().ToArray();
+
+        state = reducer.Apply(state, Event(new HumanFeedback("Stop and address this feedback."), "single-feedback"));
+        Assert.Equal(settlement is null ? DeliveryStatus.Cancelled : DeliveryStatus.Succeeded,
+            state.Outbox[operationId].Status);
+        state = reducer.Reconcile(state, Live(state, ready: false)).State;
+        if (settlement is not null)
+        {
+            Assert.Equal(Phase.FIX_PENDING, state.Issues[7].Phase);
+            Assert.Equal(7, state.AdmittedIssue);
+            Assert.Equal(taskIdBeforeFeedback, state.Issues[7].ActiveTaskId);
+            if (stage == "coding")
+                Assert.Equal(TaskStatus.Running, state.Issues[7].Tasks[taskIdBeforeFeedback!].Status);
+            else if (stage == "ci-confirmed")
+            {
+                Assert.Equal("operation", state.Issues[7].Ci!.RunId);
+                Assert.Null(state.Issues[7].Ci!.Green);
+            }
+            else
+            {
+                Assert.Equal("operation", state.Issues[7].Review!.ReviewId);
+                Assert.Null(state.Issues[7].Review!.Classification);
+            }
+            state = StateJson.Deserialize(StateJson.Serialize(state));
+            state = reducer.Apply(state, Event(settlement, "single-settlement"));
+            state = reducer.Reconcile(state, Live(state, stage == "coding" ? Sha(2) : null, ready: false)).State;
+            if (stage == "coding")
+                Assert.Equal(TaskStatus.Completed, state.Issues[7].Tasks[taskIdBeforeFeedback!].Status);
+            else if (stage == "ci-confirmed")
+                Assert.True(state.Issues[7].Ci!.Green);
+            else
+                Assert.Equal(ReviewClassification.Accepted, state.Issues[7].Review!.Classification);
+        }
+
+        AssertHeldWithoutMoreWork(state);
+        state = StateJson.Deserialize(StateJson.Serialize(state));
+        state = reducer.Apply(state, Event(new Ready(), "single-ready-after-feedback"));
+        state = reducer.Apply(state, Event(new Resume(), "single-resume-after-feedback"));
+        state = reducer.Reconcile(state, Live(state)).State;
+        AssertHeldWithoutMoreWork(state);
+
+        void AssertHeldWithoutMoreWork(RepositoryState held)
+        {
+            var issue = held.Issues[7];
+            Assert.True(issue.SinglePassTest);
+            Assert.Equal(Phase.BLOCKED, issue.Phase);
+            Assert.Equal("Single-pass test does not allow repair tasks.", issue.HoldReason);
+            Assert.True(issue.ReactivationRequired);
+            Assert.Null(held.AdmittedIssue);
+            Assert.Equal(taskIdBeforeFeedback, issue.ActiveTaskId);
+            Assert.Equal(TaskKind.Coding, Assert.Single(issue.Tasks.Values).Kind);
+            Assert.Equal("single-feedback", Assert.Single(issue.PendingFeedbackEventIds));
+            Assert.Null(issue.Feedback["single-feedback"].PlannedTaskId);
+            Assert.Null(issue.Feedback["single-feedback"].HandedOffTaskId);
+            Assert.Equal(agentIntents, held.Outbox.Values.Where(effect =>
+                effect.Kind is EffectKind.LaunchTask or EffectKind.RunCi or EffectKind.RequestReview)
+                .Select(effect => effect.Id).Order().ToArray());
+            Assert.DoesNotContain(held.Outbox.Values, effect => effect.Status == DeliveryStatus.Pending &&
+                effect.Kind is EffectKind.LaunchTask or EffectKind.RunCi or EffectKind.RequestReview);
+        }
     }
 
     [Theory]
