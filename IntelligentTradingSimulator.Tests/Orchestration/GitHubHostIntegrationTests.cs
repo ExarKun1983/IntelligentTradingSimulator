@@ -91,6 +91,37 @@ public sealed class GitHubHostIntegrationTests
     }
 
     [Fact]
+    public async Task BoundedCommandRejectsOutOfScopeStateOnLaterDispatchLoad()
+    {
+        using var fixture = new GitHubTaskIntegrationTests.ApiFixture();
+        using var client = fixture.Client();
+        var store = new ChangingStore();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new FixedClock());
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => host.ReconcileAsync(
+            fixture.Notification(), "issues", "44", 1, 1, Now, [], 99, "master", 55,
+            new(true, true, true, true), boundedScope: new(7, 1)));
+
+        Assert.Equal(2, store.Reads);
+    }
+
+    [Fact]
+    public async Task BoundedWakeRejectsOutOfScopeEffectSnapshotBeforeVerification()
+    {
+        var state = RepositoryState.Create("owner/repo");
+        state.Issues[7] = new IssueState { Number = 7, MaxRepairTasks = 1 };
+        state.Outbox["foreign"] = new EffectIntent { Id = "foreign", IssueNumber = 8 };
+        var store = new GitHubTaskIntegrationTests.Store(state);
+        using var client = new HttpClient(new NoRequests()) { BaseAddress = new("https://api.github.com/") };
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new FixedClock());
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => host.ReconcileWakeAsync(
+            JsonDocument.Parse("{}").RootElement, "schedule", "44", new(10, Sha),
+            new(true, true, true, true), 99, "master", 55,
+            new(true, true, true, true), boundedScope: new(7, 1)));
+    }
+
+    [Fact]
     public async Task ObservationReadsMappedPrButDoesNotInferCompletionFromItsHead()
     {
         var fixture = new ApiFixture();
@@ -324,6 +355,28 @@ public sealed class GitHubHostIntegrationTests
     private sealed class FixedClock : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    private sealed class ChangingStore : IStateStore
+    {
+        public int Reads { get; private set; }
+        private RepositoryState state = RepositoryState.Create("owner/repo");
+
+        public Task<StateSnapshot> LoadAsync(CancellationToken cancellationToken)
+        {
+            Reads++;
+            if (Reads == 2) state.Issues[8] = new IssueState { Number = 8 };
+            return Task.FromResult(new StateSnapshot(Reads.ToString(), StateJson.Deserialize(StateJson.Serialize(state))));
+        }
+
+        public Task<bool> TrySaveAsync(StateSnapshot expected, RepositoryState next, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("The bounded command must reject the contaminated snapshot before saving.");
+    }
+
+    private sealed class NoRequests : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Out-of-scope wake must be rejected before API verification.");
     }
 
     private sealed class Store(RepositoryState state) : IStateStore

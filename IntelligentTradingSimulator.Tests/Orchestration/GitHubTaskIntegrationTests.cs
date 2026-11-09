@@ -13,6 +13,41 @@ public sealed class GitHubTaskIntegrationTests
     private static readonly GitHubExecutionApproval ApprovedFixture = new(true, true, true, true);
     private static readonly WorkerOptions Bounded = new() { MaximumIterations = 3, PollInterval = TimeSpan.Zero };
 
+    [Fact]
+    public async Task BoundedReadyReplayWithoutScopePreservesCommittedEventAndRejectsChangedContent()
+    {
+        var fixture = new ApiFixture();
+        var store = new Store();
+        using var client = fixture.Client();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        var notification = fixture.Notification();
+        var scope = new BoundedOrchestrationScope(7, 1);
+
+        await host.ReconcileAsync(notification, "issues", "44", 1, 1, Now, [], 99, "master", 55,
+            ApprovedFixture, Bounded, new FinalHead(), boundedScope: scope);
+
+        var committed = store.State.Inbox["actions:1:44"];
+        var digest = committed.Digest;
+        var committedReady = Assert.IsType<Ready>(committed.Event!.Data);
+        Assert.Equal(1, committedReady.MaxRepairTasks);
+
+        await host.ReconcileAsync(notification, "issues", "44", 1, 1, Now, [], 99, "master", 55,
+            ApprovedFixture, Bounded, new FinalHead());
+
+        Assert.Equal(digest, store.State.Inbox["actions:1:44"].Digest);
+        Assert.Equal(1, Assert.IsType<Ready>(store.State.Inbox["actions:1:44"].Event!.Data).MaxRepairTasks);
+        Assert.Single(store.State.Issues[7].Tasks);
+        Assert.Single(store.State.Outbox.Values, effect => effect.Kind == EffectKind.LaunchTask);
+        Assert.Single(fixture.Writes, write => write.Path.StartsWith("/agents/"));
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => host.ReconcileAsync(
+            notification, "issues", "44", 1, 1, Now.AddMinutes(1), [], 99, "master", 55,
+            ApprovedFixture, Bounded, new FinalHead()));
+
+        Assert.Equal(digest, store.State.Inbox["actions:1:44"].Digest);
+        Assert.Single(fixture.Writes, write => write.Path.StartsWith("/agents/"));
+    }
+
     [Theory]
     [InlineData(5000000000L, false)]
     [InlineData(5000000000L, true)]

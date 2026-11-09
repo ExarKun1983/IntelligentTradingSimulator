@@ -21,8 +21,11 @@ public static class GitHubActionsIngress
 
     public static OrchestrationEvent? PrepareEvent(
         JsonElement payload, string eventName, string runId, IngressEvidence evidence,
-        long repositoryGeneration, long issueGeneration, DateTimeOffset occurredAt)
+        long repositoryGeneration, long issueGeneration, DateTimeOffset occurredAt,
+        int? maxRepairTasks = null)
     {
+        if (maxRepairTasks is < 1 or > 8)
+            throw new InvalidDataException("Repair-task test cap is outside the supported range.");
         var notification = Parse(payload, eventName, runId, evidence);
         if (notification.Kind == NotificationKind.Ignore) return null;
         if (repositoryGeneration <= 0 || issueGeneration <= 0 ||
@@ -32,7 +35,7 @@ public static class GitHubActionsIngress
         {
             // Live readiness can defer work, but cannot rewrite an immutable source notification.
             NotificationKind.Readiness or NotificationKind.WithdrawReadiness =>
-                payload.GetProperty("action").GetString() == "labeled" ? new Ready() : new Withdraw(),
+                payload.GetProperty("action").GetString() == "labeled" ? new Ready(maxRepairTasks) : new Withdraw(),
             NotificationKind.Projection => new StageEdited(),
             NotificationKind.Closed => new Closure(),
             NotificationKind.Reopened => new Reopen(),

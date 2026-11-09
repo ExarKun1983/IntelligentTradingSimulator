@@ -6,7 +6,8 @@ namespace IntelligentTradingSimulator.Orchestration;
 
 public sealed record GitHubLiveSettings(string Repository, long RepositoryId, long ActorId, string BaseBranch,
     GitHubExecutionApproval Tasks, GitHubWakeApproval Wake, GitHubWakeRoute WakeRoute,
-    GitHubReviewApproval Review, GitHubCiApproval Ci, GitHubCiRoute CiRoute, GitHubRequiredStatusApproval Status)
+    GitHubReviewApproval Review, GitHubCiApproval Ci, GitHubCiRoute CiRoute, GitHubRequiredStatusApproval Status,
+    int? TestIssue = null, int? TestMaxRepairTasks = null)
 {
     public static GitHubLiveSettings Read(Func<string, string?> read)
     {
@@ -15,6 +16,13 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
             throw new InvalidDataException("Missing live configuration.");
         long Identity(string name) => long.TryParse(Required(name), NumberStyles.None, CultureInfo.InvariantCulture,
             out var id) && id > 0 ? id : throw new InvalidDataException("Invalid live identity.");
+        int? OptionalIdentity(string name) => string.IsNullOrWhiteSpace(read(name)) ? null :
+            int.TryParse(read(name), NumberStyles.None, CultureInfo.InvariantCulture, out var value) && value > 0
+                ? value : throw new InvalidDataException("Invalid bounded-test identity.");
+        var testIssue = OptionalIdentity("ORCHESTRATION_TEST_ISSUE");
+        var testMaxRepairTasks = OptionalIdentity("ORCHESTRATION_TEST_MAX_REPAIR_TASKS");
+        if ((testIssue is null) != (testMaxRepairTasks is null) || testMaxRepairTasks is not (null or 1))
+            throw new InvalidDataException("Bounded test mode requires one Issue and a repair-task cap of exactly one.");
         var activation = Approved("ORCHESTRATION_ACTIVATION_APPROVED");
         var credential = Approved("ORCHESTRATION_USER_TOKEN_VERIFIED") &&
             Approved("ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED");
@@ -34,7 +42,7 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
                 Approved("ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED")),
             new(activation, credential, Approved("ORCHESTRATION_TRUSTED_CI_VERIFIED"), cost),
             new(Identity("ORCHESTRATION_CI_WORKFLOW_ID"), Required("ORCHESTRATION_CI_REF"),
-                Required("ORCHESTRATION_CI_DEFINITION_SHA")), status);
+                Required("ORCHESTRATION_CI_DEFINITION_SHA")), status, testIssue, testMaxRepairTasks);
     }
 }
 
@@ -81,6 +89,7 @@ public static class GitHubLiveCommand
                 var state = (await store.LoadAsync(default)).State;
                 var issue = eventName == "issues" ? payload.RootElement.GetProperty("issue").GetProperty("number").GetInt32() :
                     int.Parse(payload.RootElement.GetProperty("inputs").GetProperty("issue").GetString()!, CultureInfo.InvariantCulture);
+                ValidateTestScope(state, settings, issue);
                 // The run definition is verified independently of command authorization.
                 var occurredAt = await VerifyCommandDefinitionAsync(api, settings.WakeRoute, runId, eventName);
                 var repositoryGeneration = state.Generation;
@@ -101,13 +110,21 @@ public static class GitHubLiveCommand
                     issueGeneration, occurredAt,
                     [publisher.ActorId], publisher.ActorId, settings.BaseBranch, settings.ActorId,
                     settings.Tasks, ciRoute: settings.CiRoute, ciApproval: settings.Ci, reviewApproval: settings.Review,
-                    statusPublisher: publisher, statusApproval: settings.Status);
+                    statusPublisher: publisher, statusApproval: settings.Status,
+                    boundedScope: settings.TestIssue is { } testIssue
+                        ? new BoundedOrchestrationScope(testIssue, settings.TestMaxRepairTasks!.Value) : null);
             }
             else
+            {
+                if (settings.TestIssue is not null)
+                    ValidateTestScope((await store.LoadAsync(default)).State, settings, null);
                 result = await host.ReconcileWakeAsync(payload.RootElement, eventName, runId, settings.WakeRoute,
                     settings.Wake, publisher.ActorId, settings.BaseBranch, settings.ActorId, settings.Tasks,
                     ciRoute: settings.CiRoute, ciApproval: settings.Ci, reviewApproval: settings.Review,
-                    statusPublisher: publisher, statusApproval: settings.Status);
+                    statusPublisher: publisher, statusApproval: settings.Status,
+                    boundedScope: settings.TestIssue is { } testIssue
+                        ? new BoundedOrchestrationScope(testIssue, settings.TestMaxRepairTasks!.Value) : null);
+            }
             output.WriteLine(JsonSerializer.Serialize(new { Mode = "github-live", Result = result?.Reason.ToString() }, StateJson.Options));
             return 0;
         }
@@ -118,6 +135,16 @@ public static class GitHubLiveCommand
             error.WriteLine($"Live orchestration stopped ({exception.GetType().Name}); reconcile persisted state before retrying.");
             return 1;
         }
+    }
+
+    private static void ValidateTestScope(RepositoryState state, GitHubLiveSettings settings, int? requestedIssue)
+    {
+        if (settings.TestIssue is not { } testIssue) return;
+        if (requestedIssue is { } requested && requested != testIssue)
+            throw new InvalidDataException("Bounded test mode rejected an Issue outside its configured scope.");
+        if (state.Issues.Keys.Any(number => number != testIssue) ||
+            state.Issues.TryGetValue(testIssue, out var issue) && issue.MaxRepairTasks != settings.TestMaxRepairTasks)
+            throw new InvalidDataException("Canonical state contains an unexpected Issue or repair-task cap.");
     }
 
     private static async Task<DateTimeOffset> VerifyCommandDefinitionAsync(GitHubRepositoryApi api, GitHubWakeRoute route,
