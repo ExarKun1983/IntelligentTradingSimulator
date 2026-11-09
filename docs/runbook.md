@@ -2105,6 +2105,15 @@ CI dispatch with `GITHUB_TOKEN` is supported without restoring PAT projections.
 
 #### Solo-maintainer activation guide (not performed)
 
+After the environment secret and canonical state are prepared, run **Agent credentials
+preflight (no live effects)** from Actions on `master`, supplying the numeric PAT-owner
+ID. It reads the protected environment secret without printing it, verifies the
+authenticated PAT and workflow-token identities, and reads the task list and canonical
+state. Its only POST is an authenticated GraphQL identity query. It does not start
+tasks, request reviews, dispatch CI, publish status, or change labels/state. Passing
+this check proves read access only, not task-start permission, entitlement, billing
+controls or mutation capabilities. Keep the replacement workflows disabled.
+
 This PR does **not** activate anything. Both replacement jobs keep literal
 `if: ${{ false }}`; legacy disablement remains. The following are future operator
 steps after separate approval, not instructions to execute during this issue.
