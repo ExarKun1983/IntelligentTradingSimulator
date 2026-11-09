@@ -49,7 +49,7 @@ jobs:
                   payload = response.read(2 * 1024 * 1024 + 1)
           except urllib.error.HTTPError as error:
               raise SystemExit("Task read failed; HTTP status " + str(error.code)) from None
-          except urllib.error.URLError:
+          except (urllib.error.URLError, TimeoutError):
               raise SystemExit("Task read failed; transport error.") from None
           if len(payload) > 2 * 1024 * 1024:
               raise SystemExit("Task response exceeds diagnostic capacity.")
@@ -66,7 +66,25 @@ jobs:
               return type(value).__name__
 
           def identity_matches(value, expected):
-              return isinstance(value, dict) and value.get("id") == expected
+              return (
+                  isinstance(value, dict) and type(value.get("id")) is int
+                  and value["id"] == expected
+              )
+
+          def positive_id(value):
+              return type(value) is int and 0 < value <= 9223372036854775807
+
+          def global_id_valid(value):
+              return isinstance(value, str) and 0 < len(value) <= 256 and bool(value.strip())
+
+          def database_id(value):
+              if positive_id(value):
+                  return value
+              if isinstance(value, str) and re.fullmatch(r"[0-9]{1,19}", value):
+                  number = int(value)
+                  if positive_id(number):
+                      return number
+              return None
 
           report = {
               "task_id_matches": task.get("id") == "e4743d38-6b27-49cd-a272-83b34465a808",
@@ -125,7 +143,7 @@ jobs:
               except urllib.error.HTTPError as error:
                   checks[label] = {"http_status": error.code}
                   return None
-              except urllib.error.URLError:
+              except (urllib.error.URLError, TimeoutError):
                   checks[label] = {"error": "transport"}
                   return None
               if len(payload) > 2 * 1024 * 1024:
@@ -182,12 +200,15 @@ jobs:
                           if pulls:
                               data = pulls[0].get("data")
                               checks["pull_ids_match_rest"] = (
-                                  isinstance(data, dict) and data.get("id") == pr.get("id")
+                                  isinstance(data, dict)
+                                  and positive_id(data.get("id")) and positive_id(pr.get("id"))
+                                  and global_id_valid(data.get("global_id")) and global_id_valid(pr.get("node_id"))
+                                  and data.get("id") == pr.get("id")
                                   and data.get("global_id") == pr.get("node_id")
                               )
                               if isinstance(data, dict):
                                   global_id = data.get("global_id")
-                                  if isinstance(global_id, str) and 0 < len(global_id) <= 256:
+                                  if global_id_valid(global_id):
                                       result = read_mapping("graphql_read", "graphql", {
                                           "query": "query($id: ID!) { node(id: $id) { __typename ... on PullRequest { fullDatabaseId number repository { nameWithOwner } } } }",
                                           "variables": {"id": global_id},
@@ -201,7 +222,9 @@ jobs:
                                           if isinstance(node, dict):
                                               checks["graphql_identity_matches"] = (
                                                   errors == [] and node.get("__typename") == "PullRequest"
-                                                  and str(node.get("fullDatabaseId")) == str(data.get("id"))
+                                                  and positive_id(data.get("id"))
+                                                  and database_id(node.get("fullDatabaseId")) is not None
+                                                  and database_id(node.get("fullDatabaseId")) == data.get("id")
                                                   and node.get("number") == 232
                                                   and isinstance(node.get("repository"), dict)
                                                   and node["repository"].get("nameWithOwner")
