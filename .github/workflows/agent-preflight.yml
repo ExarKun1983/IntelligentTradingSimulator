@@ -1,0 +1,110 @@
+name: Agent credentials preflight (no live effects)
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_user_id:
+        description: Numeric ID of the user who owns the Agent tasks PAT
+        required: true
+        default: "6195946"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: agent-orchestration
+    steps:
+      - name: Verify credentials and read-only API access
+        env:
+          WORKFLOW_TOKEN: ${{ github.token }}
+          TASK_TOKEN: ${{ secrets.ORCHESTRATION_USER_TOKEN }}
+          EXPECTED_USER_ID: ${{ inputs.expected_user_id }}
+        shell: python
+        run: |
+          import base64
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          def require(condition, message):
+              if not condition:
+                  raise RuntimeError(message)
+
+          workflow_token = os.environ["WORKFLOW_TOKEN"]
+          task_token = os.environ["TASK_TOKEN"]
+          require(bool(task_token), "Environment secret ORCHESTRATION_USER_TOKEN is missing.")
+          require(workflow_token != task_token, "The two credentials must be separate.")
+          expected_user_id = int(os.environ["EXPECTED_USER_ID"])
+          require(expected_user_id > 0, "Expected user ID must be positive.")
+          repository = os.environ["GITHUB_REPOSITORY"]
+
+          def api(path, credential, query=None):
+              data = None if query is None else json.dumps({"query": query}).encode()
+              request = urllib.request.Request(
+                  "https://api.github.com/" + path,
+                  data=data,
+                  headers={
+                      "Authorization": "Bearer " + credential,
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2026-03-10",
+                      "User-Agent": "ITS-agent-preflight",
+                      "Content-Type": "application/json",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      return json.load(response)
+              except urllib.error.HTTPError as error:
+                  raise RuntimeError(f"{path}: HTTP {error.code}; check token permissions and access.") from None
+
+          user = api("user", task_token)
+          require(user["id"] == expected_user_id and user["type"] == "User",
+                  "Task PAT owner does not match the expected human ID.")
+          print("PASS: task PAT owner verified.")
+
+          result = api("graphql", workflow_token, "query { viewer { login databaseId id } }")
+          require(not result.get("errors"), "GraphQL could not verify the workflow token.")
+          viewer = result["data"]["viewer"]
+          bot = api("users/github-actions%5Bbot%5D", workflow_token)
+          require(viewer["databaseId"] == bot["id"] == 41898282
+                  and viewer["login"] == bot["login"] == "github-actions[bot]"
+                  and viewer["id"] == bot["node_id"] and bot["type"] == "Bot",
+                  "Workflow credential does not match github-actions[bot].")
+          print("PASS: workflow token identity verified.")
+
+          repo = api("repos/" + repository, workflow_token)
+          require(repo["full_name"] == repository, "Repository identity mismatch.")
+          tasks = api("agents/repos/" + repository + "/tasks?per_page=1", task_token)
+          require(isinstance(tasks.get("tasks"), list), "Unsupported task-list response.")
+          print("PASS: Agent tasks API read access (no task started).")
+
+          prefix = "repos/" + repository + "/git/"
+          reference = api(prefix + "ref/heads/agent-state", workflow_token)
+          commit = api(prefix + "commits/" + reference["object"]["sha"], workflow_token)
+          tree = api(prefix + "trees/" + commit["tree"]["sha"], workflow_token)
+          require(not tree.get("truncated"), "Canonical state tree is truncated.")
+          entries = [entry for entry in tree["tree"] if entry["path"] == "state.json"]
+          require(len(entries) == 1 and entries[0]["type"] == "blob"
+                  and entries[0]["mode"] == "100644", "Missing or invalid canonical state blob.")
+          content = api(prefix + "blobs/" + entries[0]["sha"], workflow_token)
+          maximum_state_bytes = 2 * 1024 * 1024
+          require(content["encoding"] == "base64" and content["size"] <= maximum_state_bytes,
+                  "Unsupported or oversized canonical state blob.")
+          decoded = base64.b64decode(content["content"])
+          require(len(decoded) <= maximum_state_bytes, "Oversized canonical state.")
+          state = json.loads(decoded.decode("utf-8"))
+          require(state["Repository"] == repository and state["SchemaVersion"] == 1,
+                  "Canonical state repository or schema mismatch.")
+          print("PASS: canonical agent-state is readable.")
+          print("No task, review, CI dispatch, status, label or state mutation was performed.")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("## Read-only preflight passed\n\n"
+                            "Both credential identities, task-list access and canonical state were verified. "
+                            "No live effects were executed. Task-start write permission, entitlement, "
+                            "review/CI permissions and billing controls are not established by this test.\n")
