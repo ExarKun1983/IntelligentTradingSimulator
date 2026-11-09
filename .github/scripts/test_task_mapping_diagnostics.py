@@ -19,7 +19,7 @@ PRIVATE = "PRIVATE_VALUE"
 class MappingDiagnosticTests(unittest.TestCase):
     def run_diagnostic(self, artifact_id=DATABASE_ID, rest_id=DATABASE_ID,
                        node_id=str(DATABASE_ID), global_id=PRIVATE, timeout=None,
-                       missing_ids=False):
+                       missing_ids=False, error=TimeoutError, branch=None, head_ref=PRIVATE):
         task = {
             "id": "e4743d38-6b27-49cd-a272-83b34465a808",
             "repository": {"id": 1277929203},
@@ -33,13 +33,15 @@ class MappingDiagnosticTests(unittest.TestCase):
         }
         pr = {
             "id": rest_id, "node_id": global_id, "number": 232, "state": "open",
-            "head": {"repo": {"id": 1277929203}, "ref": PRIVATE, "sha": "a" * 40},
+            "head": {"repo": {"id": 1277929203}, "ref": head_ref, "sha": "a" * 40},
             "base": {"repo": {"id": 1277929203}, "ref": "master"},
         }
         node = {
             "__typename": "PullRequest", "fullDatabaseId": node_id, "number": 232,
             "repository": {"nameWithOwner": "ExarKun1983/IntelligentTradingSimulator"},
         }
+        if branch is not None:
+            task["artifacts"].append({"provider": "github", "type": "branch", "data": branch})
         if missing_ids:
             del task["artifacts"][0]["data"]["id"]
             del pr["id"]
@@ -59,7 +61,7 @@ class MappingDiagnosticTests(unittest.TestCase):
 
             def read(self, limit):
                 if self.route == timeout:
-                    raise TimeoutError(PRIVATE)
+                    raise error(PRIVATE)
                 return json.dumps(self.value).encode()[:limit]
 
         class Opener:
@@ -147,6 +149,28 @@ class MappingDiagnosticTests(unittest.TestCase):
 
     def test_task_body_timeout_has_safe_error(self):
         self.run_diagnostic(timeout="task")
+
+    def test_connection_resets_are_handled(self):
+        for route in ("task", "pr", "graphql"):
+            with self.subTest(route=route):
+                checks = self.run_diagnostic(timeout=route, error=ConnectionResetError)
+                if route != "task":
+                    self.assertEqual(checks["live_pr_read" if route == "pr" else "graphql_read"],
+                                     {"error": "transport"})
+
+    def test_branch_match_requires_nonblank_refs(self):
+        good = {"head_ref": PRIVATE, "base_ref": "master"}
+        self.assertTrue(self.run_diagnostic(branch=good)["branch_matches_pr"])
+        for branch, head in (
+            ({"base_ref": "master"}, PRIVATE), ({"head_ref": PRIVATE}, PRIVATE),
+            ({"head_ref": "", "base_ref": ""}, PRIVATE),
+            ({"head_ref": " ", "base_ref": "master"}, " "),
+            ({"head_ref": None, "base_ref": "master"}, None),
+            (good, ""),
+        ):
+            with self.subTest(branch=branch, head=head):
+                checks = self.run_diagnostic(branch=branch, head_ref=head)
+                self.assertFalse(checks.get("branch_matches_pr", False))
 
 
 if __name__ == "__main__":

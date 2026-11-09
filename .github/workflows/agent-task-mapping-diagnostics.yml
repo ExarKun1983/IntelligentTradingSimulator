@@ -20,6 +20,7 @@ jobs:
           WORKFLOW_READ_TOKEN: ${{ github.token }}
         shell: python
         run: |
+          import http.client
           import json
           import os
           import re
@@ -49,7 +50,7 @@ jobs:
                   payload = response.read(2 * 1024 * 1024 + 1)
           except urllib.error.HTTPError as error:
               raise SystemExit("Task read failed; HTTP status " + str(error.code)) from None
-          except (urllib.error.URLError, TimeoutError):
+          except (urllib.error.URLError, OSError, http.client.HTTPException):
               raise SystemExit("Task read failed; transport error.") from None
           if len(payload) > 2 * 1024 * 1024:
               raise SystemExit("Task response exceeds diagnostic capacity.")
@@ -143,7 +144,7 @@ jobs:
               except urllib.error.HTTPError as error:
                   checks[label] = {"http_status": error.code}
                   return None
-              except (urllib.error.URLError, TimeoutError):
+              except (urllib.error.URLError, OSError, http.client.HTTPException):
                   checks[label] = {"error": "transport"}
                   return None
               if len(payload) > 2 * 1024 * 1024:
@@ -193,9 +194,14 @@ jobs:
                           )
                           if branches:
                               data = branches[0].get("data")
+                              def nonblank(value):
+                                  return isinstance(value, str) and value.strip() != ""
                               checks["branch_matches_pr"] = (
-                                  isinstance(data, dict) and data.get("base_ref") == base.get("ref")
-                                  and data.get("head_ref") == head.get("ref")
+                                  isinstance(data, dict)
+                                  and nonblank(data.get("base_ref")) and nonblank(data.get("head_ref"))
+                                  and nonblank(base.get("ref")) and nonblank(head.get("ref"))
+                                  and data["base_ref"] == base["ref"]
+                                  and data["head_ref"] == head["ref"]
                               )
                           if pulls:
                               data = pulls[0].get("data")
