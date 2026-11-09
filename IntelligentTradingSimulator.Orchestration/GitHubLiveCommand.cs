@@ -33,7 +33,7 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
             throw new InvalidOperationException("Live execution is disabled or its prerequisites are unverified.");
         var status = new GitHubRequiredStatusApproval(activation, credential, Approved("ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED"),
             Approved("ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED"), cost);
-        if (!status.AllowsPublication)
+        if (!status.AllowsPublication && testIssue is null)
             throw new InvalidOperationException("Required-status publication prerequisites are unverified.");
         return new(Required("GITHUB_REPOSITORY"), Identity("GITHUB_REPOSITORY_ID"), Identity("ORCHESTRATION_ACTOR_ID"),
             Required("ORCHESTRATION_BASE_BRANCH"), tasks, wake,
@@ -110,7 +110,7 @@ public static class GitHubLiveCommand
                     issueGeneration, occurredAt,
                     [publisher.ActorId], publisher.ActorId, settings.BaseBranch, settings.ActorId,
                     settings.Tasks, ciRoute: settings.CiRoute, ciApproval: settings.Ci, reviewApproval: settings.Review,
-                    statusPublisher: publisher, statusApproval: settings.Status,
+                    statusPublisher: settings.Status.AllowsPublication ? publisher : null, statusApproval: settings.Status,
                     boundedScope: settings.TestIssue is { } testIssue
                         ? new BoundedOrchestrationScope(testIssue, settings.TestMaxRepairTasks!.Value) : null);
             }
@@ -121,7 +121,7 @@ public static class GitHubLiveCommand
                 result = await host.ReconcileWakeAsync(payload.RootElement, eventName, runId, settings.WakeRoute,
                     settings.Wake, publisher.ActorId, settings.BaseBranch, settings.ActorId, settings.Tasks,
                     ciRoute: settings.CiRoute, ciApproval: settings.Ci, reviewApproval: settings.Review,
-                    statusPublisher: publisher, statusApproval: settings.Status,
+                    statusPublisher: settings.Status.AllowsPublication ? publisher : null, statusApproval: settings.Status,
                     boundedScope: settings.TestIssue is { } testIssue
                         ? new BoundedOrchestrationScope(testIssue, settings.TestMaxRepairTasks!.Value) : null);
             }
