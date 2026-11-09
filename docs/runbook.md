@@ -1535,10 +1535,12 @@ remains disabled in GitHub; never restart it for comparison, shadow mode, or rol
 The replacement jobs are **conditionally gated, not unconditionally disabled**.
 Both require `ORCHESTRATION_ACTIVATION_APPROVED=true`,
 `ORCHESTRATION_TEST_ISSUE=227`, and `ORCHESTRATION_TEST_MAX_REPAIR_TASKS=1`.
-The reconciler additionally requires `refs/heads/master`; managed CI requires
-the configured `refs/tags/` ref. Matching configuration can therefore enable
-these jobs without another code change. Keep activation explicitly `false`
-until the separate test approval and all runtime prerequisites are satisfied.
+The reconciler additionally requires its workflow definition to come from
+`refs/heads/master`; it does not use the event ref, which is not a branch ref
+for Issue events. Managed CI requires the configured `refs/tags/` ref.
+Matching configuration can therefore enable these jobs without another code
+change. Keep activation explicitly `false` until the separate test approval
+and all runtime prerequisites are satisfied.
 The reconciler has write permissions for state, projections, CI, and statuses;
 its task API step uses a separate protected user credential. Managed CI grants
 only `contents: read`. Offline/read-only modes remain the
