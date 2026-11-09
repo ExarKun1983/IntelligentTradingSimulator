@@ -33,7 +33,14 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         EnsureCapacity(state);
         switch (message.Data)
         {
-            case Ready:
+            case Ready ready:
+                if (ready.MaxRepairTasks is { } repairLimit)
+                {
+                    if (repairLimit is < 1 or > 8 ||
+                        issue.MaxRepairTasks is { } existingLimit && repairLimit > existingLimit)
+                        throw new InvalidOperationException("Ready cannot raise or invalidate the repair-task cap.");
+                    issue.MaxRepairTasks = repairLimit;
+                }
                 issue.FeedbackSince ??= message.OccurredAt;
                 if (issue.ReadyAt is null || message.OccurredAt > issue.ReadyAt)
                 {
@@ -433,9 +440,18 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 !issue.Paused && !issue.ReactivationRequired)
             {
                 if (issue.Phase == Phase.FIX_PENDING && !HasUnfinishedWork(state, issue))
-                    AddTask(state, issue, issue.Ci?.Green == false ? TaskKind.CiRepair :
-                        issue.Review?.Classification == ReviewClassification.Blocking ? TaskKind.ReviewRepair :
-                        issue.PendingFeedbackEventIds.Count > 0 ? TaskKind.FeedbackRepair : TaskKind.ReviewRepair, observation.ObservedAt);
+                {
+                    var repairTasks = issue.Tasks.Values.Count(task => task.Kind != TaskKind.Coding);
+                    if (issue.MaxRepairTasks is { } limit && repairTasks >= limit)
+                    {
+                        Hold(issue, "Repair task budget exhausted.");
+                        ReleaseIfSafe(state, issue);
+                    }
+                    else
+                        AddTask(state, issue, issue.Ci?.Green == false ? TaskKind.CiRepair :
+                            issue.Review?.Classification == ReviewClassification.Blocking ? TaskKind.ReviewRepair :
+                            issue.PendingFeedbackEventIds.Count > 0 ? TaskKind.FeedbackRepair : TaskKind.ReviewRepair, observation.ObservedAt);
+                }
                 if (issue.Phase == Phase.REVIEW_PENDING && issue.Ci?.Green == true &&
                     issue.PendingFeedbackEventIds.Count == 0 &&
                     (issue.Review is null || issue.Review.Sha != issue.HeadSha || issue.Review.TaskId != issue.ActiveTaskId))
@@ -935,6 +951,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             state.Issues.Any(pair => pair.Key != pair.Value.Number || pair.Key <= 0) ||
             state.Issues.Values.Any(issue => issue.SchemaVersion != 1 || issue.Generation <= 0 || issue.Version < 0 ||
                 !Enum.IsDefined(issue.Phase) || issue.CiBudget <= 0 || issue.ReviewBudget <= 0 ||
+                issue.MaxRepairTasks is < 1 or > 8 ||
                 issue.PullRequest is <= 0 || issue.HeadSha is not null && !IsSha(issue.HeadSha) ||
                 issue.ActiveTaskId is { } active && !issue.Tasks.ContainsKey(active)) ||
             state.AdmittedIssue is { } owner && !state.Issues.ContainsKey(owner))

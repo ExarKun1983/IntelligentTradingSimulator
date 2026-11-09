@@ -316,6 +316,43 @@ public sealed class OrchestrationCoreTests
     }
 
     [Fact]
+    public void BoundedRepairTaskCapAllowsOneRepairAndBlocksTheNext()
+    {
+        var reducer = Reducer();
+        var state = Admitted();
+        state.Issues[7].MaxRepairTasks = 1;
+        state = CompleteTask(state, 2);
+
+        state = FinishCi(state, false, "first-failure");
+        state = reducer.Reconcile(state, Live(state)).State;
+        Assert.Single(state.Issues[7].Tasks.Values, task => task.Kind == TaskKind.CiRepair);
+        state = CompleteTask(state, 3);
+
+        state = FinishCi(state, false, "second-failure");
+        state = reducer.Reconcile(state, Live(state)).State;
+
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+        Assert.Equal("Repair task budget exhausted.", state.Issues[7].HoldReason);
+        Assert.True(state.Issues[7].ReactivationRequired);
+        Assert.Null(state.AdmittedIssue);
+        Assert.Single(state.Issues[7].Tasks.Values, task => task.Kind == TaskKind.CiRepair);
+        Assert.DoesNotContain(state.Outbox.Values, intent => intent.Kind == EffectKind.LaunchTask &&
+            intent.Status == DeliveryStatus.Pending);
+    }
+
+    [Fact]
+    public void ReadyCanSetButNeverRaiseBoundedRepairTaskCap()
+    {
+        var reducer = Reducer();
+        var state = reducer.Apply(Empty(), Event(new Ready(1), "bounded-ready"));
+        Assert.Equal(1, state.Issues[7].MaxRepairTasks);
+        Assert.Throws<InvalidOperationException>(() =>
+            reducer.Apply(state, Event(new Ready(2), "attempt-raise")));
+        Assert.Throws<InvalidOperationException>(() =>
+            reducer.Apply(Empty(), Event(new Ready(0), "invalid-cap")));
+    }
+
+    [Fact]
     public void ConfirmedRepairTaskMayPushButPushStillCannotEnterCi()
     {
         var reducer = Reducer();

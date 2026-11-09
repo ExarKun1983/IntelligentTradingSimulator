@@ -69,6 +69,8 @@ public sealed class GitHubLiveCredentialsTests
         Assert.Contains("if: ${{ false }}", workflow);
         Assert.Contains("GITHUB_TOKEN: ${{ github.token }}", workflow);
         Assert.Contains("ORCHESTRATION_USER_TOKEN: ${{ secrets.ORCHESTRATION_USER_TOKEN }}", workflow);
+        Assert.Contains("ORCHESTRATION_TEST_ISSUE: ${{ vars.ORCHESTRATION_TEST_ISSUE }}", workflow);
+        Assert.Contains("ORCHESTRATION_TEST_MAX_REPAIR_TASKS: ${{ vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS }}", workflow);
         Assert.Contains("environment: agent-orchestration", workflow);
         Assert.Contains("persist-credentials: false", workflow);
         var permissions = workflow.Split("permissions:\n")[1].Split("\njobs:")[0].Trim();
@@ -77,12 +79,58 @@ public sealed class GitHubLiveCredentialsTests
             File.ReadAllText(Path.Combine(root, ".github/workflows/agent-managed-ci.yml")));
     }
 
+    [Fact]
+    public void BoundedTestModeRequiresOneIssueAndExactlyOneRepairTask()
+    {
+        var values = LiveSettingsValues();
+        values["ORCHESTRATION_TEST_ISSUE"] = "224";
+        values["ORCHESTRATION_TEST_MAX_REPAIR_TASKS"] = "1";
+        var settings = GitHubLiveSettings.Read(name => values.GetValueOrDefault(name));
+        Assert.Equal(224, settings.TestIssue);
+        Assert.Equal(1, settings.TestMaxRepairTasks);
+
+        values["ORCHESTRATION_TEST_MAX_REPAIR_TASKS"] = "2";
+        Assert.Throws<InvalidDataException>(() =>
+            GitHubLiveSettings.Read(name => values.GetValueOrDefault(name)));
+        values.Remove("ORCHESTRATION_TEST_ISSUE");
+        values["ORCHESTRATION_TEST_MAX_REPAIR_TASKS"] = "1";
+        Assert.Throws<InvalidDataException>(() =>
+            GitHubLiveSettings.Read(name => values.GetValueOrDefault(name)));
+    }
+
     private static string FindRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "IntelligentTradingSimulator.sln")))
             directory = directory.Parent;
         return directory?.FullName ?? throw new InvalidOperationException("Repository root not found.");
+    }
+
+    private static Dictionary<string, string> LiveSettingsValues()
+    {
+        var values = new Dictionary<string, string>
+        {
+            ["GITHUB_REPOSITORY"] = "owner/repo",
+            ["GITHUB_REPOSITORY_ID"] = "1",
+            ["ORCHESTRATION_ACTOR_ID"] = "55",
+            ["ORCHESTRATION_BASE_BRANCH"] = "master",
+            ["ORCHESTRATION_WORKFLOW_ID"] = "10",
+            ["ORCHESTRATION_DEFINITION_SHA"] = new string('a', 40),
+            ["ORCHESTRATION_CI_WORKFLOW_ID"] = "11",
+            ["ORCHESTRATION_CI_REF"] = "refs/tags/agent-managed-ci-v1",
+            ["ORCHESTRATION_CI_DEFINITION_SHA"] = new string('b', 40),
+        };
+        foreach (var name in new[]
+        {
+            "ORCHESTRATION_ACTIVATION_APPROVED", "ORCHESTRATION_USER_TOKEN_VERIFIED",
+            "ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED",
+            "ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED", "ORCHESTRATION_TASK_ENTITLEMENT_VERIFIED",
+            "ORCHESTRATION_TRUSTED_DEFINITION_VERIFIED", "ORCHESTRATION_REVIEW_POLICY_VERIFIED",
+            "ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED", "ORCHESTRATION_TRUSTED_CI_VERIFIED",
+            "ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED", "ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED",
+        })
+            values[name] = "true";
+        return values;
     }
 
     private static HttpClient Client(HttpMessageHandler handler, string credential)

@@ -34,6 +34,16 @@ public class GitHubActionsIngressTests
         Assert.Equal(42, first.ActorId);
     }
 
+    [Fact]
+    public void ReadyCarriesOnlyConfiguredBoundedRepairTaskCap()
+    {
+        var message = GitHubActionsIngress.PrepareEvent(Issue(), "issues", "123", Evidence(),
+            1, 1, DateTimeOffset.UnixEpoch, maxRepairTasks: 1);
+        Assert.Equal(1, Assert.IsType<Ready>(message!.Data).MaxRepairTasks);
+        Assert.Throws<InvalidDataException>(() => GitHubActionsIngress.PrepareEvent(
+            Issue(), "issues", "123", Evidence(), 1, 1, DateTimeOffset.UnixEpoch, maxRepairTasks: 0));
+    }
+
     [Theory]
     [InlineData("write")]
     [InlineData("maintain")]

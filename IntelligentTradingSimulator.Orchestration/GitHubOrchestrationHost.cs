@@ -33,13 +33,14 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         GitHubExecutionApproval? approval = null, WorkerOptions? options = null,
         ITaskFinalHeadSource? finalHeadSource = null, CancellationToken token = default,
         GitHubReviewApproval? reviewApproval = null, GitHubCiRoute? ciRoute = null, GitHubCiApproval? ciApproval = null,
-        GitHubStatusPublisher? statusPublisher = null, GitHubRequiredStatusApproval? statusApproval = null)
+        GitHubStatusPublisher? statusPublisher = null, GitHubRequiredStatusApproval? statusApproval = null,
+        int? maxRepairTasks = null)
     {
         if (approval?.AllowsTasks != true) throw new InvalidOperationException("Live activation prerequisites are not verified.");
         var snapshot = await store.LoadAsync(token);
         var evidence = await api.ReadIngressEvidenceAsync(trustedActionsPayload, eventName, runId, projectionActorIds, token);
         var message = GitHubActionsIngress.PrepareEvent(trustedActionsPayload, eventName, runId, evidence,
-            repositoryGeneration, issueGeneration, occurredAt);
+            repositoryGeneration, issueGeneration, occurredAt, maxRepairTasks);
         ValidateGeneration(snapshot.State, IssueNumber(trustedActionsPayload, eventName),
             repositoryGeneration, issueGeneration, message);
         return await RunVerifiedAsync(message, projectionActorId, baseBranch, taskCreatorId, approval, options,

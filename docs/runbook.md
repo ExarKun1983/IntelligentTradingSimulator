@@ -2232,6 +2232,16 @@ entitlement, cost controls or repository protection must leave activation blocke
    not attest approval. `GITHUB_REPOSITORY`, `GITHUB_REPOSITORY_ID`, event path/name
    and run ID are supplied by Actions, not `vars.*`. The projection login/ID are
    fixed and authenticated at startup, not operator-supplied variables.
+
+   For the explicitly approved bounded end-to-end test only, set both
+   `ORCHESTRATION_TEST_ISSUE` (the sole test Issue number) and
+   `ORCHESTRATION_TEST_MAX_REPAIR_TASKS=1`. The live host then rejects commands for
+   other Issues, rejects wake processing if canonical state contains another Issue
+   or the wrong cap, and persists the cap with the initial authorized Ready event.
+   The reducer counts all non-coding tasks and holds before planning a second repair
+   task. Remove both variables immediately after the test and leave activation false.
+   If either variable is missing or the cap is not exactly one, bounded test mode
+   fails closed. When these variables are unset, existing repair budgets are unchanged.
 7. **Approve cutover, then command work as yourself.** After the separate guard
    change/review, protected environment/state/tag, all attestations, and explicit
    approval, enable activation last. Add `agent:ready` to an open Issue as the
