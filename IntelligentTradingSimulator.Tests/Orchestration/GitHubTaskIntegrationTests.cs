@@ -30,12 +30,16 @@ public sealed class GitHubTaskIntegrationTests
         var digest = committed.Digest;
         var committedReady = Assert.IsType<Ready>(committed.Event!.Data);
         Assert.Equal(1, committedReady.MaxRepairTasks);
+        Assert.True(committedReady.SinglePassTest);
+        Assert.True(store.State.Issues[7].SinglePassTest);
 
         await host.ReconcileAsync(notification, "issues", "44", 1, 1, Now, [], 99, "master", 55,
             ApprovedFixture, Bounded, new FinalHead());
 
         Assert.Equal(digest, store.State.Inbox["actions:1:44"].Digest);
         Assert.Equal(1, Assert.IsType<Ready>(store.State.Inbox["actions:1:44"].Event!.Data).MaxRepairTasks);
+        Assert.True(store.State.Issues[7].SinglePassTest);
+        Assert.True(Assert.IsType<Ready>(store.State.Inbox["actions:1:44"].Event!.Data).SinglePassTest);
         Assert.Single(store.State.Issues[7].Tasks);
         Assert.Single(store.State.Outbox.Values, effect => effect.Kind == EffectKind.LaunchTask);
         Assert.Single(fixture.Writes, write => write.Path.StartsWith("/agents/"));

@@ -50,6 +50,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         var evidence = await api.ReadIngressEvidenceAsync(trustedActionsPayload, eventName, runId, projectionActorIds, token);
         var message = GitHubActionsIngress.PrepareEvent(trustedActionsPayload, eventName, runId, evidence,
             repositoryGeneration, issueGeneration, occurredAt, boundedScope?.MaxRepairTasks ?? maxRepairTasks);
+        if (boundedScope is not null && message?.Data is Ready ready)
+            message = message with { Data = ready with { SinglePassTest = true } };
         message = RestoreCommittedReadyReplay(snapshot.State, message);
         ValidateGeneration(snapshot.State, issueNumber,
             repositoryGeneration, issueGeneration, message);
@@ -187,7 +189,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                 state.AdmittedIssue is { } admitted && admitted != scope.IssueNumber ||
                 state.Outbox.Values.Any(effect => effect.IssueNumber != scope.IssueNumber) ||
                 state.Issues.TryGetValue(scope.IssueNumber, out var issue) &&
-                issue.MaxRepairTasks != scope.MaxRepairTasks)
+                (issue.MaxRepairTasks != scope.MaxRepairTasks || !issue.SinglePassTest))
                 throw new InvalidDataException("Canonical state or effect snapshot exceeds the bounded test scope.");
         }
     }

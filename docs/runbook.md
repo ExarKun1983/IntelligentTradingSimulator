@@ -2249,12 +2249,18 @@ entitlement, cost controls or repository protection must leave activation blocke
    `ORCHESTRATION_TEST_MAX_REPAIR_TASKS=1`. The live host then rejects commands for
    other Issues and validates every canonical state/effect snapshot loaded during
    dispatch, recovery, and wake processing; it also requires the test Issue's
-   persisted repair cap to match. The cap is persisted with the authorized Ready
-   event.
-   The reducer counts all non-coding tasks and holds before planning a second repair
-   task. Remove both variables immediately after the test and leave activation false.
+   persisted repair cap and single-pass flag to match. Both are persisted with
+   the authorized Ready event. This temporary single-pass test permits one coding
+   task, at most one managed CI intent, and at most one review intent after green
+   CI. A failing CI stops immediately; feedback or review findings requiring repair
+   also stop instead of creating any repair task. Reactivation is rejected.
+   The single-pass limits survive replay, Resume, and removal of test variables.
+   The cap variable remains `1` for configuration compatibility, but single-pass
+   mode is stricter and permits no repairs. Remove both variables immediately
+   after the test and leave activation false.
    If either variable is missing or the cap is not exactly one, bounded test mode
-   fails closed. When these variables are unset, existing repair budgets are unchanged.
+   fails closed. Ordinary Issues without the persisted single-pass flag retain
+   existing repair budgets.
    The temporary workflow job gates permit only test Issue `227`, cap `1`, and
    activation `true`. The reconciler must run from `master`; managed CI must run
    from the configured immutable tag. Removing the test variables disables these

@@ -34,6 +34,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         switch (message.Data)
         {
             case Ready ready:
+                if (ready.SinglePassTest == true) issue.SinglePassTest = true;
                 if (ready.MaxRepairTasks is { } repairLimit)
                 {
                     if (repairLimit is < 1 or > 8 ||
@@ -70,6 +71,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 CancelPendingWork(state, issue);
                 break;
             case Reactivate reactivate:
+                if (issue.SinglePassTest)
+                    throw new InvalidOperationException("A single-pass test cannot be reactivated.");
                 if (string.IsNullOrWhiteSpace(reactivate.Reason)) throw new InvalidOperationException("Reactivation requires an audit reason.");
                 if (!issue.ReactivationRequired || issue.Phase is not (Phase.BLOCKED or Phase.HUMAN_REVIEW or Phase.CLOSED))
                     throw new InvalidOperationException("Only a held or terminal issue can be explicitly reactivated.");
@@ -192,7 +195,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 else
                 {
                     issue.ConsecutiveCiFailures++;
-                    if (issue.ConsecutiveCiFailures >= issue.CiBudget) Hold(issue, "CI repair budget exhausted.");
+                    if (issue.SinglePassTest) Hold(issue, "Single-pass test stopped after CI failure.");
+                    else if (issue.ConsecutiveCiFailures >= issue.CiBudget) Hold(issue, "CI repair budget exhausted.");
                     else issue.Phase = Phase.FIX_PENDING;
                 }
                 break;
@@ -378,9 +382,15 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     }
                     else if (!issue.ReactivationRequired && !issue.Paused && issue.ActiveAuthorized && !live.Closed)
                     {
-                        issue.Phase = Phase.CI_PENDING;
-                        var intent = AddIntent(state, issue, EffectKind.RunCi, observation.ObservedAt, task.Id);
-                        issue.Ci = new CiIdentity { IntentId = intent.Id, TaskId = task.Id, Round = task.Round, Sha = task.FinalSha! };
+                        if (issue.SinglePassTest && state.Outbox.Values.Any(effect =>
+                            effect.IssueNumber == issue.Number && effect.Kind == EffectKind.RunCi))
+                            Hold(issue, "Single-pass test CI limit reached.");
+                        else
+                        {
+                            issue.Phase = Phase.CI_PENDING;
+                            var intent = AddIntent(state, issue, EffectKind.RunCi, observation.ObservedAt, task.Id);
+                            issue.Ci = new CiIdentity { IntentId = intent.Id, TaskId = task.Id, Round = task.Round, Sha = task.FinalSha! };
+                        }
                     }
                 }
                 else
@@ -442,7 +452,12 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 if (issue.Phase == Phase.FIX_PENDING && !HasUnfinishedWork(state, issue))
                 {
                     var repairTasks = issue.Tasks.Values.Count(task => task.Kind != TaskKind.Coding);
-                    if (issue.MaxRepairTasks is { } limit && repairTasks >= limit)
+                    if (issue.SinglePassTest)
+                    {
+                        Hold(issue, "Single-pass test does not allow repair tasks.");
+                        ReleaseIfSafe(state, issue);
+                    }
+                    else if (issue.MaxRepairTasks is { } limit && repairTasks >= limit)
                     {
                         Hold(issue, "Repair task budget exhausted.");
                         ReleaseIfSafe(state, issue);
@@ -456,13 +471,19 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     issue.PendingFeedbackEventIds.Count == 0 &&
                     (issue.Review is null || issue.Review.Sha != issue.HeadSha || issue.Review.TaskId != issue.ActiveTaskId))
                 {
-                    var old = issue.Review;
-                    var intent = AddIntent(state, issue, EffectKind.RequestReview, observation.ObservedAt, issue.ActiveTaskId);
-                    issue.Review = new ReviewIdentity
+                    if (issue.SinglePassTest && state.Outbox.Values.Any(effect =>
+                        effect.IssueNumber == issue.Number && effect.Kind == EffectKind.RequestReview))
+                        Hold(issue, "Single-pass test review limit reached.");
+                    else
                     {
-                        IntentId = intent.Id, TaskId = issue.ActiveTaskId!, Round = issue.Round, Sha = issue.HeadSha!,
-                        Findings = old?.Findings.ToList() ?? [], Responses = old?.Responses.ToList() ?? []
-                    };
+                        var old = issue.Review;
+                        var intent = AddIntent(state, issue, EffectKind.RequestReview, observation.ObservedAt, issue.ActiveTaskId);
+                        issue.Review = new ReviewIdentity
+                        {
+                            IntentId = intent.Id, TaskId = issue.ActiveTaskId!, Round = issue.Round, Sha = issue.HeadSha!,
+                            Findings = old?.Findings.ToList() ?? [], Responses = old?.Responses.ToList() ?? []
+                        };
+                    }
                 }
             }
         }
@@ -868,6 +889,12 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
     }
     private static void AddTask(RepositoryState state, IssueState issue, TaskKind kind, DateTimeOffset now)
     {
+        if (issue.SinglePassTest && (kind != TaskKind.Coding || issue.Tasks.Count != 0))
+        {
+            Hold(issue, "Single-pass test task limit reached.");
+            ReleaseIfSafe(state, issue);
+            return;
+        }
         var parent = issue.ActiveTaskId;
         var unmapped = kind == TaskKind.Coding && parent is null && issue.PullRequest is null && issue.HeadSha is null;
         if (!unmapped && (issue.PullRequest is not > 0 || !IsSha(issue.HeadSha)))

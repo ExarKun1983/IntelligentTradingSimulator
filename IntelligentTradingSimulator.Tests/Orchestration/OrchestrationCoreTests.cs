@@ -316,6 +316,73 @@ public sealed class OrchestrationCoreTests
     }
 
     [Fact]
+    public void SinglePassTestStopsAfterFailedCiAndCannotBeReactivated()
+    {
+        var reducer = Reducer();
+        var state = Admitted();
+        state.Issues[7].SinglePassTest = true;
+        state = CompleteTask(state, 2);
+        state = FinishCi(state, false, "failed-single-ci");
+        state = StateJson.Deserialize(StateJson.Serialize(state));
+        state = reducer.Apply(state, Event(new Resume(), "resume-single"));
+        state = reducer.Apply(state, Event(new Ready(), "ready-single"));
+        state = reducer.Reconcile(state, Live(state)).State;
+
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+        Assert.Equal("Single-pass test stopped after CI failure.", state.Issues[7].HoldReason);
+        Assert.Null(state.AdmittedIssue);
+        Assert.Single(state.Issues[7].Tasks);
+        Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.RunCi);
+        Assert.DoesNotContain(state.Outbox.Values, effect => effect.Kind == EffectKind.RequestReview);
+        Assert.Throws<InvalidOperationException>(() =>
+            reducer.Apply(state, Event(new Reactivate("try again"), "reactivate-single")));
+    }
+
+    [Fact]
+    public void SinglePassTestAllowsOneReviewAfterGreenCiButNeverRepairsReviewFindings()
+    {
+        var reducer = Reducer();
+        var state = Admitted();
+        state.Issues[7].SinglePassTest = true;
+        state = CompleteTask(state, 2);
+        state = FinishCi(state, true, "single-green");
+        state = reducer.Reconcile(state, Live(state)).State;
+        Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.RequestReview);
+        state = FinishReview(state, ReviewClassification.Blocking, "single-review",
+            [new("f", "Fix this", "evidence")], []);
+        state = reducer.Reconcile(state, Live(state)).State;
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+        Assert.Single(state.Issues[7].Tasks);
+        Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.RunCi);
+        Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.RequestReview);
+    }
+
+    [Fact]
+    public void SinglePassTestRejectsSecondCiAndReviewPlanning()
+    {
+        var reducer = Reducer();
+        var state = Admitted();
+        state.Issues[7].SinglePassTest = true;
+        state = CompleteTask(state, 2);
+        state = FinishCi(state, true, "first-ci");
+        state = reducer.Reconcile(state, Live(state)).State;
+        state = SucceedEffect(state, EffectKind.RequestReview, "first-review");
+        var original = StateJson.Serialize(state);
+
+        state.Issues[7].Review = null;
+        state = reducer.Reconcile(state, Live(state)).State;
+        Assert.Equal("Single-pass test review limit reached.", state.Issues[7].HoldReason);
+        Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.RequestReview);
+
+        state = StateJson.Deserialize(original);
+        state.Issues[7].Tasks[state.Issues[7].ActiveTaskId!].Status =
+            IntelligentTradingSimulator.Orchestration.TaskStatus.AwaitingHeadConfirmation;
+        state = reducer.Reconcile(state, Live(state)).State;
+        Assert.Equal("Single-pass test CI limit reached.", state.Issues[7].HoldReason);
+        Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.RunCi);
+    }
+
+    [Fact]
     public void BoundedRepairTaskCapAllowsOneRepairAndBlocksTheNext()
     {
         var reducer = Reducer();
