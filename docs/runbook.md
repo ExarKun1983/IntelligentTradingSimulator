@@ -2244,6 +2244,12 @@ entitlement, cost controls or repository protection must leave activation blocke
    task. Remove both variables immediately after the test and leave activation false.
    If either variable is missing or the cap is not exactly one, bounded test mode
    fails closed. When these variables are unset, existing repair budgets are unchanged.
+   The temporary workflow job gates permit only test Issue `227`, cap `1`, and
+   activation `true`. The reconciler must run from `master`; managed CI must run
+   from the configured immutable tag. Removing the test variables disables these
+   jobs, rather than activating production. The three test variables alone are
+   not a complete live configuration: all prerequisites and definition pins
+   listed above remain mandatory.
 7. **Approve cutover, then command work as yourself.** After the separate guard
    change/review, protected environment/state/tag, all attestations, and explicit
    approval, enable activation last. Add `agent:ready` to an open Issue as the

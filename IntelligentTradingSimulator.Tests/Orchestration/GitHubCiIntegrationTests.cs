@@ -366,7 +366,11 @@ public sealed class GitHubCiIntegrationTests
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "IntelligentTradingSimulator.sln")))
             directory = directory.Parent;
         var workflow = File.ReadAllText(Path.Combine(directory!.FullName, GitHubCiAdapter.WorkflowPath));
-        Assert.Contains("if: ${{ false }}", workflow);
+        Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '227'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'", workflow);
+        Assert.Contains("github.ref == vars.ORCHESTRATION_CI_REF", workflow);
+        Assert.Contains("startsWith(github.ref, 'refs/tags/')", workflow);
         Assert.Contains("ref: ${{ inputs.sha }}", workflow);
         Assert.Contains("persist-credentials: false", workflow);
         Assert.Contains("git rev-parse HEAD", workflow);

@@ -62,11 +62,14 @@ public sealed class GitHubLiveCredentialsTests
     }
 
     [Fact]
-    public void DisabledWorkflowExposesSeparateCredentialsAndOnlyRequiredPermissions()
+    public void TestWorkflowExposesSeparateCredentialsAndOnlyRequiredPermissions()
     {
         var root = FindRoot();
         var workflow = File.ReadAllText(Path.Combine(root, ".github/workflows/agent-state-machine.yml"));
-        Assert.Contains("if: ${{ false }}", workflow);
+        Assert.Contains("github.ref == 'refs/heads/master'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '227'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'", workflow);
         Assert.Contains("GITHUB_TOKEN: ${{ github.token }}", workflow);
         Assert.Contains("ORCHESTRATION_USER_TOKEN: ${{ secrets.ORCHESTRATION_USER_TOKEN }}", workflow);
         Assert.Contains("ORCHESTRATION_TEST_ISSUE: ${{ vars.ORCHESTRATION_TEST_ISSUE }}", workflow);
@@ -75,8 +78,12 @@ public sealed class GitHubLiveCredentialsTests
         Assert.Contains("persist-credentials: false", workflow);
         var permissions = workflow.Split("permissions:\n")[1].Split("\njobs:")[0].Trim();
         Assert.Equal("contents: write\n  issues: write\n  pull-requests: write\n  actions: write\n  statuses: write", permissions);
-        Assert.Contains("if: ${{ false }}",
-            File.ReadAllText(Path.Combine(root, ".github/workflows/agent-managed-ci.yml")));
+        var ci = File.ReadAllText(Path.Combine(root, ".github/workflows/agent-managed-ci.yml"));
+        Assert.Contains("github.ref == vars.ORCHESTRATION_CI_REF", ci);
+        Assert.Contains("startsWith(github.ref, 'refs/tags/')", ci);
+        Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true'", ci);
+        Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '227'", ci);
+        Assert.Contains("vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'", ci);
     }
 
     [Fact]
