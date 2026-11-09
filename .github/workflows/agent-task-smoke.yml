@@ -29,6 +29,7 @@ jobs:
           TASK_TOKEN: ${{ secrets.ORCHESTRATION_USER_TOKEN }}
         shell: python
         run: |
+          import http.client
           import json
           import os
           import urllib.error
@@ -65,7 +66,7 @@ jobs:
               )
               try:
                   with urllib.request.urlopen(request, timeout=30) as response:
-                      return json.load(response)
+                      result = json.load(response)
               except urllib.error.HTTPError as error:
                   if method == "POST" and error.code >= 500:
                       raise RuntimeError(
@@ -75,13 +76,23 @@ jobs:
                   raise RuntimeError(
                       f"{method} {path}: HTTP {error.code}; no retry was attempted."
                   ) from None
-              except (urllib.error.URLError, TimeoutError) as error:
+              except (urllib.error.URLError, TimeoutError, OSError,
+                      http.client.HTTPException, json.JSONDecodeError, UnicodeDecodeError) as error:
                   if method == "POST":
                       raise RuntimeError(
-                          "Task creation outcome is uncertain; do not retry or rerun this workflow. "
-                          "Reconcile the Agent tasks list first."
+                          "Task creation outcome is uncertain because the response could not be read "
+                          "or decoded; do not retry or rerun this workflow. Reconcile the Agent tasks "
+                          "list first."
                       ) from error
                   raise RuntimeError(f"{method} {path} failed.") from error
+              if method == "POST" and (
+                  not isinstance(result, dict) or not isinstance(result.get("id"), str) or not result["id"]
+              ):
+                  raise RuntimeError(
+                      "Task creation may have been accepted, but its response did not contain a valid task ID. "
+                      "Do not retry or rerun; reconcile the Agent tasks list first."
+                  )
+              return result
 
           user = api("user", task_token)
           require(user["id"] == expected_user_id and user["type"] == "User",
