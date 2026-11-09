@@ -23,8 +23,57 @@ env:
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
 
 jobs:
+  managed-route:
+    name: Read canonical CI routing
+    if: >-
+      ${{ vars.ORCHESTRATION_MANAGED_ROUTING_APPROVED == 'true' &&
+          vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true' &&
+          vars.ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED == 'true' &&
+          vars.ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED == 'true' &&
+          github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    outputs:
+      run_full_ci: ${{ steps.decide.outputs.run_full_ci }}
+    steps:
+      - name: Require explicitly reviewed routing code
+        env:
+          DEFINITION_SHA: ${{ vars.ORCHESTRATION_DEFINITION_SHA }}
+        run: |
+          [[ "$DEFINITION_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - name: Checkout trusted routing definition only
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ vars.ORCHESTRATION_DEFINITION_SHA }}
+          persist-credentials: false
+      - name: Setup .NET SDK for trusted router
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Read canonical state and independently verify current PR head
+        id: decide
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ORCHESTRATION_MANAGED_ROUTING_APPROVED: ${{ vars.ORCHESTRATION_MANAGED_ROUTING_APPROVED }}
+          ORCHESTRATION_ACTIVATION_APPROVED: ${{ vars.ORCHESTRATION_ACTIVATION_APPROVED }}
+          ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED: ${{ vars.ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED }}
+          ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED: ${{ vars.ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED }}
+          ORCHESTRATION_DEFINITION_SHA: ${{ vars.ORCHESTRATION_DEFINITION_SHA }}
+        run: >-
+          dotnet run --project IntelligentTradingSimulator.Orchestration
+          --configuration Release --
+          --github-route --dry-run
+
   build-and-test:
     name: Build and test
+    needs: managed-route
+    # Disabled routing preserves ordinary CI. Enabled routing must succeed and explicitly allow CI.
+    if: ${{ always() && !cancelled() && (needs.managed-route.result == 'skipped' || needs.managed-route.result == 'success' && needs.managed-route.outputs.run_full_ci == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
