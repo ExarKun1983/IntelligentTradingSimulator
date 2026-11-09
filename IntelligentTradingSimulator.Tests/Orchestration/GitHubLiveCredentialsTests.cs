@@ -66,7 +66,8 @@ public sealed class GitHubLiveCredentialsTests
     {
         var root = FindRoot();
         var workflow = File.ReadAllText(Path.Combine(root, ".github/workflows/agent-state-machine.yml"));
-        Assert.Contains("github.ref == 'refs/heads/master'", workflow);
+        Assert.Contains("github.workflow_ref == format('{0}/.github/workflows/agent-state-machine.yml@refs/heads/master', github.repository)", workflow);
+        Assert.DoesNotContain("github.ref == 'refs/heads/master'", workflow);
         Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true'", workflow);
         Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '227'", workflow);
         Assert.Contains("vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'", workflow);
