@@ -2235,7 +2235,7 @@ entitlement, cost controls or repository protection must leave activation blocke
    | `ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED` | `true` only after automatic Copilot reviews/new-push re-reviews are disabled to prevent duplicate untracked reviews. |
    | `ORCHESTRATION_TRUSTED_CI_VERIFIED` | `true` only after exact-SHA checkout/test steps and immutable executable CI tag are verified. |
    | `ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED` | `true` only after workflow-token bot publisher permissions/provenance are checked; runtime verifies its authenticated ID. |
-   | `ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED` | `true` only after branch protection requires `Agent managed CI` and independent human final approval; review other writers/spoofing risk. |
+   | `ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED` | Production: `true` only after branch protection requires `Agent managed CI` and independent human final approval. For this single-pass test, leave unset/false; status publication is disabled and the test PR must remain unmerged. |
    | `ORCHESTRATION_ACTIVATION_APPROVED` | Keep `false`; set `true` **last**, only at separately approved cutover after all prerequisites. |
    | `ORCHESTRATION_MANAGED_ROUTING_APPROVED` | Keep `false` until managed status/protection and unmanaged/manual-CI compatibility are verified; then separately approve `true` for ordinary CI's read-only router. |
 
@@ -2255,6 +2255,10 @@ entitlement, cost controls or repository protection must leave activation blocke
    CI. A failing CI stops immediately; feedback or review findings requiring repair
    also stop instead of creating any repair task. Reactivation is rejected.
    The single-pass limits survive replay, Resume, and removal of test variables.
+   If `ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED` is unset/false in this bounded
+   test mode, required-status publication is disabled. This is acceptable only
+   because the test PR must not be merged; production still requires the verified
+   protected status context before activation.
    The cap variable remains `1` for configuration compatibility, but single-pass
    mode is stricter and permits no repairs. Remove both variables immediately
    after the test and leave activation false.
