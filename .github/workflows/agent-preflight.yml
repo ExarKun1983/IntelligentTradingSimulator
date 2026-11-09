@@ -84,9 +84,21 @@ jobs:
           require(isinstance(tasks.get("tasks"), list), "Unsupported task-list response.")
           print("PASS: Agent tasks API read access (no task started).")
 
-          content = api("repos/" + repository + "/contents/state.json?ref=agent-state", workflow_token)
-          require(content["encoding"] == "base64", "Unsupported canonical-state encoding.")
-          state = json.loads(base64.b64decode(content["content"]))
+          prefix = "repos/" + repository + "/git/"
+          reference = api(prefix + "ref/heads/agent-state", workflow_token)
+          commit = api(prefix + "commits/" + reference["object"]["sha"], workflow_token)
+          tree = api(prefix + "trees/" + commit["tree"]["sha"], workflow_token)
+          require(not tree.get("truncated"), "Canonical state tree is truncated.")
+          entries = [entry for entry in tree["tree"] if entry["path"] == "state.json"]
+          require(len(entries) == 1 and entries[0]["type"] == "blob"
+                  and entries[0]["mode"] == "100644", "Missing or invalid canonical state blob.")
+          content = api(prefix + "blobs/" + entries[0]["sha"], workflow_token)
+          maximum_state_bytes = 2 * 1024 * 1024
+          require(content["encoding"] == "base64" and content["size"] <= maximum_state_bytes,
+                  "Unsupported or oversized canonical state blob.")
+          decoded = base64.b64decode(content["content"])
+          require(len(decoded) <= maximum_state_bytes, "Oversized canonical state.")
+          state = json.loads(decoded.decode("utf-8"))
           require(state["Repository"] == repository and state["SchemaVersion"] == 1,
                   "Canonical state repository or schema mismatch.")
           print("PASS: canonical agent-state is readable.")
