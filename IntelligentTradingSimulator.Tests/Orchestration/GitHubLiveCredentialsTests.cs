@@ -114,6 +114,28 @@ public sealed class GitHubLiveCredentialsTests
     }
 
     [Fact]
+    public void TaskMappingDiagnosticsOnlyReadTheSavedTaskWithProtectedCredentials()
+    {
+        var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-task-mapping-diagnostics.yml"));
+        Assert.Contains("on:\n  workflow_dispatch:\n", workflow);
+        Assert.Contains("permissions: {}", workflow);
+        Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'false'", workflow);
+        Assert.Contains("github.workflow_ref == format('{0}/.github/workflows/agent-task-mapping-diagnostics.yml@refs/heads/master', github.repository)", workflow);
+        Assert.Contains("environment: agent-orchestration", workflow);
+        Assert.Contains("TASK_READ_TOKEN: ${{ secrets.ORCHESTRATION_USER_TOKEN }}", workflow);
+        Assert.Contains("/tasks/e4743d38-6b27-49cd-a272-83b34465a808", workflow);
+        Assert.Contains("method=\"GET\"", workflow);
+        Assert.Contains("NoRedirect", workflow);
+        Assert.DoesNotContain("uses:", workflow);
+        Assert.DoesNotContain("inputs:", workflow);
+        Assert.DoesNotContain("--github-live", workflow);
+        Assert.DoesNotContain("github.token", workflow);
+        Assert.DoesNotContain("POST", workflow);
+        Assert.DoesNotContain("print(payload)", workflow);
+        Assert.DoesNotContain("print(task)", workflow);
+    }
+
+    [Fact]
     public void BoundedTestModeRequiresOneIssueAndExactlyOneRepairTask()
     {
         var values = LiveSettingsValues();

@@ -1527,6 +1527,29 @@ dotnet test IntelligentTradingSimulator.sln --configuration Release --verbosity 
 
 ## Read-only diagnosis of skipped orchestration jobs
 
+### Existing test task mapping failure
+
+For the retained Issue #227 mapping hold, **Agent task mapping diagnostics
+(read-only)** is a separate manual workflow restricted to its definition on
+`master` with activation explicitly `false`. It uses the protected
+`agent-orchestration` environment and its user credential for exactly one GET
+of the saved task `e4743d38-6b27-49cd-a272-83b34465a808`. No task creation,
+checkout, CI dispatch, state write, or recovery operation is performed.
+Run it only with separate operator approval, while both live workflows remain
+disabled. The report contains identity-match booleans and allowlisted field
+shapes, not raw API content. It describes the current response, not the lost
+snapshot from the failed run.
+
+New mapping holds include `code=mapping/<stage>/<exception-type>` in their
+reason, without exception text or API values. Existing holds are not rewritten.
+These diagnostic events use a `v2` identity so replay cannot reuse an old event
+ID with a changed reason payload.
+Use that stage and the response-shape report to create a faithful regression
+fixture before changing accepted artifact formats. Do not ignore unknown
+artifacts, manually assign a PR, or clear the single-pass hold as part of diagnosis.
+
+### Activation gate checks
+
 Keep both live workflows manually disabled, remove `agent:ready` from the test
 Issue, and keep `ORCHESTRATION_ACTIVATION_APPROVED=false` while diagnosing.
 Run **Agent gate diagnostics (read-only)** manually from `master` in Actions.
