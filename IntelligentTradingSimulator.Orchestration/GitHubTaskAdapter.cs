@@ -111,10 +111,12 @@ public sealed class GitHubTaskAdapter(
         await api.VerifyRepositoryAsync(token);
         using var response = await taskApi.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(task.ExternalId), token);
         var root = response.RootElement;
+        var stage = "task-identity";
         try
         {
             ValidateTask(root, task.ExternalId);
             var inProgress = root.GetProperty("state").GetString() is "queued" or "in_progress";
+            stage = "artifact-shape";
             if (!root.TryGetProperty("artifacts", out var artifacts))
             {
                 if (inProgress) return null;
@@ -123,6 +125,7 @@ public sealed class GitHubTaskAdapter(
             var items = artifacts.EnumerateArray().ToList();
             if (items.Count == 0 && inProgress) return null;
             if (items.Count > 100) throw new InvalidDataException("Task artifact capacity exceeded.");
+            stage = "artifact-types";
             var branches = items.Where(item => item.GetProperty("provider").GetString() == "github" &&
                 item.GetProperty("type").GetString() == "branch").ToList();
             var pulls = items.Where(item => item.GetProperty("provider").GetString() == "github" &&
@@ -134,28 +137,38 @@ public sealed class GitHubTaskAdapter(
             string? headRef = null;
             if (branches.Count == 1)
             {
+                stage = "branch-refs";
                 var data = branches[0].GetProperty("data");
                 headRef = data.GetProperty("head_ref").GetString();
                 var baseRef = data.GetProperty("base_ref").GetString();
                 if (string.IsNullOrWhiteSpace(headRef) || baseRef != baseBranch)
                     throw new InvalidDataException("Task artifact refs do not match the configured repository.");
+                stage = "branch-pr-lookup";
                 var owner = api.Repository.Split('/')[0];
                 var matches = await api.ListAsync($"pulls?state=open&head={Uri.EscapeDataString(owner + ":" + headRef)}&base={Uri.EscapeDataString(baseRef)}", token);
                 if (matches.Count == 0 && inProgress && pulls.Count == 0) return null;
                 if (matches.Count != 1) throw new InvalidDataException("Task artifact has no unique open PR.");
                 number = matches[0].GetProperty("number").GetInt32();
+                stage = "branch-pull-consistency";
                 if (pulls.Count == 1 && await api.ResolvePullArtifactAsync(pulls[0].GetProperty("data"), token) != number)
                     throw new InvalidDataException("Task branch and pull artifacts contradict each other.");
             }
-            else number = await api.ResolvePullArtifactAsync(pulls[0].GetProperty("data"), token);
+            else
+            {
+                stage = "pull-artifact-resolution";
+                number = await api.ResolvePullArtifactAsync(pulls[0].GetProperty("data"), token);
+            }
+            stage = "saved-pr-consistency";
             if (issue.PullRequest is { } mapped && mapped != number)
                 throw new InvalidDataException("Task artifact changed the mapped PR.");
+            stage = "live-pr-validation";
             using var pull = await api.GetAsync($"pulls/{number}", token);
             ValidatePull(pull.RootElement, number);
             if (headRef is not null && pull.RootElement.GetProperty("head").GetProperty("ref").GetString() != headRef)
                 throw new InvalidDataException("Task artifact head does not match the live PR.");
             var sha = pull.RootElement.GetProperty("head").GetProperty("sha").GetString()!;
             if (issue.PullRequest == number && issue.HeadSha == sha) return null;
+            stage = "task-updated-at";
             var at = root.GetProperty("updated_at").GetDateTimeOffset();
             return new($"task-pr-mapped:{api.RepositoryId}:{issue.Generation}:{task.ExternalId}:{number}:{sha}:{at:O}",
                 api.Repository, issue.Number, state.Generation, issue.Generation,
@@ -165,10 +178,12 @@ public sealed class GitHubTaskAdapter(
         {
             var at = root.TryGetProperty("updated_at", out var updated) && updated.TryGetDateTimeOffset(out var value)
                 ? value : issue.ReadyAt ?? DateTimeOffset.UnixEpoch;
-            return new($"task-pr-mapping-stopped:{api.RepositoryId}:{issue.Generation}:{task.ExternalId}:{StateJson.Digest(root.GetRawText())}",
+            var failureCode = $"mapping/{stage}/{exception.GetType().Name}";
+            return new($"task-pr-mapping-stopped:v2:{api.RepositoryId}:{issue.Generation}:{task.ExternalId}:{failureCode}:{StateJson.Digest(root.GetRawText())}",
                 api.Repository, issue.Number, state.Generation, issue.Generation,
                 new("github-task-api", ActorKind.TaskService), at,
-                new TaskStopped(taskId, "Task PR mapping is unsupported or contradictory; admission retained."));
+                new TaskStopped(taskId,
+                    $"Task PR mapping is unsupported or contradictory; code={failureCode}; admission retained."));
         }
     }
 

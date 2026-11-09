@@ -1,0 +1,104 @@
+name: Agent task mapping diagnostics (read-only)
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  diagnose:
+    if: ${{ github.workflow_ref == format('{0}/.github/workflows/agent-task-mapping-diagnostics.yml@refs/heads/master', github.repository) && vars.ORCHESTRATION_ACTIVATION_APPROVED == 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    environment: agent-orchestration
+    steps:
+      - name: Inspect only the existing test task response shape
+        env:
+          TASK_READ_TOKEN: ${{ secrets.ORCHESTRATION_USER_TOKEN }}
+        shell: python
+        run: |
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          token = os.environ["TASK_READ_TOKEN"]
+          if not token:
+              raise SystemExit("Protected task read credential is missing.")
+          request = urllib.request.Request(
+              "https://api.github.com/agents/repos/ExarKun1983/IntelligentTradingSimulator/tasks/e4743d38-6b27-49cd-a272-83b34465a808",
+              headers={
+                  "Authorization": "Bearer " + token,
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2026-03-10",
+                  "User-Agent": "IntelligentTradingSimulator-MappingDiagnostics",
+              },
+              method="GET",
+          )
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+          try:
+              with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
+                  payload = response.read(2 * 1024 * 1024 + 1)
+          except urllib.error.HTTPError as error:
+              raise SystemExit("Task read failed; HTTP status " + str(error.code)) from None
+          except urllib.error.URLError:
+              raise SystemExit("Task read failed; transport error.") from None
+          if len(payload) > 2 * 1024 * 1024:
+              raise SystemExit("Task response exceeds diagnostic capacity.")
+          try:
+              task = json.loads(payload)
+          except (ValueError, UnicodeError):
+              raise SystemExit("Task response is not valid JSON.") from None
+          if not isinstance(task, dict):
+              raise SystemExit("Task response is not an object.")
+
+          def shape(value):
+              if value is None:
+                  return "null-or-missing"
+              return type(value).__name__
+
+          def identity_matches(value, expected):
+              return isinstance(value, dict) and value.get("id") == expected
+
+          report = {
+              "task_id_matches": task.get("id") == "e4743d38-6b27-49cd-a272-83b34465a808",
+              "repository_id_matches": identity_matches(task.get("repository"), 1277929203),
+              "creator_id_matches": identity_matches(task.get("creator"), 6195946),
+              "state_supported": task.get("state") in (
+                  "queued", "in_progress", "completed", "failed", "idle",
+                  "waiting_for_user", "timed_out", "cancelled",
+              ),
+              "updated_at_shape": shape(task.get("updated_at")),
+              "artifacts_shape": shape(task.get("artifacts")),
+          }
+          artifacts = task.get("artifacts")
+          if isinstance(artifacts, list):
+              if len(artifacts) > 100:
+                  raise SystemExit("Artifact capacity exceeded.")
+              report["artifact_count"] = len(artifacts)
+              report["artifacts"] = []
+              for item in artifacts:
+                  entry = {"shape": shape(item)}
+                  if isinstance(item, dict):
+                      entry["provider_is_github"] = item.get("provider") == "github"
+                      entry["type_is_branch"] = item.get("type") == "branch"
+                      entry["type_is_pull"] = item.get("type") == "pull"
+                      data = item.get("data")
+                      entry["data_shape"] = shape(data)
+                      if isinstance(data, dict):
+                          entry["data_fields"] = {
+                              key: shape(data.get(key))
+                              for key in ("id", "global_id", "head_ref", "base_ref")
+                          }
+                          entry["base_is_master"] = data.get("base_ref") == "master"
+                  report["artifacts"].append(entry)
+          output = json.dumps(report, indent=2)
+          print(output)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("## Existing task response shape\n\n```json\n" + output + "\n```\n")
+              summary.write("\nNo raw response, prompt, credential, or unknown field values are logged. ")
+              summary.write("This read does not reconstruct the earlier response or resume orchestration.\n")

@@ -102,6 +102,69 @@ public sealed class TaskPrMappingTests
     }
 
     [Theory]
+    [InlineData("repository", false, "task-identity")]
+    [InlineData("multiple-prs", false, "branch-pr-lookup")]
+    [InlineData("base", false, "live-pr-validation")]
+    [InlineData("missing-global", true, "pull-artifact-resolution")]
+    [InlineData("duplicate-pull", true, "artifact-types")]
+    public async Task MappingHoldReportsSafeStageWithoutLosingAdmission(string corruption, bool pullArtifact, string stage)
+    {
+        var state = State();
+        using var fixture = new GitHubTaskIntegrationTests.ApiFixture
+        {
+            Corruption = corruption, PullArtifact = pullArtifact
+        };
+        using var client = fixture.Client();
+        var message = await new GitHubTaskAdapter(new(client, "owner/repo", 1),
+            new GitHubTaskIntegrationTests.Store(state), "master", 55)
+            .ReadMappingEventAsync(state, state.Issues[7], default);
+        var stopped = Assert.IsType<TaskStopped>(message!.Data);
+        Assert.StartsWith("task-pr-mapping-stopped:v2:", message.Id);
+        Assert.Contains($":mapping/{stage}/InvalidDataException:", message.Id);
+        Assert.Equal($"Task PR mapping is unsupported or contradictory; code=mapping/{stage}/InvalidDataException; admission retained.",
+            stopped.Reason);
+        var held = Reducer.Apply(state, message);
+        Assert.Equal(Phase.BLOCKED, held.Issues[7].Phase);
+        Assert.True(held.Issues[7].ReactivationRequired);
+        Assert.Equal(7, held.AdmittedIssue);
+        Assert.Null(held.Issues[7].Ci);
+        Assert.Null(held.Issues[7].Review);
+        Assert.Empty(fixture.Writes);
+    }
+
+    [Fact]
+    public async Task SameTaskResponseWithDifferentMappingFailuresHasDistinctStableEventIds()
+    {
+        var state = State();
+        using var fixture = new GitHubTaskIntegrationTests.ApiFixture { Corruption = "multiple-prs" };
+        using var client = fixture.Client();
+        var adapter = new GitHubTaskAdapter(new(client, "owner/repo", 1),
+            new GitHubTaskIntegrationTests.Store(state), "master", 55);
+
+        var lookupFailure = await adapter.ReadMappingEventAsync(state, state.Issues[7], default);
+        fixture.Corruption = "base";
+        var validationFailure = await adapter.ReadMappingEventAsync(state, state.Issues[7], default);
+        var replay = await adapter.ReadMappingEventAsync(state, state.Issues[7], default);
+
+        Assert.NotNull(lookupFailure);
+        Assert.NotNull(validationFailure);
+        Assert.NotNull(replay);
+        Assert.Equal(lookupFailure.Id.Split(':')[^1], validationFailure.Id.Split(':')[^1]);
+        Assert.NotEqual(lookupFailure.Id, validationFailure.Id);
+        Assert.Equal(validationFailure.Id, replay.Id);
+        Assert.Equal(validationFailure, replay);
+        Assert.Contains(":mapping/branch-pr-lookup/InvalidDataException:", lookupFailure.Id);
+        Assert.Contains(":mapping/live-pr-validation/InvalidDataException:", validationFailure.Id);
+        var held = Reducer.Apply(Reducer.Apply(state, lookupFailure), validationFailure);
+        Assert.Equal(Phase.BLOCKED, held.Issues[7].Phase);
+        Assert.True(held.Issues[7].ReactivationRequired);
+        Assert.Equal(7, held.AdmittedIssue);
+        Assert.Null(held.Issues[7].Ci);
+        Assert.Null(held.Issues[7].Review);
+        Assert.Empty(fixture.Writes);
+    }
+
+    [Theory]
     [InlineData(TaskStatus.Unknown)]
     [InlineData(TaskStatus.Executing)]
     [InlineData(TaskStatus.Completed)]
