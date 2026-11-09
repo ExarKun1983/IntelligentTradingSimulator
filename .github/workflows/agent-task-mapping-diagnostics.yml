@@ -3,22 +3,27 @@ name: Agent task mapping diagnostics (read-only)
 on:
   workflow_dispatch:
 
-permissions: {}
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
   diagnose:
     if: ${{ github.workflow_ref == format('{0}/.github/workflows/agent-task-mapping-diagnostics.yml@refs/heads/master', github.repository) && vars.ORCHESTRATION_ACTIVATION_APPROVED == 'false' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
     environment: agent-orchestration
     steps:
-      - name: Inspect only the existing test task response shape
+      - name: Inspect existing task and verify PR mapping without state changes
         env:
           TASK_READ_TOKEN: ${{ secrets.ORCHESTRATION_USER_TOKEN }}
+          WORKFLOW_READ_TOKEN: ${{ github.token }}
         shell: python
         run: |
+          import http.client
           import json
           import os
+          import re
           import urllib.error
           import urllib.request
 
@@ -45,7 +50,7 @@ jobs:
                   payload = response.read(2 * 1024 * 1024 + 1)
           except urllib.error.HTTPError as error:
               raise SystemExit("Task read failed; HTTP status " + str(error.code)) from None
-          except urllib.error.URLError:
+          except (urllib.error.URLError, OSError, http.client.HTTPException):
               raise SystemExit("Task read failed; transport error.") from None
           if len(payload) > 2 * 1024 * 1024:
               raise SystemExit("Task response exceeds diagnostic capacity.")
@@ -62,7 +67,25 @@ jobs:
               return type(value).__name__
 
           def identity_matches(value, expected):
-              return isinstance(value, dict) and value.get("id") == expected
+              return (
+                  isinstance(value, dict) and type(value.get("id")) is int
+                  and value["id"] == expected
+              )
+
+          def positive_id(value):
+              return type(value) is int and 0 < value <= 9223372036854775807
+
+          def global_id_valid(value):
+              return isinstance(value, str) and 0 < len(value) <= 256 and bool(value.strip())
+
+          def database_id(value):
+              if positive_id(value):
+                  return value
+              if isinstance(value, str) and re.fullmatch(r"[0-9]{1,19}", value):
+                  number = int(value)
+                  if positive_id(number):
+                      return number
+              return None
 
           report = {
               "task_id_matches": task.get("id") == "e4743d38-6b27-49cd-a272-83b34465a808",
@@ -96,9 +119,132 @@ jobs:
                           }
                           entry["base_is_master"] = data.get("base_ref") == "master"
                   report["artifacts"].append(entry)
+          workflow_token = os.environ["WORKFLOW_READ_TOKEN"]
+          if not workflow_token:
+              raise SystemExit("Workflow read credential is missing.")
+          checks = {}
+          report["mapping_checks"] = checks
+
+          def read_mapping(label, path, body=None):
+              request = urllib.request.Request(
+                  "https://api.github.com/" + path,
+                  headers={
+                      "Authorization": "Bearer " + workflow_token,
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2026-03-10",
+                      "User-Agent": "IntelligentTradingSimulator-MappingDiagnostics",
+                      "Content-Type": "application/json",
+                  },
+                  data=None if body is None else json.dumps(body).encode(),
+                  method="GET" if body is None else "POST",
+              )
+              try:
+                  with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
+                      payload = response.read(2 * 1024 * 1024 + 1)
+              except urllib.error.HTTPError as error:
+                  checks[label] = {"http_status": error.code}
+                  return None
+              except (urllib.error.URLError, OSError, http.client.HTTPException):
+                  checks[label] = {"error": "transport"}
+                  return None
+              if len(payload) > 2 * 1024 * 1024:
+                  checks[label] = {"error": "response-capacity"}
+                  return None
+              try:
+                  value = json.loads(payload)
+              except (ValueError, UnicodeError):
+                  checks[label] = {"error": "invalid-json"}
+                  return None
+              checks[label] = {"http_status": 200}
+              return value
+
+          identity_ok = all(report[key] for key in (
+              "task_id_matches", "repository_id_matches", "creator_id_matches", "state_supported"
+          ))
+          checks["task_identity_valid"] = identity_ok
+          if identity_ok and isinstance(artifacts, list):
+              branches = [
+                  item for item in artifacts if isinstance(item, dict)
+                  and item.get("provider") == "github" and item.get("type") == "branch"
+              ]
+              pulls = [
+                  item for item in artifacts if isinstance(item, dict)
+                  and item.get("provider") == "github" and item.get("type") == "pull"
+              ]
+              checks["artifact_set_supported"] = (
+                  len(branches) <= 1 and len(pulls) <= 1
+                  and 0 < len(branches) + len(pulls) == len(artifacts)
+              )
+              if checks["artifact_set_supported"]:
+                  pr = read_mapping(
+                      "live_pr_read", "repos/ExarKun1983/IntelligentTradingSimulator/pulls/232"
+                  )
+                  if isinstance(pr, dict):
+                      head = pr.get("head")
+                      base = pr.get("base")
+                      if isinstance(head, dict) and isinstance(base, dict):
+                          checks["live_pr_valid"] = (
+                              pr.get("number") == 232 and pr.get("state") == "open"
+                              and identity_matches(head.get("repo"), 1277929203)
+                              and identity_matches(base.get("repo"), 1277929203)
+                              and base.get("ref") == "master"
+                              and isinstance(head.get("ref"), str) and bool(head["ref"].strip())
+                              and isinstance(head.get("sha"), str)
+                              and re.fullmatch(r"[0-9a-fA-F]{40}", head["sha"]) is not None
+                          )
+                          if branches:
+                              data = branches[0].get("data")
+                              def nonblank(value):
+                                  return isinstance(value, str) and value.strip() != ""
+                              checks["branch_matches_pr"] = (
+                                  isinstance(data, dict)
+                                  and nonblank(data.get("base_ref")) and nonblank(data.get("head_ref"))
+                                  and nonblank(base.get("ref")) and nonblank(head.get("ref"))
+                                  and data["base_ref"] == base["ref"]
+                                  and data["head_ref"] == head["ref"]
+                              )
+                          if pulls:
+                              data = pulls[0].get("data")
+                              checks["pull_ids_match_rest"] = (
+                                  isinstance(data, dict)
+                                  and positive_id(data.get("id")) and positive_id(pr.get("id"))
+                                  and global_id_valid(data.get("global_id")) and global_id_valid(pr.get("node_id"))
+                                  and data.get("id") == pr.get("id")
+                                  and data.get("global_id") == pr.get("node_id")
+                              )
+                              if isinstance(data, dict):
+                                  global_id = data.get("global_id")
+                                  if global_id_valid(global_id):
+                                      result = read_mapping("graphql_read", "graphql", {
+                                          "query": "query($id: ID!) { node(id: $id) { __typename ... on PullRequest { fullDatabaseId number repository { nameWithOwner } } } }",
+                                          "variables": {"id": global_id},
+                                      })
+                                      if isinstance(result, dict):
+                                          errors = result.get("errors", [])
+                                          checks["graphql_has_errors"] = errors != []
+                                          container = result.get("data")
+                                          node = container.get("node") if isinstance(container, dict) else None
+                                          checks["graphql_node_is_object"] = isinstance(node, dict)
+                                          if isinstance(node, dict):
+                                              checks["graphql_identity_matches"] = (
+                                                  errors == [] and node.get("__typename") == "PullRequest"
+                                                  and positive_id(data.get("id"))
+                                                  and database_id(node.get("fullDatabaseId")) is not None
+                                                  and database_id(node.get("fullDatabaseId")) == data.get("id")
+                                                  and node.get("number") == 232
+                                                  and isinstance(node.get("repository"), dict)
+                                                  and node["repository"].get("nameWithOwner")
+                                                  == "ExarKun1983/IntelligentTradingSimulator"
+                                              )
+                      else:
+                          checks["live_pr_valid"] = False
+                  elif pr is not None:
+                      checks["live_pr_valid"] = False
           output = json.dumps(report, indent=2)
           print(output)
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
               summary.write("## Existing task response shape\n\n```json\n" + output + "\n```\n")
               summary.write("\nNo raw response, prompt, credential, or unknown field values are logged. ")
               summary.write("This read does not reconstruct the earlier response or resume orchestration.\n")
+              summary.write("PR and GraphQL checks use the workflow credential with read-only permissions. ")
+              summary.write("GraphQL POST contains a fixed query, never a mutation. Missing checks were not evaluated.\n")
