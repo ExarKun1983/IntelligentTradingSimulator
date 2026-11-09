@@ -114,11 +114,11 @@ public sealed class GitHubLiveCredentialsTests
     }
 
     [Fact]
-    public void TaskMappingDiagnosticsOnlyReadTheSavedTaskWithProtectedCredentials()
+    public void TaskMappingDiagnosticsOnlyReadSavedTaskAndPrWithSeparateCredentials()
     {
         var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-task-mapping-diagnostics.yml"));
         Assert.Contains("on:\n  workflow_dispatch:\n", workflow);
-        Assert.Contains("permissions: {}", workflow);
+        Assert.Contains("permissions:\n  contents: read\n  pull-requests: read", workflow);
         Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'false'", workflow);
         Assert.Contains("github.workflow_ref == format('{0}/.github/workflows/agent-task-mapping-diagnostics.yml@refs/heads/master', github.repository)", workflow);
         Assert.Contains("environment: agent-orchestration", workflow);
@@ -129,8 +129,11 @@ public sealed class GitHubLiveCredentialsTests
         Assert.DoesNotContain("uses:", workflow);
         Assert.DoesNotContain("inputs:", workflow);
         Assert.DoesNotContain("--github-live", workflow);
-        Assert.DoesNotContain("github.token", workflow);
-        Assert.DoesNotContain("POST", workflow);
+        Assert.Contains("WORKFLOW_READ_TOKEN: ${{ github.token }}", workflow);
+        Assert.Contains("query($id: ID!)", workflow);
+        Assert.Contains("pulls/232", workflow);
+        Assert.DoesNotContain("\"mutation", workflow);
+        Assert.DoesNotContain(": write", workflow);
         Assert.DoesNotContain("print(payload)", workflow);
         Assert.DoesNotContain("print(task)", workflow);
     }
