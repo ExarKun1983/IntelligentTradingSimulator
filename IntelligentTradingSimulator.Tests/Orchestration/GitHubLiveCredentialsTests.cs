@@ -105,6 +105,29 @@ public sealed class GitHubLiveCredentialsTests
             GitHubLiveSettings.Read(name => values.GetValueOrDefault(name)));
     }
 
+    [Fact]
+    public void SinglePassTestCanRunWithoutRequiredStatusContextAndDoesNotEnableStatusPublication()
+    {
+        var values = LiveSettingsValues();
+        values["ORCHESTRATION_TEST_ISSUE"] = "227";
+        values["ORCHESTRATION_TEST_MAX_REPAIR_TASKS"] = "1";
+        values.Remove("ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED");
+
+        var settings = GitHubLiveSettings.Read(name => values.GetValueOrDefault(name));
+
+        Assert.False(settings.Status.AllowsPublication);
+    }
+
+    [Fact]
+    public void ProductionModeStillRequiresVerifiedRequiredStatusContext()
+    {
+        var values = LiveSettingsValues();
+        values.Remove("ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED");
+
+        Assert.Throws<InvalidOperationException>(() =>
+            GitHubLiveSettings.Read(name => values.GetValueOrDefault(name)));
+    }
+
     private static string FindRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
