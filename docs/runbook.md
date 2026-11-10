@@ -2382,6 +2382,11 @@ entitlement, cost controls or repository protection must leave activation blocke
    This change does not recover the held #237 attempt or authorize another
    review, move its immutable CI tag, or change deployed definition pins.
 
+   The proposed separate coding/CI/status/pause verification is specified in
+   [the isolated status-test design](orchestration-isolated-status-test.md).
+   It is not implemented or authorized to run; do not repurpose the existing
+   #237 workflows or state to approximate that test.
+
    For the explicitly approved bounded end-to-end test only, set
    `ORCHESTRATION_TEST_ISSUE` (the sole active test Issue) and
    `ORCHESTRATION_TEST_MAX_REPAIR_TASKS=1`. The #237 retest additionally requires
