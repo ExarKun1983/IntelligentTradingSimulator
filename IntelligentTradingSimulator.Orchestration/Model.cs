@@ -225,7 +225,82 @@ public sealed record Ready([property: JsonIgnore(Condition = JsonIgnoreCondition
     int? MaxRepairTasks = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     bool? SinglePassTest = null) : EventData;
-public sealed record BoundedOrchestrationScope(int IssueNumber, int MaxRepairTasks);
+public sealed record BoundedOrchestrationScope(int IssueNumber, int MaxRepairTasks, int? RetiredIssueNumber = null)
+{
+    public void Validate(RepositoryState state)
+    {
+        var retiredNumber = RetiredIssueNumber;
+        if (IssueNumber <= 0 || MaxRepairTasks != 1 ||
+            retiredNumber is not null && (IssueNumber != 237 || retiredNumber != 227))
+            throw new InvalidDataException("Invalid bounded orchestration scope.");
+        var allowedIssues = retiredNumber is { } retired ? new[] { IssueNumber, retired } : [IssueNumber];
+        if (state.Issues.Keys.Any(number => !allowedIssues.Contains(number)) ||
+            state.Outbox.Values.Any(effect => !allowedIssues.Contains(effect.IssueNumber)) ||
+            state.Inbox.Values.Any(entry => entry.Event is { } message &&
+                !allowedIssues.Contains(message.IssueNumber)) ||
+            state.AdmittedIssue is { } admitted && admitted != IssueNumber ||
+            state.Issues.TryGetValue(IssueNumber, out var active) &&
+            (active.MaxRepairTasks != MaxRepairTasks || !active.SinglePassTest))
+            throw new InvalidDataException("Canonical state or effect snapshot exceeds the bounded test scope.");
+        if (retiredNumber is not { } retiredIssue) return;
+        if (!state.Issues.TryGetValue(retiredIssue, out var historical))
+            throw new InvalidDataException("Canonical state is missing the required retired test history.");
+        ValidateRetiredAttempt(state, historical);
+    }
+
+    private static void ValidateRetiredAttempt(RepositoryState state, IssueState issue)
+    {
+        const string taskId = "task:227:1:1:1";
+        const string externalTaskId = "e4743d38-6b27-49cd-a272-83b34465a808";
+        const string launchIntentId = "LaunchTask:227:1:task:227:1:1:1:1";
+        if (issue.Number != 227 || issue.Generation != 1 || issue.Phase != Phase.BLOCKED ||
+            !issue.SinglePassTest || issue.MaxRepairTasks != 1 || issue.Ready || issue.ActiveAuthorized ||
+            !issue.ReactivationRequired || issue.Paused || string.IsNullOrWhiteSpace(issue.HoldReason) ||
+            issue.ActiveTaskId != taskId || issue.Tasks.Count != 1 ||
+            issue.PullRequest is not null || issue.HeadSha is not null || issue.Ci is not null ||
+            issue.Review is not null || !issue.Tasks.TryGetValue(taskId, out var task) ||
+            task is not { Kind: TaskKind.Coding, Status: TaskStatus.Failed, LaunchSource: TaskLaunchSource.UnmappedIssue,
+                LaunchConfirmed: true, ExternalId: externalTaskId, FinalSha: null, CandidateShaEvidence: null,
+                OperatorResolution: { } resolution, TerminalEvidence: { } terminal } ||
+            state.AdmittedIssue == issue.Number ||
+            state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number &&
+                effect.Status is not (DeliveryStatus.Succeeded or DeliveryStatus.Failed or DeliveryStatus.Cancelled)))
+            throw new InvalidDataException("Prior single-pass Issue is not safely retired.");
+
+        var launches = state.Outbox.Values.Where(effect => effect.IssueNumber == issue.Number &&
+            effect.Kind == EffectKind.LaunchTask).ToList();
+        if (launches.Count != 1 || launches[0].Id != launchIntentId || launches[0].TaskId != taskId ||
+            launches[0].Status != DeliveryStatus.Succeeded || launches[0].Generation != issue.Generation ||
+            launches[0].Round != task.Round || launches[0].ExternalId != externalTaskId ||
+            string.IsNullOrWhiteSpace(launches[0].Digest) ||
+            state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number &&
+                effect.Kind is EffectKind.RunCi or EffectKind.RequestReview))
+            throw new InvalidDataException("Prior single-pass task launch receipt is not exact.");
+        TaskTerminalRecovery.ValidateEvidence(terminal.Evidence, state, launches[0]);
+        if (!state.Inbox.TryGetValue(terminal.EventId, out var terminalEntry) ||
+            terminalEntry.Status != DeliveryStatus.Succeeded ||
+            terminalEntry.Event is not { Data: TaskTerminalObserved observed } terminalEvent ||
+            terminalEvent.Repository != state.Repository || terminalEvent.IssueNumber != issue.Number ||
+            terminalEvent.IssueGeneration != issue.Generation || observed.TaskId != taskId ||
+            terminalEvent.Actor.Kind != ActorKind.TaskService || terminalEvent.Actor.Login != "github-task-api" ||
+            terminalEvent.OccurredAt != terminal.Evidence.ObservedAt ||
+            JsonSerializer.Serialize(observed.Evidence, StateJson.Options) !=
+            JsonSerializer.Serialize(terminal.Evidence, StateJson.Options) ||
+            !state.Inbox.TryGetValue(resolution.EventId, out var resolutionEntry) ||
+            resolutionEntry.Status != DeliveryStatus.Succeeded ||
+            resolutionEntry.Event is not { Data: ResolveTaskTerminal resolved } resolutionEvent ||
+            resolutionEvent.Repository != state.Repository || resolutionEvent.IssueNumber != issue.Number ||
+            resolutionEvent.IssueGeneration != issue.Generation || resolved.TaskId != taskId ||
+            resolutionEvent.Actor != resolution.Author || resolved.EvidenceEventId != terminal.EventId ||
+            string.IsNullOrWhiteSpace(resolved.Reason) ||
+            resolution.Author.Kind != ActorKind.Human || resolution.Author.Type != "User" ||
+            resolution.Author.Id is not > 0 || string.IsNullOrWhiteSpace(resolution.Author.Login) ||
+            resolution.Reason != resolved.Reason ||
+            resolution.OccurredAt != resolutionEvent.OccurredAt ||
+            resolution.OccurredAt < terminal.Evidence.ObservedAt)
+            throw new InvalidDataException("Prior single-pass resolution lacks durable matching evidence.");
+    }
+}
 public sealed record Withdraw : EventData;
 public sealed record StageEdited : EventData;
 public sealed record Resume : EventData;

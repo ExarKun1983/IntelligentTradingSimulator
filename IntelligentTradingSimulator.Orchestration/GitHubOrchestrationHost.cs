@@ -184,13 +184,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
 
         private void Validate(RepositoryState state)
         {
-            if (scope.IssueNumber <= 0 || scope.MaxRepairTasks != 1 ||
-                state.Issues.Keys.Any(number => number != scope.IssueNumber) ||
-                state.AdmittedIssue is { } admitted && admitted != scope.IssueNumber ||
-                state.Outbox.Values.Any(effect => effect.IssueNumber != scope.IssueNumber) ||
-                state.Issues.TryGetValue(scope.IssueNumber, out var issue) &&
-                (issue.MaxRepairTasks != scope.MaxRepairTasks || !issue.SinglePassTest))
-                throw new InvalidDataException("Canonical state or effect snapshot exceeds the bounded test scope.");
+            scope.Validate(state);
         }
     }
 
