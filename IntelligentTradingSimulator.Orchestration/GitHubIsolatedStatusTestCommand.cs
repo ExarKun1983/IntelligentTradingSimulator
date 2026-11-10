@@ -6,8 +6,14 @@ namespace IntelligentTradingSimulator.Orchestration;
 
 public static class GitHubIsolatedStatusTestCommand
 {
-    public static async Task<int> RunAsync(string[] args, TextWriter output, TextWriter error)
+    public static Task<int> RunAsync(string[] args, TextWriter output, TextWriter error) =>
+        RunAsync(args, output, error, Environment.GetEnvironmentVariable, CreateClient);
+
+    internal static async Task<int> RunAsync(string[] args, TextWriter output, TextWriter error,
+        Func<string, string?> read, Func<string, HttpClient> createClient)
     {
+        HttpClient? client = null;
+        HttpClient? userClient = null;
         IStateStore? diagnosticStore = null;
         var diagnosticIssueNumber = 0;
         string? diagnosticOperation = null;
@@ -17,23 +23,23 @@ public static class GitHubIsolatedStatusTestCommand
             if (!args.Contains("--execute", StringComparer.Ordinal) || args.Contains("--dry-run", StringComparer.Ordinal) ||
                 args.Contains("--replay", StringComparer.Ordinal) || args.Contains("--context", StringComparer.Ordinal))
                 throw new InvalidDataException("Isolated status-test mode requires a trusted Actions invocation.");
-            var path = Environment.GetEnvironmentVariable("GITHUB_EVENT_PATH");
+            var path = read("GITHUB_EVENT_PATH");
             if (string.IsNullOrWhiteSpace(path) || new FileInfo(path).Length > 2 * 1024 * 1024)
                 throw new InvalidDataException("Missing or oversized Actions notification.");
             using var payload = JsonDocument.Parse(await File.ReadAllTextAsync(path));
             var root = payload.RootElement;
-            var eventName = Environment.GetEnvironmentVariable("GITHUB_EVENT_NAME") ??
+            var eventName = read("GITHUB_EVENT_NAME") ??
                 throw new InvalidDataException("Missing Actions event.");
-            var runId = Environment.GetEnvironmentVariable("GITHUB_RUN_ID") ??
+            var runId = read("GITHUB_RUN_ID") ??
                 throw new InvalidDataException("Missing Actions run identity.");
-            var settings = GitHubIsolatedStatusTestSettings.Read(Environment.GetEnvironmentVariable, DateTimeOffset.UtcNow);
+            var settings = GitHubIsolatedStatusTestSettings.Read(read, DateTimeOffset.UtcNow);
             if (eventName != "workflow_dispatch" ||
                 root.GetProperty("inputs").GetProperty("issue").GetString() !=
                     settings.IssueNumber.ToString(CultureInfo.InvariantCulture))
                 throw new InvalidDataException("Isolated status test accepts only its exact manual Issue dispatch.");
             var expectedWorkflowRef = $"{settings.Repository}/{GitHubIsolatedStatusTestSettings.DriverWorkflowPath}@{GitHubIsolatedStatusTestSettings.DriverReference}";
-            if (Environment.GetEnvironmentVariable("GITHUB_REF") != GitHubIsolatedStatusTestSettings.DriverReference ||
-                Environment.GetEnvironmentVariable("GITHUB_WORKFLOW_REF") != expectedWorkflowRef)
+            if (read("GITHUB_REF") != GitHubIsolatedStatusTestSettings.DriverReference ||
+                read("GITHUB_WORKFLOW_REF") != expectedWorkflowRef)
                 throw new InvalidDataException("Isolated driver was not run from its immutable reviewed tag.");
             var operation = root.GetProperty("inputs").GetProperty("operation").GetString();
             diagnosticIssueNumber = settings.IssueNumber;
@@ -46,13 +52,13 @@ public static class GitHubIsolatedStatusTestCommand
             if (operation == "status-test-bootstrap" && !settings.BootstrapApproved)
                 throw new InvalidOperationException("One-time isolated state bootstrap was not separately approved.");
 
-            var userToken = Environment.GetEnvironmentVariable("ORCHESTRATION_STATUS_TEST_USER_TOKEN");
-            var workflowToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+            var userToken = read("ORCHESTRATION_STATUS_TEST_USER_TOKEN");
+            var workflowToken = read("GITHUB_TOKEN");
             if (string.IsNullOrWhiteSpace(userToken) || string.IsNullOrWhiteSpace(workflowToken) ||
                 string.Equals(userToken, workflowToken, StringComparison.Ordinal))
                 throw new InvalidOperationException("Separate isolated-test credentials are unavailable.");
-            using var client = CreateClient(workflowToken);
-            using var userClient = CreateClient(userToken);
+            client = createClient(workflowToken);
+            userClient = createClient(userToken);
             var api = new GitHubRepositoryApi(client, settings.Repository, settings.RepositoryId);
             var taskApi = new GitHubRepositoryApi(userClient, settings.Repository, settings.RepositoryId);
             var publisher = await GitHubLiveCredentials.VerifyAsync(api, taskApi, settings.ActorId);
@@ -163,7 +169,7 @@ public static class GitHubIsolatedStatusTestCommand
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or
             InvalidOperationException or ArgumentException or UnauthorizedAccessException or KeyNotFoundException or
-            HttpRequestException or FormatException or OverflowException)
+            HttpRequestException or OperationCanceledException or FormatException or OverflowException)
         {
             try
             {
@@ -221,6 +227,11 @@ public static class GitHubIsolatedStatusTestCommand
             }
             error.WriteLine($"Isolated status test stopped ({exception.GetType().Name}); reconcile saved test state before continuing.");
             return 1;
+        }
+        finally
+        {
+            userClient?.Dispose();
+            client?.Dispose();
         }
     }
 

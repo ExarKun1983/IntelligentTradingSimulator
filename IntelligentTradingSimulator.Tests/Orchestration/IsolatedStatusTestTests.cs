@@ -1,5 +1,6 @@
 using System.Net;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using IntelligentTradingSimulator.Orchestration;
 
@@ -140,6 +141,154 @@ public sealed class IsolatedStatusTestTests
             "workflow_dispatch", "99", evidence with { Ready = false }, 1, 1, Now));
         Assert.Throws<InvalidDataException>(() => GitHubActionsIngress.PrepareEvent(payload,
             "workflow_dispatch", "99", evidence with { ActorType = "Bot" }, 1, 1, Now));
+    }
+
+    [Theory]
+    [InlineData("manifest", false, "InvalidDataException")]
+    [InlineData("state-timeout", false, "TaskCanceledException")]
+    [InlineData("identity-timeout", true, "TaskCanceledException")]
+    [InlineData("diagnostic-timeout", true, "TaskCanceledException")]
+    public async Task CommandKeepsClientsAliveForSanitizedFailureDiagnosticsAndHandlesTimeouts(
+        string failure, bool stateUnavailable, string errorType)
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(path, """
+                {"inputs":{"issue":"51","operation":"status-test-start"}}
+                """);
+            var values = ValidSettings();
+            values["ORCHESTRATION_STATUS_TEST_EXPIRES_AT"] = DateTimeOffset.UtcNow.AddHours(2).ToString("O");
+            values["GITHUB_EVENT_PATH"] = path;
+            values["GITHUB_EVENT_NAME"] = "workflow_dispatch";
+            values["GITHUB_RUN_ID"] = "99";
+            values["GITHUB_REF"] = GitHubIsolatedStatusTestSettings.DriverReference;
+            values["GITHUB_WORKFLOW_REF"] =
+                $"owner/repo/{GitHubIsolatedStatusTestSettings.DriverWorkflowPath}@{GitHubIsolatedStatusTestSettings.DriverReference}";
+            values["GITHUB_TOKEN"] = "workflow-test-token";
+            values["ORCHESTRATION_STATUS_TEST_USER_TOKEN"] = "user-test-token";
+            var handler = new CommandHandler(failure);
+            var userHandler = new CommandHandler(failure);
+            var clients = new List<HttpClient>();
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+
+            var result = await GitHubIsolatedStatusTestCommand.RunAsync(["--execute"], output, error,
+                name => values.GetValueOrDefault(name), token =>
+                {
+                    var client = new HttpClient(token == "workflow-test-token" ? handler : userHandler)
+                    {
+                        BaseAddress = new("https://api.github.com/")
+                    };
+                    clients.Add(client);
+                    return client;
+                });
+
+            Assert.Equal(1, result);
+            using var evidence = JsonDocument.Parse(output.ToString());
+            var root = evidence.RootElement;
+            Assert.Equal("isolated-status-test-failure", root.GetProperty("Mode").GetString());
+            Assert.Equal(errorType, root.GetProperty("ErrorType").GetString());
+            if (stateUnavailable)
+                Assert.True(root.GetProperty("StateUnavailable").GetBoolean());
+            else
+            {
+                Assert.False(root.TryGetProperty("StateUnavailable", out _));
+                Assert.Equal(new string('c', 40), root.GetProperty("HeadSha").GetString());
+                Assert.Equal("remote-task", root.GetProperty("TaskHistory")[0].GetProperty("ExternalId").GetString());
+                Assert.Equal("90", root.GetProperty("Ci").GetProperty("RunId").GetString());
+                Assert.Equal(100, root.GetProperty("StatusHistory")[0].GetProperty("Boundary").GetProperty("StatusId").GetInt64());
+                Assert.Equal(2, handler.RefReads);
+            }
+            Assert.DoesNotContain("workflow-test-token", output.ToString() + error);
+            Assert.DoesNotContain("user-test-token", output.ToString() + error);
+            Assert.Contains("reconcile saved test state", error.ToString());
+            Assert.True(handler.Disposed);
+            Assert.True(userHandler.Disposed);
+            foreach (var client in clients)
+                await Assert.ThrowsAsync<ObjectDisposedException>(() => client.GetAsync("user"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    private sealed class CommandHandler(string failure) : HttpMessageHandler
+    {
+        public int RefReads { get; private set; }
+        public bool Disposed { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            Assert.False(Disposed);
+            var path = Uri.UnescapeDataString(request.RequestUri!.AbsolutePath);
+            if (path == "/user" && failure == "identity-timeout")
+                throw new TaskCanceledException("user-test-token must not appear in diagnostics");
+            if (path.Contains("/git/ref/", StringComparison.Ordinal))
+            {
+                RefReads++;
+                if (failure == "diagnostic-timeout" || failure == "state-timeout" && RefReads == 1)
+                    throw new TaskCanceledException("workflow-test-token must not appear in diagnostics");
+            }
+            Assert.True(request.Method == HttpMethod.Get || path == "/graphql",
+                "Failure diagnostics must not retry mutations.");
+            object body = path switch
+            {
+                "/user" => new { id = 55, login = "maintainer", type = "User" },
+                "/graphql" => new { data = new { viewer = new
+                {
+                    databaseId = GitHubLiveCredentials.ProjectionActorId,
+                    login = GitHubLiveCredentials.ProjectionLogin, id = "bot-node"
+                } } },
+                "/users/github-actions[bot]" => new
+                {
+                    id = GitHubLiveCredentials.ProjectionActorId,
+                    login = GitHubLiveCredentials.ProjectionLogin, type = "Bot", node_id = "bot-node"
+                },
+                "/repos/owner/repo" => new { id = 1, full_name = "owner/repo" },
+                "/repos/owner/repo/actions/runs/99" => new
+                {
+                    id = 99, workflow_id = 101, path = GitHubIsolatedStatusTestSettings.DriverWorkflowPath,
+                    @event = "workflow_dispatch", head_sha = Definition, repository = new { id = 1 },
+                    created_at = Now
+                },
+                "/repos/owner/repo/git/ref/heads/agent-state-status-revocation-v1" =>
+                    new { @object = new { sha = new string('d', 40) } },
+                var p when p.Contains("/git/commits/", StringComparison.Ordinal) =>
+                    new { tree = new { sha = new string('e', 40) } },
+                var p when p.Contains("/git/trees/", StringComparison.Ordinal) =>
+                    new { tree = new[] { new { path = "state.json", type = "blob", mode = "100644", sha = new string('f', 40) } } },
+                var p when p.Contains("/git/blobs/", StringComparison.Ordinal) => StateBlob(),
+                _ => throw new InvalidOperationException("Unexpected HTTP " + path)
+            };
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(body))
+            });
+        }
+
+        private static object StateBlob()
+        {
+            var state = State();
+            var issue = state.Issues[51];
+            issue.HeadSha = new('c', 40);
+            issue.Tasks["task"] = new() { Id = "task", ExternalId = "remote-task" };
+            issue.Ci = new() { RunId = "90" };
+            state.Outbox["status"] = new()
+            {
+                Id = "status", IssueNumber = 51, Kind = EffectKind.PublishRequiredStatus,
+                RequiredStatusBoundary = new(41898282, "github-actions[bot]", "bot-node", "Bot", Now, [], 100)
+            };
+            var bytes = Encoding.UTF8.GetBytes(StateJson.Serialize(state));
+            return new { encoding = "base64", size = bytes.Length, content = Convert.ToBase64String(bytes) };
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            Disposed = true;
+            base.Dispose(disposing);
+        }
     }
 
     private static Dictionary<string, string?> ValidSettings() => new()

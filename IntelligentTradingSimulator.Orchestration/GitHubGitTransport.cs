@@ -115,7 +115,7 @@ public sealed partial class GitHubGitTransport : IGitObjectRefTransport
                 throw new InvalidOperationException("Automatic state-ref creation is not supported.");
             if (await ReadRefAsync(reference, cancellationToken) is not null) return new(false);
             using var created = await client.PostAsJsonAsync(prefix + "git/refs",
-                new { @ref = RefPath(reference), sha = commit }, cancellationToken);
+                new { @ref = reference, sha = commit }, cancellationToken);
             if (created.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.UnprocessableEntity)
                 return new(false);
             using var createdJson = await ReadJsonAsync(created, cancellationToken);

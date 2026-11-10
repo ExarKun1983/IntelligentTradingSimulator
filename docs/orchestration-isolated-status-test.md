@@ -17,7 +17,7 @@ CI tag. Passing this test does not authorize recovery of #237.
   passed 726 tests, including
   published-success pause, missing downstream approvals, lost responses,
   cancellation, lookup-only replay, publisher/head rejection, and CAS conflicts.
-- Current offline validation passes the full solution suite: 2,151 passed,
+- Current offline validation passes the full solution suite: 2,156 passed,
   one skipped, zero failed. No live workflow was run.
 - Read-only inspection found zero commit statuses on the held test head
   `f52d2a10b237dff7c29cfcac3151a387a40b0396`. Its green Actions run is not
@@ -57,7 +57,8 @@ weaken the production publisher gate or set a false attestation.
 The driver needs the existing separate task-user and workflow credentials.
 Task creation uses the verified user identity. Status publication uses the
 authenticated workflow publisher, verified again in each invocation. Grant only
-the API capabilities needed by each job; the CI job needs contents read, no task
+the API capabilities needed by each job: the driver requires `actions: write`
+to dispatch the isolated CI workflow; the CI job needs contents read, no task
 credential, no state writes, and no status writes. Never execute tested-head
 code in the driver job containing mutation credentials.
 
@@ -85,6 +86,9 @@ reviewed API guards, not claimed as a GitHub token permission boundary.
   for its stage. Status history includes payload, SHA, publisher boundary,
   existing status IDs, prepared/completed times and returned status ID; failed
   stages include a sanitized summary of the last readable canonical state.
+  HTTP clients remain available until failure diagnostics finish, including
+  after API timeouts; diagnostics only read saved state and never retry a
+  prepared mutation. Clients are then disposed even if diagnostics fail.
   The workflow artifact retention is seven days.
 - Offline regressions cover settings/manifest constraints, isolated state
   limits, ingress, alternate state refs, CI routing and the worker effect cap.

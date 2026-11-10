@@ -124,6 +124,40 @@ public class GitHubGitTransportTests
     }
 
     [Fact]
+    public async Task IsolatedBootstrapSendsFullyQualifiedRefAndDoesNotRepeatCreation()
+    {
+        const string reference = GitHubIsolatedStatusTestSettings.StateReference;
+        var exists = false;
+        var posts = 0;
+        var handler = new StubHandler((request, body) =>
+        {
+            if (request.Method == HttpMethod.Get)
+            {
+                Assert.EndsWith("/git/ref/heads/agent-state-status-revocation-v1", request.RequestUri!.AbsolutePath);
+                return exists ? Json(new { @object = new { sha = Child } }) : new(HttpStatusCode.NotFound);
+            }
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.EndsWith("/git/refs", request.RequestUri!.AbsolutePath);
+            using var json = JsonDocument.Parse(body!);
+            Assert.Equal(reference, json.RootElement.GetProperty("ref").GetString());
+            Assert.Equal(Child, json.RootElement.GetProperty("sha").GetString());
+            posts++;
+            exists = true;
+            return Json(new { @ref = reference, @object = new { sha = Child } });
+        });
+        using var client = Client(handler);
+        var transport = new GitHubGitTransport(client, "owner/repo", allowMutations: true,
+            stateReference: reference, allowIsolatedInitialization: true);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            transport.TryAdvanceRefAsync("refs/heads/agent-state", null, Child, default));
+        Assert.Equal(0, handler.Calls);
+        Assert.True((await transport.TryAdvanceRefAsync(reference, null, Child, default)).Advanced);
+        Assert.False((await transport.TryAdvanceRefAsync(reference, null, Child, default)).Advanced);
+        Assert.Equal(1, posts);
+    }
+
+    [Fact]
     public void IsolatedInitializationCannotBeEnabledForTheProductionStateRef()
     {
         using var client = Client(new StubHandler((_, _) => throw new InvalidOperationException("Unexpected HTTP")));
