@@ -100,6 +100,102 @@ public sealed class GitHubTaskIntegrationTests
     }
 
     [Theory]
+    [InlineData(5000000000L)]
+    [InlineData(long.MaxValue)]
+    public async Task EmptyGlobalIdWithBranchEvidenceSupportsCompletionAndCandidateRevalidation(long id)
+    {
+        using var fixture = new ApiFixture
+        {
+            PullArtifact = true, IncludeBranch = true, ArtifactGlobalId = "", ArtifactDatabaseId = id
+        };
+        var store = new Store();
+        using var client = fixture.Client();
+        var api = new GitHubRepositoryApi(client, "owner/repo", 1);
+        var host = new GitHubOrchestrationHost(api, store, new Clock());
+        await Run(host, fixture.Notification());
+        fixture.RemoteState = "completed";
+        await Run(host, fixture.Notification());
+        await Run(host, fixture.Notification());
+
+        var issue = store.State.Issues[7];
+        var task = Assert.Single(issue.Tasks.Values);
+        Assert.Equal(17, issue.PullRequest);
+        Assert.Equal(TaskStatus.Completed, task.Status);
+        Assert.Equal(Head, task.CandidateShaEvidence!.ObservedHeadSha);
+        Assert.Equal(Head, issue.Ci!.Sha);
+        await new GitHubTaskAdapter(api, store, "master", 55)
+            .ValidateCandidateShaAsync(store.State, issue, default);
+        Assert.Empty(fixture.GraphQueries);
+        Assert.DoesNotContain(fixture.Requests, path => path.Contains($"/pulls/{id}"));
+        Assert.Single(fixture.Writes, write => write.Path.StartsWith("/agents/"));
+        Assert.DoesNotContain(fixture.Writes, write => write.Path.Contains("dispatches") ||
+            write.Path.Contains("requested_reviewers"));
+    }
+
+    [Theory]
+    [InlineData("rest-database")]
+    [InlineData("database")]
+    [InlineData("no-prs")]
+    [InlineData("multiple-prs")]
+    [InlineData("duplicate-pull")]
+    [InlineData("duplicate-branch")]
+    [InlineData("branch-base")]
+    [InlineData("blank-head-ref")]
+    [InlineData("head-ref")]
+    [InlineData("base")]
+    [InlineData("base-repository")]
+    [InlineData("head-repository")]
+    [InlineData("closed-pr")]
+    [InlineData("sha")]
+    [InlineData("missing-global")]
+    [InlineData("absent-global")]
+    [InlineData("global-type")]
+    [InlineData("global-length")]
+    public async Task EmptyGlobalIdCompletionRejectsContradictoryEvidence(string corruption)
+    {
+        using var fixture = new ApiFixture { PullArtifact = true, IncludeBranch = true, ArtifactGlobalId = "" };
+        var store = new Store();
+        using var client = fixture.Client();
+        var api = new GitHubRepositoryApi(client, "owner/repo", 1);
+        var host = new GitHubOrchestrationHost(api, store, new Clock());
+        await Run(host, fixture.Notification());
+        fixture.RemoteState = "completed";
+        fixture.Corruption = corruption;
+
+        var message = await new GitHubTaskAdapter(api, store, "master", 55)
+            .ReadEventAsync(store.State, store.State.Issues[7], default);
+        Assert.IsType<TaskStopped>(message!.Data);
+        Assert.Null(store.State.Issues[7].Ci);
+        Assert.Null(store.State.Issues[7].Review);
+        Assert.Empty(fixture.GraphQueries);
+    }
+
+    [Theory]
+    [InlineData("rest-database")]
+    [InlineData("multiple-prs")]
+    [InlineData("head-ref")]
+    [InlineData("later-push")]
+    [InlineData("missing-global")]
+    public async Task EmptyGlobalIdCandidateRevalidationRejectsChangedEvidence(string corruption)
+    {
+        using var fixture = new ApiFixture { PullArtifact = true, IncludeBranch = true, ArtifactGlobalId = "" };
+        var store = new Store();
+        using var client = fixture.Client();
+        var api = new GitHubRepositoryApi(client, "owner/repo", 1);
+        var host = new GitHubOrchestrationHost(api, store, new Clock());
+        await Run(host, fixture.Notification());
+        fixture.RemoteState = "completed";
+        await Run(host, fixture.Notification());
+        Assert.NotNull(Assert.Single(store.State.Issues[7].Tasks.Values).CandidateShaEvidence);
+
+        fixture.Corruption = corruption;
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            new GitHubTaskAdapter(api, store, "master", 55)
+                .ValidateCandidateShaAsync(store.State, store.State.Issues[7], default));
+        Assert.Empty(fixture.GraphQueries);
+    }
+
+    [Theory]
     [InlineData("missing-global")]
     [InlineData("global-length")]
     [InlineData("database")]
@@ -666,6 +762,7 @@ public sealed class GitHubTaskIntegrationTests
         public bool IncludeBranch { get; init; }
         public long ArtifactDatabaseId { get; init; } = 700;
         public bool NodeIdAsString { get; init; }
+        public string ArtifactGlobalId { get; init; } = "PR_node";
         private List<string> labels = ["agent:ready"];
         public string RemoteState { get; set; } = "in_progress";
         public string? Corruption { get; set; }
@@ -746,7 +843,8 @@ public sealed class GitHubTaskIntegrationTests
                         user = new { id = 99, type = "Bot", login = "projection" } }) }).ToArray();
             else if (path == prefix + "issues/7/labels") result = labels.Distinct().Select(name => new { name }).ToArray();
             else if (path == "/agents/repos/owner/repo/tasks/remote-task") result = TaskResponse();
-            else if (path == prefix + "pulls") result = Corruption == "multiple-prs" ? new[] { Pull(17), Pull(18) } : new[] { Pull(17) };
+            else if (path == prefix + "pulls") result = Corruption == "no-prs" ? Array.Empty<object>() :
+                Corruption == "multiple-prs" ? new[] { Pull(17), Pull(18) } : new[] { Pull(17) };
             else if (path == prefix + "pulls/17") result = Pull(17);
             else if (path == prefix + "pulls/18") result = Pull(18);
             else throw new InvalidOperationException($"Unexpected route {path}.");
@@ -769,12 +867,22 @@ public sealed class GitHubTaskIntegrationTests
             if (Corruption == "artifact") return [];
             var artifacts = new List<object>();
             if (!PullArtifact || IncludeBranch)
-                artifacts.Add(new { provider = "github", type = "branch", data = new { head_ref = "coding", base_ref = "master" } });
+                artifacts.Add(new { provider = "github", type = "branch",
+                    data = new { head_ref = Corruption == "blank-head-ref" ? "" : "coding",
+                        base_ref = Corruption == "branch-base" ? "other" : "master" } });
             if (PullArtifact)
             {
+                var data = new Dictionary<string, object?>
+                {
+                    ["id"] = Corruption == "database" ? 0 : ArtifactDatabaseId,
+                    ["global_id"] = Corruption == "missing-global" ? null :
+                        Corruption == "global-type" ? 42 :
+                        Corruption == "global-length" ? new string('x', 257) : ArtifactGlobalId
+                };
+                if (Corruption == "absent-global") data.Remove("global_id");
                 artifacts.Add(new { provider = "github", type = "pull",
-                    data = new { id = Corruption == "database" ? 0 : ArtifactDatabaseId,
-                        global_id = Corruption == "missing-global" ? null : Corruption == "global-length" ? new string('x', 257) : "PR_node" } });
+                    data });
+                if (Corruption == "duplicate-branch" && IncludeBranch) artifacts.Add(artifacts[0]);
                 if (Corruption == "duplicate-pull") artifacts.Add(artifacts[^1]);
             }
             return artifacts.ToArray();
@@ -783,9 +891,11 @@ public sealed class GitHubTaskIntegrationTests
         {
             id = Corruption == "rest-database" ? ArtifactDatabaseId + 1 : ArtifactDatabaseId, number,
             state = Corruption == "closed-pr" ? "closed" : "open", merged = false,
-            head = new { sha = Corruption == "sha" ? "invalid" : Corruption == "later-push" ? new string('b', 40) : Head, @ref = "coding",
+            head = new { sha = Corruption == "sha" ? "invalid" : Corruption == "later-push" ? new string('b', 40) : Head,
+                @ref = Corruption == "head-ref" ? "other" : "coding",
                 repo = new { id = Corruption == "head-repository" ? 2 : 1 } },
-            @base = new { @ref = Corruption == "base" ? "other" : "master", repo = new { id = 1 } }
+            @base = new { @ref = Corruption == "base" ? "other" : "master",
+                repo = new { id = Corruption == "base-repository" ? 2 : 1 } }
         };
         private static HttpResponseMessage Response(object result) => new(HttpStatusCode.OK)
             { Content = new StringContent(JsonSerializer.Serialize(result), Encoding.UTF8, "application/json") };
