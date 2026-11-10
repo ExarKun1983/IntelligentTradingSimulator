@@ -2078,6 +2078,79 @@ CI. Missing launch receipts still require an independently verified operation
 identity/capability or an explicitly approved design decision; the API has no
 caller-intent idempotency/search contract.
 
+#### Retiring the stopped #227 attempt before retest #237
+
+This is a preparation procedure, not execution approval. Do not reset
+`agent-state`, manually assign PR #232, remove `SinglePassTest`, use Reactivate,
+or resume the old remote sessions. Resume cannot clear the hold. The parser fix
+in #236 does not authorize continuation of the failed attempt.
+
+The read-only preparation snapshot has repository/Issue generation `1`,
+state version `14`, admission held by #227, and exactly one successful launch:
+local task `task:227:1:1:1`, external task
+`e4743d38-6b27-49cd-a272-83b34465a808`. The task remains locally Running under
+a BLOCKED hold; no CI or review exists. These values must be rechecked before
+execution, not assumed current. PR #232 must remain unmerged.
+
+**Stage 1: separately approved retirement, using the existing recovery path.**
+Keep #237 without `agent:ready` and keep the configuration scoped to #227.
+Before approval, confirm the exact saved launch identity, no other pending or
+uncertain work, the remote task is quiescent, and the reviewed definition pin
+matches the code to run. The existing live CLI requires activation for recovery;
+this is not a read-only diagnostic or an activation-false operation.
+
+After explicit approval for this retirement window, keep managed CI disabled,
+temporarily enable only the state-machine workflow and set activation to `true`
+with the protected environment's approval. Dispatch exactly one guarded command:
+
+```bash
+gh workflow run agent-state-machine.yml \
+  --repo ExarKun1983/IntelligentTradingSimulator --ref master \
+  -f issue=227 -f operation=resolve-task \
+  -f repository_generation=1 -f issue_generation=1 \
+  -f task=task:227:1:1:1 \
+  -f reason='Retire the stopped single-pass mapping attempt before separately approved retest #237; no successful coding or irreversible remote termination is asserted.'
+```
+
+The generations above are valid only if the preflight still confirms them.
+The host must fetch fresh task/session evidence and commit it before resolution.
+If the lookup, ended-session evidence, environment approval, or command result
+fails or is uncertain, stop and inspect receipts; do not blindly dispatch again.
+Do not treat a green workflow alone as proof that resolution was committed.
+In every outcome, disable the state-machine workflow again and return activation
+to `false`; leave managed CI disabled.
+
+For successful retirement, verify canonical admission is `null`, the old task
+is locally Failed with durable terminal evidence and operator resolution, its
+original launch receipt is retained, and #227 remains held with
+`SinglePassTest=true`. Verify no new LaunchTask, DispatchCi or RequestReview
+effect appeared and PR #232 remains unmerged. This ends local tracking; it does
+not claim the remote task can never resume. Do not proceed if any check fails.
+
+**Stage 2: prepare the new test definitions, without activation.**
+Issue #237 is the unready fixture, limited to creating
+`docs/orchestration-e2e-retest.md`. After retirement is verified, use a separate
+reviewed PR to retarget the state-machine and managed-CI exact-Issue gates from
+#227 to #237, update gate diagnostics and their contract tests, and preserve the
+cap `1` and all persisted single-pass safeguards. Do not widen these gates to
+arbitrary Issues or switch the scope before retiring #227.
+
+The existing protected CI tag `agent-managed-ci-test-227-v2` remains immutable
+at `5d122e64ea5eafc51eba1fd150ec33f7869b5731`; its workflow gate permits only
+#227. Prepare a new protected immutable tag for #237 from the reviewed CI
+definition, then update CI ref/SHA and orchestration definition pins to the
+actual reviewed commits. Do not move or reuse the old tag. Recheck all live
+credentials, environment approvals, disabled automatic reviews, and read-only
+preflight comparisons.
+
+**Stage 3: separately approved new test.**
+Only after explicit approval of the fresh start may the operator enable the
+reviewed workflows, activate the #237 scope and add its `agent:ready` label.
+Permit one coding task, at most one managed CI run and at most one Copilot
+review after green CI, with no repairs or merge. Stop at a handoff, failure or
+uncertainty, disable both workflows and return activation to `false`.
+Retirement approval does not approve this start.
+
 #### Explicit review classification
 
 `classify-review` uses the same authorized ingress and live open-head checks.
