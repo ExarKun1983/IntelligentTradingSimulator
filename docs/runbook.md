@@ -2359,7 +2359,25 @@ entitlement, cost controls or repository protection must leave activation blocke
    task, activation, credential, and authorization checks, but do not require
    downstream review/CI approvals. The CLI runs those commands in command-only
    mode: it saves the verified command/evidence without running the worker or
-   admitting/launching queued work. `resume`, `reactivate`, classification,
+   admitting/launching queued work. For a held mapped head, the only permitted
+   effect is an `error` publication for `Agent managed CI`, through the existing
+   authenticated status publisher and all status-publication approval gates.
+   This publishes a correction for an earlier green status even when review/CI
+   approvals are missing.
+   It does not read task/CI/review services (except terminal evidence required by
+   `resolve-task`), plan label/comment projections, or publish `success`.
+   A prepared or uncertain revocation is lookup-only on command replay; a lost
+   response never permits another POST for that intent. Unconfirmed delivery
+   returns `Blocked` and preserves the hold and durable status intent. At host
+   level, if status history exists but publisher approvals are unavailable, the
+   command is saved but the invocation fails explicitly rather than claiming
+   revocation; CLI startup gates may reject unverified configuration earlier.
+   Bounded tests with no status history and status publication disabled remain
+   command-only without a status write. Commit statuses are not transactional:
+   a late uncertain earlier success can still overwrite the corrective error;
+   preserve the hold and independently inspect the latest exact-SHA/context
+   status before any separately authorized reactivation.
+   `resume`, `reactivate`, classification,
    readiness, and automatic wakes still require full pipeline preflight.
    This change does not recover the held #237 attempt or authorize another
    review, move its immutable CI tag, or change deployed definition pins.

@@ -124,6 +124,22 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         if (commandOnly)
         {
             var state = (await stateStore.LoadAsync(token)).State;
+            var issue = state.Issues[message!.IssueNumber];
+            var hasStatusHistory = state.Outbox.Values.Any(effect =>
+                effect.IssueNumber == issue.Number && effect.Kind == EffectKind.PublishRequiredStatus);
+            if (statusPublisher is not null && statusApproval?.AllowsPublication == true &&
+                issue.PullRequest is > 0 && issue.HeadSha is { Length: 40 })
+            {
+                var revocation = new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher, statusApproval, clock);
+                state = await new OrchestrationReconciler().RevokeRequiredStatusAsync(stateStore, issue.Number,
+                    revocation, clock.GetUtcNow(), token);
+                var status = state.Outbox[state.Issues[issue.Number].RequiredStatusIntentId!];
+                if (status.Status != DeliveryStatus.Succeeded || status.RequiredStatus?.State != "error" ||
+                    !RequiredStatusPolicy.Matches(state, state.Issues[issue.Number], status))
+                    return new(WorkerStopReason.Blocked, 0, new(state, [], true));
+            }
+            else if (hasStatusHistory)
+                throw new InvalidOperationException("Recovery command saved, but required-status revocation prerequisites are unverified.");
             return new(WorkerStopReason.EffectsDisabled, 0, new(state, [], true));
         }
         var reviews = new GitHubReviewAdapter(api, stateStore, clock, reviewApproval, tasks);

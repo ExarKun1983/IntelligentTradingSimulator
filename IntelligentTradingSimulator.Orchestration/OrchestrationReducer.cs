@@ -550,6 +550,20 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         return new(state, state.Outbox.Values.Where(e => e.Status == DeliveryStatus.Pending).ToList());
     }
 
+    public RepositoryState PlanRequiredStatusRevocation(RepositoryState input, int issueNumber, DateTimeOffset now)
+    {
+        ValidateState(input);
+        var state = StateJson.Clone(input);
+        var issue = state.Issues[issueNumber];
+        if (issue.Number == excludedIssueNumber || issue.PullRequest is not > 0 || !IsSha(issue.HeadSha) ||
+            RequiredStatusPolicy.Desired(state, issue).State != "error")
+            throw new InvalidOperationException("Status-only recovery requires a held mapped head and a non-success status.");
+        PlanRequiredStatus(state, issue, now);
+        if (StateJson.Serialize(state) != StateJson.Serialize(input))
+            Touch(state, issue, input.LastEventId);
+        return state;
+    }
+
     public RepositoryState MarkExecuting(RepositoryState input, string id, DateTimeOffset now) =>
         ChangeEffect(input, id, effect =>
         {

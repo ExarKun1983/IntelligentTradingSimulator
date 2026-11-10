@@ -49,6 +49,45 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
 
     public ReconcileDecision Decide(RepositoryState state, LiveObservation observation) => reducer.Reconcile(state, observation);
 
+    public async Task<RepositoryState> RevokeRequiredStatusAsync(IStateStore store, int issueNumber,
+        GitHubRequiredStatusAdapter statuses, DateTimeOffset now, CancellationToken token = default)
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var snapshot = await store.LoadAsync(token);
+            var planned = reducer.PlanRequiredStatusRevocation(snapshot.State, issueNumber, now);
+            if (StateJson.Serialize(planned) != StateJson.Serialize(snapshot.State))
+            {
+                if (!await store.TrySaveAsync(snapshot, planned, token)) continue;
+                snapshot = await store.LoadAsync(token);
+            }
+            var issue = snapshot.State.Issues[issueNumber];
+            var intent = snapshot.State.Outbox[issue.RequiredStatusIntentId!];
+            if (intent.RequiredStatus?.State != "error" ||
+                !RequiredStatusPolicy.Matches(snapshot.State, issue, intent))
+                continue;
+            if (intent.Status is DeliveryStatus.Succeeded or DeliveryStatus.Failed)
+                return snapshot.State;
+            if (intent.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown)
+                return await RecoverIntentAsync(store, statuses, intent, now, 8, token);
+            if (intent.Status != DeliveryStatus.Pending)
+                throw new InvalidOperationException("Status revocation is not pending or recoverable.");
+            var executing = reducer.MarkExecuting(snapshot.State, intent.Id, now);
+            if (!await store.TrySaveAsync(snapshot, executing, token)) continue;
+            EffectOutcome outcome;
+            try
+            {
+                outcome = await statuses.ExecuteAsync(executing.Outbox[intent.Id], token);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                outcome = new(DeliveryStatus.Unknown, FailureCode: EffectFailureCode.ExecutionException);
+            }
+            return await PublishOutcomeAsync(store, intent.Id, intent.Digest, outcome, now, 8, token);
+        }
+        throw new InvalidOperationException("Status-only revocation publication conflict limit exceeded.");
+    }
+
     public async Task<RepositoryState> DispatchAsync(IStateStore store, OrchestrationEvent message,
         CancellationToken cancellationToken = default)
     {
