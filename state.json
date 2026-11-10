@@ -1,10 +1,10 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 15,
+  "Version": 16,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
-  "LastEventId": "terminal-for:actions:1277929203:42798827934",
-  "AdmittedIssue": 227,
+  "LastEventId": "actions:1277929203:42798827934",
+  "AdmittedIssue": null,
   "WorkerLease": null,
   "Continuation": {
     "Id": "continue:1:2",
@@ -18,8 +18,8 @@
       "SchemaVersion": 1,
       "Number": 227,
       "Generation": 1,
-      "Version": 13,
-      "LastEventId": "terminal-for:actions:1277929203:42798827934",
+      "Version": 14,
+      "LastEventId": "actions:1277929203:42798827934",
       "Phase": "BLOCKED",
       "Ready": false,
       "ActiveAuthorized": false,
@@ -43,7 +43,7 @@
         "task:227:1:1:1": {
           "Id": "task:227:1:1:1",
           "Kind": "Coding",
-          "Status": "Running",
+          "Status": "Failed",
           "ParentTaskId": null,
           "Round": 1,
           "LaunchSource": "UnmappedIssue",
@@ -75,7 +75,19 @@
               "ResponseDigest": "9C08DE8414B6BA9393A06E9B2CC0A153070012DCFDF46ABA52CF937F039F0325"
             }
           },
-          "OperatorResolution": null,
+          "OperatorResolution": {
+            "EventId": "actions:1277929203:42798827934",
+            "EvidenceEventId": "terminal-for:actions:1277929203:42798827934",
+            "Author": {
+              "Login": "6195946",
+              "Kind": "Human",
+              "Id": 6195946,
+              "NodeId": null,
+              "Type": "User"
+            },
+            "Reason": "Retire the stopped single-pass mapping attempt before separately approved retest #237; no successful coding or irreversible remote termination is asserted.",
+            "OccurredAt": "2026-11-10T10:24:52.7218476+00:00"
+          },
           "CandidateShaEvidence": null,
           "ReviewBlockers": [],
           "CiBlockers": [],
@@ -134,6 +146,14 @@
       "ReceivedAt": "2026-11-10T10:24:52.7218476+00:00",
       "CompletedAt": "2026-11-10T10:24:52.7218476+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022terminal-for:actions:1277929203:42798827934\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:227,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022github-task-api\u0022,\u0022Kind\u0022:1,\u0022Id\u0022:null,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-10T10:24:52.7218476\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022task-terminal-observed\u0022,\u0022TaskId\u0022:\u0022task:227:1:1:1\u0022,\u0022Evidence\u0022:{\u0022LaunchIntentId\u0022:\u0022LaunchTask:227:1:task:227:1:1:1:1\u0022,\u0022ExternalTaskId\u0022:\u0022e4743d38-6b27-49cd-a272-83b34465a808\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022RepositoryId\u0022:1277929203,\u0022CreatorId\u0022:6195946,\u0022State\u0022:\u0022completed\u0022,\u0022SessionCount\u0022:1,\u0022Sessions\u0022:[{\u0022Id\u0022:\u00224084ba5a-9b36-42a6-887a-74c4bf5003dc\u0022,\u0022ExternalTaskId\u0022:\u0022e4743d38-6b27-49cd-a272-83b34465a808\u0022,\u0022RepositoryId\u0022:1277929203,\u0022State\u0022:\u0022completed\u0022,\u0022CompletedAt\u0022:\u00222026-11-09T22:10:34\u002B00:00\u0022}],\u0022UpdatedAt\u0022:\u00222026-11-09T22:10:35.784842\u002B00:00\u0022,\u0022ObservedAt\u0022:\u00222026-11-10T10:24:52.7218476\u002B00:00\u0022,\u0022ResponseDigest\u0022:\u00229C08DE8414B6BA9393A06E9B2CC0A153070012DCFDF46ABA52CF937F039F0325\u0022}}}"
+    },
+    "actions:1277929203:42798827934": {
+      "Id": "actions:1277929203:42798827934",
+      "Digest": "E27ACF7286076254CC1F10C1A3712EABC220A37983670B24437B38ABE3948E26",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-10T10:24:52.7218476+00:00",
+      "CompletedAt": "2026-11-10T10:24:52.7218476+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022actions:1277929203:42798827934\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:227,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u00226195946\u0022,\u0022Kind\u0022:0,\u0022Id\u0022:6195946,\u0022NodeId\u0022:null,\u0022Type\u0022:\u0022User\u0022},\u0022OccurredAt\u0022:\u00222026-11-10T10:24:52.7218476\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022resolve-task-terminal\u0022,\u0022TaskId\u0022:\u0022task:227:1:1:1\u0022,\u0022EvidenceEventId\u0022:\u0022terminal-for:actions:1277929203:42798827934\u0022,\u0022Reason\u0022:\u0022Retire the stopped single-pass mapping attempt before separately approved retest #237; no successful coding or irreversible remote termination is asserted.\u0022}}"
     }
   },
   "Outbox": {
