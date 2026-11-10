@@ -36,6 +36,23 @@ public sealed class GitHubCiIntegrationTests
         Assert.Equal(0, api.Posts);
     }
 
+    [Fact]
+    public async Task IsolatedCiRoutePersistsItsOwnWorkflowPathThroughRunEvidence()
+    {
+        var path = GitHubIsolatedStatusTestSettings.CiWorkflowPath;
+        var store = new Store(State());
+        var api = new Api { WorkflowPath = path };
+        using var client = api.Client();
+        var route = Route with { WorkflowPath = path };
+        var adapter = CreateAdapter(client, store, route);
+
+        var outcome = await adapter.ExecuteAsync(store.Value.Outbox["ci"], default);
+        Assert.Equal(DeliveryStatus.Succeeded, outcome.Status);
+        Assert.Equal(path, store.Value.Issues[7].Ci!.DispatchBoundary!.WorkflowPath);
+        store.Value = new OrchestrationReducer().RecordOutcome(store.Value, "ci", outcome, Now);
+        Assert.NotNull(await adapter.ReadEventAsync(store.Value, store.Value.Issues[7], default));
+    }
+
     [Theory]
     [InlineData("ci-trusted")]
     [InlineData("refs/heads/ci-trusted")]
@@ -459,6 +476,7 @@ public sealed class GitHubCiIntegrationTests
     {
         public string? Corruption { get; set; }
         public string Result { get; set; } = "success";
+        public string WorkflowPath { get; set; } = GitHubCiAdapter.WorkflowPath;
         public int Posts { get; private set; }
         public string Body { get; private set; } = "";
         public List<string> Requests { get; } = [];
@@ -484,7 +502,7 @@ public sealed class GitHubCiIntegrationTests
             }
             else if (path == "/repos/owner/repo") result = new { id = 1, full_name = "owner/repo" };
             else if (path.EndsWith("/workflows/10")) result = new { id = 10,
-                path = Corruption == "workflow-path" ? ".github/workflows/ci.yml" : GitHubCiAdapter.WorkflowPath,
+                path = Corruption == "workflow-path" ? ".github/workflows/ci.yml" : WorkflowPath,
                 state = Corruption == "workflow-disabled" ? "disabled_manually" : "active" };
             else if (path.Contains("/commits/")) result = new { sha = Corruption == "ref-moved" ? Sha : Definition };
             else if (path.EndsWith("/issues/7")) result = new { number = 7, state = "open" };
@@ -495,16 +513,17 @@ public sealed class GitHubCiIntegrationTests
                     if (Interlocked.Increment(ref reads) == 2) preflights.TrySetResult();
                     await preflights.Task.WaitAsync(token);
                 }
-                result = new { number = 17, state = "open",
+                result = new { number = 17, state = "open", draft = true,
                     head = new { sha = Corruption == "head-changed" ? Definition : Sha,
-                        repo = new { id = Corruption == "repository" ? 2 : 1 } }, @base = new { repo = new { id = 1 } } };
+                        repo = new { id = Corruption == "repository" ? 2 : 1 } },
+                    @base = new { repo = new { id = 1 }, @ref = GitHubIsolatedStatusTestSettings.BaseBranch } };
                 AfterPullRead?.Invoke();
             }
             else if (path.EndsWith("/runs/90"))
             {
                 using var body = JsonDocument.Parse(Body);
                 result = new { id = Corruption == "run-id" ? 91 : 90, workflow_id = 10,
-                    path = Corruption == "run-path" ? "other.yml" : GitHubCiAdapter.WorkflowPath,
+                    path = Corruption == "run-path" ? "other.yml" : WorkflowPath,
                     @event = Corruption == "run-event" ? "push" : "workflow_dispatch",
                     head_sha = Corruption == "run-sha" ? Sha : Definition, run_attempt = Corruption == "run-attempt" ? 2 : 1,
                     display_title = Corruption == "run-title" ? "other" : body.RootElement.GetProperty("inputs").GetProperty("correlation").GetString(),

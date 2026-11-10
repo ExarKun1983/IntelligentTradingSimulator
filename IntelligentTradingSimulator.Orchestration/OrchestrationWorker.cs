@@ -17,7 +17,7 @@ public sealed record WorkerOptions
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromSeconds(30);
 }
 
-public enum WorkerStopReason { DryRun, EventBacklog, LeaseHeld, EffectsDisabled, Settled, Blocked, IterationLimit, TimeLimit }
+public enum WorkerStopReason { DryRun, EventBacklog, LeaseHeld, EffectsDisabled, Settled, Blocked, IterationLimit, TimeLimit, EffectLimit }
 
 public sealed record WorkerResult(WorkerStopReason Reason, int Iterations, ReconcileResult? LastReconciliation);
 
@@ -37,7 +37,8 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
             options.MaximumDuration <= TimeSpan.Zero || options.MaximumDuration > TimeSpan.FromMinutes(30) ||
             options.PollInterval < TimeSpan.Zero || options.PollInterval > options.MaximumDuration)
             throw new ArgumentOutOfRangeException(nameof(options));
-        if (reconcileOptions.MaximumConflicts < 1) throw new ArgumentOutOfRangeException(nameof(reconcileOptions));
+        if (reconcileOptions.MaximumConflicts < 1 || reconcileOptions.MaximumEffectExecutions is < 1)
+            throw new ArgumentOutOfRangeException(nameof(reconcileOptions));
 
         var reconciler = new OrchestrationReconciler(reducer);
         var started = timeProvider.GetTimestamp();
@@ -46,6 +47,7 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
         var token = linked.Token;
         ReconcileResult? last = null;
         var iterations = 0;
+        var executedEffects = 0;
         var owner = Guid.NewGuid().ToString("N");
         var ownsLease = false;
         try
@@ -115,6 +117,9 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                 if (last.EffectsDisabled) return new(WorkerStopReason.EffectsDisabled, iterations, last);
                 if (last.State.Outbox.Values.Any(OrchestrationReconciler.IsExclusiveUncertain))
                     return new(WorkerStopReason.Blocked, iterations, last);
+                if (last.ExecutedEffect is not null &&
+                    ++executedEffects >= reconcileOptions.MaximumEffectExecutions)
+                    return new(WorkerStopReason.EffectLimit, iterations, last);
                 if (!OrchestrationContinuation.HasWork(last.State))
                     return new(last.State.Issues.Values.Any(issue => issue.Phase == Phase.BLOCKED)
                         ? WorkerStopReason.Blocked : WorkerStopReason.Settled, iterations, last);

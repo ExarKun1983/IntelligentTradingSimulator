@@ -38,7 +38,8 @@ public sealed partial class GitHubRepositoryApi
     }
 
     public async Task<IngressEvidence> ReadIngressEvidenceAsync(JsonElement payload, string eventName,
-        string runId, HashSet<long> projectionActorIds, CancellationToken token)
+        string runId, HashSet<long> projectionActorIds, CancellationToken token,
+        string expectedWorkflowPath = ".github/workflows/agent-state-machine.yml")
     {
         await VerifyRepositoryAsync(token);
         if (!long.TryParse(runId, out var runNumber) || runNumber <= 0)
@@ -47,7 +48,7 @@ public sealed partial class GitHubRepositoryApi
         var sender = payload.GetProperty("sender");
         var senderId = sender.GetProperty("id").GetInt64();
         if (run.RootElement.GetProperty("event").GetString() != eventName ||
-            run.RootElement.GetProperty("path").GetString() != ".github/workflows/agent-state-machine.yml" ||
+            run.RootElement.GetProperty("path").GetString() != expectedWorkflowPath ||
             run.RootElement.GetProperty("actor").GetProperty("id").GetInt64() != senderId)
             throw new InvalidDataException("Notification does not match the trusted Actions workflow run.");
         var login = sender.GetProperty("login").GetString();

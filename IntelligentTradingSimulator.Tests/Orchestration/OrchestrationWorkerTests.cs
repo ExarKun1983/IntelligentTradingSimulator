@@ -322,6 +322,42 @@ public sealed class OrchestrationWorkerTests
     }
 
     [Fact]
+    public async Task IsolatedEffectBudgetStopsAfterCodingCiAndSuccessWithoutReviewOrReplay()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { SinglePassReady = true, ConfirmCiDispatch = true };
+        var allowed = new HashSet<EffectKind>
+        {
+            EffectKind.LaunchTask, EffectKind.RunCi, EffectKind.PublishRequiredStatus
+        };
+        var reconcile = new ReconcileOptions(false, true, true, true,
+            AllowOfflineAgentSimulation: true, AllowedEffectKinds: allowed,
+            AllowedRequiredStatusStates: new HashSet<string>(["success"], StringComparer.Ordinal),
+            MaximumEffectExecutions: 3);
+        var worker = new OrchestrationWorker(
+            new(new Authorized(), requiredStatusEnabled: true, reviewRequestsEnabled: false));
+
+        var result = await worker.RunAsync(store, api, api, api, reconcile, Fast);
+
+        Assert.Equal(WorkerStopReason.EffectLimit, result.Reason);
+        Assert.Equal(new[]
+        {
+            EffectKind.LaunchTask, EffectKind.RunCi, EffectKind.PublishRequiredStatus
+        }, api.Executions);
+        Assert.Single(store.Current.Issues[7].Tasks);
+        Assert.Equal(Phase.REVIEW_PENDING, store.Current.Issues[7].Phase);
+        Assert.Null(store.Current.Issues[7].Review);
+        Assert.Equal("success", store.Current.Outbox.Values.Single(effect =>
+            effect.Kind == EffectKind.PublishRequiredStatus &&
+            effect.RequiredStatus?.State == "success").RequiredStatus!.State);
+
+        var executionCount = api.Executions.Count;
+        await worker.RunAsync(store, api, api, api, reconcile, Fast);
+        Assert.Equal(executionCount, api.Executions.Count);
+        Assert.DoesNotContain(EffectKind.RequestReview, api.Executions);
+    }
+
+    [Fact]
     public async Task ObservationFailureAfterEventCommitLeavesTheCommandRecoverable()
     {
         var store = new Store();
@@ -596,6 +632,8 @@ public sealed class OrchestrationWorkerTests
         public int ReviewBlockers { get; init; }
         public int[] ReadyIssues { get; init; } = [7];
         public bool CompleteTasks { get; set; } = true;
+        public bool SinglePassReady { get; init; }
+        public bool ConfirmCiDispatch { get; init; }
         public bool NoInitialPullRequest { get; init; }
         public string? CompletionMismatch { get; set; }
         public bool UnknownLaunch { get; init; }
@@ -614,7 +652,7 @@ public sealed class OrchestrationWorkerTests
             var result = new List<OrchestrationEvent>();
             foreach (var number in ReadyIssues)
             {
-                Add(new Ready(), number == 7 ? "ready" : $"ready:{number}", number);
+                Add(new Ready(SinglePassTest: SinglePassReady), number == 7 ? "ready" : $"ready:{number}", number);
                 if (!state.Issues.TryGetValue(number, out var issue)) continue;
                 if (CompleteTasks && issue.ActiveTaskId is { } id &&
                     (issue.Tasks[id].Status == TaskStatus.Running || IncludeUnpublishedResults &&
@@ -717,8 +755,21 @@ public sealed class OrchestrationWorkerTests
                 Assert.Equal(Head(intent.IssueNumber), intent.Sha);
                 Assert.Equal(task.FinalSha, intent.Sha);
             }
+            if (intent.Kind == EffectKind.RunCi && ConfirmCiDispatch)
+            {
+                var reducer = new OrchestrationReducer();
+                var prepared = new CiDispatchBoundary(101, new string('d', 40),
+                    "refs/tags/agent-status-revocation-definition-v1", $"correlation:{intent.Id}", Now);
+                var snapshot = await store.LoadAsync(cancellationToken);
+                var state = reducer.RecordCiBoundary(snapshot.State, intent.Id, prepared);
+                Assert.True(await store.TrySaveAsync(snapshot, state, cancellationToken));
+                snapshot = await store.LoadAsync(cancellationToken);
+                state = reducer.RecordCiBoundary(snapshot.State, intent.Id, prepared with { RunId = 777 });
+                Assert.True(await store.TrySaveAsync(snapshot, state, cancellationToken));
+            }
             if (BeforeExternalResult is not null) await BeforeExternalResult();
-            var outcome = new EffectOutcome(DeliveryStatus.Succeeded, $"external:{intent.Id}");
+            var outcome = new EffectOutcome(DeliveryStatus.Succeeded,
+                intent.Kind == EffectKind.RunCi && ConfirmCiDispatch ? "777" : $"external:{intent.Id}");
             outcomes[intent.Id] = outcome;
             AfterExecute?.Invoke();
             return UnknownLaunch && intent.Kind == EffectKind.LaunchTask

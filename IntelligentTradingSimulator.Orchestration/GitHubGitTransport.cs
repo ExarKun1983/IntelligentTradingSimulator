@@ -12,9 +12,12 @@ public sealed partial class GitHubGitTransport : IGitObjectRefTransport
     private readonly HttpClient client;
     private readonly string prefix;
     private readonly bool allowMutations;
+    private readonly string stateReference;
+    private readonly bool allowIsolatedInitialization;
     private const int MaximumStateBytes = 2 * 1024 * 1024;
 
-    public GitHubGitTransport(HttpClient client, string repository, bool allowMutations = false)
+    public GitHubGitTransport(HttpClient client, string repository, bool allowMutations = false,
+        string stateReference = "refs/heads/agent-state", bool allowIsolatedInitialization = false)
     {
         if (!RepositoryPattern().IsMatch(repository))
             throw new ArgumentException("Expected owner/repository.", nameof(repository));
@@ -22,6 +25,12 @@ public sealed partial class GitHubGitTransport : IGitObjectRefTransport
             throw new ArgumentException("Only the GitHub API origin is permitted.", nameof(client));
         this.client = client;
         this.allowMutations = allowMutations;
+        if (stateReference is not ("refs/heads/agent-state" or "refs/heads/agent-state-status-revocation-v1"))
+            throw new ArgumentException("Only a production or the dedicated status-test state ref is supported.", nameof(stateReference));
+        if (allowIsolatedInitialization && stateReference != "refs/heads/agent-state-status-revocation-v1")
+            throw new ArgumentException("Only the dedicated isolated test ref supports one-shot initialization.", nameof(allowIsolatedInitialization));
+        this.stateReference = stateReference;
+        this.allowIsolatedInitialization = allowIsolatedInitialization;
         prefix = $"repos/{repository}/";
         if (client.DefaultRequestHeaders.UserAgent.Count == 0)
             client.DefaultRequestHeaders.UserAgent.ParseAdd("IntelligentTradingSimulator-Orchestration");
@@ -87,19 +96,35 @@ public sealed partial class GitHubGitTransport : IGitObjectRefTransport
         string tree, string? parent, string message, CancellationToken cancellationToken)
     {
         RequireWrites();
-        if (parent is null) throw new InvalidOperationException("State bootstrap is an explicit operator prerequisite.");
-        return await CreateAsync("git/commits",
-            new { tree = Sha(tree), parents = new[] { Sha(parent) }, message }, cancellationToken);
+        if (parent is null && !allowIsolatedInitialization)
+            throw new InvalidOperationException("State bootstrap is an explicit operator prerequisite.");
+        var payload = parent is null
+            ? new { tree = Sha(tree), parents = Array.Empty<string>(), message }
+            : new { tree = Sha(tree), parents = new[] { Sha(parent) }, message };
+        return await CreateAsync("git/commits", payload, cancellationToken);
     }
 
     public async Task<RefUpdateResult> TryAdvanceRefAsync(
         string reference, string? expectedTip, string commit, CancellationToken cancellationToken)
     {
         RequireWrites();
-        if (expectedTip is null)
-            throw new InvalidOperationException("Automatic state-ref creation is not supported.");
-        expectedTip = Sha(expectedTip);
         commit = Sha(commit);
+        if (expectedTip is null)
+        {
+            if (!allowIsolatedInitialization || stateReference != "refs/heads/agent-state-status-revocation-v1")
+                throw new InvalidOperationException("Automatic state-ref creation is not supported.");
+            if (await ReadRefAsync(reference, cancellationToken) is not null) return new(false);
+            using var created = await client.PostAsJsonAsync(prefix + "git/refs",
+                new { @ref = RefPath(reference), sha = commit }, cancellationToken);
+            if (created.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.UnprocessableEntity)
+                return new(false);
+            using var createdJson = await ReadJsonAsync(created, cancellationToken);
+            if (createdJson.RootElement.GetProperty("ref").GetString() != reference ||
+                createdJson.RootElement.GetProperty("object").GetProperty("sha").GetString() != commit)
+                throw new PublicationUncertainException("Isolated state bootstrap response requires reconciliation.");
+            return new(true);
+        }
+        expectedTip = Sha(expectedTip);
         // The REST endpoint has no expected-old-SHA argument. Require an exact single parent and fast-forward only.
         using var commitResponse = await client.GetAsync(prefix + "git/commits/" + commit, cancellationToken);
         using var commitJson = await ReadJsonAsync(commitResponse, cancellationToken);
@@ -153,11 +178,13 @@ public sealed partial class GitHubGitTransport : IGitObjectRefTransport
     private static string Sha(string? sha) => sha is not null && ShaPattern().IsMatch(sha)
         ? sha : throw new InvalidDataException("Invalid Git object identity.");
 
-    private static string RefPath(string reference)
+    private string RefPath(string reference)
     {
-        if (reference != "refs/heads/agent-state")
+        if (reference != stateReference)
             throw new ArgumentException("Only the approved state reference is supported.", nameof(reference));
-        return "heads/agent-state";
+        return reference["refs/heads/".Length..] is { Length: > 0 } branch
+            ? "heads/" + branch
+            : throw new ArgumentException("Invalid state reference.", nameof(reference));
     }
 
     [GeneratedRegex(@"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$")]

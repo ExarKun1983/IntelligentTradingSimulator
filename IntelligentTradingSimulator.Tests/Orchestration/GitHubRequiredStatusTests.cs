@@ -568,6 +568,25 @@ public sealed class GitHubRequiredStatusTests
     }
 
     [Fact]
+    public void IsolatedReducerPlansEligibleSuccessWithoutCreatingReviewWork()
+    {
+        var state = State();
+        var issue = state.Issues[7];
+        issue.Phase = Phase.REVIEW_PENDING;
+        issue.ActiveAuthorized = true;
+        issue.ReactivationRequired = false;
+        issue.HoldReason = null;
+        issue.Review = null;
+        var reducer = new OrchestrationReducer(new Allow(), requiredStatusEnabled: true,
+            reviewRequestsEnabled: false);
+
+        var result = reducer.Reconcile(state, Live()).State;
+
+        Assert.DoesNotContain(result.Outbox.Values, effect => effect.Kind == EffectKind.RequestReview);
+        Assert.Equal("success", Intent(result).RequiredStatus!.State);
+    }
+
+    [Fact]
     public void ActualAcceptedReviewPreservesResolvedBlockerResponsesAndGreenCi()
     {
         var state = State();

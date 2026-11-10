@@ -62,6 +62,8 @@ public static class GitHubLiveCommand
 {
     public static async Task<int> RunAsync(string[] args, TextWriter output, TextWriter error)
     {
+        if (args.Contains("--github-isolated-status-test", StringComparer.Ordinal))
+            return await GitHubIsolatedStatusTestCommand.RunAsync(args, output, error);
         try
         {
             if (!args.Contains("--execute", StringComparer.Ordinal) || args.Contains("--dry-run", StringComparer.Ordinal) ||
@@ -173,13 +175,13 @@ public static class GitHubLiveCommand
             ? new BoundedOrchestrationScope(testIssue, settings.TestMaxRepairTasks!.Value,
                 settings.RetiredTestIssue) : null;
 
-    private static async Task<DateTimeOffset> VerifyCommandDefinitionAsync(GitHubRepositoryApi api, GitHubWakeRoute route,
+    internal static async Task<DateTimeOffset> VerifyCommandDefinitionAsync(GitHubRepositoryApi api, GitHubWakeRoute route,
         string runId, string eventName)
     {
         using var run = await api.GetAsync($"actions/runs/{runId}", default);
         if (run.RootElement.GetProperty("id").ToString() != runId ||
             run.RootElement.GetProperty("workflow_id").GetInt64() != route.WorkflowId ||
-            run.RootElement.GetProperty("path").GetString() != ".github/workflows/agent-state-machine.yml" ||
+            run.RootElement.GetProperty("path").GetString() != route.WorkflowPath ||
             run.RootElement.GetProperty("event").GetString() != eventName ||
             run.RootElement.GetProperty("head_sha").GetString() != route.DefinitionSha ||
             run.RootElement.GetProperty("repository").GetProperty("id").GetInt64() != api.RepositoryId)

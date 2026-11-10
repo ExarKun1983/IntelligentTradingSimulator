@@ -39,9 +39,13 @@ public sealed record ReconcileOptions(
     bool PrerequisiteCapabilitiesVerified = false,
     bool CostApproved = false,
     int MaximumConflicts = 8,
-    bool AllowOfflineAgentSimulation = false);
+    bool AllowOfflineAgentSimulation = false,
+    IReadOnlySet<EffectKind>? AllowedEffectKinds = null,
+    IReadOnlySet<string>? AllowedRequiredStatusStates = null,
+    int? MaximumEffectExecutions = null);
 
-public sealed record ReconcileResult(RepositoryState State, IReadOnlyList<EffectIntent> Decisions, bool EffectsDisabled);
+public sealed record ReconcileResult(RepositoryState State, IReadOnlyList<EffectIntent> Decisions, bool EffectsDisabled,
+    EffectIntent? ExecutedEffect = null);
 
 public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null)
 {
@@ -105,7 +109,8 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
         DateTimeOffset observedAt, ReconcileOptions? options = null, CancellationToken cancellationToken = default)
     {
         options ??= new();
-        if (options.MaximumConflicts < 1) throw new ArgumentOutOfRangeException(nameof(options));
+        if (options.MaximumConflicts < 1 || options.MaximumEffectExecutions is < 1)
+            throw new ArgumentOutOfRangeException(nameof(options));
         if (!EffectsEnabled(options)) return null;
         var snapshot = await store.LoadAsync(cancellationToken);
         var intent = InFlight(snapshot.State);
@@ -143,6 +148,9 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             var simulateAgents = options.AllowOfflineAgentSimulation && effects is IOfflineEffectAdapter ||
                 effects is IVerifiedAgentEffectAdapter { AgentEffectsAuthorized: true };
             var pending = snapshot.State.Outbox.Values.FirstOrDefault(e => e.Status == DeliveryStatus.Pending &&
+                (options.AllowedEffectKinds is null || options.AllowedEffectKinds.Contains(e.Kind)) &&
+                (e.Kind != EffectKind.PublishRequiredStatus || options.AllowedRequiredStatusStates is null ||
+                    options.AllowedRequiredStatusStates.Contains(e.RequiredStatus?.State ?? "")) &&
                 (e.Kind is not (EffectKind.LaunchTask or EffectKind.RequestReview) || simulateAgents) &&
                 !snapshot.State.Outbox.Values.Any(IsExclusiveUncertain) &&
                 IsSafeToExecute(snapshot.State, e, live));
@@ -161,7 +169,7 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             // Once execution started, a lost result must never cause another Execute call.
             var final = await PublishOutcomeAsync(store, pending.Id, pending.Digest, outcome,
                 live.ObservedAt, options.MaximumConflicts, cancellationToken);
-            return new(final, decision.PendingEffects, false);
+            return new(final, decision.PendingEffects, false, pending);
         }
         throw new InvalidOperationException("State publication conflict limit exceeded.");
     }

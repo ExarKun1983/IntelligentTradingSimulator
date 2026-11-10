@@ -1,7 +1,7 @@
 namespace IntelligentTradingSimulator.Orchestration;
 
 public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = null, bool requiredStatusEnabled = false,
-    int? excludedIssueNumber = null)
+    int? excludedIssueNumber = null, bool reviewRequestsEnabled = true)
 {
     public const int MaximumIndexEntries = 2048;
     private readonly IAuthorizationPolicy authorization = authorization ?? new DenyAllAuthorizationPolicy();
@@ -472,7 +472,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                             issue.Review?.Classification == ReviewClassification.Blocking ? TaskKind.ReviewRepair :
                             issue.PendingFeedbackEventIds.Count > 0 ? TaskKind.FeedbackRepair : TaskKind.ReviewRepair, observation.ObservedAt);
                 }
-                if (issue.Phase == Phase.REVIEW_PENDING && issue.Ci?.Green == true &&
+                if (reviewRequestsEnabled && issue.Phase == Phase.REVIEW_PENDING && issue.Ci?.Green == true &&
                     issue.PendingFeedbackEventIds.Count == 0 &&
                     (issue.Review is null || issue.Review.Sha != issue.HeadSha || issue.Review.TaskId != issue.ActiveTaskId))
                 {

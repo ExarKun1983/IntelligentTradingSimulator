@@ -2,7 +2,8 @@ using System.Text.Json;
 
 namespace IntelligentTradingSimulator.Orchestration;
 
-public sealed record GitHubWakeRoute(long WorkflowId, string DefinitionSha);
+public sealed record GitHubWakeRoute(long WorkflowId, string DefinitionSha,
+    string WorkflowPath = ".github/workflows/agent-state-machine.yml");
 public sealed record GitHubWakeApproval(bool ActivationApproved = false, bool ApiCredentialVerified = false,
     bool TrustedWorkflowVerified = false, bool NoAdditionalChargesVerified = false)
 {

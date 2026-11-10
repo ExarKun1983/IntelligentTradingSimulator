@@ -104,6 +104,34 @@ public class GitHubGitTransportTests
     }
 
     [Fact]
+    public async Task IsolatedTransportCanOnlyReadItsDedicatedRefAndCannotCreateItDuringRuntime()
+    {
+        var handler = new StubHandler((request, _) =>
+        {
+            Assert.EndsWith("/git/ref/heads/agent-state-status-revocation-v1", request.RequestUri!.AbsolutePath);
+            return Json(new { @object = new { sha = Parent } });
+        });
+        using var client = Client(handler);
+        var transport = new GitHubGitTransport(client, "owner/repo", stateReference:
+            "refs/heads/agent-state-status-revocation-v1");
+
+        Assert.Equal(Parent, await transport.ReadRefAsync("refs/heads/agent-state-status-revocation-v1", default));
+        Assert.Equal(1, handler.Calls);
+        await Assert.ThrowsAsync<ArgumentException>(() => transport.ReadRefAsync("refs/heads/agent-state", default));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            transport.TryAdvanceRefAsync("refs/heads/agent-state-status-revocation-v1", null, Child, default));
+        Assert.Equal(1, handler.Calls);
+    }
+
+    [Fact]
+    public void IsolatedInitializationCannotBeEnabledForTheProductionStateRef()
+    {
+        using var client = Client(new StubHandler((_, _) => throw new InvalidOperationException("Unexpected HTTP")));
+        Assert.Throws<ArgumentException>(() => new GitHubGitTransport(client, "owner/repo",
+            allowMutations: true, stateReference: "refs/heads/agent-state", allowIsolatedInitialization: true));
+    }
+
+    [Fact]
     public void RefusesNonGitHubOrigin()
     {
         using var client = new HttpClient { BaseAddress = new Uri("https://example.invalid/") };

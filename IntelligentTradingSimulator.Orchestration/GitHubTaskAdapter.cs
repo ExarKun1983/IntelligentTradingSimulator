@@ -27,11 +27,12 @@ public interface ICandidateShaValidator
 public sealed class GitHubTaskAdapter(
     GitHubRepositoryApi api, IStateStore store, string baseBranch, long taskCreatorId,
     GitHubExecutionApproval? approval = null, ITaskFinalHeadSource? finalHeadSource = null,
-    GitHubRepositoryApi? taskApi = null) :
+    GitHubRepositoryApi? taskApi = null, bool requireDraftPullRequest = false) :
     IVerifiedAgentEffectAdapter, ICandidateShaValidator
 {
     public bool AgentEffectsAuthorized => approval?.AllowsTasks == true;
     private readonly GitHubRepositoryApi taskApi = taskApi ?? api;
+    private readonly bool requireDraftPullRequest = requireDraftPullRequest;
     private string TaskPath => $"agents/repos/{api.Repository}/tasks";
 
     public async Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken token)
@@ -388,6 +389,7 @@ public sealed class GitHubTaskAdapter(
             pull.GetProperty("base").GetProperty("repo").GetProperty("id").GetInt64() != api.RepositoryId ||
             pull.GetProperty("head").GetProperty("repo").GetProperty("id").GetInt64() != api.RepositoryId ||
             pull.GetProperty("base").GetProperty("ref").GetString() != baseBranch ||
+            requireDraftPullRequest && !pull.GetProperty("draft").GetBoolean() ||
             string.IsNullOrWhiteSpace(pull.GetProperty("head").GetProperty("ref").GetString()) ||
             sha is not { Length: 40 } || !sha.All(Uri.IsHexDigit))
             throw new InvalidDataException("Task PR mapping is unsupported or changed.");

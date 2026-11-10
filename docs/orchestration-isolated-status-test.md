@@ -1,6 +1,8 @@
-# Isolated required-status recovery test proposal
+# Isolated required-status recovery test
 
-Status: design for review, not an executable test or approval to deploy/run.
+Status: implementation is present in the open PR and is being validated offline.
+No GitHub resources have been provisioned and no live workflow/test has been
+authorized or run.
 
 The test exercises a real coding task, exact-head managed CI, publication of
 `Agent managed CI: success`, and command-only pause/replay. It must not reuse
@@ -11,9 +13,12 @@ CI tag. Passing this test does not authorize recovery of #237.
 
 - The reviewed recovery change is commit
   `91891bc768846d7c5b74eba1646f1a59d7273f3b`.
-- The existing orchestration regression suite passes 726 tests, including
+- Before the isolated profile was added, the orchestration regression suite
+  passed 726 tests, including
   published-success pause, missing downstream approvals, lost responses,
   cancellation, lookup-only replay, publisher/head rejection, and CAS conflicts.
+- Current offline validation passes the full solution suite: 2,151 passed,
+  one skipped, zero failed. No live workflow was run.
 - Read-only inspection found zero commit statuses on the held test head
   `f52d2a10b237dff7c29cfcac3151a387a40b0396`. Its green Actions run is not
   evidence of required-status delivery or success/error ordering.
@@ -41,7 +46,7 @@ been created.
 | `refs/tags/agent-status-revocation-definition-v1` | Immutable reviewed driver and CI definition. |
 | `agent-status-revocation-test.yml` | Manual, staged driver with no schedule/event wakes. |
 | `agent-status-revocation-ci.yml` | Exact-SHA CI; manual dispatch by the staged driver only. |
-| `agent-status-revocation-test` environment | Separate protected approvals, secrets, variables, and restricted refs. |
+| `agent-status-revocation-test` environment | Separate protected approvals/secrets and restricted refs; workflow-gate `vars` must be repository-scoped so job conditions can evaluate them. |
 | Exact-base protection rule | Require `Agent managed CI`, independent human approval, and no bypass. |
 
 Protection applies only to the dedicated base, not `master`. Do not attest
@@ -60,51 +65,51 @@ Same-repository workflow credentials are not inherently restricted to one Git
 ref. Namespace isolation must therefore be enforced by the implementation and
 reviewed API guards, not claimed as a GitHub token permission boundary.
 
-## Implementation required before provisioning
+## Implemented offline profile
 
-These are explicit changes to implement and review, not switches already
-available in the current CLI:
+- A separate CLI mode, settings manifest, state ref and guarded state store;
+  production defaults and `agent-state` remain unchanged. Bootstrap is an
+  explicit manual operation and refuses an already initialized state ref.
+- Dedicated staged driver and exact-head CI workflows, each gated by a
+  separate environment and exact workflow definition SHA. The driver accepts
+  only the configured human actor and exact Issue; live permission checks are
+  repeated by the CLI.
+- A pinned isolated CI route, draft-PR requirement, single-pass task guard,
+  no-repair/no-review reducer mode, effect allowlist, and three-execution cap
+  for coding, CI and success-status publication. Pending/failure required-status
+  intents remain canonical evidence but are not published by the isolated worker.
+- Pause calls the existing command-only status-revocation path, requiring a
+  previously saved successful status on the exact head. Replay uses canonical
+  state and existing status lookup; it does not repeat a completed POST.
+- Each driver invocation writes credential-free success or failure evidence
+  for its stage. Status history includes payload, SHA, publisher boundary,
+  existing status IDs, prepared/completed times and returned status ID; failed
+  stages include a sanitized summary of the last readable canonical state.
+  The workflow artifact retention is seven days.
+- Offline regressions cover settings/manifest constraints, isolated state
+  limits, ingress, alternate state refs, CI routing and the worker effect cap.
+  These checks do not prove live identities, permissions, protection, or
+  GitHub status ordering.
 
-1. Add a dedicated test entry point/profile, disabled by default, requiring a
-   reviewed manifest containing repository ID, Issue, dedicated base, state
-   ref, immutable definition/CI tag and SHA, workflow IDs, environment identity,
-   expiration, and explicit task/CI/cost/status approvals. Reject production
-   identities, missing values, expired approvals, and manifest changes on replay.
-2. Introduce explicit isolated-ref support without broadening the production
-   default. `GitHubGitTransport.RefPath` currently only permits `agent-state`;
-   passing a different reference to `GitStateStore` alone is not sufficient.
-   The test transport must reject every production-ref read/write and never
-   fall back to `agent-state`. State initialization is a separate operator
-   action; a missing/deleted ref after initialization is an error.
-3. Add a pinned test CI route. The CI and required-status adapters currently
-   verify `.github/workflows/agent-managed-ci.yml`; the new route must persist
-   and validate the isolated workflow identity end-to-end, including dispatch,
-   receipt recovery, run/job evidence, and success publication. Preserve the
-   production default and reject mismatched or mutable definitions.
-4. Verify manual command ingress against the isolated driver workflow ID,
-   path, pinned definition, repository, environment, human actor, and live
-   write/maintain/admin permission. Do not impersonate an `issues` notification,
-   substitute a trusted source run, or fabricate an authorized Ready event.
-5. Add staged effect selection that allows one coding launch, then one CI
-   dispatch, then status publication. After green CI, stop at `REVIEW_PENDING`
-   and prioritize the eligible success status without executing the queued
-   review intent. Never invoke the unrestricted worker and rely on a throwing
-   review adapter as a safety barrier: that would create ambiguous work and
-   invalidate green eligibility.
-6. Enforce one Issue, one coding task/round, zero repair tasks, one CI dispatch,
-   zero review requests, zero merges, and a reviewed expiration/time budget.
-   Persist limits across invocations and replay. Existing
-   `TEST_MAX_REPAIR_TASKS=1` is not a substitute for this zero-repair policy.
-7. Reuse real task mapping/terminal/candidate-SHA evidence and the existing
-   exact-head CI and status adapters. Do not seed a completed task, green CI,
-   dispatch receipt, review acceptance, or saved digest from a fixture.
-8. Reuse command-only pause/revocation and lookup-only replay. Record status
-   creation boundaries, receipts, and outcomes in the isolated CAS store.
-   A failed or uncertain stage must retain its evidence and stop.
-9. Keep an append-only, credential-free result artifact with manifest digest,
-   state revisions, IDs, SHA, publisher, and ordering observations. Save
-   diagnostic state even when a stage fails; do not export tokens or arbitrary
-   HTTP bodies. Bound artifact retention and preserve canonical evidence.
+## Remaining before provisioning
+
+1. Complete offline validation, review the entire diff, and merge the
+   implementation before creating any resources. Any fixes from this review
+   require another full offline pass.
+2. Independently inspect the workflow pins, environment approvals, task-user
+   entitlement, status publisher identity/effective permissions, state-ref
+   protection, and exact-base required-context protection. Keep resource
+   creation, secrets, protection changes, enabling and live execution as
+   separate approvals.
+3. Make the isolated state ref non-deletable under the intended protection
+   model and disable `ORCHESTRATION_STATUS_TEST_BOOTSTRAP_APPROVED` immediately
+   after the one-time bootstrap. The CLI blocks re-bootstrap when state exists;
+   deleting that ref and re-enabling bootstrap could otherwise create a new
+   empty state. Missing state during normal execution is always an error.
+4. Preserve artifacts and canonical state through the agreed retention window;
+   do not export tokens or arbitrary HTTP bodies.
+5. Keep the existing independent operator verification and cost-control steps
+   below. No local test result authorizes provisioning or a live attempt.
 
 Before any live run, offline regressions must reject cross-scope Issue/PR/base/
 SHA/state/workflow/tag identities, production-store access, mutated manifests,

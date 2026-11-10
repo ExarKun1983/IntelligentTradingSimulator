@@ -34,6 +34,8 @@ public static class GitHubActionsIngress
         EventData data = notification.Kind switch
         {
             // Live readiness can defer work, but cannot rewrite an immutable source notification.
+            NotificationKind.Readiness when IsIsolatedStatusTestStart(payload) =>
+                new Ready(SinglePassTest: true),
             NotificationKind.Readiness or NotificationKind.WithdrawReadiness =>
                 payload.GetProperty("action").GetString() == "labeled" ? new Ready(maxRepairTasks) : new Withdraw(),
             NotificationKind.Projection => new StageEdited(),
@@ -88,10 +90,14 @@ public static class GitHubActionsIngress
                 issue != evidence.IssueNumber || evidence.IsPullRequest)
                 throw new InvalidDataException("Recovery Issue identity mismatch.");
             var operation = inputs.GetProperty("operation").GetString();
+            if (operation == "status-test-start" && (!evidence.IssueOpen || !evidence.Ready))
+                throw new InvalidDataException("Isolated test start requires an open Issue with explicit readiness.");
             var kind = operation switch
             {
                 "resume" => NotificationKind.Resume,
                 "pause" => NotificationKind.Pause,
+                "status-test-start" => NotificationKind.Readiness,
+                "status-test-bootstrap" => NotificationKind.Ignore,
                 "reactivate" => NotificationKind.Reactivate,
                 "resolve-task" => NotificationKind.ResolveTask,
                 "classify-review" => NotificationKind.ClassifyReview,
@@ -158,4 +164,9 @@ public static class GitHubActionsIngress
             int.Parse(Text("pull"), System.Globalization.CultureInfo.InvariantCulture), Text("sha"), classification,
             reason, Items<Finding>("findings"), Items<FindingResponse>("responses"));
     }
+
+    private static bool IsIsolatedStatusTestStart(JsonElement payload) =>
+        payload.TryGetProperty("inputs", out var inputs) &&
+        inputs.TryGetProperty("operation", out var operation) &&
+        operation.GetString() == "status-test-start";
 }
