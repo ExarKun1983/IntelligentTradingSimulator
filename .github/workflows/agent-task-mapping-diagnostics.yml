@@ -75,8 +75,19 @@ jobs:
           def positive_id(value):
               return type(value) is int and 0 < value <= 9223372036854775807
 
-          def global_id_valid(value):
-              return isinstance(value, str) and 0 < len(value) <= 256 and bool(value.strip())
+          def global_id_status(data, key):
+              if key not in data:
+                  return "missing"
+              value = data[key]
+              if value is None:
+                  return "null"
+              if not isinstance(value, str):
+                  return "not-string"
+              if not value:
+                  return "empty"
+              if len(value) > 256:
+                  return "too-long"
+              return "valid" if value.strip() else "whitespace"
 
           def database_id(value):
               if positive_id(value):
@@ -176,6 +187,12 @@ jobs:
                   and 0 < len(branches) + len(pulls) == len(artifacts)
               )
               if checks["artifact_set_supported"]:
+                  if pulls:
+                      data = pulls[0].get("data")
+                      checks["pull_artifact_data_is_object"] = isinstance(data, dict)
+                      if isinstance(data, dict):
+                          checks["pull_artifact_database_id_valid"] = positive_id(data.get("id"))
+                          checks["pull_artifact_global_id_status"] = global_id_status(data, "global_id")
                   pr = read_mapping(
                       "live_pr_read", "repos/ExarKun1983/IntelligentTradingSimulator/pulls/232"
                   )
@@ -205,16 +222,25 @@ jobs:
                               )
                           if pulls:
                               data = pulls[0].get("data")
-                              checks["pull_ids_match_rest"] = (
-                                  isinstance(data, dict)
-                                  and positive_id(data.get("id")) and positive_id(pr.get("id"))
-                                  and global_id_valid(data.get("global_id")) and global_id_valid(pr.get("node_id"))
-                                  and data.get("id") == pr.get("id")
-                                  and data.get("global_id") == pr.get("node_id")
-                              )
+                              checks["pull_ids_match_rest"] = False
                               if isinstance(data, dict):
+                                  checks["rest_database_id_valid"] = positive_id(pr.get("id"))
+                                  checks["rest_global_id_status"] = global_id_status(pr, "node_id")
+                                  checks["pull_database_id_matches_rest"] = (
+                                      positive_id(data.get("id")) and positive_id(pr.get("id"))
+                                      and data["id"] == pr["id"]
+                                  )
+                                  checks["pull_global_id_matches_rest"] = (
+                                      checks["pull_artifact_global_id_status"] == "valid"
+                                      and checks["rest_global_id_status"] == "valid"
+                                      and data["global_id"] == pr["node_id"]
+                                  )
+                                  checks["pull_ids_match_rest"] = (
+                                      checks["pull_database_id_matches_rest"]
+                                      and checks["pull_global_id_matches_rest"]
+                                  )
                                   global_id = data.get("global_id")
-                                  if global_id_valid(global_id):
+                                  if checks["pull_artifact_global_id_status"] == "valid":
                                       result = read_mapping("graphql_read", "graphql", {
                                           "query": "query($id: ID!) { node(id: $id) { __typename ... on PullRequest { fullDatabaseId number repository { nameWithOwner } } } }",
                                           "variables": {"id": global_id},
