@@ -44,6 +44,85 @@ public sealed class TaskPrMappingTests
         if (globalPull) Assert.NotEmpty(fixture.GraphQueries);
     }
 
+    [Theory]
+    [InlineData(5000000000L)]
+    [InlineData(long.MaxValue)]
+    public async Task EmptyGlobalIdMapsOnlyUsingUniqueBranchAndMatchingRestDatabaseId(long id)
+    {
+        var state = State();
+        using var fixture = new GitHubTaskIntegrationTests.ApiFixture
+        {
+            PullArtifact = true, IncludeBranch = true, ArtifactGlobalId = "", ArtifactDatabaseId = id
+        };
+        using var client = fixture.Client();
+        var message = await new GitHubTaskAdapter(new(client, "owner/repo", 1),
+            new GitHubTaskIntegrationTests.Store(state), "master", 55)
+            .ReadMappingEventAsync(state, state.Issues[7], default);
+        var mapping = Assert.IsType<TaskPrMapped>(message!.Data);
+        Assert.Equal(17, mapping.PullRequest);
+        Assert.Equal(Head, mapping.ObservedHead);
+        var mapped = Reducer.Apply(state, message);
+        Assert.Equal(TaskStatus.Running, mapped.Issues[7].Tasks["task"].Status);
+        Assert.Null(mapped.Issues[7].Tasks["task"].CandidateShaEvidence);
+        Assert.Null(mapped.Issues[7].Ci);
+        Assert.Null(mapped.Issues[7].Review);
+        Assert.Single(mapped.Outbox);
+        Assert.Empty(fixture.GraphQueries);
+        Assert.Empty(fixture.Writes);
+        Assert.DoesNotContain(fixture.Requests, path => path.Contains($"/pulls/{id}"));
+    }
+
+    [Theory]
+    [InlineData(false, "", null)]
+    [InlineData(true, " ", null)]
+    [InlineData(true, "", "missing-global")]
+    [InlineData(true, "", "absent-global")]
+    [InlineData(true, "", "global-type")]
+    [InlineData(true, "", "global-length")]
+    [InlineData(true, "", "database")]
+    [InlineData(true, "", "rest-database")]
+    [InlineData(true, "", "no-prs")]
+    [InlineData(true, "", "multiple-prs")]
+    [InlineData(true, "", "duplicate-pull")]
+    [InlineData(true, "", "duplicate-branch")]
+    [InlineData(true, "", "branch-base")]
+    [InlineData(true, "", "blank-head-ref")]
+    [InlineData(true, "", "head-ref")]
+    [InlineData(true, "", "base")]
+    [InlineData(true, "", "base-repository")]
+    [InlineData(true, "", "head-repository")]
+    [InlineData(true, "", "closed-pr")]
+    [InlineData(true, "", "sha")]
+    [InlineData(true, "PR_node", "node-null")]
+    [InlineData(true, "PR_node", "node-database")]
+    [InlineData(true, "PR_node", "branch-contradiction")]
+    [InlineData(true, "PR_node", "graphql-errors")]
+    public async Task BranchEvidenceNeverBypassesMissingOrContradictoryIdentities(
+        bool includeBranch, string globalId, string? corruption)
+    {
+        var state = State();
+        using var fixture = new GitHubTaskIntegrationTests.ApiFixture
+        {
+            PullArtifact = true, IncludeBranch = includeBranch, ArtifactGlobalId = globalId,
+            Corruption = corruption
+        };
+        using var client = fixture.Client();
+        var message = await new GitHubTaskAdapter(new(client, "owner/repo", 1),
+            new GitHubTaskIntegrationTests.Store(state), "master", 55)
+            .ReadMappingEventAsync(state, state.Issues[7], default);
+        Assert.IsType<TaskStopped>(message!.Data);
+        var held = Reducer.Apply(state, message);
+        Assert.Equal(Phase.BLOCKED, held.Issues[7].Phase);
+        Assert.True(held.Issues[7].ReactivationRequired);
+        Assert.Equal(7, held.AdmittedIssue);
+        Assert.Null(held.Issues[7].PullRequest);
+        Assert.Null(held.Issues[7].Ci);
+        Assert.Null(held.Issues[7].Review);
+        Assert.Empty(fixture.Writes);
+        if (globalId == "") Assert.Empty(fixture.GraphQueries);
+        else if (globalId == "PR_node") Assert.NotEmpty(fixture.GraphQueries);
+    }
+
     [Fact]
     public async Task AbsentArtifactsDuringProgressRemainRunningWithoutHold()
     {

@@ -1552,6 +1552,9 @@ Database-ID validity and database/global-ID REST matches are reported separately
 the combined match still requires both identities to match. Artifact ID validity
 and global-ID status are retained even if the subsequent PR read fails.
 These diagnostics do not relax parser validation or authorize a mapping.
+An `empty` artifact global-ID status still yields a false combined global/REST
+match; that diagnostic alone does not reject the separately validated
+branch-plus-database-ID mapping path described below.
 Run diagnostic script regressions locally
 with `python .github/scripts/test_task_mapping_diagnostics.py` (no network or
 credentials required).
@@ -1778,10 +1781,17 @@ the task schema names the field but does not specify its semantics. Association
 requires a non-null `PullRequest` node, matching `fullDatabaseId` (int64 preserved),
 repository name, positive PR number, and matching REST PR database/repository IDs.
 The numeric artifact ID is never interpreted as a PR number or decoded into a node ID.
-Branch and pull artifacts, when both present, must agree. Missing/unusable global
-IDs, duplicate artifacts, partial GraphQL errors, or mismatches fail closed. No
-historical PR scan or guessed association is used; absent global IDs require
-provider-supported identity evidence before this path can proceed. This resolves
+Branch and pull artifacts, when both present, must agree. A narrowly bounded
+exception handles an explicitly empty string `global_id`: a branch artifact must
+identify exactly one open PR by repository owner, head ref and configured base.
+That PR's positive REST database ID must equal the pull artifact's positive Int64
+ID, with matching PR number, repository identities, refs and valid head SHA.
+Only this empty-string case skips GraphQL; a populated global ID still requires
+the GraphQL checks above even when branch evidence is present. Pull-only empty IDs,
+missing/null/whitespace/overlong global IDs, duplicate artifacts, ambiguous branch
+lookups, partial GraphQL errors, and identity mismatches fail closed. The same
+checks apply during initial mapping, completion and candidate revalidation.
+No historical PR scan or guessed association is used. This resolves
 PR identity, **not** the task's final SHA.
 
 Task failures, waiting/idle/timed-out/cancelled states and unsupported/contradictory

@@ -150,7 +150,7 @@ public sealed class GitHubTaskAdapter(
                 if (matches.Count != 1) throw new InvalidDataException("Task artifact has no unique open PR.");
                 number = matches[0].GetProperty("number").GetInt32();
                 stage = "branch-pull-consistency";
-                if (pulls.Count == 1 && await api.ResolvePullArtifactAsync(pulls[0].GetProperty("data"), token) != number)
+                if (pulls.Count == 1 && await api.ResolvePullArtifactAsync(pulls[0].GetProperty("data"), token, number) != number)
                     throw new InvalidDataException("Task branch and pull artifacts contradict each other.");
             }
             else
@@ -339,7 +339,7 @@ public sealed class GitHubTaskAdapter(
             if (matches.Count != 1)
                 throw new InvalidDataException("Task artifact has no unique open PR.");
             number = matches[0].GetProperty("number").GetInt32();
-            if (pulls.Count == 1 && await api.ResolvePullArtifactAsync(pulls[0].GetProperty("data"), token) != number)
+            if (pulls.Count == 1 && await api.ResolvePullArtifactAsync(pulls[0].GetProperty("data"), token, number) != number)
                 throw new InvalidDataException("Task branch and pull artifacts contradict each other.");
         }
         else number = await api.ResolvePullArtifactAsync(pulls[0].GetProperty("data"), token);

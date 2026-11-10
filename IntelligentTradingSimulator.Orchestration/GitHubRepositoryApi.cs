@@ -156,10 +156,13 @@ public sealed partial class GitHubRepositoryApi
         return await ReadJsonAsync(response, token);
     }
 
-    internal async Task<int> ResolvePullArtifactAsync(JsonElement artifact, CancellationToken token)
+    internal async Task<int> ResolvePullArtifactAsync(JsonElement artifact, CancellationToken token,
+        int? branchPullRequest = null)
     {
         var databaseId = artifact.GetProperty("id").GetInt64();
         var globalId = artifact.GetProperty("global_id").GetString();
+        if (databaseId > 0 && globalId == "" && branchPullRequest is > 0)
+            return await ValidatePullArtifactRestAsync(databaseId, branchPullRequest.Value, token);
         if (databaseId <= 0 || string.IsNullOrWhiteSpace(globalId) || globalId.Length > 256)
             throw new InvalidDataException("Pull artifact requires database and global node identities.");
         const string query = """
@@ -186,6 +189,11 @@ public sealed partial class GitHubRepositoryApi
             throw new InvalidDataException("Pull artifact node or repository identity mismatch.");
         var number = node.GetProperty("number").GetInt32();
         if (number <= 0) throw new InvalidDataException("Invalid resolved PR number.");
+        return await ValidatePullArtifactRestAsync(databaseId, number, token);
+    }
+
+    private async Task<int> ValidatePullArtifactRestAsync(long databaseId, int number, CancellationToken token)
+    {
         using var pull = await GetAsync($"pulls/{number}", token);
         if (pull.RootElement.GetProperty("id").GetInt64() != databaseId ||
             pull.RootElement.GetProperty("number").GetInt32() != number ||
