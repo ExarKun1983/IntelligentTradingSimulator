@@ -27,7 +27,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             return null;
         return await RunVerifiedAsync(scopedStore, null, projectionActorId, baseBranch, taskCreatorId, approval, options,
             finalHeadSource, token, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval,
-            boundedScope?.RetiredIssueNumber);
+            boundedScope?.RetiredIssueNumber, false);
     }
 
     public async Task<WorkerResult> ReconcileAsync(JsonElement trustedActionsPayload, string eventName, string runId,
@@ -37,7 +37,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         ITaskFinalHeadSource? finalHeadSource = null, CancellationToken token = default,
         GitHubReviewApproval? reviewApproval = null, GitHubCiRoute? ciRoute = null, GitHubCiApproval? ciApproval = null,
         GitHubStatusPublisher? statusPublisher = null, GitHubRequiredStatusApproval? statusApproval = null,
-        int? maxRepairTasks = null, BoundedOrchestrationScope? boundedScope = null)
+        int? maxRepairTasks = null, BoundedOrchestrationScope? boundedScope = null, bool commandOnly = false)
     {
         if (approval?.AllowsTasks != true) throw new InvalidOperationException("Live activation prerequisites are not verified.");
         if (boundedScope is not null && maxRepairTasks is not null &&
@@ -51,6 +51,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         var evidence = await api.ReadIngressEvidenceAsync(trustedActionsPayload, eventName, runId, projectionActorIds, token);
         var message = GitHubActionsIngress.PrepareEvent(trustedActionsPayload, eventName, runId, evidence,
             repositoryGeneration, issueGeneration, occurredAt, boundedScope?.MaxRepairTasks ?? maxRepairTasks);
+        if (commandOnly && message?.Data is not (Pause or ResolveTaskTerminal))
+            throw new InvalidDataException("Command-only execution supports only pause or terminal resolution.");
         if (boundedScope is not null && message?.Data is Ready ready)
             message = message with { Data = ready with { SinglePassTest = true } };
         message = RestoreCommittedReadyReplay(snapshot.State, message);
@@ -58,7 +60,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             repositoryGeneration, issueGeneration, message);
         return await RunVerifiedAsync(scopedStore, message, projectionActorId, baseBranch, taskCreatorId, approval, options,
             finalHeadSource, token, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval,
-            boundedScope?.RetiredIssueNumber);
+            boundedScope?.RetiredIssueNumber, commandOnly);
     }
 
     private async Task<WorkerResult> RunVerifiedAsync(IStateStore stateStore, OrchestrationEvent? message,
@@ -66,7 +68,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         WorkerOptions? options, ITaskFinalHeadSource? finalHeadSource, CancellationToken token,
         GitHubReviewApproval? reviewApproval, GitHubCiRoute? ciRoute, GitHubCiApproval? ciApproval,
         GitHubStatusPublisher? statusPublisher, GitHubRequiredStatusApproval? statusApproval,
-        int? excludedIssueNumber)
+        int? excludedIssueNumber, bool commandOnly)
     {
         var authorization = new VerifiedEvents();
         var tasks = new GitHubTaskAdapter(api, stateStore, baseBranch, taskCreatorId, approval, finalHeadSource, taskApi);
@@ -118,6 +120,11 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             authorization.Grant(message);
             // Persist a verified command before unrelated service reads can fail or the invocation yields.
             await new OrchestrationReconciler(new(authorization)).DispatchAsync(stateStore, message, token);
+        }
+        if (commandOnly)
+        {
+            var state = (await stateStore.LoadAsync(token)).State;
+            return new(WorkerStopReason.EffectsDisabled, 0, new(state, [], true));
         }
         var reviews = new GitHubReviewAdapter(api, stateStore, clock, reviewApproval, tasks);
         var ci = ciRoute is null ? null : new GitHubCiAdapter(api, stateStore, ciRoute, clock, ciApproval, tasks);

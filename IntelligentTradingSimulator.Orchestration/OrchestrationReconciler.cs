@@ -2,7 +2,17 @@ using System.Text.Json;
 
 namespace IntelligentTradingSimulator.Orchestration;
 
-public sealed record EffectOutcome(DeliveryStatus Status, string? ExternalId = null);
+public enum EffectFailureCode
+{
+    ReviewPrerequisitesUnverified,
+    ReviewPreflightRejected,
+    ReviewIdentityMismatch,
+    ExecutionException,
+    RecoveryException
+}
+
+public sealed record EffectOutcome(DeliveryStatus Status, string? ExternalId = null,
+    EffectFailureCode? FailureCode = null);
 
 public interface IObservationSource
 {
@@ -107,7 +117,7 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                outcome = new(DeliveryStatus.Unknown);
+                outcome = new(DeliveryStatus.Unknown, FailureCode: EffectFailureCode.ExecutionException);
             }
             // Once execution started, a lost result must never cause another Execute call.
             var final = await PublishOutcomeAsync(store, pending.Id, pending.Digest, outcome,
@@ -139,7 +149,7 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            recovered = new(DeliveryStatus.Unknown);
+            recovered = new(DeliveryStatus.Unknown, FailureCode: EffectFailureCode.RecoveryException);
         }
         return await PublishOutcomeAsync(store, intent.Id, intent.Digest, recovered,
             observedAt, maximumConflicts, cancellationToken);

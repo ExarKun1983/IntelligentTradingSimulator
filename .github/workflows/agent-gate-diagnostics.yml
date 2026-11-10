@@ -22,6 +22,9 @@ jobs:
           RETIRED_ISSUE_MATCH: ${{ vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '227' }}
           REPAIR_CAP_MATCH: ${{ vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1' }}
           DEFINITION_MATCH: ${{ vars.ORCHESTRATION_DEFINITION_SHA == github.sha }}
+          REVIEW_POLICY_MATCH: ${{ vars.ORCHESTRATION_REVIEW_POLICY_VERIFIED == 'true' }}
+          AUTOMATIC_REVIEWS_DISABLED_MATCH: ${{ vars.ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED == 'true' }}
+          TRUSTED_CI_MATCH: ${{ vars.ORCHESTRATION_TRUSTED_CI_VERIFIED == 'true' }}
           CI_REF: ${{ vars.ORCHESTRATION_CI_REF }}
           CI_DEFINITION_SHA: ${{ vars.ORCHESTRATION_CI_DEFINITION_SHA }}
           GH_TOKEN: ${{ github.token }}
@@ -50,6 +53,9 @@ jobs:
             printf '| ORCHESTRATION_RETIRED_TEST_ISSUE == 227 | %s |\n' "$RETIRED_ISSUE_MATCH"
             printf '| ORCHESTRATION_TEST_MAX_REPAIR_TASKS == 1 | %s |\n' "$REPAIR_CAP_MATCH"
             printf '| ORCHESTRATION_DEFINITION_SHA == this run SHA | %s |\n' "$DEFINITION_MATCH"
+            printf '| ORCHESTRATION_REVIEW_POLICY_VERIFIED == true | %s |\n' "$REVIEW_POLICY_MATCH"
+            printf '| ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED == true | %s |\n' "$AUTOMATIC_REVIEWS_DISABLED_MATCH"
+            printf '| ORCHESTRATION_TRUSTED_CI_VERIFIED == true | %s |\n' "$TRUSTED_CI_MATCH"
             printf '| ORCHESTRATION_CI_REF == refs/tags/agent-managed-ci-test-237-v1 | %s |\n' "$ci_ref_match"
             printf '| New CI tag resolves to a commit | %s |\n' "$ci_tag_lookup"
             printf '| ORCHESTRATION_CI_DEFINITION_SHA matches the new tag target | %s |\n' "$ci_definition_match"

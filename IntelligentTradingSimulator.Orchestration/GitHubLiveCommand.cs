@@ -9,6 +9,14 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
     GitHubReviewApproval Review, GitHubCiApproval Ci, GitHubCiRoute CiRoute, GitHubRequiredStatusApproval Status,
     int? TestIssue = null, int? TestMaxRepairTasks = null, int? RetiredTestIssue = null)
 {
+    public void ValidatePipelinePrerequisites()
+    {
+        if (!Review.AllowsReviews)
+            throw new InvalidOperationException("Review prerequisites are unverified before pipeline execution.");
+        if (!Ci.AllowsCi)
+            throw new InvalidOperationException("Managed CI prerequisites are unverified before pipeline execution.");
+    }
+
     public static GitHubLiveSettings Read(Func<string, string?> read)
     {
         bool Approved(string name) => read(name) == "true";
@@ -60,15 +68,30 @@ public static class GitHubLiveCommand
                 args.Contains("--replay", StringComparer.Ordinal) || args.Contains("--context", StringComparer.Ordinal))
                 throw new InvalidDataException("Live mode requires explicit execution and trusted Actions input.");
             var settings = GitHubLiveSettings.Read(Environment.GetEnvironmentVariable);
+            var path = Environment.GetEnvironmentVariable("GITHUB_EVENT_PATH");
+            if (string.IsNullOrWhiteSpace(path) || new FileInfo(path).Length > 2 * 1024 * 1024)
+                throw new InvalidDataException("Missing or oversized Actions notification.");
+            using var payload = JsonDocument.Parse(await File.ReadAllTextAsync(path));
+            var eventName = Environment.GetEnvironmentVariable("GITHUB_EVENT_NAME") ?? throw new InvalidDataException("Missing event.");
+            var recoveryOnly = eventName == "workflow_dispatch" &&
+                payload.RootElement.GetProperty("inputs").GetProperty("operation").GetString() is "pause" or "resolve-task";
+            if (!recoveryOnly)
+            {
+                try
+                {
+                    settings.ValidatePipelinePrerequisites();
+                }
+                catch (InvalidOperationException exception)
+                {
+                    error.WriteLine($"Live preflight stopped: {exception.Message} No API calls or state writes were made.");
+                    return 1;
+                }
+            }
             var credential = Environment.GetEnvironmentVariable("ORCHESTRATION_USER_TOKEN");
             if (string.IsNullOrWhiteSpace(credential)) throw new InvalidOperationException("Verified user credential unavailable.");
             var workflowCredential = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
             if (string.IsNullOrWhiteSpace(workflowCredential) || workflowCredential == credential)
                 throw new InvalidOperationException("Separate workflow credential unavailable.");
-            var path = Environment.GetEnvironmentVariable("GITHUB_EVENT_PATH");
-            if (string.IsNullOrWhiteSpace(path) || new FileInfo(path).Length > 2 * 1024 * 1024)
-                throw new InvalidDataException("Missing or oversized Actions notification.");
-            using var payload = JsonDocument.Parse(await File.ReadAllTextAsync(path));
             using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
             {
                 BaseAddress = new("https://api.github.com/"), Timeout = TimeSpan.FromSeconds(30)
@@ -84,7 +107,6 @@ public static class GitHubLiveCommand
             var publisher = await GitHubLiveCredentials.VerifyAsync(api, taskApi, settings.ActorId);
             var store = new GitStateStore(new GitHubGitTransport(client, settings.Repository, allowMutations: true), settings.Repository);
             var host = new GitHubOrchestrationHost(api, store, taskApi: taskApi);
-            var eventName = Environment.GetEnvironmentVariable("GITHUB_EVENT_NAME") ?? throw new InvalidDataException("Missing event.");
             var runId = Environment.GetEnvironmentVariable("GITHUB_RUN_ID") ?? throw new InvalidDataException("Missing run ID.");
             WorkerResult? result;
             if (eventName is "issues" or "workflow_dispatch")
@@ -114,7 +136,7 @@ public static class GitHubLiveCommand
                     [publisher.ActorId], publisher.ActorId, settings.BaseBranch, settings.ActorId,
                     settings.Tasks, ciRoute: settings.CiRoute, ciApproval: settings.Ci, reviewApproval: settings.Review,
                     statusPublisher: settings.Status.AllowsPublication ? publisher : null, statusApproval: settings.Status,
-                    boundedScope: CreateBoundedScope(settings));
+                    boundedScope: CreateBoundedScope(settings), commandOnly: recoveryOnly);
             }
             else
             {

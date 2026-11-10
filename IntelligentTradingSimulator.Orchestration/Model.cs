@@ -193,6 +193,8 @@ public sealed class EffectIntent
     public string? TaskPrompt { get; set; }
     public RequiredStatusPayload? RequiredStatus { get; set; }
     public RequiredStatusBoundary? RequiredStatusBoundary { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public EffectFailureCode? FailureCode { get; set; }
 }
 
 public sealed record RequiredStatusPayload(string Context, string State, string Description, string TargetUrl,

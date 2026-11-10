@@ -314,7 +314,7 @@ public sealed class SharedHostLifecycleIntegrationTests
         public List<JsonElement> Statuses { get; } = [];
         public List<string> StatusWrites { get; } = [];
         private string correlation = "";
-        private static object ReviewActor => new { id = 77, node_id = "reviewer-node", login = Reviewer, type = "Bot" };
+        private static object ReviewActor => new { id = 175728472, node_id = "BOT_kgDOCnlnWA", login = "Copilot", type = "Bot" };
         private static object StatusActor => new { id = 99, node_id = "publisher-node", login = "status-publisher", type = "Bot" };
         public PipelineApi(HttpMessageHandler tasks) => this.tasks = new(tasks, false);
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)

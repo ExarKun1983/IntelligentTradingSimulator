@@ -563,6 +563,12 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         if (outcome.Status is not (DeliveryStatus.Succeeded or DeliveryStatus.Failed or DeliveryStatus.Unknown))
             throw new InvalidOperationException("Invalid effect outcome.");
         var existing = input.Outbox[id];
+        if (existing.Kind == EffectKind.RequestReview && outcome.Status == DeliveryStatus.Failed &&
+            outcome.FailureCode is EffectFailureCode.ReviewPrerequisitesUnverified or
+                EffectFailureCode.ReviewPreflightRejected or EffectFailureCode.ReviewIdentityMismatch &&
+            (existing.Status == DeliveryStatus.Unknown ||
+                input.Issues[existing.IssueNumber].Review?.RequestBoundary is not null))
+            outcome = outcome with { Status = DeliveryStatus.Unknown };
         if (existing.Status == DeliveryStatus.Succeeded)
         {
             if (outcome.Status == DeliveryStatus.Succeeded && existing.ExternalId != outcome.ExternalId)
@@ -570,7 +576,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             return StateJson.Clone(input);
         }
         if (existing.Status == DeliveryStatus.Unknown && outcome.Status == DeliveryStatus.Unknown &&
-            (outcome.ExternalId is null || existing.ExternalId == outcome.ExternalId))
+            (outcome.ExternalId is null || existing.ExternalId == outcome.ExternalId) &&
+            (outcome.FailureCode is null || existing.FailureCode == outcome.FailureCode))
             return StateJson.Clone(input);
         return ChangeEffect(input, id, effect =>
         {
@@ -579,6 +586,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             effect.Status = outcome.Status;
             effect.ExternalId = outcome.ExternalId ?? effect.ExternalId;
             effect.CompletedAt = now;
+            effect.FailureCode = outcome.Status == DeliveryStatus.Succeeded ? null :
+                outcome.FailureCode ?? effect.FailureCode;
             if (outcome.Status == DeliveryStatus.Succeeded && effect.Kind != EffectKind.ProjectLabels &&
                 string.IsNullOrWhiteSpace(outcome.ExternalId))
                 throw new InvalidOperationException("Successful remote operation requires an identity.");

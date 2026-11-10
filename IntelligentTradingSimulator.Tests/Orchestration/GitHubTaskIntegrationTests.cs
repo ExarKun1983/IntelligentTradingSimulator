@@ -13,6 +13,40 @@ public sealed class GitHubTaskIntegrationTests
     private static readonly GitHubExecutionApproval ApprovedFixture = new(true, true, true, true);
     private static readonly WorkerOptions Bounded = new() { MaximumIterations = 3, PollInterval = TimeSpan.Zero };
 
+    [Theory]
+    [InlineData("pause")]
+    [InlineData("resume")]
+    public async Task CommandOnlyRecoveryCannotStartQueuedWork(string operation)
+    {
+        var fixture = new ApiFixture { RunEvent = "workflow_dispatch" };
+        var state = RepositoryState.Create("owner/repo");
+        state.Issues[7] = new IssueState { Number = 7, Ready = true, Phase = Phase.READY, ReadyAt = Now };
+        var store = new Store(state);
+        using var client = fixture.Client();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            sender = new { id = 55, login = "maintainer", type = "User" },
+            inputs = new { issue = "7", operation, reason = "Operator pause." }
+        });
+
+        if (operation == "pause")
+        {
+            var result = await host.ReconcileAsync(payload, "workflow_dispatch", "44", 1, 1, Now,
+                [], 99, "master", 55, ApprovedFixture, Bounded, commandOnly: true);
+            Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
+            Assert.True(store.State.Issues[7].Paused);
+        }
+        else
+            await Assert.ThrowsAsync<InvalidDataException>(() => host.ReconcileAsync(payload,
+                "workflow_dispatch", "44", 1, 1, Now, [], 99, "master", 55,
+                ApprovedFixture, Bounded, commandOnly: true));
+
+        Assert.Empty(store.State.Outbox);
+        Assert.Empty(fixture.Writes);
+    }
+
     [Fact]
     public async Task BoundedReadyReplayWithoutScopePreservesCommittedEventAndRejectsChangedContent()
     {

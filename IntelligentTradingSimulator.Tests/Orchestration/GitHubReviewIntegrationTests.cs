@@ -14,6 +14,102 @@ public sealed class GitHubReviewIntegrationTests
     private static GitHubReviewAdapter CreateAdapter(HttpClient client, Store store) =>
         new(new(client, "owner/repo", 1), store, new Clock(), Approved, new CandidateValidator());
 
+    [Theory]
+    [InlineData("Copilot")]
+    [InlineData("copilot-pull-request-reviewer[bot]")]
+    public async Task VerifiedReviewerAliasesAcceptTheSamePinnedBotAcrossRequestAndSubmission(string login)
+    {
+        var store = new Store(Eligible());
+        var handler = new Api { ReviewerLogin = login };
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, store);
+
+        var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
+        Assert.Equal(DeliveryStatus.Succeeded, outcome.Status);
+        var boundary = store.State.Issues[7].Review!.RequestBoundary!;
+        Assert.Equal(175728472, boundary.ReviewerId);
+        Assert.Equal("BOT_kgDOCnlnWA", boundary.ReviewerNodeId);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
+        handler.HasOutput = true;
+
+        Assert.NotNull(await adapter.ReadEventAsync(store.State, store.State.Issues[7], default));
+        Assert.Equal(1, handler.Posts);
+    }
+
+    [Theory]
+    [InlineData("approval", DeliveryStatus.Failed, EffectFailureCode.ReviewPrerequisitesUnverified, 0)]
+    [InlineData("bot-id", DeliveryStatus.Failed, EffectFailureCode.ReviewIdentityMismatch, 0)]
+    [InlineData("closed", DeliveryStatus.Failed, EffectFailureCode.ReviewPreflightRejected, 0)]
+    [InlineData("lost-response", DeliveryStatus.Unknown, EffectFailureCode.ExecutionException, 1)]
+    public async Task WorkerPersistsSafeFailureCodesWithoutRetryingReview(string corruption,
+        DeliveryStatus status, EffectFailureCode code, int posts)
+    {
+        var store = new Store(Eligible());
+        store.State.Outbox["review"].Status = DeliveryStatus.Pending;
+        var handler = new Api { Corruption = corruption };
+        using var client = handler.Client();
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(),
+            corruption == "approval" ? new(true, false, true, true) : Approved, new CandidateValidator());
+        var worker = new OrchestrationWorker(new(), new Clock());
+        var options = new WorkerOptions { MaximumIterations = 3, PollInterval = TimeSpan.Zero };
+
+        await worker.RunAsync(store, new Events(adapter, false), new Observations(), new Effects(adapter),
+            new(false, true, true, true), options);
+
+        var effect = store.State.Outbox["review"];
+        Assert.Equal(status, effect.Status);
+        Assert.Equal(code, effect.FailureCode);
+        Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
+        Assert.True(store.State.Issues[7].ReactivationRequired);
+        Assert.Equal(posts, handler.Posts);
+        if (posts == 0) Assert.Null(store.State.Issues[7].Review!.RequestBoundary);
+        else Assert.Equal(7, store.State.AdmittedIssue);
+
+        await worker.RunAsync(store, new Events(adapter, false), new Observations(), new Effects(adapter),
+            new(false, true, true, true), options);
+        Assert.Equal(posts, handler.Posts);
+        Assert.Equal(code, store.State.Outbox["review"].FailureCode);
+        Assert.DoesNotContain("Injected response loss", StateJson.Serialize(store.State));
+    }
+
+    [Fact]
+    public void PreflightRefusalCannotOverwriteAConcurrentPreparedRequestAsDefinitelyFailed()
+    {
+        var state = Eligible();
+        state.Issues[7].Review!.RequestBoundary = new(175728472, "BOT_kgDOCnlnWA", Now, []);
+        var next = new OrchestrationReducer().RecordOutcome(state, "review",
+            new(DeliveryStatus.Failed, FailureCode: EffectFailureCode.ReviewPreflightRejected), Now);
+
+        Assert.Equal(DeliveryStatus.Unknown, next.Outbox["review"].Status);
+        Assert.Equal(7, next.AdmittedIssue);
+        Assert.True(next.Issues[7].ReactivationRequired);
+    }
+
+    [Fact]
+    public async Task HistoricalUnknownReviewWithoutBoundaryStaysUnknownAndIsNeverRetried()
+    {
+        var store = new Store(Eligible());
+        store.State.Outbox["review"].Status = DeliveryStatus.Unknown;
+        store.State.Issues[7].Phase = Phase.BLOCKED;
+        store.State.Issues[7].ReactivationRequired = true;
+        var handler = new Api();
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, store);
+
+        var outcome = await adapter.ReconcileAsync(store.State.Outbox["review"], default);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
+
+        Assert.Equal(DeliveryStatus.Unknown, outcome.Status);
+        Assert.Null(store.State.Outbox["review"].FailureCode);
+        Assert.Equal(7, store.State.AdmittedIssue);
+        Assert.True(store.State.Issues[7].ReactivationRequired);
+        Assert.Equal(0, handler.Posts);
+        var refused = new OrchestrationReducer().RecordOutcome(store.State, "review",
+            new(DeliveryStatus.Failed, FailureCode: EffectFailureCode.ReviewPrerequisitesUnverified), Now);
+        Assert.Equal(DeliveryStatus.Unknown, refused.Outbox["review"].Status);
+        Assert.Equal(7, refused.AdmittedIssue);
+    }
+
     [Fact]
     public async Task ConcurrentAdapterExecutorsCannotRepeatNonIdempotentRequest()
     {
@@ -71,14 +167,14 @@ public sealed class GitHubReviewIntegrationTests
         using var dispatchClient = dispatchHandler.Client();
         var dispatchAdapter = new GitHubReviewAdapter(new(dispatchClient, "owner/repo", 1), dispatchStore,
             new Clock(), Approved, new CandidateValidator { Reject = true });
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-            dispatchAdapter.ExecuteAsync(dispatchStore.State.Outbox["review"], default));
+        Assert.Equal(EffectFailureCode.ReviewPreflightRejected,
+            (await dispatchAdapter.ExecuteAsync(dispatchStore.State.Outbox["review"], default)).FailureCode);
         Assert.Equal(0, dispatchHandler.Posts);
 
         var state = Eligible();
         var issue = state.Issues[7];
         issue.Review!.ReviewId = "review-request:review";
-        issue.Review.RequestBoundary = new(55, "BOT_node", Now, [], Confirmed: true);
+        issue.Review.RequestBoundary = new(175728472, "BOT_kgDOCnlnWA", Now, [], Confirmed: true);
         state.Outbox["review"].Status = DeliveryStatus.Succeeded;
         state.Outbox["review"].ExternalId = "review-request:review";
         var store = new Store(state);
@@ -111,7 +207,8 @@ public sealed class GitHubReviewIntegrationTests
         if (afterRequest)
             await Assert.ThrowsAsync<HttpRequestException>(() => adapter.ReadEventAsync(store.State, store.State.Issues[7], default));
         else
-            await Assert.ThrowsAsync<HttpRequestException>(() => adapter.ExecuteAsync(store.State.Outbox["review"], default));
+            Assert.Equal(EffectFailureCode.ReviewPreflightRejected,
+                (await adapter.ExecuteAsync(store.State.Outbox["review"], default)).FailureCode);
         Assert.Equal(afterRequest ? 1 : 0, handler.Posts);
         Assert.Null(store.State.Issues[7].Review!.Classification);
         Assert.Equal(Phase.REVIEW_PENDING, store.State.Issues[7].Phase);
@@ -183,9 +280,11 @@ public sealed class GitHubReviewIntegrationTests
         using var client = handler.Client();
         var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(),
             new(activation, policy, cost, automatic));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => adapter.ExecuteAsync(store.State.Outbox["review"], default));
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            new GitHubReviewAdapter(new(client, "owner/repo", 1), store).ExecuteAsync(store.State.Outbox["review"], default));
+        Assert.Equal(new EffectOutcome(DeliveryStatus.Failed, FailureCode: EffectFailureCode.ReviewPrerequisitesUnverified),
+            await adapter.ExecuteAsync(store.State.Outbox["review"], default));
+        Assert.Equal(new EffectOutcome(DeliveryStatus.Failed, FailureCode: EffectFailureCode.ReviewPrerequisitesUnverified),
+            await new GitHubReviewAdapter(new(client, "owner/repo", 1), store)
+                .ExecuteAsync(store.State.Outbox["review"], default));
         Assert.Empty(handler.Requests);
     }
 
@@ -219,8 +318,12 @@ public sealed class GitHubReviewIntegrationTests
         var store = new Store(state);
         var handler = new Api();
         using var client = handler.Client();
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-            CreateAdapter(client, store).ExecuteAsync(candidate, default));
+        if (corruption is "digest" or "pending-intent")
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                CreateAdapter(client, store).ExecuteAsync(candidate, default));
+        else
+            Assert.Equal(EffectFailureCode.ReviewPreflightRejected,
+                (await CreateAdapter(client, store).ExecuteAsync(candidate, default)).FailureCode);
         Assert.Empty(handler.Requests);
         Assert.Null(store.State.Issues[7].Review!.RequestBoundary);
     }
@@ -230,6 +333,9 @@ public sealed class GitHubReviewIntegrationTests
     [InlineData("closed")]
     [InlineData("repository")]
     [InlineData("bot-type")]
+    [InlineData("bot-id")]
+    [InlineData("bot-node")]
+    [InlineData("bot-login")]
     [InlineData("existing-request")]
     [InlineData("pending-review")]
     public async Task LivePreflightFailuresNeverLaunchReview(string corruption)
@@ -237,9 +343,10 @@ public sealed class GitHubReviewIntegrationTests
         var store = new Store(Eligible());
         var handler = new Api { Corruption = corruption };
         using var client = handler.Client();
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-            CreateAdapter(client, store)
-                .ExecuteAsync(store.State.Outbox["review"], default));
+        var outcome = await CreateAdapter(client, store).ExecuteAsync(store.State.Outbox["review"], default);
+        Assert.Equal(DeliveryStatus.Failed, outcome.Status);
+        Assert.Equal(corruption.StartsWith("bot-", StringComparison.Ordinal)
+            ? EffectFailureCode.ReviewIdentityMismatch : EffectFailureCode.ReviewPreflightRejected, outcome.FailureCode);
         Assert.Equal(0, handler.Posts);
         Assert.Null(store.State.Issues[7].Review!.RequestBoundary);
     }
@@ -492,8 +599,14 @@ public sealed class GitHubReviewIntegrationTests
         public string RequestBody { get; private set; } = "";
         public Action? BeforePost { get; set; }
         public HttpClient Client() => new(this) { BaseAddress = new("https://api.github.com/") };
-        private object Actor(bool bad = false) => new { id = bad ? 66 : 55, node_id = "BOT_node",
-            login = "copilot-pull-request-reviewer[bot]", type = Corruption == "bot-type" ? "User" : "Bot" };
+        public string ReviewerLogin { get; init; } = "Copilot";
+        private object Actor(bool bad = false) => new
+        {
+            id = bad || Corruption == "bot-id" ? 66 : 175728472,
+            node_id = Corruption == "bot-node" ? "wrong-node" : "BOT_kgDOCnlnWA",
+            login = Corruption == "bot-login" ? "impostor" : ReviewerLogin,
+            type = Corruption == "bot-type" ? "User" : "Bot"
+        };
         private object Pull(bool acknowledgement = false) => new
         {
             number = 17, state = Corruption == "closed" ? "closed" : "open",
