@@ -26,7 +26,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             !OrchestrationContinuation.HasWork(state) && !OrchestrationContinuation.RequiresObservation(state))
             return null;
         return await RunVerifiedAsync(scopedStore, null, projectionActorId, baseBranch, taskCreatorId, approval, options,
-            finalHeadSource, token, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval);
+            finalHeadSource, token, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval,
+            boundedScope?.RetiredIssueNumber);
     }
 
     public async Task<WorkerResult> ReconcileAsync(JsonElement trustedActionsPayload, string eventName, string runId,
@@ -56,14 +57,16 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         ValidateGeneration(snapshot.State, issueNumber,
             repositoryGeneration, issueGeneration, message);
         return await RunVerifiedAsync(scopedStore, message, projectionActorId, baseBranch, taskCreatorId, approval, options,
-            finalHeadSource, token, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval);
+            finalHeadSource, token, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval,
+            boundedScope?.RetiredIssueNumber);
     }
 
     private async Task<WorkerResult> RunVerifiedAsync(IStateStore stateStore, OrchestrationEvent? message,
         long projectionActorId, string baseBranch, long taskCreatorId, GitHubExecutionApproval approval,
         WorkerOptions? options, ITaskFinalHeadSource? finalHeadSource, CancellationToken token,
         GitHubReviewApproval? reviewApproval, GitHubCiRoute? ciRoute, GitHubCiApproval? ciApproval,
-        GitHubStatusPublisher? statusPublisher, GitHubRequiredStatusApproval? statusApproval)
+        GitHubStatusPublisher? statusPublisher, GitHubRequiredStatusApproval? statusApproval,
+        int? excludedIssueNumber)
     {
         var authorization = new VerifiedEvents();
         var tasks = new GitHubTaskAdapter(api, stateStore, baseBranch, taskCreatorId, approval, finalHeadSource, taskApi);
@@ -72,7 +75,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             var state = (await stateStore.LoadAsync(token)).State;
             if (!state.Inbox.ContainsKey(message.Id))
             {
-                var live = await api.ObserveAsync(state, clock.GetUtcNow(), token);
+                var live = await api.ObserveAsync(state, clock.GetUtcNow(), token, excludedIssueNumber);
                 if (!live.Issues.TryGetValue(message.IssueNumber, out var issue) || issue.Closed ||
                     issue.PullRequest != classification.PullRequest || issue.HeadSha != classification.Sha)
                     throw new InvalidDataException("Review classification no longer matches the live open head.");
@@ -118,12 +121,13 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         }
         var reviews = new GitHubReviewAdapter(api, stateStore, clock, reviewApproval, tasks);
         var ci = ciRoute is null ? null : new GitHubCiAdapter(api, stateStore, ciRoute, clock, ciApproval, tasks);
-        var events = new ProductionEvents(message, api, tasks, reviews, ci, authorization, projectionActorId);
+        var events = new ProductionEvents(message, api, tasks, reviews, ci, authorization, projectionActorId,
+            excludedIssueNumber);
         var statuses = statusPublisher is null ? null : new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher, statusApproval, clock);
         var effects = new ProductionEffects(tasks, reviews, ci, statuses, new GitHubProjectionAdapter(api, projectionActorId, true));
         return await new OrchestrationWorker(new OrchestrationReducer(authorization, statuses is not null &&
-            statusApproval?.AllowsPublication == true), clock).RunAsync(stateStore, events,
-            new TaskObservations(tasks, clock), effects, new ReconcileOptions(false, true, true, true),
+            statusApproval?.AllowsPublication == true, excludedIssueNumber), clock).RunAsync(stateStore, events,
+            new TaskObservations(tasks, clock, excludedIssueNumber), effects, new ReconcileOptions(false, true, true, true),
             options, token);
     }
 
@@ -238,7 +242,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
 
     private sealed class ProductionEvents(OrchestrationEvent? command, GitHubRepositoryApi api,
         GitHubTaskAdapter tasks, GitHubReviewAdapter reviews, GitHubCiAdapter? ci,
-        VerifiedEvents authorization, long projectionActorId) : IWorkerEventSource
+        VerifiedEvents authorization, long projectionActorId, int? excludedIssueNumber) : IWorkerEventSource
     {
         private readonly Dictionary<string, OrchestrationEvent> acceptedObservations = [];
         private bool reactivationBoundaryPending = command?.Data is Reactivate;
@@ -263,6 +267,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             var completions = new List<OrchestrationEvent>();
             foreach (var issue in state.Issues.Values)
             {
+                if (issue.Number == excludedIssueNumber) continue;
                 var mapping = await tasks.ReadMappingEventAsync(state, issue, token);
                 if (mapping?.Data is TaskPrMapped mapped)
                     feedbackState.Issues[issue.Number].PullRequest = mapped.PullRequest;
@@ -274,16 +279,19 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             }
             // Fetch newly verified PR feedback before applying completion or authorizing downstream effects.
             messages.AddRange(mappings);
-            messages.AddRange(await new GitHubFeedbackSource(api, projectionActorId).ReadAsync(feedbackState, token));
+            messages.AddRange(await new GitHubFeedbackSource(api, projectionActorId)
+                .ReadAsync(feedbackState, token, excludedIssueNumber));
             messages.AddRange(completions);
             if (ci is not null)
                 foreach (var issue in state.Issues.Values)
                 {
+                    if (issue.Number == excludedIssueNumber) continue;
                     var result = await ci.ReadEventAsync(state, issue, token);
                     if (result is not null && !state.Inbox.ContainsKey(result.Id)) messages.Add(result);
                 }
             foreach (var issue in state.Issues.Values)
             {
+                if (issue.Number == excludedIssueNumber) continue;
                 var result = await reviews.ReadEventAsync(state, issue, token);
                 if (result is not null && !state.Inbox.ContainsKey(result.Id)) messages.Add(result);
             }
@@ -302,10 +310,10 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         }
     }
 
-    private sealed class TaskObservations(GitHubTaskAdapter tasks, TimeProvider clock) : IObservationSource
+    private sealed class TaskObservations(GitHubTaskAdapter tasks, TimeProvider clock, int? excludedIssueNumber) : IObservationSource
     {
         public Task<LiveObservation> ObserveAsync(RepositoryState state, CancellationToken token) =>
-            tasks.ObserveAsync(state, clock.GetUtcNow(), token);
+            tasks.ObserveAsync(state, clock.GetUtcNow(), token, excludedIssueNumber);
     }
 
     private sealed class ProductionEffects(GitHubTaskAdapter tasks, GitHubReviewAdapter reviews,

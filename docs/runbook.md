@@ -2368,7 +2368,10 @@ entitlement, cost controls or repository protection must leave activation blocke
    remains BLOCKED with `ReactivationRequired`, admission is not held by #227,
    and all of its effects are terminal. Missing, changed, active, uncertain or
    additional historical work fails closed. The #237 bounded scope cannot
-   reactivate or act on #227.
+   reactivate or act on #227. It validates #227's canonical history but excludes
+   it from live task, issue, feedback, CI, and review reads and from projection
+   planning during #237 reconciliation, so historical label drift or absent projection
+   receipts cannot block the active retest.
 
    The new managed-CI ref is `refs/tags/agent-managed-ci-test-237-v1`. Before
    creating it, configure an organization/repository tag ruleset that prevents

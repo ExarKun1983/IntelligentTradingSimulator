@@ -26,6 +26,39 @@ public sealed class BoundedOrchestrationScopeTests
         Scope().Validate(state);
     }
 
+    [Fact]
+    public void ReconcileRetestDoesNotRepairRetiredProjectionsAndAdmitsReadyIssue()
+    {
+        var state = RetiredState();
+        state.Issues[227].ProjectionDigest = null;
+        state.Issues[227].ObservedProjectionDigest = null;
+        state.Issues[237] = new()
+        {
+            Number = 237, Generation = 1, Ready = true, ReadyAt = Created,
+            Phase = Phase.READY, MaxRepairTasks = 1, SinglePassTest = true
+        };
+        Scope().Validate(state);
+        var observation = new LiveObservation
+        {
+            ObservedAt = Observed,
+            Issues = new()
+            {
+                [227] = new() { Ready = false, Labels = ["agent:ready"] },
+                [237] = new() { Ready = true, Labels = ["agent:ready"] }
+            }
+        };
+
+        var result = new OrchestrationReducer(excludedIssueNumber: 227).Reconcile(state, observation);
+
+        Assert.Equal(237, result.State.AdmittedIssue);
+        Assert.Contains(result.State.Outbox.Values, effect =>
+            effect.IssueNumber == 237 && effect.Kind == EffectKind.LaunchTask);
+        Assert.DoesNotContain(result.State.Outbox.Values, effect =>
+            effect.IssueNumber == 227 && effect.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus);
+        Assert.Null(result.State.Issues[227].ProjectionDigest);
+        Assert.Null(result.State.Issues[227].ObservedProjectionDigest);
+    }
+
     private static void RetestScopeRejectsAnUnresolvedOrAlteredPriorAttempt(Action<RepositoryState> mutate)
     {
         var state = RetiredState();
@@ -75,6 +108,9 @@ public sealed class BoundedOrchestrationScopeTests
         yield return [(
             Action<RepositoryState>)(state => state.Issues[227].Tasks[TaskId].OperatorResolution =
                 state.Issues[227].Tasks[TaskId].OperatorResolution! with { Reason = "changed" })];
+        yield return [(
+            Action<RepositoryState>)(state => state.Issues[227].Tasks[TaskId].OperatorResolution =
+                state.Issues[227].Tasks[TaskId].OperatorResolution! with { EvidenceEventId = "not-in-inbox" })];
     }
 
     [Theory]

@@ -78,7 +78,8 @@ public sealed partial class GitHubRepositoryApi
             Labels(root).Contains("agent:ready"), root.TryGetProperty("pull_request", out _), projectionActorIds);
     }
 
-    public async Task<LiveObservation> ObserveAsync(RepositoryState state, DateTimeOffset now, CancellationToken token)
+    public async Task<LiveObservation> ObserveAsync(RepositoryState state, DateTimeOffset now, CancellationToken token,
+        int? excludedIssueNumber = null)
     {
         if (state.Repository != Repository || state.Issues.Count > OrchestrationReducer.MaximumIndexEntries)
             throw new InvalidDataException("Observation repository or capacity mismatch.");
@@ -86,6 +87,7 @@ public sealed partial class GitHubRepositoryApi
         var result = new LiveObservation { ObservedAt = now };
         foreach (var issue in state.Issues.Values)
         {
+            if (issue.Number == excludedIssueNumber) continue;
             using var response = await GetAsync($"issues/{issue.Number}", token);
             var root = response.RootElement;
             if (root.GetProperty("number").GetInt32() != issue.Number || root.TryGetProperty("pull_request", out _))

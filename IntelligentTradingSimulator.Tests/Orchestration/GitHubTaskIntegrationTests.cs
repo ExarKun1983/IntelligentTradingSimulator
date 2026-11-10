@@ -52,6 +52,92 @@ public sealed class GitHubTaskIntegrationTests
         Assert.Single(fixture.Writes, write => write.Path.StartsWith("/agents/"));
     }
 
+    [Fact]
+    public async Task BoundedRetestHostIgnoresRetiredIssueDriftAndContinuesReadyIssue()
+    {
+        var fixture = new ApiFixture();
+        var state = RetiredAttemptState();
+        state.Issues[237] = new IssueState
+        {
+            Number = 237, Generation = 1, Ready = true, ReadyAt = Now, Phase = Phase.READY,
+            MaxRepairTasks = 1, SinglePassTest = true
+        };
+        var store = new Store(state);
+        using var client = fixture.Client();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        var notification = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            sender = new { id = 55, login = "maintainer", type = "User" },
+            issue = new { id = 2370, number = 237 }, action = "labeled", label = new { name = "agent:ready" }
+        });
+
+        await host.ReconcileAsync(notification, "issues", "44", 1, 1, Now, [], 99, "master", 55,
+            ApprovedFixture, Bounded, new FinalHead(), boundedScope: new(237, 1, 227));
+
+        Assert.Equal(237, store.State.AdmittedIssue);
+        Assert.Contains(store.State.Outbox.Values, effect =>
+            effect.IssueNumber == 237 && effect.Kind == EffectKind.LaunchTask);
+        Assert.DoesNotContain(store.State.Outbox.Values, effect =>
+            effect.IssueNumber == 227 && effect.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus);
+        Assert.Null(store.State.Issues[227].ProjectionDigest);
+        Assert.Null(store.State.Issues[227].ObservedProjectionDigest);
+        Assert.DoesNotContain(fixture.Requests, request => request.Contains("/issues/227", StringComparison.Ordinal));
+        Assert.DoesNotContain(fixture.Writes, write => write.Path.Contains("/issues/227", StringComparison.Ordinal));
+    }
+
+    private static RepositoryState RetiredAttemptState()
+    {
+        const string taskId = "task:227:1:1:1";
+        const string externalTaskId = "e4743d38-6b27-49cd-a272-83b34465a808";
+        const string launchId = "LaunchTask:227:1:task:227:1:1:1:1";
+        const string terminalId = "terminal-for:resolve-task-227";
+        const string resolutionId = "resolve-task-227";
+        const string reason = "Retire the stopped single-pass mapping attempt before separately approved retest #237.";
+        var state = RepositoryState.Create("owner/repo");
+        var launchAt = Now.AddMinutes(-3);
+        var observedAt = Now.AddMinutes(-2);
+        var resolvedAt = Now.AddMinutes(-1);
+        state.Outbox[launchId] = new EffectIntent
+        {
+            Id = launchId, Digest = "launch-digest", IssueNumber = 227, Generation = 1,
+            Kind = EffectKind.LaunchTask, Status = DeliveryStatus.Succeeded, TaskId = taskId,
+            Round = 1, ExternalId = externalTaskId, CreatedAt = launchAt, StartedAt = launchAt,
+            CompletedAt = launchAt.AddSeconds(1)
+        };
+        var evidence = new TaskTerminalEvidence(launchId, externalTaskId, state.Repository, 1, 55,
+            "completed", 1, [new("session", externalTaskId, 1, "completed", observedAt)],
+            observedAt, observedAt, new string('a', 64));
+        var taskActor = new Actor("github-task-api", ActorKind.TaskService);
+        var human = new Actor("maintainer", ActorKind.Human, 55, Type: "User");
+        var terminal = new OrchestrationEvent(terminalId, state.Repository, 227, 1, 1,
+            taskActor, observedAt, new TaskTerminalObserved(taskId, evidence));
+        var resolution = new OrchestrationEvent(resolutionId, state.Repository, 227, 1, 1,
+            human, resolvedAt, new ResolveTaskTerminal(taskId, terminalId, reason));
+        state.Inbox[terminalId] = RetiredInbox(terminal, observedAt);
+        state.Inbox[resolutionId] = RetiredInbox(resolution, resolvedAt);
+        state.Issues[227] = new IssueState
+        {
+            Number = 227, Generation = 1, Phase = Phase.BLOCKED, ReactivationRequired = true,
+            HoldReason = "Task PR mapping is unsupported or contradictory; admission retained.",
+            Round = 1, MaxRepairTasks = 1, SinglePassTest = true, ActiveTaskId = taskId,
+            Tasks = new()
+            {
+                [taskId] = new TaskIdentity
+                {
+                    Id = taskId, Kind = TaskKind.Coding, Status = TaskStatus.Failed, Round = 1,
+                    LaunchSource = TaskLaunchSource.UnmappedIssue, LaunchConfirmed = true,
+                    ExternalId = externalTaskId, TerminalEvidence = new(terminalId, evidence),
+                    OperatorResolution = new(resolutionId, terminalId, human, reason, resolvedAt)
+                }
+            }
+        };
+        return state;
+    }
+
+    private static InboxEntry RetiredInbox(OrchestrationEvent message, DateTimeOffset at) =>
+        new(message.Id, message.Digest, DeliveryStatus.Succeeded, at, at, JsonSerializer.Serialize(message));
+
     [Theory]
     [InlineData(5000000000L, false)]
     [InlineData(5000000000L, true)]
@@ -813,11 +899,17 @@ public sealed class GitHubTaskIntegrationTests
                     if (LoseLaunchResponse) throw new HttpRequestException("Lost launch response.");
                     return Response(TaskResponse());
                 }
-                if (path == prefix + "issues/7/labels")
+                if (path == prefix + "issues/7/labels" || path == prefix + "issues/237/labels")
                     labels.AddRange(json.RootElement.GetProperty("labels").EnumerateArray().Select(value => value.GetString()!));
-                else if (request.Method == HttpMethod.Delete && path.StartsWith(prefix + "issues/7/labels/"))
-                    labels.Remove(Uri.UnescapeDataString(path[(prefix + "issues/7/labels/").Length..]));
-                else if (path == prefix + "issues/7/comments" || path == prefix + "issues/comments/101")
+                else if (request.Method == HttpMethod.Delete &&
+                         (path.StartsWith(prefix + "issues/7/labels/") || path.StartsWith(prefix + "issues/237/labels/")))
+                {
+                    var labelPrefix = path.StartsWith(prefix + "issues/237/", StringComparison.Ordinal)
+                        ? prefix + "issues/237/labels/" : prefix + "issues/7/labels/";
+                    labels.Remove(Uri.UnescapeDataString(path[labelPrefix.Length..]));
+                }
+                else if (path == prefix + "issues/7/comments" || path == prefix + "issues/237/comments" ||
+                         path == prefix + "issues/comments/101")
                 {
                     statusBody = json.RootElement.GetProperty("body").GetString()!;
                     return Response(new { id = 101, body = statusBody, user = new { id = 99 } });
@@ -837,11 +929,14 @@ public sealed class GitHubTaskIntegrationTests
             }
             else if (path == prefix + "issues/7")
                 result = new { id = 70, number = 7, state = "open", labels = labels.Distinct().Select(name => new { name }) };
+            else if (path == prefix + "issues/237")
+                result = new { id = 2370, number = 237, state = "open", labels = labels.Distinct().Select(name => new { name }) };
             else if (path.EndsWith("/comments"))
                 result = path.Contains("/17/") ? PrComments.ToArray() : Comments.Concat(statusBody.Length == 0 ? [] :
                     new[] { JsonSerializer.SerializeToElement(new { id = 101, body = statusBody, updated_at = Now,
                         user = new { id = 99, type = "Bot", login = "projection" } }) }).ToArray();
-            else if (path == prefix + "issues/7/labels") result = labels.Distinct().Select(name => new { name }).ToArray();
+            else if (path == prefix + "issues/7/labels" || path == prefix + "issues/237/labels")
+                result = labels.Distinct().Select(name => new { name }).ToArray();
             else if (path == "/agents/repos/owner/repo/tasks/remote-task") result = TaskResponse();
             else if (path == prefix + "pulls") result = Corruption == "no-prs" ? Array.Empty<object>() :
                 Corruption == "multiple-prs" ? new[] { Pull(17), Pull(18) } : new[] { Pull(17) };

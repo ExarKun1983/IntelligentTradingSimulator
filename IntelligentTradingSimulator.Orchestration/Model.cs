@@ -292,6 +292,7 @@ public sealed record BoundedOrchestrationScope(int IssueNumber, int MaxRepairTas
             resolutionEvent.Repository != state.Repository || resolutionEvent.IssueNumber != issue.Number ||
             resolutionEvent.IssueGeneration != issue.Generation || resolved.TaskId != taskId ||
             resolutionEvent.Actor != resolution.Author || resolved.EvidenceEventId != terminal.EventId ||
+            resolution.EvidenceEventId != terminal.EventId ||
             string.IsNullOrWhiteSpace(resolved.Reason) ||
             resolution.Author.Kind != ActorKind.Human || resolution.Author.Type != "User" ||
             resolution.Author.Id is not > 0 || string.IsNullOrWhiteSpace(resolution.Author.Login) ||

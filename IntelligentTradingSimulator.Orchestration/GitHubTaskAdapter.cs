@@ -352,11 +352,13 @@ public sealed class GitHubTaskAdapter(
         return (number, pull.RootElement.GetProperty("head").GetProperty("sha").GetString()!);
     }
 
-    public async Task<LiveObservation> ObserveAsync(RepositoryState state, DateTimeOffset now, CancellationToken token)
+    public async Task<LiveObservation> ObserveAsync(RepositoryState state, DateTimeOffset now, CancellationToken token,
+        int? excludedIssueNumber = null)
     {
-        var live = await api.ObserveAsync(state, now, token);
+        var live = await api.ObserveAsync(state, now, token, excludedIssueNumber);
         foreach (var issue in state.Issues.Values)
         {
+            if (issue.Number == excludedIssueNumber) continue;
             var message = await ReadEventAsync(state, issue, token);
             if (message?.Data is not TaskCompleted completed) continue;
             live.Issues[issue.Number].PullRequest = completed.PullRequest;

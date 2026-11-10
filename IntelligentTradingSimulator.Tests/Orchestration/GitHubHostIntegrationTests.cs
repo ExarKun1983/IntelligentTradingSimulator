@@ -135,6 +135,23 @@ public sealed class GitHubHostIntegrationTests
     }
 
     [Fact]
+    public async Task ObservationExcludesRetiredIssueWhileReadingActiveRetestIssue()
+    {
+        var fixture = new ApiFixture();
+        fixture.State.Issues[227] = new IssueState { Number = 227 };
+        fixture.State.Issues[237] = new IssueState { Number = 237 };
+        using var client = fixture.Client();
+
+        var observation = await new GitHubRepositoryApi(client, "owner/repo", 1)
+            .ObserveAsync(fixture.State, Now, default, excludedIssueNumber: 227);
+
+        Assert.DoesNotContain(227, observation.Issues.Keys);
+        Assert.Contains(237, observation.Issues.Keys);
+        Assert.DoesNotContain(fixture.Requests, request => request.Path.EndsWith("/issues/227", StringComparison.Ordinal));
+        Assert.Contains(fixture.Requests, request => request.Path.EndsWith("/issues/237", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task StatusIntentIsStableAcrossReconcileAndRedactsArbitraryFeedbackAndHoldText()
     {
         var fixture = new ApiFixture();
@@ -457,6 +474,10 @@ public sealed class GitHubHostIntegrationTests
                 result = new { permission = Corruption == "permission" ? "read" : "write", user = new { id = Corruption == "permission-user" ? 66 : 55 } };
             else if (path == prefix + "issues/7")
                 result = new { id = Corruption == "issue" ? 71 : 70, number = 7, state = Closed ? "closed" : "open", labels = Labels.Select(name => new { name }) };
+            else if (path.StartsWith(prefix + "issues/", StringComparison.Ordinal) &&
+                     !path[(prefix + "issues/").Length..].Contains("/", StringComparison.Ordinal) &&
+                     int.TryParse(path[(prefix + "issues/").Length..], out var issueNumber))
+                result = new { id = issueNumber * 10, number = issueNumber, state = "open", labels = Array.Empty<object>() };
             else if (path == prefix + "pulls/17")
                 result = new { number = 17, state = "open", merged = false, head = new { sha = Sha }, @base = new { repo = new { id = 1 } } };
             else if (path == prefix + "issues/7/labels" && request.Method == HttpMethod.Get)

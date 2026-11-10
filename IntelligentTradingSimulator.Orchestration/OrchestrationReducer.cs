@@ -1,6 +1,7 @@
 namespace IntelligentTradingSimulator.Orchestration;
 
-public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = null, bool requiredStatusEnabled = false)
+public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = null, bool requiredStatusEnabled = false,
+    int? excludedIssueNumber = null)
 {
     public const int MaximumIndexEntries = 2048;
     private readonly IAuthorizationPolicy authorization = authorization ?? new DenyAllAuthorizationPolicy();
@@ -18,6 +19,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         if (string.IsNullOrWhiteSpace(message.Id) || message.IssueNumber <= 0 ||
             message.Repository != input.Repository || message.RepositoryGeneration != input.Generation)
             throw new InvalidOperationException("Invalid event scope or generation.");
+        if (message.IssueNumber == excludedIssueNumber)
+            throw new InvalidOperationException("Retired Issue history is immutable in the active test scope.");
         if (!authorization.IsAuthorized(message) || !ActorMatches(message))
             throw new UnauthorizedAccessException("Event actor is not authorized.");
         var state = StateJson.Clone(input);
@@ -321,6 +324,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         var state = StateJson.Clone(input);
         foreach (var issue in state.Issues.Values.OrderBy(i => i.Number))
         {
+            if (issue.Number == excludedIssueNumber) continue;
             if (!observation.Issues.TryGetValue(issue.Number, out var live)) continue;
             if (!live.Ready && (issue.Ready || RequiresInitialReadiness(issue)))
             {
@@ -422,7 +426,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             !state.Outbox.Values.Any(e => e.Kind != EffectKind.PublishRequiredStatus &&
                 e.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown))
         {
-            var next = state.Issues.Values.Where(i => (i.Ready || i.ActiveAuthorized) &&
+            var next = state.Issues.Values.Where(i => i.Number != excludedIssueNumber &&
+                    (i.Ready || i.ActiveAuthorized) &&
                     i.Phase is Phase.READY or Phase.FIX_PENDING &&
                     !i.Paused && !i.ReactivationRequired && observation.Issues.TryGetValue(i.Number, out var live) &&
                     (i.ActiveAuthorized || live.Ready) && !live.Closed && !HasUnfinishedWork(state, i))
@@ -489,6 +494,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         }
         foreach (var issue in state.Issues.Values)
         {
+            if (issue.Number == excludedIssueNumber) continue;
             if (!observation.Issues.TryGetValue(issue.Number, out var live)) continue;
             if (requiredStatusEnabled && issue.PullRequest is > 0 && IsSha(issue.HeadSha))
                 PlanRequiredStatus(state, issue, observation.ObservedAt);
