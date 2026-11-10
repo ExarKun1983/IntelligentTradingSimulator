@@ -1545,7 +1545,14 @@ and a current snapshot do not reproduce the original run's exact conditions.
 Identity matches require positive Int64 database IDs and populated global IDs;
 GraphQL database IDs may also be decimal BigInt strings. Missing values never
 match each other. PR/GraphQL body timeouts are reported as transport errors
-while preserving earlier results. Run diagnostic script regressions locally
+while preserving earlier results. Pull artifact and REST global IDs are classified
+as `missing`, `null`, `not-string`, `empty`, `too-long` (over 256 characters),
+`whitespace`, or `valid`, without logging their values or exact lengths.
+Database-ID validity and database/global-ID REST matches are reported separately;
+the combined match still requires both identities to match. Artifact ID validity
+and global-ID status are retained even if the subsequent PR read fails.
+These diagnostics do not relax parser validation or authorize a mapping.
+Run diagnostic script regressions locally
 with `python .github/scripts/test_task_mapping_diagnostics.py` (no network or
 credentials required).
 Run it only with separate operator approval, while both live workflows remain
