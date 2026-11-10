@@ -80,7 +80,7 @@ permissions:
 jobs:
   reconcile:
     # Temporary opt-in for the single reviewed test Issue; not production cutover.
-    if: ${{ github.workflow_ref == format('{0}/.github/workflows/agent-state-machine.yml@refs/heads/master', github.repository) && vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true' && vars.ORCHESTRATION_TEST_ISSUE == '227' && vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1' }}
+    if: ${{ github.workflow_ref == format('{0}/.github/workflows/agent-state-machine.yml@refs/heads/master', github.repository) && vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true' && vars.ORCHESTRATION_TEST_ISSUE == '237' && vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '227' && vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     environment: agent-orchestration
@@ -120,6 +120,7 @@ jobs:
           ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED: ${{ vars.ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED }}
           ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED: ${{ vars.ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED }}
           ORCHESTRATION_TEST_ISSUE: ${{ vars.ORCHESTRATION_TEST_ISSUE }}
+          ORCHESTRATION_RETIRED_TEST_ISSUE: ${{ vars.ORCHESTRATION_RETIRED_TEST_ISSUE }}
           ORCHESTRATION_TEST_MAX_REPAIR_TASKS: ${{ vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS }}
         run: >-
           dotnet run --project IntelligentTradingSimulator.Orchestration

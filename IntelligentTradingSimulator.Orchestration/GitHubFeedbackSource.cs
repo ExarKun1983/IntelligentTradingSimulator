@@ -5,13 +5,15 @@ namespace IntelligentTradingSimulator.Orchestration;
 /// <summary>Current authorized human comments, not a lossless edited/deleted comment history.</summary>
 public sealed class GitHubFeedbackSource(GitHubRepositoryApi api, long? projectionActorId = null)
 {
-    public async Task<IReadOnlyList<OrchestrationEvent>> ReadAsync(RepositoryState state, CancellationToken token)
+    public async Task<IReadOnlyList<OrchestrationEvent>> ReadAsync(RepositoryState state, CancellationToken token,
+        int? excludedIssueNumber = null)
     {
         if (state.Repository != api.Repository) throw new InvalidDataException("Feedback repository mismatch.");
         await api.VerifyRepositoryAsync(token);
         var events = new List<OrchestrationEvent>();
         foreach (var issue in state.Issues.Values)
         {
+            if (issue.Number == excludedIssueNumber) continue;
             var since = issue.FeedbackSince ?? issue.ReadyAt;
             if (since is null || issue.Phase == Phase.CLOSED) continue;
             var targets = new[] { issue.Number, issue.PullRequest ?? issue.Number }.Distinct();

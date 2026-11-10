@@ -7,7 +7,7 @@ namespace IntelligentTradingSimulator.Orchestration;
 public sealed record GitHubLiveSettings(string Repository, long RepositoryId, long ActorId, string BaseBranch,
     GitHubExecutionApproval Tasks, GitHubWakeApproval Wake, GitHubWakeRoute WakeRoute,
     GitHubReviewApproval Review, GitHubCiApproval Ci, GitHubCiRoute CiRoute, GitHubRequiredStatusApproval Status,
-    int? TestIssue = null, int? TestMaxRepairTasks = null)
+    int? TestIssue = null, int? TestMaxRepairTasks = null, int? RetiredTestIssue = null)
 {
     public static GitHubLiveSettings Read(Func<string, string?> read)
     {
@@ -21,7 +21,10 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
                 ? value : throw new InvalidDataException("Invalid bounded-test identity.");
         var testIssue = OptionalIdentity("ORCHESTRATION_TEST_ISSUE");
         var testMaxRepairTasks = OptionalIdentity("ORCHESTRATION_TEST_MAX_REPAIR_TASKS");
-        if ((testIssue is null) != (testMaxRepairTasks is null) || testMaxRepairTasks is not (null or 1))
+        var retiredTestIssue = OptionalIdentity("ORCHESTRATION_RETIRED_TEST_ISSUE");
+        if ((testIssue is null) != (testMaxRepairTasks is null) || testMaxRepairTasks is not (null or 1) ||
+            (retiredTestIssue is not null && (testIssue != 237 || retiredTestIssue != 227)) ||
+            (testIssue == 237 && retiredTestIssue != 227))
             throw new InvalidDataException("Bounded test mode requires one Issue and a repair-task cap of exactly one.");
         var activation = Approved("ORCHESTRATION_ACTIVATION_APPROVED");
         var credential = Approved("ORCHESTRATION_USER_TOKEN_VERIFIED") &&
@@ -42,7 +45,7 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
                 Approved("ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED")),
             new(activation, credential, Approved("ORCHESTRATION_TRUSTED_CI_VERIFIED"), cost),
             new(Identity("ORCHESTRATION_CI_WORKFLOW_ID"), Required("ORCHESTRATION_CI_REF"),
-                Required("ORCHESTRATION_CI_DEFINITION_SHA")), status, testIssue, testMaxRepairTasks);
+                Required("ORCHESTRATION_CI_DEFINITION_SHA")), status, testIssue, testMaxRepairTasks, retiredTestIssue);
     }
 }
 
@@ -111,8 +114,7 @@ public static class GitHubLiveCommand
                     [publisher.ActorId], publisher.ActorId, settings.BaseBranch, settings.ActorId,
                     settings.Tasks, ciRoute: settings.CiRoute, ciApproval: settings.Ci, reviewApproval: settings.Review,
                     statusPublisher: settings.Status.AllowsPublication ? publisher : null, statusApproval: settings.Status,
-                    boundedScope: settings.TestIssue is { } testIssue
-                        ? new BoundedOrchestrationScope(testIssue, settings.TestMaxRepairTasks!.Value) : null);
+                    boundedScope: CreateBoundedScope(settings));
             }
             else
             {
@@ -122,8 +124,7 @@ public static class GitHubLiveCommand
                     settings.Wake, publisher.ActorId, settings.BaseBranch, settings.ActorId, settings.Tasks,
                     ciRoute: settings.CiRoute, ciApproval: settings.Ci, reviewApproval: settings.Review,
                     statusPublisher: settings.Status.AllowsPublication ? publisher : null, statusApproval: settings.Status,
-                    boundedScope: settings.TestIssue is { } testIssue
-                        ? new BoundedOrchestrationScope(testIssue, settings.TestMaxRepairTasks!.Value) : null);
+                    boundedScope: CreateBoundedScope(settings));
             }
             output.WriteLine(JsonSerializer.Serialize(new { Mode = "github-live", Result = result?.Reason.ToString() }, StateJson.Options));
             return 0;
@@ -142,10 +143,13 @@ public static class GitHubLiveCommand
         if (settings.TestIssue is not { } testIssue) return;
         if (requestedIssue is { } requested && requested != testIssue)
             throw new InvalidDataException("Bounded test mode rejected an Issue outside its configured scope.");
-        if (state.Issues.Keys.Any(number => number != testIssue) ||
-            state.Issues.TryGetValue(testIssue, out var issue) && issue.MaxRepairTasks != settings.TestMaxRepairTasks)
-            throw new InvalidDataException("Canonical state contains an unexpected Issue or repair-task cap.");
+        CreateBoundedScope(settings)!.Validate(state);
     }
+
+    private static BoundedOrchestrationScope? CreateBoundedScope(GitHubLiveSettings settings) =>
+        settings.TestIssue is { } testIssue
+            ? new BoundedOrchestrationScope(testIssue, settings.TestMaxRepairTasks!.Value,
+                settings.RetiredTestIssue) : null;
 
     private static async Task<DateTimeOffset> VerifyCommandDefinitionAsync(GitHubRepositoryApi api, GitHubWakeRoute route,
         string runId, string eventName)

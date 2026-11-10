@@ -1604,8 +1604,11 @@ contract uses **label-controlled initiation**, not a mandatory Start button.
 Implementation/testing approval is not activation approval. The legacy workflow
 remains disabled in GitHub; never restart it for comparison, shadow mode, or rollback.
 The replacement jobs are **conditionally gated, not unconditionally disabled**.
-Both require `ORCHESTRATION_ACTIVATION_APPROVED=true`,
-`ORCHESTRATION_TEST_ISSUE=227`, and `ORCHESTRATION_TEST_MAX_REPAIR_TASKS=1`.
+The current stopped-attempt recovery remains scoped to Issue `227`, with
+`ORCHESTRATION_TEST_MAX_REPAIR_TASKS=1`. Only after its audited resolution and
+the separately reviewed retest-gate change may the new test scope use
+`ORCHESTRATION_TEST_ISSUE=237`, `ORCHESTRATION_RETIRED_TEST_ISSUE=227`, and cap
+`1`.
 The reconciler additionally requires its workflow definition to come from
 `refs/heads/master`; it does not use the event ref, which is not a branch ref
 for Issue events. Managed CI requires the configured `refs/tags/` ref.
@@ -1963,8 +1966,10 @@ coding SHA.** The isolated workflow receives the completed task's final SHA as
 input, checks out exactly it with `persist-credentials: false`, verifies HEAD,
 then runs the repository-required restore/Release build/test commands. It grants
 only `contents: read`; it has no state writes, orchestration credentials or secret
-inputs. Its only trigger is `workflow_dispatch`. Its job requires activation
-`true`, test Issue `227`, cap `1`, and a tag ref equal to `ORCHESTRATION_CI_REF`.
+inputs. Its only trigger is `workflow_dispatch`. The original CI gate was limited
+to test Issue `227`; after the separately reviewed retest-gate change it must
+require Issue `237`, cap `1`, and the protected
+`refs/tags/agent-managed-ci-test-237-v1` equal to `ORCHESTRATION_CI_REF`.
 These are configuration-dependent gates, not a literal-false safety guarantee.
 
 Result correlation checks provider run/workflow/repository/path/event/revision,
@@ -2316,6 +2321,8 @@ entitlement, cost controls or repository protection must leave activation blocke
    | `ORCHESTRATION_TRUSTED_CI_VERIFIED` | `true` only after exact-SHA checkout/test steps and immutable executable CI tag are verified. |
    | `ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED` | `true` only after workflow-token bot publisher permissions/provenance are checked; runtime verifies its authenticated ID. |
    | `ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED` | Production: `true` only after branch protection requires `Agent managed CI` and independent human final approval. For this single-pass test, leave unset/false; status publication is disabled and the test PR must remain unmerged. |
+   | `ORCHESTRATION_TEST_ISSUE` | The single bounded test Issue. For the existing cleanup operation this remains `227`; only after its verified resolution and the reviewed retest-gate change set this to `237`. |
+   | `ORCHESTRATION_RETIRED_TEST_ISSUE` | Leave unset for the #227 cleanup operation. Set to `227` only with retest Issue `237`; runtime verifies the exact durable retired-state evidence. |
    | `ORCHESTRATION_ACTIVATION_APPROVED` | Keep `false`; set `true` **last**, only at separately approved cutover after all prerequisites. |
    | `ORCHESTRATION_MANAGED_ROUTING_APPROVED` | Keep `false` until managed status/protection and unmanaged/manual-CI compatibility are verified; then separately approve `true` for ordinary CI's read-only router. |
 
@@ -2324,9 +2331,11 @@ entitlement, cost controls or repository protection must leave activation blocke
    and run ID are supplied by Actions, not `vars.*`. The projection login/ID are
    fixed and authenticated at startup, not operator-supplied variables.
 
-   For the explicitly approved bounded end-to-end test only, set both
-   `ORCHESTRATION_TEST_ISSUE` (the sole test Issue number) and
-   `ORCHESTRATION_TEST_MAX_REPAIR_TASKS=1`. The live host then rejects commands for
+   For the explicitly approved bounded end-to-end test only, set
+   `ORCHESTRATION_TEST_ISSUE` (the sole active test Issue) and
+   `ORCHESTRATION_TEST_MAX_REPAIR_TASKS=1`. The #237 retest additionally requires
+   `ORCHESTRATION_RETIRED_TEST_ISSUE=227`, and only after the prior task's audited
+   resolution. The live host then rejects commands for
    other Issues and validates every canonical state/effect snapshot loaded during
    dispatch, recovery, and wake processing; it also requires the test Issue's
    persisted repair cap and single-pass flag to match. Both are persisted with
@@ -2345,12 +2354,44 @@ entitlement, cost controls or repository protection must leave activation blocke
    If either variable is missing or the cap is not exactly one, bounded test mode
    fails closed. Ordinary Issues without the persisted single-pass flag retain
    existing repair budgets.
-   The temporary workflow job gates permit only test Issue `227`, cap `1`, and
-   activation `true`. The reconciler must run from `master`; managed CI must run
-   from the configured immutable tag. Removing the test variables disables these
-   jobs, rather than activating production. The three test variables alone are
-   not a complete live configuration: all prerequisites and definition pins
-   listed above remain mandatory.
+   The initial temporary workflow job gates permit only test Issue `227`, cap
+   `1`, and activation `true`. After the stopped #227 attempt is resolved, a
+   separately reviewed retest definition may target only Issue `237` with cap
+   `1` and `ORCHESTRATION_RETIRED_TEST_ISSUE=227`. Do not merge that gate change
+   before #227's audited `resolve-task` completes; doing so blocks the old
+   resolution command.
+
+   For #237, the canonical `agent-state` intentionally retains the historical
+   #227 record. Bounded-state validation allows that one prior Issue only when
+   its exact single-pass task/launch identity matches, the Issue, task, and launch
+   rounds are all `1`, the task is locally Failed with durable ended-session
+   and operator-resolution events, the Issue
+   remains BLOCKED with `ReactivationRequired`, admission is not held by #227,
+   and all of its effects are terminal. Both saved event receipt digests must
+   match their terminal and operator-resolution payloads. Missing, changed,
+   active, uncertain or additional historical work fails closed. The #237 bounded scope cannot
+   reactivate or act on #227. It validates #227's canonical history but excludes
+   it from live task, issue, feedback, CI, and review reads and from projection
+   planning during #237 reconciliation, so historical label drift or absent projection
+   receipts cannot block the active retest.
+
+   The new managed-CI ref is `refs/tags/agent-managed-ci-test-237-v1`. Before
+   creating it, configure an organization/repository tag ruleset that prevents
+   update and deletion for this exact tag pattern. Create a lightweight tag
+   only after the gate/workflow commit has been reviewed and merged, pointing
+   directly at that immutable commit. Set `ORCHESTRATION_CI_REF` to this ref
+   and `ORCHESTRATION_CI_DEFINITION_SHA` to its exact 40-character commit
+   target. Never move or reuse `agent-managed-ci-test-227-v2`. The manual
+   read-only gate diagnostic checks the new tag target against the configured
+   CI SHA; independently verify the tag ruleset and target before activation.
+   Existing tag rulesets for the #227 v1/v2 tags are exact-ref rules and do not
+   protect this new #237 tag.
+
+   The reconciler must run from `master`, and its definition SHA must match the
+   reviewed merge commit. Removing test variables disables these jobs, rather
+   than activating production. These bounded-scope variables alone are not a
+   complete live configuration: all prerequisites, approvals, and definition
+   pins listed above remain mandatory.
 7. **Approve cutover, then command work as yourself.** After the separate guard
    change/review, protected environment/state/tag, all attestations, and explicit
    approval, enable activation last. Add `agent:ready` to an open Issue as the
