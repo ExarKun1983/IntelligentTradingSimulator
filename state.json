@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 40,
+  "Version": 41,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "LastEventId": "task-completed:1277929203:1:ee2c7e33-d2af-4b16-8082-fb9b0c7f3538",
   "AdmittedIssue": 237,
@@ -120,7 +120,7 @@
       "SchemaVersion": 1,
       "Number": 237,
       "Generation": 1,
-      "Version": 17,
+      "Version": 18,
       "LastEventId": "task-completed:1277929203:1:ee2c7e33-d2af-4b16-8082-fb9b0c7f3538",
       "Phase": "CI_PENDING",
       "Ready": false,
@@ -180,7 +180,14 @@
         "Green": null,
         "TerminalStopReason": null,
         "Blockers": [],
-        "DispatchBoundary": null
+        "DispatchBoundary": {
+          "WorkflowId": 412034682,
+          "WorkflowSha": "2115d2e5d30923bcef7c967b0569f6f4cb33930e",
+          "Ref": "refs/tags/agent-managed-ci-test-237-v1",
+          "Correlation": "managed-ci-1a802b073ba5041f29d454965b37ad5f0904d5c0951765a7cca1ff0b56ac7db9",
+          "PreparedAt": "2026-11-10T12:05:14.7845407+00:00",
+          "RunId": null
+        }
       },
       "Review": null,
       "FeedbackEventIds": [],
