@@ -2363,11 +2363,13 @@ entitlement, cost controls or repository protection must leave activation blocke
 
    For #237, the canonical `agent-state` intentionally retains the historical
    #227 record. Bounded-state validation allows that one prior Issue only when
-   its exact single-pass task/launch identity matches, the task is locally
-   Failed with durable ended-session and operator-resolution events, the Issue
+   its exact single-pass task/launch identity matches, the Issue, task, and launch
+   rounds are all `1`, the task is locally Failed with durable ended-session
+   and operator-resolution events, the Issue
    remains BLOCKED with `ReactivationRequired`, admission is not held by #227,
-   and all of its effects are terminal. Missing, changed, active, uncertain or
-   additional historical work fails closed. The #237 bounded scope cannot
+   and all of its effects are terminal. Both saved event receipt digests must
+   match their terminal and operator-resolution payloads. Missing, changed,
+   active, uncertain or additional historical work fails closed. The #237 bounded scope cannot
    reactivate or act on #227. It validates #227's canonical history but excludes
    it from live task, issue, feedback, CI, and review reads and from projection
    planning during #237 reconciliation, so historical label drift or absent projection

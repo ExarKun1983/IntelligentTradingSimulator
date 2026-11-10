@@ -57,6 +57,8 @@ public sealed class GitHubTaskIntegrationTests
     {
         var fixture = new ApiFixture();
         var state = RetiredAttemptState();
+        var retiredHistory = JsonSerializer.Serialize(state.Issues[227], StateJson.Options);
+        var retiredReceipts = JsonSerializer.Serialize(state.Inbox, StateJson.Options);
         state.Issues[237] = new IssueState
         {
             Number = 237, Generation = 1, Ready = true, ReadyAt = Now, Phase = Phase.READY,
@@ -82,7 +84,13 @@ public sealed class GitHubTaskIntegrationTests
             effect.IssueNumber == 227 && effect.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus);
         Assert.Null(store.State.Issues[227].ProjectionDigest);
         Assert.Null(store.State.Issues[227].ObservedProjectionDigest);
+        Assert.Equal(retiredHistory, JsonSerializer.Serialize(store.State.Issues[227], StateJson.Options));
+        Assert.Equal(retiredReceipts, JsonSerializer.Serialize(
+            store.State.Inbox.Where(entry => entry.Value.Event?.IssueNumber == 227)
+                .ToDictionary(entry => entry.Key, entry => entry.Value), StateJson.Options));
         Assert.DoesNotContain(fixture.Requests, request => request.Contains("/issues/227", StringComparison.Ordinal));
+        Assert.DoesNotContain(fixture.Requests, request =>
+            request.Contains("/tasks/e4743d38-6b27-49cd-a272-83b34465a808", StringComparison.Ordinal));
         Assert.DoesNotContain(fixture.Writes, write => write.Path.Contains("/issues/227", StringComparison.Ordinal));
     }
 

@@ -256,11 +256,12 @@ public sealed record BoundedOrchestrationScope(int IssueNumber, int MaxRepairTas
         if (issue.Number != 227 || issue.Generation != 1 || issue.Phase != Phase.BLOCKED ||
             !issue.SinglePassTest || issue.MaxRepairTasks != 1 || issue.Ready || issue.ActiveAuthorized ||
             !issue.ReactivationRequired || issue.Paused || string.IsNullOrWhiteSpace(issue.HoldReason) ||
-            issue.ActiveTaskId != taskId || issue.Tasks.Count != 1 ||
+            issue.Round != 1 || issue.ActiveTaskId != taskId || issue.Tasks.Count != 1 ||
             issue.PullRequest is not null || issue.HeadSha is not null || issue.Ci is not null ||
             issue.Review is not null || !issue.Tasks.TryGetValue(taskId, out var task) ||
-            task is not { Kind: TaskKind.Coding, Status: TaskStatus.Failed, LaunchSource: TaskLaunchSource.UnmappedIssue,
-                LaunchConfirmed: true, ExternalId: externalTaskId, FinalSha: null, CandidateShaEvidence: null,
+            task is not { Id: taskId, Kind: TaskKind.Coding, Status: TaskStatus.Failed, Round: 1,
+                LaunchSource: TaskLaunchSource.UnmappedIssue, LaunchConfirmed: true, ExternalId: externalTaskId,
+                FinalSha: null, CandidateShaEvidence: null,
                 OperatorResolution: { } resolution, TerminalEvidence: { } terminal } ||
             state.AdmittedIssue == issue.Number ||
             state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number &&
@@ -280,6 +281,7 @@ public sealed record BoundedOrchestrationScope(int IssueNumber, int MaxRepairTas
         if (!state.Inbox.TryGetValue(terminal.EventId, out var terminalEntry) ||
             terminalEntry.Status != DeliveryStatus.Succeeded ||
             terminalEntry.Event is not { Data: TaskTerminalObserved observed } terminalEvent ||
+            terminalEntry.Digest != terminalEvent.Digest ||
             terminalEvent.Repository != state.Repository || terminalEvent.IssueNumber != issue.Number ||
             terminalEvent.IssueGeneration != issue.Generation || observed.TaskId != taskId ||
             terminalEvent.Actor.Kind != ActorKind.TaskService || terminalEvent.Actor.Login != "github-task-api" ||
@@ -289,6 +291,7 @@ public sealed record BoundedOrchestrationScope(int IssueNumber, int MaxRepairTas
             !state.Inbox.TryGetValue(resolution.EventId, out var resolutionEntry) ||
             resolutionEntry.Status != DeliveryStatus.Succeeded ||
             resolutionEntry.Event is not { Data: ResolveTaskTerminal resolved } resolutionEvent ||
+            resolutionEntry.Digest != resolutionEvent.Digest ||
             resolutionEvent.Repository != state.Repository || resolutionEvent.IssueNumber != issue.Number ||
             resolutionEvent.IssueGeneration != issue.Generation || resolved.TaskId != taskId ||
             resolutionEvent.Actor != resolution.Author || resolved.EvidenceEventId != terminal.EventId ||

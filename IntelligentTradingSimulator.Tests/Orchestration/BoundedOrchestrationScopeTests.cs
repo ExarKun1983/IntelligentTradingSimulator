@@ -78,6 +78,21 @@ public sealed class BoundedOrchestrationScopeTests
         yield return [(
             Action<RepositoryState>)(state => state.Issues[227].Tasks[TaskId].ExternalId = "different-task")];
         yield return [(
+            Action<RepositoryState>)(state => state.Issues[227].Tasks[TaskId].Id = "different-task")];
+        yield return [(
+            Action<RepositoryState>)(state => state.Issues[227].Round = 2)];
+        yield return [(Action<RepositoryState>)(state =>
+        {
+            state.Issues[227].Tasks[TaskId].Round = 2;
+            Assert.Single(state.Outbox.Values).Round = 2;
+        })];
+        yield return [(Action<RepositoryState>)(state =>
+        {
+            state.Issues[227].Round = 2;
+            state.Issues[227].Tasks[TaskId].Round = 2;
+            Assert.Single(state.Outbox.Values).Round = 2;
+        })];
+        yield return [(
             Action<RepositoryState>)(state => state.Issues[227].ActiveAuthorized = true)];
         yield return [(
             Action<RepositoryState>)(state => state.Issues[227].ReactivationRequired = false)];
@@ -117,6 +132,56 @@ public sealed class BoundedOrchestrationScopeTests
     [MemberData(nameof(InvalidRetirementMutations))]
     public void RetestScopeRejectsInvalidRetirementEvidence(Action<RepositoryState> mutate) =>
         RetestScopeRejectsAnUnresolvedOrAlteredPriorAttempt(mutate);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RetestScopeRejectsAlteredResolutionPayloadWithUnchangedReceiptDigest(bool changeAuthor)
+    {
+        var state = RetiredState();
+        Scope().Validate(state);
+        var task = state.Issues[227].Tasks[TaskId];
+        var resolution = task.OperatorResolution!;
+        var entry = state.Inbox[resolution.EventId];
+        var message = entry.Event!;
+        var resolved = Assert.IsType<ResolveTaskTerminal>(message.Data);
+        if (changeAuthor)
+        {
+            var author = resolution.Author with { Login = "different-maintainer", Id = 66 };
+            task.OperatorResolution = resolution with { Author = author };
+            message = message with { Actor = author };
+        }
+        else
+        {
+            task.OperatorResolution = resolution with { Reason = "Changed retirement reason." };
+            message = message with { Data = resolved with { Reason = task.OperatorResolution.Reason } };
+        }
+        state.Inbox[entry.Id] = entry with { PayloadJson = JsonSerializer.Serialize(message) };
+
+        Assert.Equal(entry.Digest, state.Inbox[entry.Id].Digest);
+        Assert.NotEqual(entry.Digest, state.Inbox[entry.Id].Event!.Digest);
+        Assert.Throws<InvalidDataException>(() => Scope().Validate(state));
+    }
+
+    [Fact]
+    public void RetestScopeRejectsAlteredTerminalPayloadWithUnchangedReceiptDigest()
+    {
+        var state = RetiredState();
+        Scope().Validate(state);
+        var task = state.Issues[227].Tasks[TaskId];
+        var terminal = task.TerminalEvidence!;
+        var entry = state.Inbox[terminal.EventId];
+        var message = entry.Event!;
+        var observed = Assert.IsType<TaskTerminalObserved>(message.Data);
+        var evidence = terminal.Evidence with { ResponseDigest = new string('b', 64) };
+        task.TerminalEvidence = terminal with { Evidence = evidence };
+        message = message with { Data = observed with { Evidence = evidence } };
+        state.Inbox[entry.Id] = entry with { PayloadJson = JsonSerializer.Serialize(message) };
+
+        Assert.Equal(entry.Digest, state.Inbox[entry.Id].Digest);
+        Assert.NotEqual(entry.Digest, state.Inbox[entry.Id].Event!.Digest);
+        Assert.Throws<InvalidDataException>(() => Scope().Validate(state));
+    }
 
     [Theory]
     [InlineData(228, 227)]
