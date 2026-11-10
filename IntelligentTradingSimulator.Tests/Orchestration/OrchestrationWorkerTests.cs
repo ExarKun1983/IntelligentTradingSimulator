@@ -321,11 +321,16 @@ public sealed class OrchestrationWorkerTests
         Assert.Empty(api.Executions);
     }
 
-    [Fact]
-    public async Task IsolatedEffectBudgetStopsAfterCodingCiAndSuccessWithoutReviewOrReplay()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task IsolatedPassStopsAfterSuccessOrCiFailureAndReplayDoesNotPoll(bool ciFailure)
     {
         var store = new Store();
-        var api = new OfflineApi(store) { SinglePassReady = true, ConfirmCiDispatch = true };
+        var api = new OfflineApi(store)
+        {
+            SinglePassReady = true, ConfirmCiDispatch = true, CiFailures = ciFailure ? 1 : 0
+        };
         var allowed = new HashSet<EffectKind>
         {
             EffectKind.LaunchTask, EffectKind.RunCi, EffectKind.PublishRequiredStatus
@@ -339,22 +344,62 @@ public sealed class OrchestrationWorkerTests
 
         var result = await worker.RunAsync(store, api, api, api, reconcile, Fast);
 
-        Assert.Equal(WorkerStopReason.EffectLimit, result.Reason);
-        Assert.Equal(new[]
+        Assert.Equal(ciFailure ? WorkerStopReason.Blocked : WorkerStopReason.EffectLimit, result.Reason);
+        Assert.True(result.Iterations < Fast.MaximumIterations);
+        Assert.Equal(ciFailure ? new[] { EffectKind.LaunchTask, EffectKind.RunCi } : new[]
         {
             EffectKind.LaunchTask, EffectKind.RunCi, EffectKind.PublishRequiredStatus
         }, api.Executions);
         Assert.Single(store.Current.Issues[7].Tasks);
-        Assert.Equal(Phase.REVIEW_PENDING, store.Current.Issues[7].Phase);
+        Assert.Equal(ciFailure ? Phase.BLOCKED : Phase.REVIEW_PENDING, store.Current.Issues[7].Phase);
         Assert.Null(store.Current.Issues[7].Review);
-        Assert.Equal("success", store.Current.Outbox.Values.Single(effect =>
-            effect.Kind == EffectKind.PublishRequiredStatus &&
-            effect.RequiredStatus?.State == "success").RequiredStatus!.State);
+        if (!ciFailure)
+            Assert.Contains(store.Current.Outbox.Values, effect =>
+                effect.Kind == EffectKind.PublishRequiredStatus &&
+                effect.RequiredStatus?.State == "success" && effect.Status == DeliveryStatus.Succeeded);
+        Assert.Contains(store.Current.Outbox.Values, effect =>
+            effect.Status == DeliveryStatus.Pending && !reconcile.AllowsEffect(effect));
+        Assert.False(store.Current.Continuation!.Pending);
 
         var executionCount = api.Executions.Count;
-        await worker.RunAsync(store, api, api, api, reconcile, Fast);
+        var excluded = store.Current.Outbox.Values.Where(effect =>
+            effect.Status == DeliveryStatus.Pending && !reconcile.AllowsEffect(effect)).Select(effect => effect.Id).ToArray();
+        var replay = await worker.RunAsync(store, api, api, api, reconcile, Fast);
+        Assert.Equal(ciFailure ? WorkerStopReason.Blocked : WorkerStopReason.Settled, replay.Reason);
+        Assert.Equal(1, replay.Iterations);
         Assert.Equal(executionCount, api.Executions.Count);
         Assert.DoesNotContain(EffectKind.RequestReview, api.Executions);
+        Assert.All(excluded, id => Assert.Equal(DeliveryStatus.Pending, store.Current.Outbox[id].Status));
+        Assert.False(store.Current.Continuation!.Pending);
+    }
+
+    [Fact]
+    public async Task IsolatedPassStillWaitsForRunningTaskAndCi()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { SinglePassReady = true, CompleteTasks = false };
+        var reconcile = Simulation with
+        {
+            AllowedEffectKinds = new HashSet<EffectKind>
+                { EffectKind.LaunchTask, EffectKind.RunCi, EffectKind.PublishRequiredStatus },
+            AllowedRequiredStatusStates = new HashSet<string>(["success"], StringComparer.Ordinal),
+            MaximumEffectExecutions = 3
+        };
+        var worker = new OrchestrationWorker(new(new Authorized(), true, reviewRequestsEnabled: false));
+        var bounded = Fast with { MaximumIterations = 3 };
+        var coding = await worker.RunAsync(store, api, api, api, reconcile, bounded);
+        Assert.Equal(WorkerStopReason.IterationLimit, coding.Reason);
+        Assert.Equal(Phase.CODING, store.Current.Issues[7].Phase);
+        Assert.True(store.Current.Continuation!.Pending);
+
+        api.CompleteTasks = true;
+        api.CompleteCi = false;
+        var ci = await worker.RunAsync(store, api, api, api, reconcile, bounded);
+        Assert.Equal(WorkerStopReason.IterationLimit, ci.Reason);
+        Assert.Equal(Phase.CI_PENDING, store.Current.Issues[7].Phase);
+        Assert.NotNull(store.Current.Issues[7].Ci!.RunId);
+        Assert.True(store.Current.Continuation!.Pending);
+        Assert.Equal(new[] { EffectKind.LaunchTask, EffectKind.RunCi }, api.Executions);
     }
 
     [Fact]
@@ -632,6 +677,7 @@ public sealed class OrchestrationWorkerTests
         public int ReviewBlockers { get; init; }
         public int[] ReadyIssues { get; init; } = [7];
         public bool CompleteTasks { get; set; } = true;
+        public bool CompleteCi { get; set; } = true;
         public bool SinglePassReady { get; init; }
         public bool ConfirmCiDispatch { get; init; }
         public bool NoInitialPullRequest { get; init; }
@@ -667,7 +713,7 @@ public sealed class OrchestrationWorkerTests
                         [$"session:{id}"], number + 10, Head(number));
                     Add(new TaskCompleted(id, number + 10, Head(number), evidence), $"completed:{id}", number);
                 }
-                if (issue.Ci is { Green: null } ci &&
+                if (CompleteCi && issue.Ci is { Green: null } ci &&
                     (ci.RunId ?? UnpublishedId(ci.IntentId)) is { } runId)
                 {
                     var green = issue.Tasks.Values.Count(task => task.Kind == TaskKind.CiRepair) >= CiFailures;

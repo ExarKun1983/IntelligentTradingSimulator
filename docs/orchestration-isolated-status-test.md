@@ -17,7 +17,7 @@ CI tag. Passing this test does not authorize recovery of #237.
   passed 726 tests, including
   published-success pause, missing downstream approvals, lost responses,
   cancellation, lookup-only replay, publisher/head rejection, and CAS conflicts.
-- Current offline validation passes the full solution suite: 2,156 passed,
+- Current offline validation passes the full solution suite: 2,158 passed,
   one skipped, zero failed. No live workflow was run.
 - Read-only inspection found zero commit statuses on the held test head
   `f52d2a10b237dff7c29cfcac3151a387a40b0396`. Its green Actions run is not
@@ -79,6 +79,10 @@ reviewed API guards, not claimed as a GitHub token permission boundary.
   no-repair/no-review reducer mode, effect allowlist, and three-execution cap
   for coding, CI and success-status publication. Pending/failure required-status
   intents remain canonical evidence but are not published by the isolated worker.
+  Continuation uses the same allowlists: a held CI failure stops immediately,
+  and a completed-pass replay settles after one observation iteration rather
+  than polling excluded projections or waiting for disabled review work.
+  Running coding tasks and unfinished CI runs still require observation.
 - Pause calls the existing command-only status-revocation path, requiring a
   previously saved successful status on the exact head. Replay uses canonical
   state and existing status lookup; it does not repeat a completed POST.

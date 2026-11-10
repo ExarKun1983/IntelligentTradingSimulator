@@ -16,21 +16,27 @@ public static class OrchestrationContinuation
             throw new InvalidDataException("Invalid durable continuation or worker lease; operator reconciliation is required.");
     }
 
-    public static bool HasWork(RepositoryState state) =>
-        state.Outbox.Values.Any(effect => effect.Status is DeliveryStatus.Pending or DeliveryStatus.Executing) ||
+    public static bool HasWork(RepositoryState state, ReconcileOptions? options = null) =>
+        state.Outbox.Values.Any(effect => effect.Status == DeliveryStatus.Executing ||
+            effect.Status == DeliveryStatus.Pending && (options?.AllowsEffect(effect) ?? true)) ||
         state.Issues.Values.Any(issue =>
             !issue.Paused && !issue.ReactivationRequired && (issue.Ready || issue.ActiveAuthorized) &&
-            issue.Phase is Phase.READY or Phase.CODING or Phase.CI_PENDING or Phase.REVIEW_PENDING or Phase.FIX_PENDING) ||
+            (issue.Phase is Phase.READY or Phase.FIX_PENDING &&
+                (options?.AllowedEffectKinds?.Contains(EffectKind.LaunchTask) ?? true) ||
+             issue.Phase is Phase.CODING or Phase.CI_PENDING ||
+             issue.Phase == Phase.REVIEW_PENDING &&
+                (options?.AllowedEffectKinds?.Contains(EffectKind.RequestReview) ?? true))) ||
         state.Issues.Values.Any(issue => issue.Ci is { RunId: not null, Green: null, TerminalStopReason: null });
 
     public static bool RequiresObservation(RepositoryState state) =>
         state.Issues.Values.Any(issue => issue.Phase != Phase.CLOSED &&
             (issue.PullRequest is not null || issue.ActiveTaskId is not null));
 
-    public static RepositoryState Prepare(RepositoryState input, DateTimeOffset now, string reason, bool inFlight = false)
+    public static RepositoryState Prepare(RepositoryState input, DateTimeOffset now, string reason, bool inFlight = false,
+        ReconcileOptions? options = null)
     {
         var state = StateJson.Clone(input);
-        if (inFlight || HasWork(state))
+        if (inFlight || HasWork(state, options))
         {
             var id = state.Continuation is { Pending: true } existing &&
                 existing.RepositoryGeneration == state.Generation ? existing.Id :

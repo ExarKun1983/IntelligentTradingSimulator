@@ -42,7 +42,13 @@ public sealed record ReconcileOptions(
     bool AllowOfflineAgentSimulation = false,
     IReadOnlySet<EffectKind>? AllowedEffectKinds = null,
     IReadOnlySet<string>? AllowedRequiredStatusStates = null,
-    int? MaximumEffectExecutions = null);
+    int? MaximumEffectExecutions = null)
+{
+    public bool AllowsEffect(EffectIntent effect) =>
+        (AllowedEffectKinds is null || AllowedEffectKinds.Contains(effect.Kind)) &&
+        (effect.Kind != EffectKind.PublishRequiredStatus || AllowedRequiredStatusStates is null ||
+            AllowedRequiredStatusStates.Contains(effect.RequiredStatus?.State ?? ""));
+}
 
 public sealed record ReconcileResult(RepositoryState State, IReadOnlyList<EffectIntent> Decisions, bool EffectsDisabled,
     EffectIntent? ExecutedEffect = null);
@@ -148,9 +154,7 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             var simulateAgents = options.AllowOfflineAgentSimulation && effects is IOfflineEffectAdapter ||
                 effects is IVerifiedAgentEffectAdapter { AgentEffectsAuthorized: true };
             var pending = snapshot.State.Outbox.Values.FirstOrDefault(e => e.Status == DeliveryStatus.Pending &&
-                (options.AllowedEffectKinds is null || options.AllowedEffectKinds.Contains(e.Kind)) &&
-                (e.Kind != EffectKind.PublishRequiredStatus || options.AllowedRequiredStatusStates is null ||
-                    options.AllowedRequiredStatusStates.Contains(e.RequiredStatus?.State ?? "")) &&
+                options.AllowsEffect(e) &&
                 (e.Kind is not (EffectKind.LaunchTask or EffectKind.RequestReview) || simulateAgents) &&
                 !snapshot.State.Outbox.Values.Any(IsExclusiveUncertain) &&
                 IsSafeToExecute(snapshot.State, e, live));
