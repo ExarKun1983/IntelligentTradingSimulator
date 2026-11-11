@@ -49,13 +49,19 @@ authorize the remaining state bootstrap, task or draft PR creation.
 | `refs/tags/agent-status-revocation-definition-v1` | Immutable reviewed driver and CI definition. |
 | `agent-status-revocation-test.yml` | Manual, staged driver with no schedule/event wakes. |
 | `agent-status-revocation-ci.yml` | Exact-SHA CI; manual dispatch by the staged driver only. |
-| `agent-status-revocation-test` environment | Separate protected approvals/secrets and restricted refs; workflow-gate `vars` must be repository-scoped so job conditions can evaluate them. |
+| `agent-status-revocation-test` environment | Restricted refs and a required reviewer; workflow-gate `vars` must be repository-scoped so job conditions can evaluate them. |
 | Exact-base protection rule | Require `Agent managed CI`, independent human approval, and no bypass. |
 
 Protection applies only to the dedicated base, not `master`. Do not attest
 `RequiredContextVerified` until the maintainer verifies the saved test-base
 rule. If that cannot be established, stop before green publication; do not
 weaken the production publisher gate or set a false attestation.
+
+The provisioned environment currently names `ExarKun1983` as its sole reviewer
+and allows self-review (`prevent_self_review=false`). This is an environment
+admission gate, not independent second-person approval. Do not describe it as
+independent approval; if a second-person gate is required, add and verify an
+eligible independent reviewer before any future dispatch.
 
 The driver needs the existing separate task-user and workflow credentials.
 Task creation uses the verified user identity. Status publication uses the
@@ -76,10 +82,18 @@ reviewed API guards, not claimed as a GitHub token permission boundary.
   explicit manual operation and refuses an already initialized state ref.
 - Dedicated staged driver and exact-head CI workflows, each gated by a
   separate environment and exact workflow definition SHA. The driver accepts
-  only the configured human actor and exact Issue; live permission checks are
-  repeated by the CLI. Because both workflows share one immutable tag, their
+  only the configured human actor and exact Issue, and rejects a re-run when
+  the triggering actor differs from the original actor; live permission checks
+  are repeated by the CLI. Because both workflows share one immutable tag, their
   configured definition SHAs must match; the driver also resolves that tag
   before bootstrap or execution and rejects a moved tag.
+- The currently provisioned v1 definition tag remains immutable at its reviewed
+  commit. Merging later source changes does not change code executed from that
+  tag. Activating a merged driver fix requires a separately approved new
+  immutable definition tag, matching driver/CI pins, tag protection, and an
+  environment deployment policy that admits that exact tag. Until those
+  controls are updated and independently verified, do not bootstrap or start
+  the isolated driver.
 - A pinned isolated CI route, draft-PR requirement, single-pass task guard,
   no-repair/no-review reducer mode, effect allowlist, and three-execution cap
   for coding, CI and success-status publication. Pending/failure required-status
