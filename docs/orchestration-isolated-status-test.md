@@ -160,7 +160,9 @@ in behavior. New workflow definitions need syntax/shell validation too.
 `agent-status-test-diagnostics.yml` is a separate manual diagnostic on `master`.
 It reuses the configured isolated resource names and definition pins; it does not
 need a new environment, secret, tag or variable. Merge/review and permission to
-dispatch it are separate decisions. It requires the configured human actor and
+dispatch it are separate decisions. It requires the configured human actor,
+the same triggering actor (so another collaborator cannot re-run an authorized
+invocation), and
 explicit `false` values for `ORCHESTRATION_STATUS_TEST_APPROVED`,
 `ORCHESTRATION_STATUS_TEST_BOOTSTRAP_APPROVED` and
 `ORCHESTRATION_STATUS_TEST_STATUS_PUBLISHER_VERIFIED`.

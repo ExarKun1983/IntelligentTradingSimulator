@@ -15,6 +15,7 @@ jobs:
         github.repository == 'ExarKun1983/IntelligentTradingSimulator' &&
         github.workflow_ref == format('{0}/.github/workflows/agent-status-test-diagnostics.yml@refs/heads/master', github.repository) &&
         github.actor_id == '6195946' &&
+        github.triggering_actor == github.actor &&
         vars.ORCHESTRATION_STATUS_TEST_APPROVED == 'false' &&
         vars.ORCHESTRATION_STATUS_TEST_BOOTSTRAP_APPROVED == 'false' &&
         vars.ORCHESTRATION_STATUS_TEST_STATUS_PUBLISHER_VERIFIED == 'false'

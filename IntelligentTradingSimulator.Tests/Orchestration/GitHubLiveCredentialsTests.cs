@@ -130,6 +130,7 @@ public sealed class GitHubLiveCredentialsTests
         Assert.Contains("on:\n  workflow_dispatch:\n", workflow);
         Assert.Contains("permissions:\n  actions: read\n  contents: read\n  statuses: write\n", workflow);
         Assert.Contains("github.actor_id == '6195946'", workflow);
+        Assert.Contains("github.triggering_actor == github.actor &&", workflow);
         Assert.Contains("agent-status-test-diagnostics.yml@refs/heads/master", workflow);
         Assert.Contains("vars.ORCHESTRATION_STATUS_TEST_APPROVED == 'false'", workflow);
         Assert.Contains("vars.ORCHESTRATION_STATUS_TEST_BOOTSTRAP_APPROVED == 'false'", workflow);
