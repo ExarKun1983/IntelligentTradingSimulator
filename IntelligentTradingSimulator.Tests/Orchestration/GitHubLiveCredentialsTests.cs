@@ -154,6 +154,17 @@ public sealed class GitHubLiveCredentialsTests
     }
 
     [Fact]
+    public void IsolatedMutationDriverRejectsRerunsByAnotherActor()
+    {
+        var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-status-revocation-test.yml"));
+        Assert.Contains("github.actor_id == vars.ORCHESTRATION_STATUS_TEST_ACTOR_ID &&", workflow);
+        Assert.Contains("github.triggering_actor == github.actor &&", workflow);
+        Assert.Contains("vars.ORCHESTRATION_STATUS_TEST_APPROVED == 'true'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_STATUS_TEST_BOOTSTRAP_APPROVED == 'true'", workflow);
+        Assert.Contains("environment: agent-status-revocation-test", workflow);
+    }
+
+    [Fact]
     public void TaskMappingDiagnosticsOnlyReadSavedTaskAndPrWithSeparateCredentials()
     {
         var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-task-mapping-diagnostics.yml"));

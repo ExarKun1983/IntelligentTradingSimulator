@@ -42,6 +42,7 @@ jobs:
           github.repository, vars.ORCHESTRATION_STATUS_TEST_DRIVER_REF) &&
         github.workflow_sha == vars.ORCHESTRATION_STATUS_TEST_DEFINITION_SHA &&
         github.actor_id == vars.ORCHESTRATION_STATUS_TEST_ACTOR_ID &&
+        github.triggering_actor == github.actor &&
         vars.ORCHESTRATION_STATUS_TEST_APPROVED == 'true' &&
         vars.ORCHESTRATION_STATUS_TEST_ISSUE == inputs.issue &&
         vars.ORCHESTRATION_STATUS_TEST_STATE_REF == 'refs/heads/agent-state-status-revocation-v1' &&
