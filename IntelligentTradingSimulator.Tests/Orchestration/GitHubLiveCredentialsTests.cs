@@ -124,6 +124,36 @@ public sealed class GitHubLiveCredentialsTests
     }
 
     [Fact]
+    public void IsolatedStatusDiagnosticsRequireDisabledApprovalsAndNeverExecuteMutationCode()
+    {
+        var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-status-test-diagnostics.yml"));
+        Assert.Contains("on:\n  workflow_dispatch:\n", workflow);
+        Assert.Contains("permissions:\n  actions: read\n  contents: read\n", workflow);
+        Assert.Contains("github.actor_id == '6195946'", workflow);
+        Assert.Contains("github.triggering_actor == github.actor &&", workflow);
+        Assert.Contains("agent-status-test-diagnostics.yml@refs/heads/master", workflow);
+        Assert.Contains("vars.ORCHESTRATION_STATUS_TEST_APPROVED == 'false'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_STATUS_TEST_BOOTSTRAP_APPROVED == 'false'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_STATUS_TEST_STATUS_PUBLISHER_VERIFIED == 'false'", workflow);
+        Assert.Contains("query { viewer { login databaseId id } }", workflow);
+        Assert.Contains("NoRedirect", workflow);
+        Assert.Contains("method=\"GET\" if query is None else \"POST\"", workflow);
+        Assert.Contains("raise SystemExit(\"One or more isolated diagnostic checks failed.\")", workflow);
+        Assert.Contains("not to a future driver run", workflow);
+        Assert.Contains("has no statuses permission", workflow);
+        Assert.Contains("cannot verify another run's effective grant", workflow);
+        Assert.DoesNotContain("environment:", workflow);
+        Assert.DoesNotContain("secrets.", workflow);
+        Assert.DoesNotMatch(@"(?m)^\s*(- )?uses:", workflow);
+        Assert.DoesNotContain("--github-live", workflow);
+        Assert.DoesNotContain("mutation {", workflow);
+        Assert.DoesNotContain("/statuses/", workflow);
+        Assert.DoesNotContain("contents: write", workflow);
+        Assert.DoesNotContain("actions: write", workflow);
+        Assert.DoesNotContain("statuses: write", workflow);
+    }
+
+    [Fact]
     public void TaskMappingDiagnosticsOnlyReadSavedTaskAndPrWithSeparateCredentials()
     {
         var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-task-mapping-diagnostics.yml"));

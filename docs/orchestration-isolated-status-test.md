@@ -1,8 +1,11 @@
 # Isolated required-status recovery test
 
-Status: implementation is present in the open PR and is being validated offline.
-No GitHub resources have been provisioned and no live workflow/test has been
-authorized or run.
+Status: implementation was merged through PR #241 at
+`b3df1399a222d695f80c71f97c01b2d2b10f378a`. The isolated base, definition tag,
+environment and protection rules have been provisioned, with Issue #242 as
+the fixture. Isolated state has not been bootstrapped and the live test has
+not been authorized or run. Activation/bootstrap remain false; the diagnostic
+described below is a separate proposed workflow, not live verification.
 
 The test exercises a real coding task, exact-head managed CI, publication of
 `Agent managed CI: success`, and command-only pause/replay. It must not reuse
@@ -34,8 +37,8 @@ CI tag. Passing this test does not authorize recovery of #237.
 ## Proposed resources and permissions
 
 Use the same repository, with a separate test namespace and no automatic
-triggers. Proposed names below are subject to maintainer review; none have
-been created.
+triggers. The table records the original resource plan; provisioning does not
+authorize the remaining state bootstrap, task or draft PR creation.
 
 | Resource | Purpose |
 | --- | --- |
@@ -151,6 +154,43 @@ in behavior. New workflow definitions need syntax/shell validation too.
    `ORCHESTRATION_ACTIVATION_APPROVED` or existing CI/test variables.
 
 ## Live stages and acceptance criteria
+
+### Non-mutating publisher diagnostic
+
+`agent-status-test-diagnostics.yml` is a separate manual diagnostic on `master`.
+It reuses the configured isolated resource names and definition pins; it does not
+need a new environment, secret, tag or variable. Merge/review and permission to
+dispatch it are separate decisions. It requires the configured human actor,
+the same triggering actor (so another collaborator cannot re-run an authorized
+invocation), and
+explicit `false` values for `ORCHESTRATION_STATUS_TEST_APPROVED`,
+`ORCHESTRATION_STATUS_TEST_BOOTSTRAP_APPROVED` and
+`ORCHESTRATION_STATUS_TEST_STATUS_PUBLISHER_VERIFIED`.
+
+The job reads repository/workflow/tag metadata and queries the workflow token's
+GraphQL viewer, comparing its numeric and node identities to `github-actions[bot]`.
+Only boolean comparisons are reported. It has no checkout, user credential or
+environment access and never dispatches CI/tasks, writes statuses/state, or
+updates configuration. Its token is limited to contents read and Actions read;
+it has no `statuses` permission and cannot write statuses. This diagnostic
+therefore verifies identity/configuration only, not status-write permission.
+
+A green result proves the reported comparisons for that diagnostic invocation,
+not the future driver's permissions, user-token identity, Agent tasks entitlement,
+protection configuration or absence of charges. Existing `*_VERIFIED` variables
+are operator attestations, not measurements. Keep activation/bootstrap false.
+Do not set `ORCHESTRATION_STATUS_TEST_STATUS_PUBLISHER_VERIFIED` based on this
+diagnostic. Before any separately approved live dispatch, review the driver's
+repository-wide `statuses: write` boundary and protected-environment gate, then
+inspect the effective `GITHUB_TOKEN Permissions` in that exact approved run.
+This diagnostic cannot establish the future driver's effective grant. Never
+publish a probe status or move the immutable definition tag to make this
+diagnostic pass.
+
+Run the diagnostic script's offline HTTP/configuration regressions with
+`python3 -B -m unittest discover -s .github/scripts/tests -p 'test_status_test_diagnostics.py'`.
+They execute the actual inline workflow script with mocked HTTP responses;
+they never connect to GitHub or require a token.
 
 | Stage | Action | Required evidence before continuing |
 | --- | --- | --- |
