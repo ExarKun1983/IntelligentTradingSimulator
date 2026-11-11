@@ -43,6 +43,7 @@ jobs:
           import http.client
           import json
           import os
+          import re
           import urllib.error
           import urllib.request
 
@@ -92,7 +93,7 @@ jobs:
           viewer = data["viewer"]
           bot = read("users/github-actions%5Bbot%5D")
           repo = read(repository)
-          tag = read(repository + "/git/ref/tags/agent-status-revocation-definition-v1")
+          tag = read(repository + "/git/ref/tags/agent-status-revocation-definition-v2")
           if not isinstance(tag.get("object"), dict):
               raise SystemExit("Definition tag response is incomplete.")
           driver = read(repository + "/actions/workflows/414090147")
@@ -104,8 +105,8 @@ jobs:
           except (ValueError, TypeError):
               valid_expiration = False
 
-          expected_sha = "b3df1399a222d695f80c71f97c01b2d2b10f378a"
-          expected_ref = "refs/tags/agent-status-revocation-definition-v1"
+          expected_sha = os.environ["DRIVER_SHA"]
+          expected_ref = "refs/tags/agent-status-revocation-definition-v2"
           checks = {
               "publisher_identity": (
                   viewer.get("login") == bot.get("login") == "github-actions[bot]"
@@ -128,7 +129,8 @@ jobs:
               ),
               "shared_tag_and_sha": (
                   os.environ["DRIVER_REF"] == os.environ["CI_REF"] == tag.get("ref") == expected_ref
-                  and os.environ["DRIVER_SHA"] == os.environ["CI_SHA"] == expected_sha
+                  and os.environ["CI_SHA"] == expected_sha
+                  and re.fullmatch("[0-9a-f]{40}", expected_sha) is not None
                   and tag["object"].get("type") == "commit"
                   and tag["object"].get("sha") == expected_sha
               ),

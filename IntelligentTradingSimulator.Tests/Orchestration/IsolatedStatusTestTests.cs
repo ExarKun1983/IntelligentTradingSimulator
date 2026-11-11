@@ -24,6 +24,10 @@ public sealed class IsolatedStatusTestTests
         Assert.True(settings.Status.AllowsPublication);
         Assert.NotEqual(GitHubIsolatedStatusTestSettings.StateReference, "refs/heads/agent-state");
         Assert.Equal(GitHubIsolatedStatusTestSettings.CiWorkflowPath, settings.CiRoute.WorkflowPath);
+        Assert.Equal("refs/tags/agent-status-revocation-definition-v2",
+            GitHubIsolatedStatusTestSettings.DriverReference);
+        Assert.Equal(GitHubIsolatedStatusTestSettings.DriverReference,
+            GitHubIsolatedStatusTestSettings.CiReference);
 
         values["ORCHESTRATION_STATUS_TEST_ISSUE"] = "237";
         Assert.Throws<InvalidDataException>(() =>
