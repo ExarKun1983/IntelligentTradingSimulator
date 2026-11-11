@@ -17,7 +17,7 @@ CI tag. Passing this test does not authorize recovery of #237.
   passed 726 tests, including
   published-success pause, missing downstream approvals, lost responses,
   cancellation, lookup-only replay, publisher/head rejection, and CAS conflicts.
-- Current offline validation passes the full solution suite: 2,158 passed,
+- Current offline validation passes the full solution suite: 2,163 passed,
   one skipped, zero failed. No live workflow was run.
 - Read-only inspection found zero commit statuses on the held test head
   `f52d2a10b237dff7c29cfcac3151a387a40b0396`. Its green Actions run is not
@@ -74,7 +74,9 @@ reviewed API guards, not claimed as a GitHub token permission boundary.
 - Dedicated staged driver and exact-head CI workflows, each gated by a
   separate environment and exact workflow definition SHA. The driver accepts
   only the configured human actor and exact Issue; live permission checks are
-  repeated by the CLI.
+  repeated by the CLI. Because both workflows share one immutable tag, their
+  configured definition SHAs must match; the driver also resolves that tag
+  before bootstrap or execution and rejects a moved tag.
 - A pinned isolated CI route, draft-PR requirement, single-pass task guard,
   no-repair/no-review reducer mode, effect allowlist, and three-execution cap
   for coding, CI and success-status publication. Pending/failure required-status
@@ -86,6 +88,9 @@ reviewed API guards, not claimed as a GitHub token permission boundary.
 - Pause calls the existing command-only status-revocation path, requiring a
   previously saved successful status on the exact head. Replay uses canonical
   state and existing status lookup; it does not repeat a completed POST.
+  An overlapping pause performs lookup only for an executing correction. A
+  missing receipt leaves that intent executing rather than marking it unknown
+  and preventing its owner from saving the publication boundary.
 - Each driver invocation writes credential-free success or failure evidence
   for its stage. Status history includes payload, SHA, publisher boundary,
   existing status IDs, prepared/completed times and returned status ID; failed
@@ -173,6 +178,15 @@ Any unexpected identity, permission, scope, head, feedback, extra task/run,
 ambiguous effect, missing receipt, or unconfirmed error stops the test. Do not
 clear admission, reactivate, recreate missing state, or launch a replacement.
 Further recovery requires a separate operator decision.
+
+The manifest expiration also bounds bootstrap and the running driver through
+cancellation, not only startup validation. Expiration stops further driver
+effects and preserves uncertain operations for inspection; it does not cancel
+an already launched remote task or CI run, nor roll back an accepted status
+POST. Failure diagnostics remain read-only after expiration. An expired
+manifest does not authorize a new pause or recovery invocation: a separate
+operator decision is required, not an automatic expiry extension or manifest
+replacement.
 
 GitHub statuses and canonical-state CAS are not transactional. A late older
 success may arrive after an error; IDs/timestamps and repeated independent

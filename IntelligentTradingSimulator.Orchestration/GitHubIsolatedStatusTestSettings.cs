@@ -49,7 +49,8 @@ public sealed record GitHubIsolatedStatusTestSettings(
         var ciWorkflowId = Id("ORCHESTRATION_STATUS_TEST_CI_WORKFLOW_ID");
         var definitionSha = Required("ORCHESTRATION_STATUS_TEST_DEFINITION_SHA");
         var ciSha = Required("ORCHESTRATION_STATUS_TEST_CI_DEFINITION_SHA");
-        if (!IsSha(definitionSha) || !IsSha(ciSha) || driverWorkflowId == ciWorkflowId)
+        if (!IsSha(definitionSha) || !IsSha(ciSha) ||
+            !string.Equals(definitionSha, ciSha, StringComparison.OrdinalIgnoreCase) || driverWorkflowId == ciWorkflowId)
             throw new InvalidDataException("Isolated status-test definition identity is invalid.");
         if (Required("ORCHESTRATION_STATUS_TEST_STATE_REF") != StateReference ||
             Required("ORCHESTRATION_STATUS_TEST_BASE_BRANCH") != BaseBranch ||

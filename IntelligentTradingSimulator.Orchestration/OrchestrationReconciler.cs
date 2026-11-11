@@ -78,7 +78,16 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                 continue;
             if (intent.Status is DeliveryStatus.Succeeded or DeliveryStatus.Failed)
                 return snapshot.State;
-            if (intent.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown)
+            if (intent.Status == DeliveryStatus.Executing)
+            {
+                // Another pause may still own the POST. An empty lookup must not
+                // change its executing state and prevent it saving its boundary.
+                var recovered = await statuses.ReconcileAsync(intent, token);
+                if (recovered.Status != DeliveryStatus.Succeeded)
+                    return (await store.LoadAsync(token)).State;
+                return await PublishOutcomeAsync(store, intent.Id, intent.Digest, recovered, now, 8, token);
+            }
+            if (intent.Status == DeliveryStatus.Unknown)
                 return await RecoverIntentAsync(store, statuses, intent, now, 8, token);
             if (intent.Status != DeliveryStatus.Pending)
                 throw new InvalidOperationException("Status revocation is not pending or recoverable.");

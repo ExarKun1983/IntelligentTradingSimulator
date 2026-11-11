@@ -10,7 +10,7 @@ public sealed class IsolatedStatusTestTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-11-10T12:00:00Z");
     private static readonly string Definition = new('a', 40);
-    private static readonly string CiDefinition = new('b', 40);
+    private static readonly string CiDefinition = Definition;
     private const string Manifest = "manifest-digest";
 
     [Fact]
@@ -42,6 +42,15 @@ public sealed class IsolatedStatusTestTests
         values[name] = value;
         Assert.Throws<InvalidDataException>(() =>
             GitHubIsolatedStatusTestSettings.Read(key => values.GetValueOrDefault(key), Now));
+    }
+
+    [Fact]
+    public void SharedDefinitionTagRequiresMatchingDriverAndCiShas()
+    {
+        var values = ValidSettings();
+        values["ORCHESTRATION_STATUS_TEST_CI_DEFINITION_SHA"] = new string('b', 40);
+        Assert.Throws<InvalidDataException>(() =>
+            GitHubIsolatedStatusTestSettings.Read(values.GetValueOrDefault, Now));
     }
 
     [Fact]
@@ -148,6 +157,8 @@ public sealed class IsolatedStatusTestTests
     [InlineData("state-timeout", false, "TaskCanceledException")]
     [InlineData("identity-timeout", true, "TaskCanceledException")]
     [InlineData("diagnostic-timeout", true, "TaskCanceledException")]
+    [InlineData("authorization-expiry", false, "TaskCanceledException")]
+    [InlineData("moved-tag", true, "InvalidDataException")]
     public async Task CommandKeepsClientsAliveForSanitizedFailureDiagnosticsAndHandlesTimeouts(
         string failure, bool stateUnavailable, string errorType)
     {
@@ -158,7 +169,9 @@ public sealed class IsolatedStatusTestTests
                 {"inputs":{"issue":"51","operation":"status-test-start"}}
                 """);
             var values = ValidSettings();
-            values["ORCHESTRATION_STATUS_TEST_EXPIRES_AT"] = DateTimeOffset.UtcNow.AddHours(2).ToString("O");
+            values["ORCHESTRATION_STATUS_TEST_EXPIRES_AT"] =
+                (failure == "authorization-expiry" ? DateTimeOffset.UtcNow.AddSeconds(2) :
+                    DateTimeOffset.UtcNow.AddHours(2)).ToString("O");
             values["GITHUB_EVENT_PATH"] = path;
             values["GITHUB_EVENT_NAME"] = "workflow_dispatch";
             values["GITHUB_RUN_ID"] = "99";
@@ -219,7 +232,7 @@ public sealed class IsolatedStatusTestTests
         public int RefReads { get; private set; }
         public bool Disposed { get; private set; }
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             Assert.False(Disposed);
             var path = Uri.UnescapeDataString(request.RequestUri!.AbsolutePath);
@@ -228,6 +241,8 @@ public sealed class IsolatedStatusTestTests
             if (path.Contains("/git/ref/", StringComparison.Ordinal))
             {
                 RefReads++;
+                if (failure == "authorization-expiry" && RefReads == 1)
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
                 if (failure == "diagnostic-timeout" || failure == "state-timeout" && RefReads == 1)
                     throw new TaskCanceledException("workflow-test-token must not appear in diagnostics");
             }
@@ -253,6 +268,8 @@ public sealed class IsolatedStatusTestTests
                     @event = "workflow_dispatch", head_sha = Definition, repository = new { id = 1 },
                     created_at = Now
                 },
+                var p when p.StartsWith("/repos/owner/repo/commits/", StringComparison.Ordinal) =>
+                    new { sha = failure == "moved-tag" ? new string('b', 40) : Definition },
                 "/repos/owner/repo/git/ref/heads/agent-state-status-revocation-v1" =>
                     new { @object = new { sha = new string('d', 40) } },
                 var p when p.Contains("/git/commits/", StringComparison.Ordinal) =>
@@ -262,10 +279,10 @@ public sealed class IsolatedStatusTestTests
                 var p when p.Contains("/git/blobs/", StringComparison.Ordinal) => StateBlob(),
                 _ => throw new InvalidOperationException("Unexpected HTTP " + path)
             };
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(JsonSerializer.Serialize(body))
-            });
+            };
         }
 
         private static object StateBlob()

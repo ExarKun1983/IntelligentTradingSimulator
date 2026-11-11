@@ -69,6 +69,39 @@ public sealed class GitHubRequiredStatusTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OverlappingPauseDoesNotInvalidateExecutingRevocation(bool afterBoundary)
+    {
+        var store = new Store(Planned());
+        var api = new Api();
+        using var client = api.Client();
+        var success = await Adapter(client, store).ExecuteAsync(Intent(store.Value), default);
+        store.Value = new OrchestrationReducer().RecordOutcome(store.Value, Intent(store.Value).Id, success, Now);
+        var overlapObserved = false;
+        api.OnPullRead = async () =>
+        {
+            if (overlapObserved || (Intent(store.Value).RequiredStatusBoundary is not null) != afterBoundary)
+                return;
+            overlapObserved = true;
+            var concurrent = await PauseCommandOnlyAsync(client, store, Approved);
+            Assert.Equal(WorkerStopReason.Blocked, concurrent.Reason);
+            Assert.Equal(DeliveryStatus.Executing, Intent(store.Value).Status);
+            Assert.Equal(1, api.Posts);
+        };
+
+        var result = await PauseCommandOnlyAsync(client, store, Approved);
+
+        Assert.True(overlapObserved);
+        Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
+        Assert.Equal(DeliveryStatus.Succeeded, Intent(store.Value).Status);
+        Assert.Equal("error", Intent(store.Value).RequiredStatus!.State);
+        Assert.Equal(2, api.Posts);
+        await PauseCommandOnlyAsync(client, store, Approved);
+        Assert.Equal(2, api.Posts);
+    }
+
+    [Theory]
     [InlineData("lost-response")]
     [InlineData("publisher")]
     [InlineData("head")]
@@ -878,6 +911,7 @@ public sealed class GitHubRequiredStatusTests
         public bool HideFirstStatus { get; set; }
         public Action? BeforePost { get; set; }
         public Action? AfterPullRead { get; set; }
+        public Func<Task>? OnPullRead { get; set; }
         private object? created;
         private readonly List<string> createdBodies = [];
         private readonly TaskCompletionSource preparation = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -918,6 +952,7 @@ public sealed class GitHubRequiredStatusTests
                     @base = new { repo = new { id = 1 } },
                     head = new { sha = Corruption == "head" ? Definition : Sha, repo = new { id = 1 } } };
                 AfterPullRead?.Invoke();
+                if (OnPullRead is not null) await OnPullRead();
             }
             else if (path.Contains("/commits/refs", StringComparison.Ordinal))
                 value = new { sha = Corruption == "definition" ? Sha : Definition };

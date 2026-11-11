@@ -65,9 +65,21 @@ public static class GitHubIsolatedStatusTestCommand
             var workflowRoute = new GitHubWakeRoute(settings.DriverWorkflowId, settings.DefinitionSha,
                 GitHubIsolatedStatusTestSettings.DriverWorkflowPath);
             var occurredAt = await GitHubLiveCommand.VerifyCommandDefinitionAsync(api, workflowRoute, runId, eventName);
+            using (var definition = await api.GetAsync(
+                "commits/" + Uri.EscapeDataString(GitHubIsolatedStatusTestSettings.DriverReference), default))
+            {
+                if (!string.Equals(definition.RootElement.GetProperty("sha").GetString(),
+                        settings.DefinitionSha, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Shared isolated definition tag changed.");
+            }
+            var remainingAuthorization = settings.ExpiresAt - DateTimeOffset.UtcNow;
+            if (remainingAuthorization <= TimeSpan.Zero)
+                throw new InvalidOperationException("Isolated authorization expired before execution.");
+            using var authorizationDeadline = new CancellationTokenSource(remainingAuthorization);
+            var authorizationToken = authorizationDeadline.Token;
             if (operation == "status-test-bootstrap")
             {
-                var ingress = await api.ReadIngressEvidenceAsync(root, eventName, runId, [publisher.ActorId], default,
+                var ingress = await api.ReadIngressEvidenceAsync(root, eventName, runId, [publisher.ActorId], authorizationToken,
                     GitHubIsolatedStatusTestSettings.DriverWorkflowPath);
                 if (ingress.ActorId == publisher.ActorId || ingress.ActorType != "User" ||
                     ingress.Permission is not ("admin" or "maintain" or "write"))
@@ -77,13 +89,13 @@ public static class GitHubIsolatedStatusTestCommand
                 var bootstrapStore = new GitStateStore(bootstrapTransport, settings.Repository,
                     GitHubIsolatedStatusTestSettings.StateReference, allowInitialization: true);
                 diagnosticStore = bootstrapStore;
-                var initial = await bootstrapStore.LoadAsync(default);
+                var initial = await bootstrapStore.LoadAsync(authorizationToken);
                 if (initial.Revision is not null)
                     throw new InvalidOperationException("Isolated state already exists; bootstrap cannot be repeated.");
                 initial.State.IsolatedTestManifestDigest = settings.ManifestDigest;
-                if (!await bootstrapStore.TrySaveAsync(initial, initial.State, default))
+                if (!await bootstrapStore.TrySaveAsync(initial, initial.State, authorizationToken))
                     throw new InvalidOperationException("Isolated state bootstrap conflicted; inspect the ref before retrying.");
-                var saved = await bootstrapStore.LoadAsync(default);
+                var saved = await bootstrapStore.LoadAsync(authorizationToken);
                 if (saved.State.IsolatedTestManifestDigest != settings.ManifestDigest)
                     throw new InvalidDataException("Isolated state bootstrap receipt does not match the reviewed manifest.");
                 output.WriteLine(JsonSerializer.Serialize(new
@@ -100,7 +112,7 @@ public static class GitHubIsolatedStatusTestCommand
             IStateStore store = new GitStateStore(transport, settings.Repository,
                 GitHubIsolatedStatusTestSettings.StateReference);
             diagnosticStore = store;
-            var snapshot = await store.LoadAsync(default);
+            var snapshot = await store.LoadAsync(authorizationToken);
             if (snapshot.State.IsolatedTestManifestDigest is not null &&
                 snapshot.State.IsolatedTestManifestDigest != settings.ManifestDigest)
                 throw new InvalidDataException("Isolated test manifest differs from its initialized state.");
@@ -124,8 +136,8 @@ public static class GitHubIsolatedStatusTestCommand
                 statusApproval: settings.Status, commandOnly: operation == "pause",
                 isolatedStatusTest: true,
                 trustedWorkflowPath: GitHubIsolatedStatusTestSettings.DriverWorkflowPath,
-                isolatedManifestDigest: settings.ManifestDigest);
-            var final = await store.LoadAsync(default);
+                isolatedManifestDigest: settings.ManifestDigest, token: authorizationToken);
+            var final = await store.LoadAsync(authorizationToken);
             if (!final.State.Issues.TryGetValue(settings.IssueNumber, out var issue))
                 throw new InvalidDataException("Isolated stage did not persist its Issue.");
             var currentStatus = issue.RequiredStatusIntentId is { } statusId
