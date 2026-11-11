@@ -6,7 +6,6 @@ on:
 permissions:
   actions: read
   contents: read
-  statuses: write
 
 jobs:
   diagnose:
@@ -146,8 +145,8 @@ jobs:
               *["| " + name + " | " + str(value).lower() + " |" for name, value in checks.items()],
               "",
               "No AI task, CI dispatch, status publication, state write or configuration change was requested.",
-              "This job requests statuses: write only to inspect the effective grant in its Set up job log.",
-              "Identity checks do not prove status-write access. Inspect GITHUB_TOKEN Permissions in that log.",
+              "This diagnostic token has no statuses permission and cannot verify another run's effective grant.",
+              "Identity checks do not prove status-write access. Inspect GITHUB_TOKEN Permissions in an approved driver run.",
               "This token belongs to this diagnostic run, not to a future driver run.",
               "No environment or user secret was accessed; user-token identity/entitlement remains unverified here.",
               "Protected resources and cost controls require separate operator verification.",

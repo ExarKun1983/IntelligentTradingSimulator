@@ -171,19 +171,20 @@ The job reads repository/workflow/tag metadata and queries the workflow token's
 GraphQL viewer, comparing its numeric and node identities to `github-actions[bot]`.
 Only boolean comparisons are reported. It has no checkout, user credential or
 environment access and never dispatches CI/tasks, writes statuses/state, or
-updates configuration. It intentionally requests `statuses: write`; inspect the
-effective `GITHUB_TOKEN Permissions` in **Set up job**, not just the YAML.
-This permission makes the token write-capable; the diagnostic code performs no
-mutations. Other permissions are limited to contents read and Actions read
-(needed to inspect the two workflow definitions).
+updates configuration. Its token is limited to contents read and Actions read;
+it has no `statuses` permission and cannot write statuses. This diagnostic
+therefore verifies identity/configuration only, not status-write permission.
 
 A green result proves the reported comparisons for that diagnostic invocation,
 not the future driver's permissions, user-token identity, Agent tasks entitlement,
 protection configuration or absence of charges. Existing `*_VERIFIED` variables
 are operator attestations, not measurements. Keep activation/bootstrap false.
-Before marking publisher verification complete, inspect the effective grant and
-identity evidence; repeat these checks for the actual driver's own token/logs.
-Never publish a probe status or move the immutable definition tag to make this
+Do not set `ORCHESTRATION_STATUS_TEST_STATUS_PUBLISHER_VERIFIED` based on this
+diagnostic. Before any separately approved live dispatch, review the driver's
+repository-wide `statuses: write` boundary and protected-environment gate, then
+inspect the effective `GITHUB_TOKEN Permissions` in that exact approved run.
+This diagnostic cannot establish the future driver's effective grant. Never
+publish a probe status or move the immutable definition tag to make this
 diagnostic pass.
 
 Run the diagnostic script's offline HTTP/configuration regressions with
