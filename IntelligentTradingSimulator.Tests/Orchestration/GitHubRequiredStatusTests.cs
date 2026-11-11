@@ -14,6 +14,232 @@ public sealed class GitHubRequiredStatusTests
     private static readonly GitHubStatusPublisher Publisher = new(9, "trusted[bot]", "BOT_9", "Bot");
     private static readonly GitHubRequiredStatusApproval Approved = new(true, true, true, true, true);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CommandOnlyPauseRevokesPublishedSuccessWithoutDownstreamApprovalOrQueuedWork(bool uncertainSuccess)
+    {
+        var store = new Store(Planned());
+        var api = new Api { LostResponse = uncertainSuccess };
+        using var client = api.Client();
+        var adapter = Adapter(client, store);
+        var successId = Intent(store.Value).Id;
+        if (uncertainSuccess)
+        {
+            await Assert.ThrowsAsync<HttpRequestException>(() => adapter.ExecuteAsync(Intent(store.Value), default));
+            store.Value = new OrchestrationReducer().RecordOutcome(store.Value, successId, new(DeliveryStatus.Unknown), Now);
+        }
+        else
+        {
+            var success = await adapter.ExecuteAsync(Intent(store.Value), default);
+            store.Value = new OrchestrationReducer().RecordOutcome(store.Value, successId, success, Now);
+        }
+        api.LostResponse = false;
+        store.Value.Issues[8] = new() { Number = 8, Ready = true, ReadyAt = Now };
+        var queued = JsonSerializer.Serialize(store.Value.Issues[8], StateJson.Options);
+        var admission = store.Value.AdmittedIssue;
+        var existingIntents = store.Value.Outbox.Keys.ToHashSet();
+        api.Requests.Clear();
+
+        var result = await PauseCommandOnlyAsync(client, store, Approved);
+
+        Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
+        Assert.Equal(0, result.Iterations);
+        Assert.True(store.Value.Issues[7].Paused);
+        Assert.Equal(admission, store.Value.AdmittedIssue);
+        Assert.Equal(queued, JsonSerializer.Serialize(store.Value.Issues[8], StateJson.Options));
+        Assert.Equal(uncertainSuccess ? DeliveryStatus.Unknown : DeliveryStatus.Succeeded, store.Value.Outbox[successId].Status);
+        Assert.Equal("error", Intent(store.Value).RequiredStatus!.State);
+        Assert.Equal(DeliveryStatus.Succeeded, Intent(store.Value).Status);
+        Assert.Equal(Sha, Intent(store.Value).Sha);
+        Assert.Equal(RequiredStatusPolicy.Context, Intent(store.Value).RequiredStatus!.Context);
+        Assert.Equal(Intent(store.Value).Id,
+            Assert.Single(store.Value.Outbox.Values, intent => !existingIntents.Contains(intent.Id)).Id);
+        Assert.Equal(2, api.Posts);
+        Assert.Equal("error", JsonDocument.Parse(api.Body!).RootElement.GetProperty("state").GetString());
+        Assert.DoesNotContain(api.Requests, path => path.Contains("/agents/", StringComparison.Ordinal) ||
+            path.Contains("/actions/runs/90", StringComparison.Ordinal) ||
+            path.Contains("/requested_reviewers", StringComparison.Ordinal) ||
+            path.Contains("/issues/8", StringComparison.Ordinal) ||
+            path.Contains("/comments", StringComparison.Ordinal) || path.Contains("/labels", StringComparison.Ordinal) ||
+            path.Contains("/dispatches", StringComparison.Ordinal));
+
+        await PauseCommandOnlyAsync(client, store, Approved);
+        Assert.Equal(2, api.Posts);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OverlappingPauseDoesNotInvalidateExecutingRevocation(bool afterBoundary)
+    {
+        var store = new Store(Planned());
+        var api = new Api();
+        using var client = api.Client();
+        var success = await Adapter(client, store).ExecuteAsync(Intent(store.Value), default);
+        store.Value = new OrchestrationReducer().RecordOutcome(store.Value, Intent(store.Value).Id, success, Now);
+        var overlapObserved = false;
+        api.OnPullRead = async () =>
+        {
+            if (overlapObserved || (Intent(store.Value).RequiredStatusBoundary is not null) != afterBoundary)
+                return;
+            overlapObserved = true;
+            var concurrent = await PauseCommandOnlyAsync(client, store, Approved);
+            Assert.Equal(WorkerStopReason.Blocked, concurrent.Reason);
+            Assert.Equal(DeliveryStatus.Executing, Intent(store.Value).Status);
+            Assert.Equal(1, api.Posts);
+        };
+
+        var result = await PauseCommandOnlyAsync(client, store, Approved);
+
+        Assert.True(overlapObserved);
+        Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
+        Assert.Equal(DeliveryStatus.Succeeded, Intent(store.Value).Status);
+        Assert.Equal("error", Intent(store.Value).RequiredStatus!.State);
+        Assert.Equal(2, api.Posts);
+        await PauseCommandOnlyAsync(client, store, Approved);
+        Assert.Equal(2, api.Posts);
+    }
+
+    [Theory]
+    [InlineData("lost-response")]
+    [InlineData("publisher")]
+    [InlineData("head")]
+    public async Task CommandOnlyRevocationFailurePreservesPauseAndNeverBlindlyRepeatsPost(string failure)
+    {
+        var store = new Store(Planned());
+        var api = new Api();
+        using var client = api.Client();
+        var success = await Adapter(client, store).ExecuteAsync(Intent(store.Value), default);
+        store.Value = new OrchestrationReducer().RecordOutcome(store.Value, Intent(store.Value).Id, success, Now);
+        store.Value.Issues[8] = new() { Number = 8, Ready = true, ReadyAt = Now };
+        api.LostResponse = failure == "lost-response";
+        api.HideCreatedStatus = failure == "lost-response";
+        api.Corruption = failure == "publisher" ? "actor" : failure == "head" ? "head" : null;
+
+        var result = await PauseCommandOnlyAsync(client, store, Approved);
+
+        Assert.Equal(WorkerStopReason.Blocked, result.Reason);
+        Assert.True(store.Value.Issues[7].Paused);
+        Assert.Empty(store.Value.Issues[8].Tasks);
+        Assert.Equal(DeliveryStatus.Unknown, Intent(store.Value).Status);
+        Assert.Equal("error", Intent(store.Value).RequiredStatus!.State);
+        var posts = api.Posts;
+        await PauseCommandOnlyAsync(client, store, Approved);
+        Assert.Equal(posts, api.Posts);
+        if (failure == "lost-response")
+        {
+            api.HideCreatedStatus = false;
+            api.LostResponse = false;
+            var recovered = await PauseCommandOnlyAsync(client, store, Approved);
+            Assert.Equal(WorkerStopReason.EffectsDisabled, recovered.Reason);
+            Assert.Equal(DeliveryStatus.Succeeded, Intent(store.Value).Status);
+            Assert.True(store.Value.Issues[7].Paused);
+            Assert.Equal(posts, api.Posts);
+        }
+    }
+
+    [Fact]
+    public async Task CommandOnlyRevocationCancellationLeavesExecutingIntentForLookupOnlyReplay()
+    {
+        var store = new Store(Planned());
+        var api = new Api();
+        using var client = api.Client();
+        var success = await Adapter(client, store).ExecuteAsync(Intent(store.Value), default);
+        store.Value = new OrchestrationReducer().RecordOutcome(store.Value, Intent(store.Value).Id, success, Now);
+        api.CancelAfterPost = true;
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => PauseCommandOnlyAsync(client, store, Approved));
+
+        Assert.True(store.Value.Issues[7].Paused);
+        Assert.Equal(DeliveryStatus.Executing, Intent(store.Value).Status);
+        Assert.NotNull(Intent(store.Value).RequiredStatusBoundary);
+        Assert.Equal("error", Intent(store.Value).RequiredStatus!.State);
+        api.CancelAfterPost = false;
+        var recovered = await PauseCommandOnlyAsync(client, store, Approved);
+        Assert.Equal(WorkerStopReason.EffectsDisabled, recovered.Reason);
+        Assert.Equal(DeliveryStatus.Succeeded, Intent(store.Value).Status);
+        Assert.Equal(2, api.Posts);
+    }
+
+    [Theory]
+    [InlineData(DeliveryStatus.Pending)]
+    [InlineData(DeliveryStatus.Executing)]
+    [InlineData(DeliveryStatus.Succeeded)]
+    public async Task StatusOnlyRevocationCasConflictsNeverRepeatTheCreate(DeliveryStatus conflictAt)
+    {
+        var store = new Store(Planned());
+        var api = new Api();
+        using var client = api.Client();
+        var success = await Adapter(client, store).ExecuteAsync(Intent(store.Value), default);
+        store.Value = new OrchestrationReducer().RecordOutcome(store.Value, Intent(store.Value).Id, success, Now);
+        var conflict = false;
+        store.RejectSave = next =>
+        {
+            if (conflict || Intent(next) is not { RequiredStatus.State: "error" } intent ||
+                intent.Status != conflictAt) return false;
+            conflict = true;
+            return true;
+        };
+
+        await PauseCommandOnlyAsync(client, store, Approved);
+
+        Assert.True(conflict);
+        Assert.True(store.Value.Issues[7].Paused);
+        Assert.Equal(DeliveryStatus.Succeeded, Intent(store.Value).Status);
+        Assert.Equal(2, api.Posts);
+    }
+
+    [Fact]
+    public void StatusOnlyPlannerCannotPublishSuccessOrAdmitQueuedWork()
+    {
+        var state = State();
+        state.Issues[8] = new() { Number = 8, Ready = true, ReadyAt = Now };
+        var reducer = new OrchestrationReducer();
+        Assert.Throws<InvalidOperationException>(() => reducer.PlanRequiredStatusRevocation(state, 7, Now));
+        state.Issues[7].Paused = true;
+        var planned = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        Assert.Equal("error", Intent(planned).RequiredStatus!.State);
+        Assert.Equal(state.AdmittedIssue, planned.AdmittedIssue);
+        Assert.Empty(planned.Issues[8].Tasks);
+        Assert.Equal(StateJson.Serialize(planned),
+            StateJson.Serialize(reducer.PlanRequiredStatusRevocation(planned, 7, Now)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CommandOnlyPauseWithoutStatusAuthorizationSavesPauseButExplicitlyFailsRevocation(bool missingPublisher)
+    {
+        var store = new Store(Planned());
+        var api = new Api();
+        using var client = api.Client();
+        var success = await Adapter(client, store).ExecuteAsync(Intent(store.Value), default);
+        store.Value = new OrchestrationReducer().RecordOutcome(store.Value, Intent(store.Value).Id, success, Now);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            PauseCommandOnlyAsync(client, store, missingPublisher ? Approved : new(), missingPublisher));
+
+        Assert.Contains("revocation prerequisites", error.Message);
+        Assert.True(store.Value.Issues[7].Paused);
+        Assert.Equal(1, api.Posts);
+        Assert.Equal(DeliveryStatus.Succeeded, Intent(store.Value).Status);
+    }
+
+    private static Task<WorkerResult> PauseCommandOnlyAsync(HttpClient client, Store store,
+        GitHubRequiredStatusApproval approval, bool missingPublisher = false)
+    {
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            sender = new { id = 55, login = "maintainer", type = "User" },
+            inputs = new { issue = "7", operation = "pause", reason = "Operator pause after published success." }
+        });
+        return new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock())
+            .ReconcileAsync(payload, "workflow_dispatch", "44", 1, 1, Now, [], 9, "master", 55,
+                new(true, true, true, true), reviewApproval: new(), ciApproval: new(),
+                statusPublisher: missingPublisher ? null : Publisher, statusApproval: approval, commandOnly: true);
+    }
+
     [Fact]
     public async Task ExactTestedShaNotDefinitionShaIsPublishedAfterDurableBoundary()
     {
@@ -375,6 +601,25 @@ public sealed class GitHubRequiredStatusTests
     }
 
     [Fact]
+    public void IsolatedReducerPlansEligibleSuccessWithoutCreatingReviewWork()
+    {
+        var state = State();
+        var issue = state.Issues[7];
+        issue.Phase = Phase.REVIEW_PENDING;
+        issue.ActiveAuthorized = true;
+        issue.ReactivationRequired = false;
+        issue.HoldReason = null;
+        issue.Review = null;
+        var reducer = new OrchestrationReducer(new Allow(), requiredStatusEnabled: true,
+            reviewRequestsEnabled: false);
+
+        var result = reducer.Reconcile(state, Live()).State;
+
+        Assert.DoesNotContain(result.Outbox.Values, effect => effect.Kind == EffectKind.RequestReview);
+        Assert.Equal("success", Intent(result).RequiredStatus!.State);
+    }
+
+    [Fact]
     public void ActualAcceptedReviewPreservesResolvedBlockerResponsesAndGreenCi()
     {
         var state = State();
@@ -640,11 +885,13 @@ public sealed class GitHubRequiredStatusTests
     {
         public RepositoryState Value { get; set; } = state;
         public bool FailSave { get; set; }
+        public Func<RepositoryState, bool>? RejectSave { get; set; }
         public Task<StateSnapshot> LoadAsync(CancellationToken token) => Task.FromResult(new StateSnapshot(
             Value.Version.ToString(), StateJson.Deserialize(StateJson.Serialize(Value))));
         public Task<bool> TrySaveAsync(StateSnapshot expected, RepositoryState next, CancellationToken token)
         {
             if (FailSave) throw new IOException("offline persistence failure");
+            if (RejectSave?.Invoke(next) == true) return Task.FromResult(false);
             if (expected.Revision != Value.Version.ToString()) return Task.FromResult(false);
             Value = next;
             return Task.FromResult(true);
@@ -664,6 +911,7 @@ public sealed class GitHubRequiredStatusTests
         public bool HideFirstStatus { get; set; }
         public Action? BeforePost { get; set; }
         public Action? AfterPullRead { get; set; }
+        public Func<Task>? OnPullRead { get; set; }
         private object? created;
         private readonly List<string> createdBodies = [];
         private readonly TaskCompletionSource preparation = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -688,15 +936,23 @@ public sealed class GitHubRequiredStatusTests
                 value = created;
             }
             else if (path == "/repos/owner/repo") value = new { id = 1, full_name = "owner/repo" };
+            else if (path.EndsWith("/actions/runs/44", StringComparison.Ordinal))
+                value = new { @event = "workflow_dispatch", path = ".github/workflows/agent-state-machine.yml",
+                    actor = new { id = 55 } };
+            else if (path == "/users/maintainer") value = new { id = 55, login = "maintainer", type = "User" };
+            else if (path.EndsWith("/collaborators/maintainer/permission", StringComparison.Ordinal))
+                value = new { permission = "write", user = new { id = 55 } };
             else if (path.StartsWith("/users/", StringComparison.Ordinal)) value = Actor();
             else if (path.EndsWith("/issues/7", StringComparison.Ordinal))
-                value = new { number = 7, state = Corruption == "issue-closed" ? "closed" : "open" };
+                value = new { id = 70, number = 7, state = Corruption == "issue-closed" ? "closed" : "open",
+                    labels = Array.Empty<object>() };
             else if (path.EndsWith("/pulls/17", StringComparison.Ordinal))
             {
                 value = new { number = 17, state = Corruption == "pull-closed" ? "closed" : "open",
                     @base = new { repo = new { id = 1 } },
                     head = new { sha = Corruption == "head" ? Definition : Sha, repo = new { id = 1 } } };
                 AfterPullRead?.Invoke();
+                if (OnPullRead is not null) await OnPullRead();
             }
             else if (path.Contains("/commits/refs", StringComparison.Ordinal))
                 value = new { sha = Corruption == "definition" ? Sha : Definition };

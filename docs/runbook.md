@@ -1885,6 +1885,10 @@ Before POST, the adapter verifies the canonical executing intent, completed
 task/round/final SHA, exact eligible green CI receipt, admission, no holds/feedback,
 and live open Issue/PR/head/repository. It verifies the Copilot bot through the
 user API and rejects an already requested reviewer or pre-existing pending review.
+The request uses the documented `copilot-pull-request-reviewer[bot]` alias.
+REST may return that alias or canonical login `Copilot`; either must match numeric
+ID `175728472`, node ID `BOT_kgDOCnlnWA`, and type `Bot`. The same pinned identity
+is required in acknowledgements, submissions, and comments; login alone is not proof.
 The reducer persists a `ReviewRequestBoundary` containing verified bot IDs, time,
 and pre-existing review IDs before the non-idempotent call.
 Only the first CAS publication may claim an unconfirmed boundary; concurrent
@@ -1902,6 +1906,19 @@ receipt. A lost response or failed confirmation write remains unknown, even if
 the reviewer now appears or a new review exists. It never repeats POST or clears
 a human hold. A crash after preparation but before POST also remains uncertain;
 operator reconciliation is required rather than guessing that no request occurred.
+
+For new attempts, a missing review approval returns `Failed` with
+`FailureCode=ReviewPrerequisitesUnverified` without making API calls.
+Read-only preflight rejection returns `ReviewPreflightRejected`, or
+`ReviewIdentityMismatch` for an unexpected reviewer identity, before saving a
+request boundary or sending POST. These definite refusals still produce a human
+hold and are never automatically retried. A concurrent saved request boundary
+prevents recording such a refusal as a definite failure; it remains `Unknown`.
+After boundary preparation, exceptions conservatively remain `Unknown`.
+The shared reconciler records `ExecutionException` or `RecoveryException` for
+uncaught execution/recovery failures without storing exception messages,
+response bodies, or credentials. Existing `Unknown` receipts are not
+reclassified from missing boundaries or new configuration.
 
 Submitted output is fetched only for the current completed/CI-green task and
 request. Existing review IDs, other actors, pending and stale-head submissions
@@ -2330,6 +2347,46 @@ entitlement, cost controls or repository protection must leave activation blocke
    not attest approval. `GITHUB_REPOSITORY`, `GITHUB_REPOSITORY_ID`, event path/name
    and run ID are supplied by Actions, not `vars.*`. The projection login/ID are
    fixed and authenticated at startup, not operator-supplied variables.
+
+   The live CLI preflights review and managed-CI approvals before API calls,
+   state writes, or coding, including in bounded test mode. This requires
+   `ORCHESTRATION_REVIEW_POLICY_VERIFIED`,
+   `ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED`, and
+   `ORCHESTRATION_TRUSTED_CI_VERIFIED` as well as task/credential/cost gates.
+   The read-only gate diagnostic reports these downstream comparisons too.
+   Do not set an attestation merely to pass a gate; verify the underlying policy.
+   Explicit `pause` and `resolve-task` recovery commands retain their existing
+   task, activation, credential, and authorization checks, but do not require
+   downstream review/CI approvals. The CLI runs those commands in command-only
+   mode: it saves the verified command/evidence without running the worker or
+   admitting/launching queued work. For a held mapped head, the only permitted
+   effect is an `error` publication for `Agent managed CI`, through the existing
+   authenticated status publisher and all status-publication approval gates.
+   This publishes a correction for an earlier green status even when review/CI
+   approvals are missing.
+   It does not read task/CI/review services (except terminal evidence required by
+   `resolve-task`), plan label/comment projections, or publish `success`.
+   A prepared or uncertain revocation is lookup-only on command replay; a lost
+   response never permits another POST for that intent. Unconfirmed delivery
+   returns `Blocked` and preserves the hold and durable status intent. At host
+   level, if status history exists but publisher approvals are unavailable, the
+   command is saved but the invocation fails explicitly rather than claiming
+   revocation; CLI startup gates may reject unverified configuration earlier.
+   Bounded tests with no status history and status publication disabled remain
+   command-only without a status write. Commit statuses are not transactional:
+   a late uncertain earlier success can still overwrite the corrective error;
+   preserve the hold and independently inspect the latest exact-SHA/context
+   status before any separately authorized reactivation.
+   `resume`, `reactivate`, classification,
+   readiness, and automatic wakes still require full pipeline preflight.
+   This change does not recover the held #237 attempt or authorize another
+   review, move its immutable CI tag, or change deployed definition pins.
+
+   The proposed separate coding/CI/status/pause verification is specified in
+   [the isolated status-test design](orchestration-isolated-status-test.md).
+   The isolated profile is implemented in the open PR but is not yet merged,
+   provisioned, or authorized to run. Do not repurpose the existing #237
+   workflows or state to approximate that test.
 
    For the explicitly approved bounded end-to-end test only, set
    `ORCHESTRATION_TEST_ISSUE` (the sole active test Issue) and

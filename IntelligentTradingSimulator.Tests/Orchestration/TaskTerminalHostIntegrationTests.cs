@@ -12,6 +12,24 @@ public sealed class TaskTerminalHostIntegrationTests
     private static readonly GitHubExecutionApproval Approval = new(true, true, true, true);
 
     [Fact]
+    public async Task CommandOnlyResolutionSavesAuditedEvidenceWithoutRunningWorkerOrAdmittingQueuedWork()
+    {
+        var store = new Store();
+        store.State.Issues[8] = new IssueState { Number = 8, Ready = true, Phase = Phase.READY, ReadyAt = Now };
+        using var fixture = new Fixture(store);
+        using var client = fixture.Client();
+
+        var result = await Run(client, store, commandOnly: true);
+
+        Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
+        Assert.Equal(0, result.Iterations);
+        AssertResolved(store.State);
+        Assert.Empty(store.State.Issues[8].Tasks);
+        Assert.Equal(1, fixture.TaskReads);
+        Assert.All(fixture.Requests, request => Assert.StartsWith("GET ", request));
+    }
+
+    [Fact]
     public async Task VerifiedHostPersistsApiEvidenceBeforeOperatorResolutionAndDoesNotAdvance()
     {
         var store = new Store();
@@ -219,7 +237,8 @@ public sealed class TaskTerminalHostIntegrationTests
 
     private static Task<WorkerResult> Run(HttpClient client, Store store, string reason = "End verified task tracking",
         string task = "task", DateTimeOffset? occurredAt = null, string actorType = "User",
-        long repositoryGeneration = 1, long issueGeneration = 1, string runId = "44", DateTimeOffset? observedAt = null)
+        long repositoryGeneration = 1, long issueGeneration = 1, string runId = "44", DateTimeOffset? observedAt = null,
+        bool commandOnly = false)
     {
         var payload = JsonSerializer.SerializeToElement(new
         {
@@ -230,7 +249,7 @@ public sealed class TaskTerminalHostIntegrationTests
         return new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock(observedAt ?? Now))
             .ReconcileAsync(payload, "workflow_dispatch", runId, repositoryGeneration, issueGeneration,
                 occurredAt ?? Now.AddDays(-1), [], 99, "master", 55, Approval,
-                new() { MaximumIterations = 2, PollInterval = TimeSpan.Zero });
+                new() { MaximumIterations = 2, PollInterval = TimeSpan.Zero }, commandOnly: commandOnly);
     }
 
     private sealed class Clock(DateTimeOffset now) : TimeProvider

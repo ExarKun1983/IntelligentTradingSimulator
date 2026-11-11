@@ -29,6 +29,7 @@ public sealed class RepositoryState
     public long Generation { get; set; } = 1;
     public long Version { get; set; }
     public string Repository { get; set; } = "";
+    public string? IsolatedTestManifestDigest { get; set; }
     public string? LastEventId { get; set; }
     public int? AdmittedIssue { get; set; }
     public WorkerLease? WorkerLease { get; set; }
@@ -121,7 +122,8 @@ public sealed class CiIdentity
 }
 
 public sealed record CiDispatchBoundary(long WorkflowId, string WorkflowSha, string Ref, string Correlation,
-    DateTimeOffset PreparedAt, long? RunId = null);
+    DateTimeOffset PreparedAt, long? RunId = null,
+    string WorkflowPath = GitHubCiAdapter.WorkflowPath);
 
 public sealed class ReviewIdentity
 {
@@ -193,6 +195,8 @@ public sealed class EffectIntent
     public string? TaskPrompt { get; set; }
     public RequiredStatusPayload? RequiredStatus { get; set; }
     public RequiredStatusBoundary? RequiredStatusBoundary { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public EffectFailureCode? FailureCode { get; set; }
 }
 
 public sealed record RequiredStatusPayload(string Context, string State, string Description, string TargetUrl,

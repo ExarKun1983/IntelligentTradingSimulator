@@ -27,7 +27,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             return null;
         return await RunVerifiedAsync(scopedStore, null, projectionActorId, baseBranch, taskCreatorId, approval, options,
             finalHeadSource, token, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval,
-            boundedScope?.RetiredIssueNumber);
+            boundedScope?.RetiredIssueNumber, false);
     }
 
     public async Task<WorkerResult> ReconcileAsync(JsonElement trustedActionsPayload, string eventName, string runId,
@@ -37,7 +37,9 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         ITaskFinalHeadSource? finalHeadSource = null, CancellationToken token = default,
         GitHubReviewApproval? reviewApproval = null, GitHubCiRoute? ciRoute = null, GitHubCiApproval? ciApproval = null,
         GitHubStatusPublisher? statusPublisher = null, GitHubRequiredStatusApproval? statusApproval = null,
-        int? maxRepairTasks = null, BoundedOrchestrationScope? boundedScope = null)
+        int? maxRepairTasks = null, BoundedOrchestrationScope? boundedScope = null, bool commandOnly = false,
+        bool isolatedStatusTest = false, string trustedWorkflowPath = ".github/workflows/agent-state-machine.yml",
+        string? isolatedManifestDigest = null)
     {
         if (approval?.AllowsTasks != true) throw new InvalidOperationException("Live activation prerequisites are not verified.");
         if (boundedScope is not null && maxRepairTasks is not null &&
@@ -48,17 +50,39 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         var issueNumber = IssueNumber(trustedActionsPayload, eventName);
         if (boundedScope is { } scope && issueNumber != scope.IssueNumber)
             throw new InvalidDataException("Bounded scope rejected a command for another Issue.");
-        var evidence = await api.ReadIngressEvidenceAsync(trustedActionsPayload, eventName, runId, projectionActorIds, token);
+        var evidence = await api.ReadIngressEvidenceAsync(trustedActionsPayload, eventName, runId, projectionActorIds,
+            token, trustedWorkflowPath);
         var message = GitHubActionsIngress.PrepareEvent(trustedActionsPayload, eventName, runId, evidence,
             repositoryGeneration, issueGeneration, occurredAt, boundedScope?.MaxRepairTasks ?? maxRepairTasks);
+        if (commandOnly && message?.Data is not (Pause or ResolveTaskTerminal))
+            throw new InvalidDataException("Command-only execution supports only pause or terminal resolution.");
+        if (isolatedStatusTest && (string.IsNullOrWhiteSpace(isolatedManifestDigest) ||
+            message?.Data is not (Ready or Pause)))
+            throw new InvalidDataException("Isolated status test requires its pinned manifest and start/pause command.");
         if (boundedScope is not null && message?.Data is Ready ready)
             message = message with { Data = ready with { SinglePassTest = true } };
         message = RestoreCommittedReadyReplay(snapshot.State, message);
         ValidateGeneration(snapshot.State, issueNumber,
             repositoryGeneration, issueGeneration, message);
+        if (isolatedStatusTest)
+        {
+            if (issueNumber is 227 or 237 || stateHasOutOfScopeData(snapshot.State, issueNumber))
+                throw new InvalidDataException("Isolated status test rejected production or cross-Issue state.");
+            if (message?.Data is Ready && !snapshot.State.Inbox.ContainsKey(message.Id) &&
+                (snapshot.State.Issues.Count != 0 || snapshot.State.Outbox.Count != 0))
+                throw new InvalidDataException("The isolated start command is allowed only once on fresh state.");
+            if (message?.Data is Pause && !snapshot.State.Outbox.Values.Any(effect =>
+                effect.IssueNumber == issueNumber && effect.Kind == EffectKind.PublishRequiredStatus &&
+                effect.Status == DeliveryStatus.Succeeded && effect.RequiredStatus?.State == "success" &&
+                effect.Sha == snapshot.State.Issues.GetValueOrDefault(issueNumber)?.HeadSha))
+                throw new InvalidDataException("Isolated pause requires a saved exact-head successful required status.");
+            await PinIsolatedManifestAsync(scopedStore, message!, isolatedManifestDigest!, token);
+            snapshot = await scopedStore.LoadAsync(token);
+            ValidateIsolatedState(snapshot.State, issueNumber, isolatedManifestDigest!);
+        }
         return await RunVerifiedAsync(scopedStore, message, projectionActorId, baseBranch, taskCreatorId, approval, options,
             finalHeadSource, token, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval,
-            boundedScope?.RetiredIssueNumber);
+            boundedScope?.RetiredIssueNumber, commandOnly, isolatedStatusTest, trustedWorkflowPath);
     }
 
     private async Task<WorkerResult> RunVerifiedAsync(IStateStore stateStore, OrchestrationEvent? message,
@@ -66,10 +90,12 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         WorkerOptions? options, ITaskFinalHeadSource? finalHeadSource, CancellationToken token,
         GitHubReviewApproval? reviewApproval, GitHubCiRoute? ciRoute, GitHubCiApproval? ciApproval,
         GitHubStatusPublisher? statusPublisher, GitHubRequiredStatusApproval? statusApproval,
-        int? excludedIssueNumber)
+        int? excludedIssueNumber, bool commandOnly, bool isolatedStatusTest = false,
+        string trustedWorkflowPath = ".github/workflows/agent-state-machine.yml")
     {
         var authorization = new VerifiedEvents();
-        var tasks = new GitHubTaskAdapter(api, stateStore, baseBranch, taskCreatorId, approval, finalHeadSource, taskApi);
+        var tasks = new GitHubTaskAdapter(api, stateStore, baseBranch, taskCreatorId, approval, finalHeadSource,
+            taskApi, requireDraftPullRequest: isolatedStatusTest);
         if (message?.Data is HumanClassification classification)
         {
             var state = (await stateStore.LoadAsync(token)).State;
@@ -119,16 +145,90 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             // Persist a verified command before unrelated service reads can fail or the invocation yields.
             await new OrchestrationReconciler(new(authorization)).DispatchAsync(stateStore, message, token);
         }
+        if (commandOnly)
+        {
+            var state = (await stateStore.LoadAsync(token)).State;
+            var issue = state.Issues[message!.IssueNumber];
+            var hasStatusHistory = state.Outbox.Values.Any(effect =>
+                effect.IssueNumber == issue.Number && effect.Kind == EffectKind.PublishRequiredStatus);
+            if (statusPublisher is not null && statusApproval?.AllowsPublication == true &&
+                issue.PullRequest is > 0 && issue.HeadSha is { Length: 40 })
+            {
+                var revocation = new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher, statusApproval, clock);
+                state = await new OrchestrationReconciler().RevokeRequiredStatusAsync(stateStore, issue.Number,
+                    revocation, clock.GetUtcNow(), token);
+                var status = state.Outbox[state.Issues[issue.Number].RequiredStatusIntentId!];
+                if (status.Status != DeliveryStatus.Succeeded || status.RequiredStatus?.State != "error" ||
+                    !RequiredStatusPolicy.Matches(state, state.Issues[issue.Number], status))
+                    return new(WorkerStopReason.Blocked, 0, new(state, [], true));
+            }
+            else if (hasStatusHistory)
+                throw new InvalidOperationException("Recovery command saved, but required-status revocation prerequisites are unverified.");
+            return new(WorkerStopReason.EffectsDisabled, 0, new(state, [], true));
+        }
         var reviews = new GitHubReviewAdapter(api, stateStore, clock, reviewApproval, tasks);
         var ci = ciRoute is null ? null : new GitHubCiAdapter(api, stateStore, ciRoute, clock, ciApproval, tasks);
         var events = new ProductionEvents(message, api, tasks, reviews, ci, authorization, projectionActorId,
-            excludedIssueNumber);
+            excludedIssueNumber, !isolatedStatusTest);
         var statuses = statusPublisher is null ? null : new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher, statusApproval, clock);
         var effects = new ProductionEffects(tasks, reviews, ci, statuses, new GitHubProjectionAdapter(api, projectionActorId, true));
-        return await new OrchestrationWorker(new OrchestrationReducer(authorization, statuses is not null &&
-            statusApproval?.AllowsPublication == true, excludedIssueNumber), clock).RunAsync(stateStore, events,
-            new TaskObservations(tasks, clock, excludedIssueNumber), effects, new ReconcileOptions(false, true, true, true),
-            options, token);
+        var reducer = new OrchestrationReducer(authorization, statuses is not null &&
+            statusApproval?.AllowsPublication == true, excludedIssueNumber, reviewRequestsEnabled: !isolatedStatusTest);
+        var allowedEffects = isolatedStatusTest
+            ? new HashSet<EffectKind> { EffectKind.LaunchTask, EffectKind.RunCi, EffectKind.PublishRequiredStatus }
+            : null;
+        var reconcile = new ReconcileOptions(false, true, true, true,
+            AllowedEffectKinds: allowedEffects,
+            AllowedRequiredStatusStates: isolatedStatusTest ? new HashSet<string>(["success"], StringComparer.Ordinal) : null,
+            MaximumEffectExecutions: isolatedStatusTest ? 3 : null);
+        return await new OrchestrationWorker(reducer, clock).RunAsync(stateStore, events,
+            new TaskObservations(tasks, clock, excludedIssueNumber), effects, reconcile,
+            isolatedStatusTest ? new WorkerOptions { MaximumIterations = 256, MaximumDuration = TimeSpan.FromMinutes(30),
+                PollInterval = TimeSpan.FromSeconds(15) } : options, token);
+    }
+
+    private static bool stateHasOutOfScopeData(RepositoryState state, int issueNumber) =>
+        state.Issues.Keys.Any(number => number != issueNumber) ||
+        state.Outbox.Values.Any(effect => effect.IssueNumber != issueNumber);
+
+    private static void ValidateIsolatedState(RepositoryState state, int issueNumber, string manifestDigest)
+    {
+        if (state.IsolatedTestManifestDigest != manifestDigest ||
+            state.Issues.Keys.Any(number => number != issueNumber) ||
+            state.Outbox.Values.Any(effect => effect.IssueNumber != issueNumber) ||
+            state.AdmittedIssue is { } admitted && admitted != issueNumber ||
+            state.Issues.TryGetValue(issueNumber, out var issue) &&
+            (!issue.SinglePassTest || issue.Tasks.Count > 1 || issue.Round > 1 ||
+             issue.Tasks.Values.Any(task => task.Kind != TaskKind.Coding) ||
+             issue.Ci is not null && state.Outbox.Values.Count(effect =>
+                 effect.IssueNumber == issueNumber && effect.Kind == EffectKind.RunCi) > 1 ||
+             state.Outbox.Values.Any(effect => effect.IssueNumber == issueNumber &&
+                 effect.Kind == EffectKind.RequestReview)))
+            throw new InvalidDataException("Canonical state exceeds the isolated status-test manifest limits.");
+    }
+
+    private static async Task PinIsolatedManifestAsync(IStateStore store, OrchestrationEvent message,
+        string manifestDigest, CancellationToken token)
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var snapshot = await store.LoadAsync(token);
+            var saved = snapshot.State.IsolatedTestManifestDigest;
+            if (saved is not null)
+            {
+                if (saved != manifestDigest) throw new InvalidDataException("Isolated test manifest changed after initialization.");
+                return;
+            }
+            if (snapshot.State.Issues.Count != 0 || snapshot.State.Outbox.Count != 0 ||
+                snapshot.State.Inbox.Count != 0 || snapshot.State.AdmittedIssue is not null ||
+                message.Data is not Ready)
+                throw new InvalidDataException("Only a fresh isolated state can pin the test manifest.");
+            var next = StateJson.Clone(snapshot.State);
+            next.IsolatedTestManifestDigest = manifestDigest;
+            next.Version++;
+            if (await store.TrySaveAsync(snapshot, next, token)) return;
+        }
+        throw new InvalidOperationException("Isolated test manifest publication conflict limit exceeded.");
     }
 
     public async Task<WorkerResult> PreviewAsync(JsonElement trustedActionsPayload, string eventName, string runId,
@@ -242,7 +342,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
 
     private sealed class ProductionEvents(OrchestrationEvent? command, GitHubRepositoryApi api,
         GitHubTaskAdapter tasks, GitHubReviewAdapter reviews, GitHubCiAdapter? ci,
-        VerifiedEvents authorization, long projectionActorId, int? excludedIssueNumber) : IWorkerEventSource
+        VerifiedEvents authorization, long projectionActorId, int? excludedIssueNumber,
+        bool readReviewEvents = true) : IWorkerEventSource
     {
         private readonly Dictionary<string, OrchestrationEvent> acceptedObservations = [];
         private bool reactivationBoundaryPending = command?.Data is Reactivate;
@@ -289,12 +390,13 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                     var result = await ci.ReadEventAsync(state, issue, token);
                     if (result is not null && !state.Inbox.ContainsKey(result.Id)) messages.Add(result);
                 }
-            foreach (var issue in state.Issues.Values)
-            {
-                if (issue.Number == excludedIssueNumber) continue;
-                var result = await reviews.ReadEventAsync(state, issue, token);
-                if (result is not null && !state.Inbox.ContainsKey(result.Id)) messages.Add(result);
-            }
+            if (readReviewEvents)
+                foreach (var issue in state.Issues.Values)
+                {
+                    if (issue.Number == excludedIssueNumber) continue;
+                    var result = await reviews.ReadEventAsync(state, issue, token);
+                    if (result is not null && !state.Inbox.ContainsKey(result.Id)) messages.Add(result);
+                }
             var batch = new List<OrchestrationEvent>();
             foreach (var message in messages.Take(128))
             {

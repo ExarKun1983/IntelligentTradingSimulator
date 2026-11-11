@@ -9,7 +9,8 @@ public sealed record GitHubCiApproval(bool ActivationApproved = false, bool ApiC
     public bool AllowsCi => ActivationApproved && ApiCredentialVerified && TrustedWorkflowVerified && NoAdditionalChargesVerified;
 }
 
-public sealed record GitHubCiRoute(long WorkflowId, string Ref, string WorkflowSha);
+public sealed record GitHubCiRoute(long WorkflowId, string Ref, string WorkflowSha,
+    string WorkflowPath = GitHubCiAdapter.WorkflowPath);
 
 /// <summary>Dispatches the trusted workflow, never a workflow definition from the coding branch.</summary>
 public sealed class GitHubCiAdapter(GitHubRepositoryApi api, IStateStore store, GitHubCiRoute route,
@@ -30,7 +31,8 @@ public sealed class GitHubCiAdapter(GitHubRepositoryApi api, IStateStore store, 
         await VerifyRouteAsync(token);
         await ValidateCandidateShaAsync(state, issue, token);
         if (!await LiveEligibleAsync(issue, token)) throw new InvalidDataException("CI head or open mapping changed.");
-        var boundary = new CiDispatchBoundary(route.WorkflowId, route.WorkflowSha, route.Ref, Correlation(intent), clock.GetUtcNow());
+        var boundary = new CiDispatchBoundary(route.WorkflowId, route.WorkflowSha, route.Ref, Correlation(intent),
+            clock.GetUtcNow(), WorkflowPath: route.WorkflowPath);
         await SaveBoundaryAsync(intent, boundary, token);
         var latest = (await store.LoadAsync(token)).State;
         var latestIssue = ValidateIntent(latest, intent);
@@ -155,12 +157,13 @@ public sealed class GitHubCiAdapter(GitHubRepositoryApi api, IStateStore store, 
     {
         if (route.WorkflowId <= 0 || !route.Ref.StartsWith("refs/tags/", StringComparison.Ordinal) ||
             route.Ref.Length <= "refs/tags/".Length ||
-            route.WorkflowSha.Length != 40 || !route.WorkflowSha.All(Uri.IsHexDigit))
+            route.WorkflowSha.Length != 40 || !route.WorkflowSha.All(Uri.IsHexDigit) ||
+            route.WorkflowPath is not (WorkflowPath or GitHubIsolatedStatusTestSettings.CiWorkflowPath))
             throw new InvalidDataException("Invalid trusted CI route.");
         await api.VerifyRepositoryAsync(token);
         using var workflow = await api.GetAsync($"actions/workflows/{route.WorkflowId}", token);
         if (workflow.RootElement.GetProperty("id").GetInt64() != route.WorkflowId ||
-            workflow.RootElement.GetProperty("path").GetString() != WorkflowPath ||
+            workflow.RootElement.GetProperty("path").GetString() != route.WorkflowPath ||
             workflow.RootElement.GetProperty("state").GetString() != "active")
             throw new InvalidDataException("Trusted managed CI workflow is unavailable.");
         using var commit = await api.GetAsync("commits/" + Uri.EscapeDataString(route.Ref), token);
@@ -179,13 +182,16 @@ public sealed class GitHubCiAdapter(GitHubRepositoryApi api, IStateStore store, 
             throw new InvalidDataException("CI live repository/mapping identity mismatch.");
         return liveIssue.RootElement.GetProperty("state").GetString() == "open" &&
             pull.RootElement.GetProperty("state").GetString() == "open" &&
+            (route.WorkflowPath != GitHubIsolatedStatusTestSettings.CiWorkflowPath ||
+                pull.RootElement.GetProperty("draft").GetBoolean() &&
+                pull.RootElement.GetProperty("base").GetProperty("ref").GetString() == GitHubIsolatedStatusTestSettings.BaseBranch) &&
             pull.RootElement.GetProperty("head").GetProperty("sha").GetString() == issue.HeadSha;
     }
 
     private void ValidateRun(JsonElement run, long runId, CiDispatchBoundary boundary)
     {
         if (run.GetProperty("id").GetInt64() != runId || run.GetProperty("workflow_id").GetInt64() != boundary.WorkflowId ||
-            run.GetProperty("path").GetString() != WorkflowPath || run.GetProperty("event").GetString() != "workflow_dispatch" ||
+            run.GetProperty("path").GetString() != boundary.WorkflowPath || run.GetProperty("event").GetString() != "workflow_dispatch" ||
             run.GetProperty("head_sha").GetString() != boundary.WorkflowSha || run.GetProperty("run_attempt").GetInt32() != 1 ||
             run.GetProperty("display_title").GetString() != boundary.Correlation ||
             run.GetProperty("repository").GetProperty("id").GetInt64() != api.RepositoryId)

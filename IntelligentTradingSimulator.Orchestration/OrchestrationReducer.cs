@@ -1,7 +1,7 @@
 namespace IntelligentTradingSimulator.Orchestration;
 
 public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = null, bool requiredStatusEnabled = false,
-    int? excludedIssueNumber = null)
+    int? excludedIssueNumber = null, bool reviewRequestsEnabled = true)
 {
     public const int MaximumIndexEntries = 2048;
     private readonly IAuthorizationPolicy authorization = authorization ?? new DenyAllAuthorizationPolicy();
@@ -472,7 +472,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                             issue.Review?.Classification == ReviewClassification.Blocking ? TaskKind.ReviewRepair :
                             issue.PendingFeedbackEventIds.Count > 0 ? TaskKind.FeedbackRepair : TaskKind.ReviewRepair, observation.ObservedAt);
                 }
-                if (issue.Phase == Phase.REVIEW_PENDING && issue.Ci?.Green == true &&
+                if (reviewRequestsEnabled && issue.Phase == Phase.REVIEW_PENDING && issue.Ci?.Green == true &&
                     issue.PendingFeedbackEventIds.Count == 0 &&
                     (issue.Review is null || issue.Review.Sha != issue.HeadSha || issue.Review.TaskId != issue.ActiveTaskId))
                 {
@@ -550,6 +550,20 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         return new(state, state.Outbox.Values.Where(e => e.Status == DeliveryStatus.Pending).ToList());
     }
 
+    public RepositoryState PlanRequiredStatusRevocation(RepositoryState input, int issueNumber, DateTimeOffset now)
+    {
+        ValidateState(input);
+        var state = StateJson.Clone(input);
+        var issue = state.Issues[issueNumber];
+        if (issue.Number == excludedIssueNumber || issue.PullRequest is not > 0 || !IsSha(issue.HeadSha) ||
+            RequiredStatusPolicy.Desired(state, issue).State != "error")
+            throw new InvalidOperationException("Status-only recovery requires a held mapped head and a non-success status.");
+        PlanRequiredStatus(state, issue, now);
+        if (StateJson.Serialize(state) != StateJson.Serialize(input))
+            Touch(state, issue, input.LastEventId);
+        return state;
+    }
+
     public RepositoryState MarkExecuting(RepositoryState input, string id, DateTimeOffset now) =>
         ChangeEffect(input, id, effect =>
         {
@@ -563,6 +577,12 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         if (outcome.Status is not (DeliveryStatus.Succeeded or DeliveryStatus.Failed or DeliveryStatus.Unknown))
             throw new InvalidOperationException("Invalid effect outcome.");
         var existing = input.Outbox[id];
+        if (existing.Kind == EffectKind.RequestReview && outcome.Status == DeliveryStatus.Failed &&
+            outcome.FailureCode is EffectFailureCode.ReviewPrerequisitesUnverified or
+                EffectFailureCode.ReviewPreflightRejected or EffectFailureCode.ReviewIdentityMismatch &&
+            (existing.Status == DeliveryStatus.Unknown ||
+                input.Issues[existing.IssueNumber].Review?.RequestBoundary is not null))
+            outcome = outcome with { Status = DeliveryStatus.Unknown };
         if (existing.Status == DeliveryStatus.Succeeded)
         {
             if (outcome.Status == DeliveryStatus.Succeeded && existing.ExternalId != outcome.ExternalId)
@@ -570,7 +590,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             return StateJson.Clone(input);
         }
         if (existing.Status == DeliveryStatus.Unknown && outcome.Status == DeliveryStatus.Unknown &&
-            (outcome.ExternalId is null || existing.ExternalId == outcome.ExternalId))
+            (outcome.ExternalId is null || existing.ExternalId == outcome.ExternalId) &&
+            (outcome.FailureCode is null || existing.FailureCode == outcome.FailureCode))
             return StateJson.Clone(input);
         return ChangeEffect(input, id, effect =>
         {
@@ -579,6 +600,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             effect.Status = outcome.Status;
             effect.ExternalId = outcome.ExternalId ?? effect.ExternalId;
             effect.CompletedAt = now;
+            effect.FailureCode = outcome.Status == DeliveryStatus.Succeeded ? null :
+                outcome.FailureCode ?? effect.FailureCode;
             if (outcome.Status == DeliveryStatus.Succeeded && effect.Kind != EffectKind.ProjectLabels &&
                 string.IsNullOrWhiteSpace(outcome.ExternalId))
                 throw new InvalidOperationException("Successful remote operation requires an identity.");

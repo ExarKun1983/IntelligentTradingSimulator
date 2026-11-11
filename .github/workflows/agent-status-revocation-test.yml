@@ -1,0 +1,124 @@
+name: Isolated required-status recovery test (disabled by default)
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Exact isolated test Issue
+        required: true
+        type: string
+      operation:
+        description: Bootstrap once, start one bounded pass, or pause it
+        required: true
+        type: choice
+        options: [status-test-bootstrap, status-test-start, pause]
+      repository_generation:
+        description: Expected isolated repository generation
+        required: true
+        type: string
+        default: "1"
+      issue_generation:
+        description: Expected isolated Issue generation
+        required: true
+        type: string
+        default: "1"
+      reason:
+        description: Required audit reason for pause
+        required: false
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+  issues: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  isolated-test:
+    if: >-
+      ${{
+        github.workflow_ref == format('{0}/.github/workflows/agent-status-revocation-test.yml@{1}',
+          github.repository, vars.ORCHESTRATION_STATUS_TEST_DRIVER_REF) &&
+        github.workflow_sha == vars.ORCHESTRATION_STATUS_TEST_DEFINITION_SHA &&
+        github.actor_id == vars.ORCHESTRATION_STATUS_TEST_ACTOR_ID &&
+        vars.ORCHESTRATION_STATUS_TEST_APPROVED == 'true' &&
+        vars.ORCHESTRATION_STATUS_TEST_ISSUE == inputs.issue &&
+        vars.ORCHESTRATION_STATUS_TEST_STATE_REF == 'refs/heads/agent-state-status-revocation-v1' &&
+        vars.ORCHESTRATION_STATUS_TEST_BASE_BRANCH == 'agent-status-revocation-base-v1' &&
+        vars.ORCHESTRATION_STATUS_TEST_CI_REF == 'refs/tags/agent-status-revocation-definition-v1' &&
+        vars.ORCHESTRATION_STATUS_TEST_DRIVER_REF == 'refs/tags/agent-status-revocation-definition-v1' &&
+        vars.ORCHESTRATION_STATUS_TEST_ENVIRONMENT == 'agent-status-revocation-test' &&
+        (inputs.operation != 'status-test-bootstrap' || vars.ORCHESTRATION_STATUS_TEST_BOOTSTRAP_APPROVED == 'true')
+      }}
+    runs-on: ubuntu-latest
+    environment: agent-status-revocation-test
+    timeout-minutes: 35
+    steps:
+      - name: Require immutable isolated definitions
+        env:
+          DEFINITION_SHA: ${{ vars.ORCHESTRATION_STATUS_TEST_DEFINITION_SHA }}
+          CI_DEFINITION_SHA: ${{ vars.ORCHESTRATION_STATUS_TEST_CI_DEFINITION_SHA }}
+          EXPIRES_AT: ${{ vars.ORCHESTRATION_STATUS_TEST_EXPIRES_AT }}
+        run: |
+          [[ "$DEFINITION_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CI_DEFINITION_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GITHUB_WORKFLOW_SHA" == "$DEFINITION_SHA" ]]
+          python - "$EXPIRES_AT" <<'PY'
+          import datetime, sys
+          expiration = datetime.datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+          now = datetime.datetime.now(datetime.timezone.utc)
+          if expiration <= now or expiration > now + datetime.timedelta(hours=72):
+              raise SystemExit("isolated authorization is expired or exceeds 72 hours")
+          PY
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ vars.ORCHESTRATION_STATUS_TEST_DEFINITION_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+      - name: Build isolated driver
+        run: dotnet build IntelligentTradingSimulator.Orchestration --configuration Release
+      - name: Run isolated staged driver
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          ORCHESTRATION_STATUS_TEST_USER_TOKEN: ${{ secrets.ORCHESTRATION_STATUS_TEST_USER_TOKEN }}
+          ORCHESTRATION_STATUS_TEST_APPROVED: ${{ vars.ORCHESTRATION_STATUS_TEST_APPROVED }}
+          ORCHESTRATION_STATUS_TEST_BOOTSTRAP_APPROVED: ${{ vars.ORCHESTRATION_STATUS_TEST_BOOTSTRAP_APPROVED }}
+          ORCHESTRATION_STATUS_TEST_CREDENTIALS_VERIFIED: ${{ vars.ORCHESTRATION_STATUS_TEST_CREDENTIALS_VERIFIED }}
+          ORCHESTRATION_STATUS_TEST_TASK_ENTITLEMENT_VERIFIED: ${{ vars.ORCHESTRATION_STATUS_TEST_TASK_ENTITLEMENT_VERIFIED }}
+          ORCHESTRATION_STATUS_TEST_CI_VERIFIED: ${{ vars.ORCHESTRATION_STATUS_TEST_CI_VERIFIED }}
+          ORCHESTRATION_STATUS_TEST_STATUS_PUBLISHER_VERIFIED: ${{ vars.ORCHESTRATION_STATUS_TEST_STATUS_PUBLISHER_VERIFIED }}
+          ORCHESTRATION_STATUS_TEST_CONTEXT_PROTECTION_VERIFIED: ${{ vars.ORCHESTRATION_STATUS_TEST_CONTEXT_PROTECTION_VERIFIED }}
+          ORCHESTRATION_STATUS_TEST_NO_ADDED_CHARGES_VERIFIED: ${{ vars.ORCHESTRATION_STATUS_TEST_NO_ADDED_CHARGES_VERIFIED }}
+          ORCHESTRATION_STATUS_TEST_ACTOR_ID: ${{ vars.ORCHESTRATION_STATUS_TEST_ACTOR_ID }}
+          ORCHESTRATION_STATUS_TEST_ISSUE: ${{ vars.ORCHESTRATION_STATUS_TEST_ISSUE }}
+          ORCHESTRATION_STATUS_TEST_WORKFLOW_ID: ${{ vars.ORCHESTRATION_STATUS_TEST_WORKFLOW_ID }}
+          ORCHESTRATION_STATUS_TEST_CI_WORKFLOW_ID: ${{ vars.ORCHESTRATION_STATUS_TEST_CI_WORKFLOW_ID }}
+          ORCHESTRATION_STATUS_TEST_DEFINITION_SHA: ${{ vars.ORCHESTRATION_STATUS_TEST_DEFINITION_SHA }}
+          ORCHESTRATION_STATUS_TEST_CI_DEFINITION_SHA: ${{ vars.ORCHESTRATION_STATUS_TEST_CI_DEFINITION_SHA }}
+          ORCHESTRATION_STATUS_TEST_STATE_REF: ${{ vars.ORCHESTRATION_STATUS_TEST_STATE_REF }}
+          ORCHESTRATION_STATUS_TEST_BASE_BRANCH: ${{ vars.ORCHESTRATION_STATUS_TEST_BASE_BRANCH }}
+          ORCHESTRATION_STATUS_TEST_CI_REF: ${{ vars.ORCHESTRATION_STATUS_TEST_CI_REF }}
+          ORCHESTRATION_STATUS_TEST_DRIVER_REF: ${{ vars.ORCHESTRATION_STATUS_TEST_DRIVER_REF }}
+          ORCHESTRATION_STATUS_TEST_ENVIRONMENT: agent-status-revocation-test
+          ORCHESTRATION_STATUS_TEST_EXPIRES_AT: ${{ vars.ORCHESTRATION_STATUS_TEST_EXPIRES_AT }}
+        run: |
+          dotnet run --no-build --project IntelligentTradingSimulator.Orchestration \
+            --configuration Release -- \
+            --github-live --github-isolated-status-test --execute \
+            > "$RUNNER_TEMP/isolated-status-test-result.json"
+      - name: Preserve sanitized test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: isolated-status-test-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/isolated-status-test-result.json
+          if-no-files-found: warn
+          retention-days: 7

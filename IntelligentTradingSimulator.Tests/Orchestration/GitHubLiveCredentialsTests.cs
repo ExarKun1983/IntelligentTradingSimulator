@@ -1,4 +1,6 @@
 using System.Net;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using IntelligentTradingSimulator.Orchestration;
 
@@ -102,6 +104,9 @@ public sealed class GitHubLiveCredentialsTests
         Assert.Contains("vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '227'", workflow);
         Assert.Contains("vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'", workflow);
         Assert.Contains("vars.ORCHESTRATION_DEFINITION_SHA == github.sha", workflow);
+        Assert.Contains("vars.ORCHESTRATION_REVIEW_POLICY_VERIFIED == 'true'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED == 'true'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_TRUSTED_CI_VERIFIED == 'true'", workflow);
         Assert.Contains("agent-managed-ci-test-237-v1", workflow);
         Assert.Contains("GH_TOKEN: ${{ github.token }}", workflow);
         Assert.Contains("CI_DEFINITION_SHA matches the new tag target", workflow);
@@ -216,6 +221,67 @@ public sealed class GitHubLiveCredentialsTests
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "IntelligentTradingSimulator.sln")))
             directory = directory.Parent;
         return directory?.FullName ?? throw new InvalidOperationException("Repository root not found.");
+    }
+
+    [Theory]
+    [InlineData("ORCHESTRATION_REVIEW_POLICY_VERIFIED")]
+    [InlineData("ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED")]
+    [InlineData("ORCHESTRATION_TRUSTED_CI_VERIFIED")]
+    public void PipelinePreflightRejectsMissingDownstreamApprovalEvenInBoundedMode(string name)
+    {
+        var values = LiveSettingsValues();
+        values["ORCHESTRATION_TEST_ISSUE"] = "237";
+        values["ORCHESTRATION_RETIRED_TEST_ISSUE"] = "227";
+        values["ORCHESTRATION_TEST_MAX_REPAIR_TASKS"] = "1";
+        GitHubLiveSettings.Read(key => values.GetValueOrDefault(key)).ValidatePipelinePrerequisites();
+        values.Remove(name);
+
+        var settings = GitHubLiveSettings.Read(key => values.GetValueOrDefault(key));
+        Assert.Throws<InvalidOperationException>(settings.ValidatePipelinePrerequisites);
+        Assert.True(settings.Tasks.AllowsTasks);
+    }
+
+    [Theory]
+    [InlineData("ORCHESTRATION_REVIEW_POLICY_VERIFIED", "Review prerequisites")]
+    [InlineData("ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED", "Review prerequisites")]
+    [InlineData("ORCHESTRATION_TRUSTED_CI_VERIFIED", "Managed CI prerequisites")]
+    public async Task LiveCliRejectsDownstreamGateBeforeCredentialsApisOrState(string name, string reason)
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(path, "{\"issue\":{\"number\":237}}");
+            var host = Path.GetFullPath(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(),
+                "..", "..", "..", OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet"));
+            var start = new ProcessStartInfo(host) { RedirectStandardOutput = true, RedirectStandardError = true };
+            start.ArgumentList.Add(typeof(GitHubLiveCommand).Assembly.Location);
+            start.ArgumentList.Add("--github-live");
+            start.ArgumentList.Add("--execute");
+            var values = LiveSettingsValues();
+            values["ORCHESTRATION_TEST_ISSUE"] = "237";
+            values["ORCHESTRATION_RETIRED_TEST_ISSUE"] = "227";
+            values["ORCHESTRATION_TEST_MAX_REPAIR_TASKS"] = "1";
+            values[name] = "";
+            foreach (var value in values) start.Environment[value.Key] = value.Value;
+            start.Environment["ORCHESTRATION_USER_TOKEN"] = "";
+            start.Environment["GITHUB_TOKEN"] = "";
+            start.Environment["GITHUB_EVENT_PATH"] = path;
+            start.Environment["GITHUB_EVENT_NAME"] = "issues";
+            using var process = Process.Start(start)!;
+            var output = process.StandardOutput.ReadToEndAsync();
+            var error = process.StandardError.ReadToEndAsync();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await process.WaitForExitAsync(timeout.Token);
+
+            Assert.Equal(1, process.ExitCode);
+            Assert.Empty(await output);
+            Assert.Contains(reason, await error);
+            Assert.Contains("No API calls or state writes were made.", await error);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     private static Dictionary<string, string> LiveSettingsValues()

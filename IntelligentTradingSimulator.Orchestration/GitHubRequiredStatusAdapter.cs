@@ -113,6 +113,9 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
             pr.GetProperty("number").GetInt32() != issue.PullRequest ||
             pr.GetProperty("base").GetProperty("repo").GetProperty("id").GetInt64() != api.RepositoryId ||
             pr.GetProperty("head").GetProperty("repo").GetProperty("id").GetInt64() != api.RepositoryId ||
+            state.IsolatedTestManifestDigest is not null &&
+                (!pr.GetProperty("draft").GetBoolean() ||
+                 pr.GetProperty("base").GetProperty("ref").GetString() != GitHubIsolatedStatusTestSettings.BaseBranch) ||
             pr.GetProperty("head").GetProperty("sha").GetString() != intent.Sha)
             throw new InvalidDataException("Required-status live head/repository mapping changed.");
         if (intent.RequiredStatus!.State == "success")
@@ -136,7 +139,7 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
         if (root.GetProperty("id").GetInt64() != boundary.RunId ||
             root.GetProperty("workflow_id").GetInt64() != boundary.WorkflowId ||
             root.GetProperty("repository").GetProperty("id").GetInt64() != api.RepositoryId ||
-            root.GetProperty("path").GetString() != GitHubCiAdapter.WorkflowPath ||
+            root.GetProperty("path").GetString() != boundary.WorkflowPath ||
             root.GetProperty("event").GetString() != "workflow_dispatch" ||
             root.GetProperty("head_sha").GetString() != boundary.WorkflowSha ||
             root.GetProperty("run_attempt").GetInt32() != 1 ||
