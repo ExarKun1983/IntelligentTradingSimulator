@@ -451,6 +451,24 @@ public sealed class GitHubReviewIntegrationTests
     }
 
     [Theory]
+    [InlineData("empty-pending-identity")]
+    [InlineData("node-pending-identity")]
+    [InlineData("empty-history-identity")]
+    [InlineData("node-history-identity")]
+    public async Task AbandonmentRejectsIncompleteOrContradictoryReviewerIdentities(string corruption)
+    {
+        var state = UncertainReview();
+        var handler = new Api { Corruption = corruption };
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, new Store(state));
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            adapter.ReadAbandonmentEvidenceAsync(state, state.Issues[7], "review", Sha, Now, default));
+        Assert.Equal(0, handler.Posts);
+        Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
+    }
+
+    [Theory]
     [InlineData("COMMENTED")]
     [InlineData("APPROVED")]
     [InlineData("CHANGES_REQUESTED")]
@@ -775,6 +793,13 @@ public sealed class GitHubReviewIntegrationTests
         public Action? BeforePost { get; set; }
         public HttpClient Client() => new(this) { BaseAddress = new("https://api.github.com/") };
         public string ReviewerLogin { get; init; } = "Copilot";
+        private object AbandonmentActor => Corruption switch
+        {
+            "empty-pending-identity" or "empty-history-identity" => new { },
+            "node-pending-identity" or "node-history-identity" => new
+                { id = 66, node_id = "BOT_kgDOCnlnWA", login = "impostor", type = "Bot" },
+            _ => Actor()
+        };
         private object Actor(bool bad = false) => new
         {
             id = bad || Corruption == "bot-id" ? 66 : 175728472,
@@ -841,8 +866,10 @@ public sealed class GitHubReviewIntegrationTests
             else if (path == "/repos/owner/repo/pulls/17") response = Pull();
             else if (path.StartsWith("/users/")) response = Actor();
             else if (path.EndsWith("/requested_reviewers"))
-                response = new { users = Corruption == "existing-request" ? new[] { Actor() } :
-                    Corruption == "abandon-pending" ? new[] { Actor() } : [], teams = Array.Empty<object>() };
+                response = new { users =
+                    Corruption is "existing-request" or "abandon-pending" ? new object[] { Actor() } :
+                    Corruption is "empty-pending-identity" or "node-pending-identity"
+                        ? new object[] { AbandonmentActor } : [], teams = Array.Empty<object>() };
             else if (path.EndsWith("/reviews"))
             {
                 if (ConcurrentPreflight)
@@ -854,6 +881,8 @@ public sealed class GitHubReviewIntegrationTests
                 if (secondPage && FailSecondPage) throw new HttpRequestException("Injected second-page lookup failure");
                 if (Paginated && !secondPage)
                     response = Enumerable.Range(1, 100).Select(id => new { id, state = "COMMENTED", user = Actor() }).ToArray();
+                else if (Corruption is "empty-history-identity" or "node-history-identity")
+                    response = new[] { new { id = 101, state = "COMMENTED", user = AbandonmentActor } };
                 else response = Corruption == "no-reviews" ? [] : Paginated ? HasOutput ? new[] { Review(false) } : [] :
                     HasOutput ? new[] { Review(true), Review(false) } : new[] { Review(true) };
             }

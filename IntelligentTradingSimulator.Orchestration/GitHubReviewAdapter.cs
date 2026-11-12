@@ -276,9 +276,17 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
         user.TryGetProperty("login", out var login) && login.GetString() is Reviewer or "Copilot" &&
         user.TryGetProperty("type", out var type) && type.GetString() == "Bot";
 
-    private static bool IsReviewerCandidate(JsonElement user) =>
-        user.TryGetProperty("id", out var id) && id.TryGetInt64(out var number) && number == ReviewerId ||
-        user.TryGetProperty("login", out var login) && login.GetString() is Reviewer or "Copilot";
+    private static bool IsReviewerCandidate(JsonElement user)
+    {
+        if (user.ValueKind != JsonValueKind.Object ||
+            !user.TryGetProperty("id", out var id) || !id.TryGetInt64(out var number) || number <= 0 ||
+            !user.TryGetProperty("node_id", out var node) || node.GetString() is not { Length: > 0 } nodeId ||
+            !user.TryGetProperty("login", out var login) || login.GetString() is not { Length: > 0 } loginName ||
+            !user.TryGetProperty("type", out var type) || type.GetString() is not { Length: > 0 })
+            throw new InvalidDataException("Reviewer identity is incomplete.");
+
+        return number == ReviewerId || nodeId == ReviewerNodeId || loginName is Reviewer or "Copilot";
+    }
 
     private static bool ActorMatches(JsonElement user, ReviewRequestBoundary boundary) =>
         boundary.ReviewerId == ReviewerId && boundary.ReviewerNodeId == ReviewerNodeId && VerifiedReviewer(user);
