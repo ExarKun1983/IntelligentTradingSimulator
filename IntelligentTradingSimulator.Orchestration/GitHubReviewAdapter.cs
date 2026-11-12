@@ -279,13 +279,17 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
     private static bool IsReviewerCandidate(JsonElement user)
     {
         if (user.ValueKind != JsonValueKind.Object ||
-            !user.TryGetProperty("id", out var id) || !id.TryGetInt64(out var number) || number <= 0 ||
-            !user.TryGetProperty("node_id", out var node) || node.GetString() is not { Length: > 0 } nodeId ||
-            !user.TryGetProperty("login", out var login) || login.GetString() is not { Length: > 0 } loginName ||
-            !user.TryGetProperty("type", out var type) || type.GetString() is not { Length: > 0 })
+            !user.TryGetProperty("id", out var id) || id.ValueKind != JsonValueKind.Number ||
+            !id.TryGetInt64(out var number) || number <= 0 ||
+            !user.TryGetProperty("node_id", out var node) || node.ValueKind != JsonValueKind.String ||
+            string.IsNullOrWhiteSpace(node.GetString()) ||
+            !user.TryGetProperty("login", out var login) || login.ValueKind != JsonValueKind.String ||
+            string.IsNullOrWhiteSpace(login.GetString()) ||
+            !user.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String ||
+            string.IsNullOrWhiteSpace(type.GetString()))
             throw new InvalidDataException("Reviewer identity is incomplete.");
 
-        return number == ReviewerId || nodeId == ReviewerNodeId || loginName is Reviewer or "Copilot";
+        return number == ReviewerId || node.GetString() == ReviewerNodeId || login.GetString() is Reviewer or "Copilot";
     }
 
     private static bool ActorMatches(JsonElement user, ReviewRequestBoundary boundary) =>

@@ -455,6 +455,10 @@ public sealed class GitHubReviewIntegrationTests
     [InlineData("node-pending-identity")]
     [InlineData("empty-history-identity")]
     [InlineData("node-history-identity")]
+    [InlineData("whitespace-pending-identity")]
+    [InlineData("whitespace-history-identity")]
+    [InlineData("malformed-pending-identity")]
+    [InlineData("malformed-history-identity")]
     public async Task AbandonmentRejectsIncompleteOrContradictoryReviewerIdentities(string corruption)
     {
         var state = UncertainReview();
@@ -798,6 +802,10 @@ public sealed class GitHubReviewIntegrationTests
             "empty-pending-identity" or "empty-history-identity" => new { },
             "node-pending-identity" or "node-history-identity" => new
                 { id = 66, node_id = "BOT_kgDOCnlnWA", login = "impostor", type = "Bot" },
+            "whitespace-pending-identity" or "whitespace-history-identity" => new
+                { id = 66, node_id = " \t ", login = "maintainer", type = "User" },
+            "malformed-pending-identity" or "malformed-history-identity" => new
+                { id = "66", node_id = "USER_node", login = "maintainer", type = "User" },
             _ => Actor()
         };
         private object Actor(bool bad = false) => new
@@ -868,7 +876,8 @@ public sealed class GitHubReviewIntegrationTests
             else if (path.EndsWith("/requested_reviewers"))
                 response = new { users =
                     Corruption is "existing-request" or "abandon-pending" ? new object[] { Actor() } :
-                    Corruption is "empty-pending-identity" or "node-pending-identity"
+                    Corruption is "empty-pending-identity" or "node-pending-identity" or
+                        "whitespace-pending-identity" or "malformed-pending-identity"
                         ? new object[] { AbandonmentActor } : [], teams = Array.Empty<object>() };
             else if (path.EndsWith("/reviews"))
             {
@@ -881,7 +890,8 @@ public sealed class GitHubReviewIntegrationTests
                 if (secondPage && FailSecondPage) throw new HttpRequestException("Injected second-page lookup failure");
                 if (Paginated && !secondPage)
                     response = Enumerable.Range(1, 100).Select(id => new { id, state = "COMMENTED", user = Actor() }).ToArray();
-                else if (Corruption is "empty-history-identity" or "node-history-identity")
+                else if (Corruption is "empty-history-identity" or "node-history-identity" or
+                    "whitespace-history-identity" or "malformed-history-identity")
                     response = new[] { new { id = 101, state = "COMMENTED", user = AbandonmentActor } };
                 else response = Corruption == "no-reviews" ? [] : Paginated ? HasOutput ? new[] { Review(false) } : [] :
                     HasOutput ? new[] { Review(true), Review(false) } : new[] { Review(true) };
