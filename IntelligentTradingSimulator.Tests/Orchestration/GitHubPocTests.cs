@@ -136,8 +136,7 @@ public sealed class GitHubPocTests
     [Theory]
     [InlineData("rerun")]
     [InlineData("triggering-actor")]
-    [InlineData("moved-tag")]
-    [InlineData("moved-base")]
+    [InlineData("moved-master")]
     [InlineData("missing-state")]
     [InlineData("manifest")]
     [InlineData("second-start")]
@@ -302,9 +301,7 @@ public sealed class GitHubPocTests
                     run_attempt = corruption == "rerun" ? 2 : 1, actor = new { id = 55 },
                     triggering_actor = new { id = corruption == "triggering-actor" ? 66 : 55 }, created_at = Now };
             else if (path == prefix + "/commits/" + GitHubPocSettings.DefinitionReference)
-                response = new { sha = corruption == "moved-tag" ? Tip : Definition };
-            else if (path == prefix + "/branches/" + GitHubPocSettings.BaseBranch)
-                response = new { commit = new { sha = corruption == "moved-base" ? Tip : Definition } };
+                response = new { sha = corruption == "moved-master" ? Tip : Definition };
             else if (path == "/users/maintainer") response = new { id = 55, type = "User" };
             else if (path == prefix + "/collaborators/maintainer/permission")
                 response = new { user = new { id = 55 }, permission = "write" };

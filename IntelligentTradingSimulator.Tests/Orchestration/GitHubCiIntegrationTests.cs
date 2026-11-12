@@ -45,7 +45,8 @@ public sealed class GitHubCiIntegrationTests
         var api = new Api { WorkflowPath = path, BaseBranch = path == GitHubPocSettings.CiWorkflowPath
             ? GitHubPocSettings.BaseBranch : GitHubIsolatedStatusTestSettings.BaseBranch };
         using var client = api.Client();
-        var route = Route with { WorkflowPath = path };
+        var route = Route with { WorkflowPath = path, Ref = path == GitHubPocSettings.CiWorkflowPath
+            ? GitHubPocSettings.DefinitionReference : Route.Ref };
         var adapter = CreateAdapter(client, store, route);
 
         var outcome = await adapter.ExecuteAsync(store.Value.Outbox["ci"], default);
@@ -56,16 +57,33 @@ public sealed class GitHubCiIntegrationTests
     }
 
     [Theory]
-    [InlineData("master", true)]
+    [InlineData("other", true)]
     [InlineData(GitHubPocSettings.BaseBranch, false)]
     public async Task PocCiRejectsWrongBaseOrNonDraftBeforeDispatch(string baseBranch, bool draft)
     {
         var store = new Store(State());
         var api = new Api { WorkflowPath = GitHubPocSettings.CiWorkflowPath, BaseBranch = baseBranch, Draft = draft };
         using var client = api.Client();
-        var adapter = CreateAdapter(client, store, Route with { WorkflowPath = GitHubPocSettings.CiWorkflowPath });
+        var adapter = CreateAdapter(client, store, Route with { WorkflowPath = GitHubPocSettings.CiWorkflowPath,
+            Ref = GitHubPocSettings.DefinitionReference });
         await Assert.ThrowsAsync<InvalidDataException>(() => adapter.ExecuteAsync(store.Value.Outbox["ci"], default));
         Assert.Equal(0, api.Posts);
+    }
+
+    [Theory]
+    [InlineData("refs/tags/trusted-ci")]
+    [InlineData("refs/heads/other")]
+    public async Task PocCiRejectsDefinitionsOutsideMaster(string reference)
+    {
+        var store = new Store(State());
+        var api = new Api { WorkflowPath = GitHubPocSettings.CiWorkflowPath };
+        using var client = api.Client();
+        var adapter = CreateAdapter(client, store, Route with
+        {
+            WorkflowPath = GitHubPocSettings.CiWorkflowPath, Ref = reference
+        });
+        await Assert.ThrowsAsync<InvalidDataException>(() => adapter.ExecuteAsync(store.Value.Outbox["ci"], default));
+        Assert.Empty(api.Requests);
     }
 
     [Theory]

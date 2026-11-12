@@ -155,8 +155,11 @@ public sealed class GitHubCiAdapter(GitHubRepositoryApi api, IStateStore store, 
 
     private async Task VerifyRouteAsync(CancellationToken token)
     {
-        if (route.WorkflowId <= 0 || !route.Ref.StartsWith("refs/tags/", StringComparison.Ordinal) ||
-            route.Ref.Length <= "refs/tags/".Length ||
+        if (route.WorkflowId <= 0 ||
+            (route.WorkflowPath == GitHubPocSettings.CiWorkflowPath
+                ? route.Ref != GitHubPocSettings.DefinitionReference
+                : !route.Ref.StartsWith("refs/tags/", StringComparison.Ordinal) ||
+                    route.Ref.Length <= "refs/tags/".Length) ||
             route.WorkflowSha.Length != 40 || !route.WorkflowSha.All(Uri.IsHexDigit) ||
             route.WorkflowPath is not (WorkflowPath or GitHubIsolatedStatusTestSettings.CiWorkflowPath or
                 GitHubPocSettings.CiWorkflowPath))

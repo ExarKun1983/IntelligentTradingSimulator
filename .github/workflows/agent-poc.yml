@@ -76,7 +76,7 @@ jobs:
     if: >-
       ${{
         github.repository == 'ExarKun1983/IntelligentTradingSimulator' &&
-        github.workflow_ref == format('{0}/.github/workflows/agent-poc.yml@refs/tags/agent-poc-249-definition-v1', github.repository) &&
+        github.workflow_ref == format('{0}/.github/workflows/agent-poc.yml@refs/heads/master', github.repository) &&
         github.workflow_sha == vars.ORCHESTRATION_POC_DEFINITION_SHA &&
         github.actor_id == vars.ORCHESTRATION_POC_ACTOR_ID &&
         github.triggering_actor == github.actor &&
@@ -90,7 +90,7 @@ jobs:
     environment: agent-orchestration
     timeout-minutes: 35
     steps:
-      - name: Require immutable reviewed definition
+      - name: Require reviewed master definition
         env:
           DEFINITION_SHA: ${{ vars.ORCHESTRATION_POC_DEFINITION_SHA }}
         run: |

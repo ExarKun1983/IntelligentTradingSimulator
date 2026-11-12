@@ -58,11 +58,9 @@ public static class GitHubPocCommand
             var occurredAt = await VerifyRunAsync(api, settings, runId, token);
             using (var definition = await api.GetAsync(
                 "commits/" + Uri.EscapeDataString(GitHubPocSettings.DefinitionReference), token))
-            using (var baseBranch = await api.GetAsync("branches/" + GitHubPocSettings.BaseBranch, token))
             {
-                if (definition.RootElement.GetProperty("sha").GetString() != settings.DefinitionSha ||
-                    baseBranch.RootElement.GetProperty("commit").GetProperty("sha").GetString() != settings.DefinitionSha)
-                    throw new InvalidDataException("PoC definition tag or frozen base moved.");
+                if (definition.RootElement.GetProperty("sha").GetString() != settings.DefinitionSha)
+                    throw new InvalidDataException("PoC master definition moved.");
             }
 
             var transport = new GitHubGitTransport(client, settings.Repository, allowMutations: true,
@@ -83,7 +81,7 @@ public static class GitHubPocCommand
                 if (!await store.TrySaveAsync(snapshot, snapshot.State, token))
                     throw new InvalidOperationException("PoC bootstrap conflicted; inspect the state before continuing.");
                 store = new PocStateStore(store, settings.Repository, GitHubPocSettings.IssueNumber, settings.ManifestDigest);
-                await WriteEvidenceAsync(output, store, operation, null, token);
+                await WriteEvidenceAsync(output, store, operation, null, null, token);
                 return 0;
             }
 
@@ -110,7 +108,9 @@ public static class GitHubPocCommand
                 boundedScope: new(GitHubPocSettings.IssueNumber, 1, SinglePassTest: false),
                 commandOnly: operation == "pause", trustedWorkflowPath: GitHubPocSettings.DriverWorkflowPath,
                 requireDraftPullRequest: true);
-            await WriteEvidenceAsync(output, store, operation!, result, token);
+            var candidate = new GitHubTaskAdapter(api, store, GitHubPocSettings.BaseBranch, settings.ActorId,
+                settings.Tasks, taskApi: taskApi, requireDraftPullRequest: true);
+            await WriteEvidenceAsync(output, store, operation!, result, candidate, token);
             var final = (await store.LoadAsync(token)).State.Issues[GitHubPocSettings.IssueNumber];
             return result.Reason == WorkerStopReason.Blocked &&
                 final.HoldReason != "Review requires human classification." ? 1 : 0;
@@ -147,11 +147,12 @@ public static class GitHubPocCommand
         return root.GetProperty("created_at").GetDateTimeOffset();
     }
 
-    private static async Task WriteEvidenceAsync(TextWriter output, IStateStore store, string operation,
-        WorkerResult? result, CancellationToken token)
+    internal static async Task WriteEvidenceAsync(TextWriter output, IStateStore store, string operation,
+        WorkerResult? result, GitHubTaskAdapter? candidate, CancellationToken token)
     {
         var snapshot = await store.LoadAsync(token);
         var issue = snapshot.State.Issues.GetValueOrDefault(GitHubPocSettings.IssueNumber);
+        var completed = await IsCompleteAsync(snapshot.State, issue, candidate, token);
         output.WriteLine(JsonSerializer.Serialize(new
         {
             Mode = "github-poc", Operation = operation, Issue = GitHubPocSettings.IssueNumber,
@@ -168,11 +169,22 @@ public static class GitHubPocCommand
                 effect.Kind is EffectKind.LaunchTask or EffectKind.RunCi or EffectKind.RequestReview)
                 .Select(effect => new { effect.Id, effect.Kind, effect.Status, effect.TaskId, effect.Sha,
                     effect.ExternalId, effect.CreatedAt, effect.CompletedAt }).ToArray(),
-            Completed = issue?.Phase == Phase.HUMAN_REVIEW &&
-                issue.Review?.Classification == ReviewClassification.Accepted &&
-                issue.Ci?.Green == true && issue.Ci.Sha == issue.HeadSha && issue.Review.Sha == issue.HeadSha,
+            Completed = completed,
             MergeEnabled = false, RequiredStatusPublicationEnabled = false
         }, StateJson.Options));
+    }
+
+    internal static async Task<bool> IsCompleteAsync(RepositoryState state, IssueState? issue,
+        GitHubTaskAdapter? candidate, CancellationToken token)
+    {
+        if (issue?.Phase != Phase.HUMAN_REVIEW ||
+            issue.Review?.Classification != ReviewClassification.Accepted ||
+            issue.Ci?.Green != true || issue.Ci.Sha != issue.HeadSha || issue.Review.Sha != issue.HeadSha)
+            return false;
+        if (candidate is null)
+            throw new InvalidDataException("PoC completion requires live candidate validation.");
+        await candidate.ValidateCandidateShaAsync(state, issue, token);
+        return true;
     }
 
     private static HttpClient CreateClient(string token)

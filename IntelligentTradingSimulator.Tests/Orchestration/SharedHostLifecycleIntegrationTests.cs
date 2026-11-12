@@ -356,6 +356,16 @@ public sealed class SharedHostLifecycleIntegrationTests
                 using var body = JsonDocument.Parse(write.Body);
                 Assert.Equal(baseBranch, body.RootElement.GetProperty("base_ref").GetString());
             });
+            var candidate = new GitHubTaskAdapter(new(client, "owner/repo", 1), guarded, baseBranch, 55,
+                TaskApproval, taskApi: new(userClient, "owner/repo", 1), requireDraftPullRequest: true);
+            Assert.True(await GitHubPocCommand.IsCompleteAsync(store.State, handoff, candidate, default));
+            taskApi.Draft = false;
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                GitHubPocCommand.IsCompleteAsync(store.State, handoff, candidate, default));
+            taskApi.Draft = true;
+            taskApi.Corruption = "base";
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                GitHubPocCommand.IsCompleteAsync(store.State, handoff, candidate, default));
         }
         else
         {

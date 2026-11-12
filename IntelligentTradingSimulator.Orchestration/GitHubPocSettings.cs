@@ -10,8 +10,8 @@ public sealed record GitHubPocSettings(string Repository, long RepositoryId, lon
 {
     public const int IssueNumber = 249;
     public const string StateReference = "refs/heads/agent-state-poc-249-v1";
-    public const string BaseBranch = "agent-poc-249-base-v1";
-    public const string DefinitionReference = "refs/tags/agent-poc-249-definition-v1";
+    public const string BaseBranch = "master";
+    public const string DefinitionReference = "refs/heads/master";
     public const string DriverWorkflowPath = ".github/workflows/agent-poc.yml";
     public const string CiWorkflowPath = ".github/workflows/agent-poc-ci.yml";
     public const string EnvironmentName = "agent-orchestration";

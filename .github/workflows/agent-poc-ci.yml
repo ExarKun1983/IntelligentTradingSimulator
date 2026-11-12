@@ -21,7 +21,7 @@ jobs:
     if: >-
       ${{
         github.repository == 'ExarKun1983/IntelligentTradingSimulator' &&
-        github.ref == 'refs/tags/agent-poc-249-definition-v1' &&
+        github.ref == 'refs/heads/master' &&
         github.workflow_sha == vars.ORCHESTRATION_POC_DEFINITION_SHA &&
         github.actor == 'github-actions[bot]' &&
         github.triggering_actor == github.actor &&

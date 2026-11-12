@@ -1631,13 +1631,14 @@ not activate the main workflow or the status-revocation experiment. Its CLI mode
 is `--github-live --github-poc --execute`. These source changes alone do not
 provision resources or authorize a live run.
 
-The profile is fixed to Issue #249, base `agent-poc-249-base-v1`, state
-`refs/heads/agent-state-poc-249-v1`, and immutable definition tag
-`refs/tags/agent-poc-249-definition-v1`. Both driver and CI execute from that
-tag. The base must remain at the same reviewed definition SHA throughout the
-attempt; the task creates a separate draft PR against it. The driver validates
-the repository, configured human actor, original run actor, attempt 1, definition
-tag, frozen base and generation before admission. Re-runs are rejected.
+The profile is fixed to Issue #249, PR base `master`, and separate state
+`refs/heads/agent-state-poc-249-v1`. Both driver and CI execute from `master`
+at the configured reviewed definition SHA; CI checks out the agent's exact task
+head separately. The task creates a draft PR against `master`. If `master`
+advances during the attempt, the profile stops rather than executing an
+unreviewed definition. The driver validates the repository, configured human
+actor, original run actor, attempt 1, definition and generation before
+admission. Re-runs are rejected.
 
 The canonical manifest pins those identities and an expiry at most 72 hours
 away. Its store permits one coding task, at most one review repair task in total,
@@ -1645,10 +1646,10 @@ at most two managed CI dispatches and two review requests. CI build/test failure
 infrastructure failure or ambiguous API outcomes stop the attempt. Unclassified
 human feedback requiring a separate repair also stops the attempt. Changing configuration or extending expiry
 cannot silently reuse bootstrapped state. Missing state is an error, not a new
-attempt. Do not delete state, move the definition tag, or re-bootstrap to retry.
+attempt. Do not delete state or re-bootstrap to retry.
 
 Unlike the old bounded profile, this profile does not set `SinglePassTest`.
-It does require the mapped PR to stay draft and on the dedicated base.
+It does require the mapped PR to stay draft and based on `master`.
 It deliberately does not publish required commit statuses, does not test
 status revocation, and is not evidence that production branch protection works.
 It never calls the merge API. Passing CI, review and final human handoff are
@@ -1659,12 +1660,11 @@ the scope of this PoC, not deployment or automatic merge.
 Keep the legacy/main execution workflows disabled and their variables unchanged.
 Do not use the resources or state of #227, #237 or the status experiment.
 
-1. Review and merge this implementation. Record the full lowercase merge SHA.
-   Protect the new definition tag against updates/deletion before creating it,
-   and freeze the dedicated base at that same SHA. Do not merge the generated
-   task PR into either the base or `master`.
-2. Admit that exact definition tag through the existing `agent-orchestration`
-   environment's deployment policy without removing its existing protections.
+1. Review and merge this implementation. Record the full lowercase `master`
+   commit SHA; keep `master` unchanged during the attempt. Do not merge the
+   generated task PR.
+2. Verify that `master` is admitted by the existing `agent-orchestration`
+   environment's deployment policy.
    Reuse its `ORCHESTRATION_USER_TOKEN` secret; do not copy credentials into new
    environments or repository variables. Verify task entitlement, review API
    access, environment protection, effective workflow permissions, and agreed
@@ -1680,11 +1680,11 @@ Do not use the resources or state of #227, #237 or the status experiment.
 | `ORCHESTRATION_POC_ACTOR_ID` | Numeric ID of the authorized human owning the task credential |
 | `ORCHESTRATION_POC_WORKFLOW_ID` | GitHub ID of `.github/workflows/agent-poc.yml` |
 | `ORCHESTRATION_POC_CI_WORKFLOW_ID` | GitHub ID of `.github/workflows/agent-poc-ci.yml`; distinct from driver |
-| `ORCHESTRATION_POC_DEFINITION_SHA` | Reviewed commit of both workflows and the immutable tag/base |
+| `ORCHESTRATION_POC_DEFINITION_SHA` | Reviewed current `master` commit containing both workflows |
 | `ORCHESTRATION_POC_EXPIRES_AT` | Agreed UTC deadline, no more than 72 hours away |
 | `ORCHESTRATION_POC_CREDENTIALS_VERIFIED` | `true` only after verifying separate credentials and their protected environment |
 | `ORCHESTRATION_POC_TASK_ENTITLEMENT_VERIFIED` | `true` only after verifying task API entitlement |
-| `ORCHESTRATION_POC_TRUSTED_DEFINITION_VERIFIED` | `true` only after reviewing driver/CI and verifying definition protection/pins |
+| `ORCHESTRATION_POC_TRUSTED_DEFINITION_VERIFIED` | `true` only after reviewing the driver and CI at the configured SHA |
 | `ORCHESTRATION_POC_NO_ADDED_CHARGES_VERIFIED` | `true` only after confirming the agreed cost controls |
 | `ORCHESTRATION_POC_REVIEW_POLICY_VERIFIED` | `true` only after verifying Copilot review access/policy |
 | `ORCHESTRATION_POC_AUTOMATIC_REVIEWS_DISABLED` | `true` only after verifying native automatic reviews will not duplicate managed requests |
@@ -1700,8 +1700,7 @@ is enforced by the reviewed driver/adapters/store.
 #### Authorized live sequence
 
 After separate authorization, enable only the two new PoC workflows if needed
-and set `ORCHESTRATION_POC_APPROVED=true`. All dispatches must select tag
-`agent-poc-249-definition-v1`, not `master`, and supply
+and set `ORCHESTRATION_POC_APPROVED=true`. All dispatches select `master` and supply
 `confirmation=POC-249-ONE-REPAIR-NO-MERGE`.
 
 1. Temporarily set `ORCHESTRATION_POC_BOOTSTRAP_APPROVED=true`. Dispatch the
@@ -1714,7 +1713,7 @@ and set `ORCHESTRATION_POC_APPROVED=true`. All dispatches must select tag
    ```bash
    gh workflow run agent-poc.yml \
      --repo ExarKun1983/IntelligentTradingSimulator \
-     --ref agent-poc-249-definition-v1 \
+     --ref master \
      -f issue=249 -f operation=poc-start \
      -f confirmation=POC-249-ONE-REPAIR-NO-MERGE \
      -f repository_generation=1 -f issue_generation=1
@@ -1745,7 +1744,8 @@ and set `ORCHESTRATION_POC_APPROVED=true`. All dispatches must select tag
    a third task.
 6. Completion means phase `HUMAN_REVIEW`, explicitly accepted review, current
    exact-head green CI and an unmerged draft PR. The artifact reports
-   `Completed=true` only at that handoff. A green driver job by itself is not
+   `Completed=true` only after revalidating the task and live PR head, draft
+   status and `master` base at that handoff. A green driver job by itself is not
    proof of completion. Preserve canonical state and evidence; set
    `ORCHESTRATION_POC_APPROVED=false` after the attempt and leave bootstrap false.
 
@@ -1756,7 +1756,7 @@ state. Errors report a sanitized error type and the state ref to inspect; they
 never automatically repeat a POST. Use `operation=pause` with a reason to save
 a hold while authorization is still valid. Expiry stops further driver effects,
 not an already submitted remote task or CI run. Any further recovery after an
-ambiguous write or expiry needs a separate operator decision, not tag/state
+ambiguous write or expiry needs a separate operator decision, not state
 replacement or an automatic expiry extension.
 
 ### Main workflow diagnostics and recovery
