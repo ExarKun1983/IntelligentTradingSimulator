@@ -47,8 +47,8 @@ jobs:
         vars.ORCHESTRATION_STATUS_TEST_ISSUE == inputs.issue &&
         vars.ORCHESTRATION_STATUS_TEST_STATE_REF == 'refs/heads/agent-state-status-revocation-v1' &&
         vars.ORCHESTRATION_STATUS_TEST_BASE_BRANCH == 'agent-status-revocation-base-v1' &&
-        vars.ORCHESTRATION_STATUS_TEST_CI_REF == 'refs/tags/agent-status-revocation-definition-v1' &&
-        vars.ORCHESTRATION_STATUS_TEST_DRIVER_REF == 'refs/tags/agent-status-revocation-definition-v1' &&
+        vars.ORCHESTRATION_STATUS_TEST_CI_REF == 'refs/tags/agent-status-revocation-definition-v2' &&
+        vars.ORCHESTRATION_STATUS_TEST_DRIVER_REF == 'refs/tags/agent-status-revocation-definition-v2' &&
         vars.ORCHESTRATION_STATUS_TEST_ENVIRONMENT == 'agent-status-revocation-test' &&
         (inputs.operation != 'status-test-bootstrap' || vars.ORCHESTRATION_STATUS_TEST_BOOTSTRAP_APPROVED == 'true')
       }}

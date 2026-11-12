@@ -157,6 +157,8 @@ public sealed class GitHubLiveCredentialsTests
     public void IsolatedMutationDriverRejectsRerunsByAnotherActor()
     {
         var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-status-revocation-test.yml"));
+        Assert.Contains("refs/tags/agent-status-revocation-definition-v2", workflow);
+        Assert.DoesNotContain("refs/tags/agent-status-revocation-definition-v1", workflow);
         Assert.Contains("github.actor_id == vars.ORCHESTRATION_STATUS_TEST_ACTOR_ID &&", workflow);
         Assert.Contains("github.triggering_actor == github.actor &&", workflow);
         Assert.Contains("vars.ORCHESTRATION_STATUS_TEST_APPROVED == 'true'", workflow);

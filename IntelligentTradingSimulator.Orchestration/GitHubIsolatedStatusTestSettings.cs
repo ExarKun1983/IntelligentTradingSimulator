@@ -20,10 +20,10 @@ public sealed record GitHubIsolatedStatusTestSettings(
 {
     public const string StateReference = "refs/heads/agent-state-status-revocation-v1";
     public const string BaseBranch = "agent-status-revocation-base-v1";
-    public const string DriverReference = "refs/tags/agent-status-revocation-definition-v1";
+    public const string DriverReference = "refs/tags/agent-status-revocation-definition-v2";
     public const string DriverWorkflowPath = ".github/workflows/agent-status-revocation-test.yml";
     public const string CiWorkflowPath = ".github/workflows/agent-status-revocation-ci.yml";
-    public const string CiReference = "refs/tags/agent-status-revocation-definition-v1";
+    public const string CiReference = "refs/tags/agent-status-revocation-definition-v2";
     public const string EnvironmentName = "agent-status-revocation-test";
 
     public static GitHubIsolatedStatusTestSettings Read(Func<string, string?> read, DateTimeOffset now)

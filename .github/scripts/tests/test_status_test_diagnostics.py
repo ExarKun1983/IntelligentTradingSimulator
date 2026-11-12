@@ -14,8 +14,8 @@ import urllib.error
 
 WORKFLOW = Path(__file__).resolve().parents[2] / "workflows/agent-status-test-diagnostics.yml"
 SOURCE = textwrap.dedent(WORKFLOW.read_text(encoding="utf-8").split("        run: |\n", 1)[1])
-SHA = "b3df1399a222d695f80c71f97c01b2d2b10f378a"
-REF = "refs/tags/agent-status-revocation-definition-v1"
+SHA = "c752c1b221527f6b8dacdea81ab0c49c6d88c4ed"
+REF = "refs/tags/agent-status-revocation-definition-v2"
 REPO = "repos/ExarKun1983/IntelligentTradingSimulator"
 
 
@@ -46,7 +46,7 @@ class StatusTestDiagnosticsTests(unittest.TestCase):
                 "login": "github-actions[bot]", "id": 41898282, "node_id": "bot-node", "type": "Bot",
             },
             REPO: {"id": 1277929203},
-            REPO + "/git/ref/tags/agent-status-revocation-definition-v1": {
+            REPO + "/git/ref/tags/agent-status-revocation-definition-v2": {
                 "ref": REF, "object": {"type": "commit", "sha": SHA},
             },
             REPO + "/actions/workflows/414090147": {
@@ -127,9 +127,9 @@ class StatusTestDiagnosticsTests(unittest.TestCase):
             (REPO, lambda item: item.update(id=1)),
             (REPO + "/actions/workflows/414090147", lambda item: item.update(state="disabled_manually")),
             (REPO + "/actions/workflows/414090145", lambda item: item.update(path="unexpected")),
-            (REPO + "/git/ref/tags/agent-status-revocation-definition-v1",
+            (REPO + "/git/ref/tags/agent-status-revocation-definition-v2",
              lambda item: item["object"].update(sha="a" * 40)),
-            (REPO + "/git/ref/tags/agent-status-revocation-definition-v1",
+            (REPO + "/git/ref/tags/agent-status-revocation-definition-v2",
              lambda item: item["object"].update(type="tag")),
         ]
         for path, mutate in mutations:

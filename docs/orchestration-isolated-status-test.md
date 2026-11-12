@@ -1,11 +1,12 @@
 # Isolated required-status recovery test
 
-Status: implementation was merged through PR #241 at
-`b3df1399a222d695f80c71f97c01b2d2b10f378a`. The isolated base, definition tag,
-environment and protection rules have been provisioned, with Issue #242 as
-the fixture. Isolated state has not been bootstrapped and the live test has
-not been authorized or run. Activation/bootstrap remain false; the diagnostic
-described below is a separate proposed workflow, not live verification.
+Status: implementation was merged through PR #241; the driver re-run guard
+followed in PR #244. The isolated base, original v1 definition tag, environment
+and protection rules have been provisioned, with Issue #242 as the fixture.
+The immutable v1 tag is intentionally unchanged. This source profile now targets
+a new v2 tag, which must be protected and admitted by the environment before it
+is created. Isolated state has not been bootstrapped and the live test has not
+been authorized or run. Activation/bootstrap remain false.
 
 The test exercises a real coding task, exact-head managed CI, publication of
 `Agent managed CI: success`, and command-only pause/replay. It must not reuse
@@ -46,7 +47,7 @@ authorize the remaining state bootstrap, task or draft PR creation.
 | `agent-status-revocation-base-v1` | Dedicated PR base; never merge it into `master`. |
 | Fresh draft PR | Created by the real coding task against the dedicated base; never merge. |
 | `refs/heads/agent-state-status-revocation-v1` | Separate durable CAS state, explicitly bootstrapped once. |
-| `refs/tags/agent-status-revocation-definition-v1` | Immutable reviewed driver and CI definition. |
+| `refs/tags/agent-status-revocation-definition-v2` | New immutable reviewed driver and CI definition; create only after protection and environment admission match. |
 | `agent-status-revocation-test.yml` | Manual, staged driver with no schedule/event wakes. |
 | `agent-status-revocation-ci.yml` | Exact-SHA CI; manual dispatch by the staged driver only. |
 | `agent-status-revocation-test` environment | Restricted refs and a required reviewer; workflow-gate `vars` must be repository-scoped so job conditions can evaluate them. |
@@ -89,11 +90,13 @@ reviewed API guards, not claimed as a GitHub token permission boundary.
   before bootstrap or execution and rejects a moved tag.
 - The currently provisioned v1 definition tag remains immutable at its reviewed
   commit. Merging later source changes does not change code executed from that
-  tag. Activating a merged driver fix requires a separately approved new
-  immutable definition tag, matching driver/CI pins, tag protection, and an
-  environment deployment policy that admits that exact tag. Until those
-  controls are updated and independently verified, do not bootstrap or start
-  the isolated driver.
+  tag. This profile targets v2 in the source; after this change is reviewed and
+  merged, update the existing tag ruleset and environment deployment policy to
+  admit exactly `agent-status-revocation-definition-v2`. Then set both
+  definition SHA variables to the merged commit SHA, both ref variables to
+  `refs/tags/agent-status-revocation-definition-v2`, and create the protected
+  tag at that exact commit. Run the read-only diagnostics and verify all pins
+  before considering bootstrap. Until then, do not bootstrap or start the driver.
 - A pinned isolated CI route, draft-PR requirement, single-pass task guard,
   no-repair/no-review reducer mode, effect allowlist, and three-execution cap
   for coding, CI and success-status publication. Pending/failure required-status

@@ -805,7 +805,7 @@ public sealed class OrchestrationWorkerTests
             {
                 var reducer = new OrchestrationReducer();
                 var prepared = new CiDispatchBoundary(101, new string('d', 40),
-                    "refs/tags/agent-status-revocation-definition-v1", $"correlation:{intent.Id}", Now);
+                    "refs/tags/agent-status-revocation-definition-v2", $"correlation:{intent.Id}", Now);
                 var snapshot = await store.LoadAsync(cancellationToken);
                 var state = reducer.RecordCiBoundary(snapshot.State, intent.Id, prepared);
                 Assert.True(await store.TrySaveAsync(snapshot, state, cancellationToken));
