@@ -846,8 +846,12 @@ public sealed class GitHubTaskIntegrationTests
 
     internal sealed class FinalHead : ITaskFinalHeadSource
     {
+        private readonly string sha;
+
+        public FinalHead(string? sha = null) => this.sha = sha ?? Head;
+
         public Task<TaskFinalHeadEvidence?> ReadAsync(string externalTaskId, CancellationToken token) =>
-            Task.FromResult<TaskFinalHeadEvidence?>(new(externalTaskId, ["session"], 17, Head));
+            Task.FromResult<TaskFinalHeadEvidence?>(new(externalTaskId, ["session"], 17, sha));
     }
 
     private static OrchestrationEvent Message(EventData data, string id, ActorKind kind = ActorKind.Human) =>
@@ -893,11 +897,16 @@ public sealed class GitHubTaskIntegrationTests
         public string ArtifactGlobalId { get; init; } = "PR_node";
         private List<string> labels = ["agent:ready"];
         public string RemoteState { get; set; } = "in_progress";
+        public string HeadSha { get; set; } = Head;
+        public string BaseBranch { get; init; } = "master";
+        public string WorkflowPath { get; init; } = ".github/workflows/agent-state-machine.yml";
+        public bool Draft { get; set; }
         public string? Corruption { get; set; }
         public string RunEvent { get; set; } = "issues";
         public bool LoseLaunchResponse { get; init; }
         public bool PermissionMismatch { get; init; }
         public Action? AfterLaunch { get; set; }
+        private int launchCount;
         private string statusBody = "";
         public HttpClient Client() => new(this) { BaseAddress = new Uri("https://api.github.com/") };
         public JsonElement Notification() => JsonSerializer.SerializeToElement(new
@@ -937,9 +946,10 @@ public sealed class GitHubTaskIntegrationTests
                 using var json = JsonDocument.Parse(body);
                 if (path == "/agents/repos/owner/repo/tasks")
                 {
+                    var taskId = ++launchCount == 1 ? "remote-task" : $"remote-task-{launchCount}";
                     AfterLaunch?.Invoke();
                     if (LoseLaunchResponse) throw new HttpRequestException("Lost launch response.");
-                    return Response(TaskResponse());
+                    return Response(TaskResponse(taskId));
                 }
                 if (path == prefix + "issues/7/labels" || path == prefix + "issues/237/labels")
                     labels.AddRange(json.RootElement.GetProperty("labels").EnumerateArray().Select(value => value.GetString()!));
@@ -961,7 +971,7 @@ public sealed class GitHubTaskIntegrationTests
             }
             if (path == "/repos/owner/repo") result = new { id = 1, full_name = "owner/repo" };
             else if (path == prefix + "actions/runs/44")
-                result = new { @event = RunEvent, path = ".github/workflows/agent-state-machine.yml", actor = new { id = 55 } };
+                result = new { @event = RunEvent, path = WorkflowPath, actor = new { id = 55 } };
             else if (path == "/users/maintainer") result = new { id = 55, login = "maintainer", type = "User" };
             else if (path.Contains("/permission"))
             {
@@ -979,7 +989,8 @@ public sealed class GitHubTaskIntegrationTests
                         user = new { id = 99, type = "Bot", login = "projection" } }) }).ToArray();
             else if (path == prefix + "issues/7/labels" || path == prefix + "issues/237/labels")
                 result = labels.Distinct().Select(name => new { name }).ToArray();
-            else if (path == "/agents/repos/owner/repo/tasks/remote-task") result = TaskResponse();
+            else if (path.StartsWith("/agents/repos/owner/repo/tasks/", StringComparison.Ordinal))
+                result = TaskResponse(Uri.UnescapeDataString(path["/agents/repos/owner/repo/tasks/".Length..]));
             else if (path == prefix + "pulls") result = Corruption == "no-prs" ? Array.Empty<object>() :
                 Corruption == "multiple-prs" ? new[] { Pull(17), Pull(18) } : new[] { Pull(17) };
             else if (path == prefix + "pulls/17") result = Pull(17);
@@ -988,14 +999,14 @@ public sealed class GitHubTaskIntegrationTests
             return Response(result);
         }
 
-        private object TaskResponse() => new
+        private object TaskResponse(string taskId) => new
         {
-            id = Corruption == "task" ? "other-task" : "remote-task",
+            id = Corruption == "task" ? "other-task" : taskId,
             repository = new { id = Corruption == "repository" ? 2 : 1 },
             creator = new { id = Corruption == "creator" ? 66 : 55 },
             state = Corruption == "failed" ? "failed" : Corruption == "waiting" ? "waiting_for_user" : RemoteState,
             updated_at = Now.AddMinutes(1), session_count = Corruption == "session-count" ? 2 : 1,
-            sessions = new[] { new { id = "session", task_id = "remote-task", state = Corruption == "session" ? "in_progress" : "completed",
+            sessions = new[] { new { id = "session", task_id = taskId, state = Corruption == "session" ? "in_progress" : "completed",
                 repository = new { id = 1 }, completed_at = Now.AddMinutes(1) } },
             artifacts = Artifacts()
         };
@@ -1006,7 +1017,7 @@ public sealed class GitHubTaskIntegrationTests
             if (!PullArtifact || IncludeBranch)
                 artifacts.Add(new { provider = "github", type = "branch",
                     data = new { head_ref = Corruption == "blank-head-ref" ? "" : "coding",
-                        base_ref = Corruption == "branch-base" ? "other" : "master" } });
+                        base_ref = Corruption == "branch-base" ? "other" : BaseBranch } });
             if (PullArtifact)
             {
                 var data = new Dictionary<string, object?>
@@ -1027,11 +1038,11 @@ public sealed class GitHubTaskIntegrationTests
         private object Pull(int number) => new
         {
             id = Corruption == "rest-database" ? ArtifactDatabaseId + 1 : ArtifactDatabaseId, number,
-            state = Corruption == "closed-pr" ? "closed" : "open", merged = false,
-            head = new { sha = Corruption == "sha" ? "invalid" : Corruption == "later-push" ? new string('b', 40) : Head,
+            state = Corruption == "closed-pr" ? "closed" : "open", merged = false, draft = Draft,
+            head = new { sha = Corruption == "sha" ? "invalid" : Corruption == "later-push" ? new string('b', 40) : HeadSha,
                 @ref = Corruption == "head-ref" ? "other" : "coding",
                 repo = new { id = Corruption == "head-repository" ? 2 : 1 } },
-            @base = new { @ref = Corruption == "base" ? "other" : "master",
+            @base = new { @ref = Corruption == "base" ? "other" : BaseBranch,
                 repo = new { id = Corruption == "base-repository" ? 2 : 1 } }
         };
         private static HttpResponseMessage Response(object result) => new(HttpStatusCode.OK)

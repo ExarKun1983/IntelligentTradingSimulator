@@ -25,9 +25,11 @@ public sealed partial class GitHubGitTransport : IGitObjectRefTransport
             throw new ArgumentException("Only the GitHub API origin is permitted.", nameof(client));
         this.client = client;
         this.allowMutations = allowMutations;
-        if (stateReference is not ("refs/heads/agent-state" or "refs/heads/agent-state-status-revocation-v1"))
-            throw new ArgumentException("Only a production or the dedicated status-test state ref is supported.", nameof(stateReference));
-        if (allowIsolatedInitialization && stateReference != "refs/heads/agent-state-status-revocation-v1")
+        if (stateReference is not ("refs/heads/agent-state" or "refs/heads/agent-state-status-revocation-v1" or
+            GitHubPocSettings.StateReference))
+            throw new ArgumentException("Only explicitly supported state refs are permitted.", nameof(stateReference));
+        if (allowIsolatedInitialization && stateReference is not ("refs/heads/agent-state-status-revocation-v1" or
+            GitHubPocSettings.StateReference))
             throw new ArgumentException("Only the dedicated isolated test ref supports one-shot initialization.", nameof(allowIsolatedInitialization));
         this.stateReference = stateReference;
         this.allowIsolatedInitialization = allowIsolatedInitialization;
@@ -111,7 +113,8 @@ public sealed partial class GitHubGitTransport : IGitObjectRefTransport
         commit = Sha(commit);
         if (expectedTip is null)
         {
-            if (!allowIsolatedInitialization || stateReference != "refs/heads/agent-state-status-revocation-v1")
+            if (!allowIsolatedInitialization || stateReference is not ("refs/heads/agent-state-status-revocation-v1" or
+                GitHubPocSettings.StateReference))
                 throw new InvalidOperationException("Automatic state-ref creation is not supported.");
             if (await ReadRefAsync(reference, cancellationToken) is not null) return new(false);
             using var created = await client.PostAsJsonAsync(prefix + "git/refs",

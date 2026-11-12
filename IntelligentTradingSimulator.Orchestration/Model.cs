@@ -236,13 +236,14 @@ public sealed record Ready([property: JsonIgnore(Condition = JsonIgnoreCondition
     int? MaxRepairTasks = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     bool? SinglePassTest = null) : EventData;
-public sealed record BoundedOrchestrationScope(int IssueNumber, int MaxRepairTasks, int? RetiredIssueNumber = null)
+public sealed record BoundedOrchestrationScope(int IssueNumber, int MaxRepairTasks, int? RetiredIssueNumber = null,
+    bool SinglePassTest = true)
 {
     public void Validate(RepositoryState state)
     {
         var retiredNumber = RetiredIssueNumber;
         if (IssueNumber <= 0 || MaxRepairTasks != 1 ||
-            retiredNumber is not null && (IssueNumber != 237 || retiredNumber != 227))
+            retiredNumber is not null && (IssueNumber != 237 || retiredNumber != 227 || !SinglePassTest))
             throw new InvalidDataException("Invalid bounded orchestration scope.");
         var allowedIssues = retiredNumber is { } retired ? new[] { IssueNumber, retired } : [IssueNumber];
         if (state.Issues.Keys.Any(number => !allowedIssues.Contains(number)) ||
@@ -251,7 +252,7 @@ public sealed record BoundedOrchestrationScope(int IssueNumber, int MaxRepairTas
                 !allowedIssues.Contains(message.IssueNumber)) ||
             state.AdmittedIssue is { } admitted && admitted != IssueNumber ||
             state.Issues.TryGetValue(IssueNumber, out var active) &&
-            (active.MaxRepairTasks != MaxRepairTasks || !active.SinglePassTest))
+            (active.MaxRepairTasks != MaxRepairTasks || active.SinglePassTest != SinglePassTest))
             throw new InvalidDataException("Canonical state or effect snapshot exceeds the bounded test scope.");
         if (retiredNumber is not { } retiredIssue) return;
         if (!state.Issues.TryGetValue(retiredIssue, out var historical))

@@ -103,37 +103,39 @@ public class GitHubGitTransportTests
         Assert.Equal(0, handler.Calls);
     }
 
-    [Fact]
-    public async Task IsolatedTransportCanOnlyReadItsDedicatedRefAndCannotCreateItDuringRuntime()
+    [Theory]
+    [InlineData(GitHubIsolatedStatusTestSettings.StateReference)]
+    [InlineData(GitHubPocSettings.StateReference)]
+    public async Task IsolatedTransportCanOnlyReadItsDedicatedRefAndCannotCreateItDuringRuntime(string reference)
     {
         var handler = new StubHandler((request, _) =>
         {
-            Assert.EndsWith("/git/ref/heads/agent-state-status-revocation-v1", request.RequestUri!.AbsolutePath);
+            Assert.EndsWith("/git/ref/" + reference["refs/".Length..], request.RequestUri!.AbsolutePath);
             return Json(new { @object = new { sha = Parent } });
         });
         using var client = Client(handler);
-        var transport = new GitHubGitTransport(client, "owner/repo", stateReference:
-            "refs/heads/agent-state-status-revocation-v1");
+        var transport = new GitHubGitTransport(client, "owner/repo", stateReference: reference);
 
-        Assert.Equal(Parent, await transport.ReadRefAsync("refs/heads/agent-state-status-revocation-v1", default));
+        Assert.Equal(Parent, await transport.ReadRefAsync(reference, default));
         Assert.Equal(1, handler.Calls);
         await Assert.ThrowsAsync<ArgumentException>(() => transport.ReadRefAsync("refs/heads/agent-state", default));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            transport.TryAdvanceRefAsync("refs/heads/agent-state-status-revocation-v1", null, Child, default));
+            transport.TryAdvanceRefAsync(reference, null, Child, default));
         Assert.Equal(1, handler.Calls);
     }
 
-    [Fact]
-    public async Task IsolatedBootstrapSendsFullyQualifiedRefAndDoesNotRepeatCreation()
+    [Theory]
+    [InlineData(GitHubIsolatedStatusTestSettings.StateReference)]
+    [InlineData(GitHubPocSettings.StateReference)]
+    public async Task IsolatedBootstrapSendsFullyQualifiedRefAndDoesNotRepeatCreation(string reference)
     {
-        const string reference = GitHubIsolatedStatusTestSettings.StateReference;
         var exists = false;
         var posts = 0;
         var handler = new StubHandler((request, body) =>
         {
             if (request.Method == HttpMethod.Get)
             {
-                Assert.EndsWith("/git/ref/heads/agent-state-status-revocation-v1", request.RequestUri!.AbsolutePath);
+                Assert.EndsWith("/git/ref/" + reference["refs/".Length..], request.RequestUri!.AbsolutePath);
                 return exists ? Json(new { @object = new { sha = Child } }) : new(HttpStatusCode.NotFound);
             }
             Assert.Equal(HttpMethod.Post, request.Method);

@@ -1,0 +1,56 @@
+name: Bounded PoC exact-head CI (opt-in)
+run-name: ${{ inputs.correlation }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact completed-task head SHA
+        required: true
+        type: string
+      correlation:
+        description: Canonical dispatch correlation
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: >-
+      ${{
+        github.repository == 'ExarKun1983/IntelligentTradingSimulator' &&
+        github.ref == 'refs/tags/agent-poc-249-definition-v1' &&
+        github.workflow_sha == vars.ORCHESTRATION_POC_DEFINITION_SHA &&
+        github.actor == 'github-actions[bot]' &&
+        github.triggering_actor == github.actor &&
+        github.run_attempt == 1 &&
+        startsWith(inputs.correlation, 'managed-ci-') &&
+        vars.ORCHESTRATION_POC_APPROVED == 'true'
+      }}
+    name: Test ${{ inputs.sha }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Validate SHA input
+        env:
+          TESTED_SHA: ${{ inputs.sha }}
+        run: '[[ "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]]'
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+      - name: Verify tested SHA
+        env:
+          TESTED_SHA: ${{ inputs.sha }}
+        run: 'test "$(git rev-parse HEAD)" = "$TESTED_SHA"'
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+      - name: Restore dependencies
+        run: dotnet restore IntelligentTradingSimulator.sln
+      - name: Build solution
+        run: dotnet build IntelligentTradingSimulator.sln --configuration Release --no-restore
+      - name: Run tests
+        run: dotnet test IntelligentTradingSimulator.sln --configuration Release --no-build --verbosity normal

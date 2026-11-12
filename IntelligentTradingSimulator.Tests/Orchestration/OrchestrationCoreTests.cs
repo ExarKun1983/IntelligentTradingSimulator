@@ -538,6 +538,25 @@ public sealed class OrchestrationCoreTests
     }
 
     [Fact]
+    public void PocCiFailureStopsWithoutRepairOrReview()
+    {
+        var reducer = new OrchestrationReducer(new TrustedPolicy(), stopOnCiFailure: true);
+        var state = CompleteTask(Admitted(), 2);
+        state.Issues[7].MaxRepairTasks = 1;
+        state = SucceedEffect(state, EffectKind.RunCi, "poc-failed");
+        var ci = state.Issues[7].Ci!;
+        state = reducer.Apply(state, Event(new CiResult("poc-failed", ci.TaskId, ci.Round, 11, ci.Sha,
+            false, [new Finding("failure", "CI failed", "Build failure")]), "poc-ci"));
+        state = reducer.Apply(state, Event(new Resume(), "resume-poc"));
+        state = reducer.Reconcile(state, Live(state)).State;
+
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+        Assert.Equal("PoC stopped after CI failure.", state.Issues[7].HoldReason);
+        Assert.Single(state.Issues[7].Tasks);
+        Assert.DoesNotContain(state.Outbox.Values, effect => effect.Kind == EffectKind.RequestReview);
+    }
+
+    [Fact]
     public void SinglePassTestAllowsOneReviewAfterGreenCiButNeverRepairsReviewFindings()
     {
         var reducer = Reducer();
