@@ -40,7 +40,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         int? maxRepairTasks = null, BoundedOrchestrationScope? boundedScope = null, bool commandOnly = false,
         bool isolatedStatusTest = false, string trustedWorkflowPath = ".github/workflows/agent-state-machine.yml",
         string? isolatedManifestDigest = null, GitHubRecoveryApproval? recoveryApproval = null,
-        bool requireDraftPullRequest = false)
+        bool requireDraftPullRequest = false, Func<CancellationToken, Task>? beforeEffect = null)
     {
         if (approval is null ||
             (!approval.AllowsTasks && !(commandOnly && recoveryApproval?.AllowsRecovery == true)))
@@ -92,7 +92,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         return await RunVerifiedAsync(scopedStore, message, projectionActorId, baseBranch, taskCreatorId, approval, options,
             finalHeadSource, token, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval,
             boundedScope?.RetiredIssueNumber, commandOnly, isolatedStatusTest, trustedWorkflowPath,
-            requireDraftPullRequest);
+            requireDraftPullRequest, beforeEffect);
     }
 
     private async Task<WorkerResult> RunVerifiedAsync(IStateStore stateStore, OrchestrationEvent? message,
@@ -102,7 +102,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         GitHubStatusPublisher? statusPublisher, GitHubRequiredStatusApproval? statusApproval,
         int? excludedIssueNumber, bool commandOnly, bool isolatedStatusTest = false,
         string trustedWorkflowPath = ".github/workflows/agent-state-machine.yml",
-        bool requireDraftPullRequest = false)
+        bool requireDraftPullRequest = false, Func<CancellationToken, Task>? beforeEffect = null)
     {
         var authorization = new VerifiedEvents();
         var tasks = new GitHubTaskAdapter(api, stateStore, baseBranch, taskCreatorId, approval, finalHeadSource,
@@ -215,7 +215,9 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         var events = new ProductionEvents(message, api, tasks, reviews, ci, authorization, projectionActorId,
             excludedIssueNumber, !isolatedStatusTest);
         var statuses = statusPublisher is null ? null : new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher, statusApproval, clock);
-        var effects = new ProductionEffects(tasks, reviews, ci, statuses, new GitHubProjectionAdapter(api, projectionActorId, true));
+        IVerifiedAgentEffectAdapter effects = new ProductionEffects(tasks, reviews, ci, statuses,
+            new GitHubProjectionAdapter(api, projectionActorId, true));
+        if (beforeEffect is not null) effects = new GuardedEffects(effects, beforeEffect);
         var reducer = new OrchestrationReducer(authorization, statuses is not null &&
             statusApproval?.AllowsPublication == true, excludedIssueNumber, reviewRequestsEnabled: !isolatedStatusTest,
             stopOnCiFailure: trustedWorkflowPath == GitHubPocSettings.DriverWorkflowPath);
@@ -500,5 +502,23 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             EffectKind.ProjectLabels or EffectKind.ProjectStatus => projections.ReconcileAsync(intent, token),
             _ => Task.FromResult(new EffectOutcome(DeliveryStatus.Unknown))
         };
+    }
+
+    private sealed class GuardedEffects(IVerifiedAgentEffectAdapter inner,
+        Func<CancellationToken, Task> beforeEffect) : IVerifiedAgentEffectAdapter
+    {
+        public bool AgentEffectsAuthorized => inner.AgentEffectsAuthorized;
+
+        public async Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken token)
+        {
+            await beforeEffect(token);
+            return await inner.ExecuteAsync(intent, token);
+        }
+
+        public async Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken token)
+        {
+            await beforeEffect(token);
+            return await inner.ReconcileAsync(intent, token);
+        }
     }
 }

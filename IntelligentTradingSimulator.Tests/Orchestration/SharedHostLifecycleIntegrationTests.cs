@@ -210,6 +210,61 @@ public sealed class SharedHostLifecycleIntegrationTests
         Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
     }
 
+    [Fact]
+    public async Task PocDoesNotRequestReviewWhenDefinitionMovesAfterCiDispatch()
+    {
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture
+        {
+            BaseBranch = GitHubPocSettings.BaseBranch, WorkflowPath = GitHubPocSettings.DriverWorkflowPath,
+            Draft = true, RunEvent = "workflow_dispatch"
+        };
+        using var fixture = new PipelineApi(taskApi)
+        {
+            VerifyCredentials = true,
+            Route = CiRoute with { Ref = GitHubPocSettings.DefinitionReference,
+                WorkflowPath = GitHubPocSettings.CiWorkflowPath },
+            WakeEvent = "workflow_dispatch"
+        };
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        client.DefaultRequestHeaders.Authorization = new("Bearer", "offline-workflow");
+        using var userClient = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        userClient.DefaultRequestHeaders.Authorization = new("Bearer", "offline-user");
+        var initial = RepositoryState.Create("owner/repo");
+        initial.IsolatedTestManifestDigest = "poc-manifest";
+        var innerStore = new GitHubTaskIntegrationTests.Store(initial);
+        IStateStore store = new PocStateStore(innerStore, "owner/repo", 7, "poc-manifest");
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock(),
+            new(userClient, "owner/repo", 1));
+        var api = new GitHubRepositoryApi(client, "owner/repo", 1);
+        Task VerifyDefinition(CancellationToken token) =>
+            GitHubPocCommand.VerifyDefinitionAsync(api, Definition, token);
+        JsonElement Command(string operation) => JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            sender = new { id = 55, login = "maintainer", type = "User" },
+            inputs = new { issue = "7", operation }
+        });
+        Task<WorkerResult> Reconcile(string operation, string runId) =>
+            host.ReconcileAsync(Command(operation), "workflow_dispatch", runId, 1, 1, Now, [], 99,
+                GitHubPocSettings.BaseBranch, 55, TaskApproval, Bounded, token: default,
+                reviewApproval: ReviewApproval, ciRoute: fixture.Route, ciApproval: CiApproval,
+                boundedScope: new(7, 1, SinglePassTest: false),
+                trustedWorkflowPath: GitHubPocSettings.DriverWorkflowPath, requireDraftPullRequest: true,
+                beforeEffect: VerifyDefinition);
+
+        await Reconcile("poc-start", "44");
+        taskApi.RemoteState = "completed";
+        await Reconcile("resume", "90");
+        Assert.Equal(1, fixture.CiDispatches);
+
+        fixture.DefinitionSha = new('e', 40);
+        fixture.CiCompleted = true;
+        await Reconcile("resume", "91");
+
+        Assert.True(innerStore.State.Issues[7].Ci!.Green);
+        Assert.Equal(0, fixture.ReviewRequests);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
@@ -522,6 +577,7 @@ public sealed class SharedHostLifecycleIntegrationTests
         public bool VerifyCredentials { get; init; }
         public GitHubCiRoute Route { get; init; } = CiRoute;
         public string WakeEvent { get; set; } = "schedule";
+        public string DefinitionSha { get; set; } = Definition;
         public int CiDispatches { get; private set; }
         public int ReviewRequests { get; private set; }
         public List<JsonElement> Statuses { get; } = [];
@@ -552,7 +608,7 @@ public sealed class SharedHostLifecycleIntegrationTests
             else if (path == prefix + "actions/workflows/88")
                 response = new { id = 88, path = Route.WorkflowPath, state = "active" };
             else if (path.StartsWith(prefix + "commits/refs"))
-                response = new { sha = Definition };
+                response = new { sha = DefinitionSha };
             else if (path == prefix + "actions/workflows/88/dispatches")
             {
                 using var payload = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));

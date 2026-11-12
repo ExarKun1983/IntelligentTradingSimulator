@@ -56,12 +56,7 @@ public static class GitHubPocCommand
             var publisher = await GitHubLiveCredentials.VerifyAsync(api, taskApi, settings.ActorId, token);
             var runId = read("GITHUB_RUN_ID") ?? throw new InvalidDataException("Missing PoC run ID.");
             var occurredAt = await VerifyRunAsync(api, settings, runId, token);
-            using (var definition = await api.GetAsync(
-                "commits/" + Uri.EscapeDataString(GitHubPocSettings.DefinitionReference), token))
-            {
-                if (definition.RootElement.GetProperty("sha").GetString() != settings.DefinitionSha)
-                    throw new InvalidDataException("PoC master definition moved.");
-            }
+            await VerifyDefinitionAsync(api, settings.DefinitionSha, token);
 
             var transport = new GitHubGitTransport(client, settings.Repository, allowMutations: true,
                 stateReference: GitHubPocSettings.StateReference, allowIsolatedInitialization: operation == "poc-bootstrap");
@@ -81,6 +76,7 @@ public static class GitHubPocCommand
                 if (!await store.TrySaveAsync(snapshot, snapshot.State, token))
                     throw new InvalidOperationException("PoC bootstrap conflicted; inspect the state before continuing.");
                 store = new PocStateStore(store, settings.Repository, GitHubPocSettings.IssueNumber, settings.ManifestDigest);
+                await VerifyDefinitionAsync(api, settings.DefinitionSha, token);
                 await WriteEvidenceAsync(output, store, operation, null, null, token);
                 return 0;
             }
@@ -107,9 +103,11 @@ public static class GitHubPocCommand
                 ciRoute: settings.CiRoute, ciApproval: settings.Ci,
                 boundedScope: new(GitHubPocSettings.IssueNumber, 1, SinglePassTest: false),
                 commandOnly: operation == "pause", trustedWorkflowPath: GitHubPocSettings.DriverWorkflowPath,
-                requireDraftPullRequest: true);
+                requireDraftPullRequest: true,
+                beforeEffect: effectToken => VerifyDefinitionAsync(api, settings.DefinitionSha, effectToken));
             var candidate = new GitHubTaskAdapter(api, store, GitHubPocSettings.BaseBranch, settings.ActorId,
                 settings.Tasks, taskApi: taskApi, requireDraftPullRequest: true);
+            await VerifyDefinitionAsync(api, settings.DefinitionSha, token);
             await WriteEvidenceAsync(output, store, operation!, result, candidate, token);
             var final = (await store.LoadAsync(token)).State.Issues[GitHubPocSettings.IssueNumber];
             return result.Reason == WorkerStopReason.Blocked &&
@@ -145,6 +143,15 @@ public static class GitHubPocCommand
             root.GetProperty("triggering_actor").GetProperty("id").GetInt64() != settings.ActorId)
             throw new InvalidDataException("PoC run definition, actor or attempt does not match authorization.");
         return root.GetProperty("created_at").GetDateTimeOffset();
+    }
+
+    internal static async Task VerifyDefinitionAsync(GitHubRepositoryApi api, string definitionSha,
+        CancellationToken token)
+    {
+        using var definition = await api.GetAsync(
+            "commits/" + Uri.EscapeDataString(GitHubPocSettings.DefinitionReference), token);
+        if (definition.RootElement.GetProperty("sha").GetString() != definitionSha)
+            throw new InvalidDataException("PoC master definition moved.");
     }
 
     internal static async Task WriteEvidenceAsync(TextWriter output, IStateStore store, string operation,
