@@ -139,6 +139,27 @@ public sealed partial class GitHubRepositoryApi
         throw new InvalidDataException("API pagination limit exceeded.");
     }
 
+    internal async Task<List<JsonElement>> ListRequestedReviewersAsync(int pullNumber, CancellationToken token)
+    {
+        var users = new List<JsonElement>();
+        var total = 0;
+        for (var page = 1; page <= 21; page++)
+        {
+            using var response = await GetAsync(
+                $"pulls/{pullNumber}/requested_reviewers?per_page=100&page={page}", token);
+            var pageUsers = response.RootElement.GetProperty("users").EnumerateArray().ToList();
+            var teams = response.RootElement.GetProperty("teams").GetArrayLength();
+            var count = pageUsers.Count + teams;
+            if (pageUsers.Count > 100 || teams > 100 ||
+                total + count > OrchestrationReducer.MaximumIndexEntries)
+                throw new InvalidDataException("Requested reviewer capacity exceeded; reconciliation is incomplete.");
+            total += count;
+            users.AddRange(pageUsers.Select(user => user.Clone()));
+            if (count < 100) return users;
+        }
+        throw new InvalidDataException("Requested reviewer pagination limit exceeded.");
+    }
+
     internal async Task<JsonDocument> WriteAsync(HttpMethod method, string path, object payload, CancellationToken token)
     {
         using var request = new HttpRequestMessage(method, prefix + path) { Content = JsonContent.Create(payload) };

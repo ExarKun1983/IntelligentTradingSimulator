@@ -103,6 +103,7 @@ public sealed class GitHubLiveCredentialsTests
         Assert.Contains("Exact canonical uncertain RequestReview intent; never a new launch", workflow);
         Assert.Contains("github.event.inputs.operation == 'abandon-uncertain-review'", workflow);
         Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true' ||", workflow);
+        Assert.Contains("concurrency:\n  group: agent-state-machine-${{ github.repository_id }}\n  cancel-in-progress: false", workflow);
     }
 
     [Fact]

@@ -125,8 +125,7 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
             pullRoot.GetProperty("base").GetProperty("repo").GetProperty("id").GetInt64() != api.RepositoryId)
             throw new InvalidDataException("Review abandonment requires the mapped open PR at the exact current head.");
 
-        using var pending = await api.GetAsync($"pulls/{pullNumber}/requested_reviewers", token);
-        foreach (var candidate in pending.RootElement.GetProperty("users").EnumerateArray())
+        foreach (var candidate in await api.ListRequestedReviewersAsync(pullNumber, token))
         {
             if (!IsReviewerCandidate(candidate)) continue;
             if (!VerifiedReviewer(candidate))

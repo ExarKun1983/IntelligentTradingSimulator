@@ -579,6 +579,118 @@ public sealed class GitHubReviewIntegrationTests
     }
 
     [Fact]
+    public async Task SerializedRecoveryWaitsForExecutorPausedImmediatelyBeforeReviewPost()
+    {
+        var store = new Store(Eligible());
+        var atPost = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePost = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var handler = new Api
+        {
+            Corruption = "no-reviews",
+            BeforePostAsync = async token =>
+            {
+                atPost.TrySetResult();
+                await releasePost.Task.WaitAsync(token);
+            }
+        };
+        using var client = handler.Client();
+        using var slot = new SemaphoreSlim(1);
+        // Model the shared, non-cancelling Actions concurrency slot.
+        async Task Execute()
+        {
+            await slot.WaitAsync();
+            try
+            {
+                var outcome = await CreateAdapter(client, store).ExecuteAsync(store.State.Outbox["review"], default);
+                store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
+            }
+            finally { slot.Release(); }
+        }
+        async Task Recover()
+        {
+            await slot.WaitAsync();
+            try { await RunAbandonment(client, store); }
+            finally { slot.Release(); }
+        }
+
+        var execution = Execute();
+        await atPost.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var recovery = Recover();
+        try
+        {
+            Assert.False(recovery.IsCompleted);
+            Assert.Equal(0, handler.Posts);
+            Assert.Equal(DeliveryStatus.Executing, store.State.Outbox["review"].Status);
+            Assert.Equal(7, store.State.AdmittedIssue);
+            Assert.Null(store.State.Issues[7].Review!.OperatorResolution);
+        }
+        finally { releasePost.TrySetResult(); }
+        await execution;
+        await Assert.ThrowsAsync<InvalidDataException>(() => recovery);
+        Assert.Equal(1, handler.Posts);
+        Assert.Equal(DeliveryStatus.Succeeded, store.State.Outbox["review"].Status);
+        Assert.Null(store.State.Issues[7].Review!.OperatorResolution);
+        Assert.Equal(7, store.State.AdmittedIssue);
+    }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("error")]
+    [InlineData("overflow")]
+    public async Task AbandonmentRejectsPendingReviewerOnLaterPageOrIncompletePagination(string pagination)
+    {
+        var store = new Store(UncertainReview());
+        var original = StateJson.Serialize(store.State);
+        using var handler = new Api { Corruption = "no-reviews", RequestedReviewerPagination = pagination };
+        using var client = handler.Client();
+
+        await Assert.ThrowsAnyAsync<Exception>(() => RunAbandonment(client, store));
+
+        Assert.Equal(original, StateJson.Serialize(store.State));
+        Assert.Contains(handler.Requests, request => request.Contains("requested_reviewers?per_page=100&page=2"));
+        Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
+    }
+
+    [Fact]
+    public async Task AbandonmentAcceptsEmptyEvidenceOnlyAfterLastRequestedReviewerPage()
+    {
+        var store = new Store(UncertainReview());
+        using var handler = new Api { Corruption = "no-reviews", RequestedReviewerPagination = "empty" };
+        using var client = handler.Client();
+
+        await RunAbandonment(client, store);
+
+        Assert.Contains(handler.Requests, request => request.Contains("requested_reviewers?per_page=100&page=2"));
+        Assert.Equal(DeliveryStatus.Failed, store.State.Outbox["review"].Status);
+        Assert.NotNull(store.State.Issues[7].Review!.OperatorResolution);
+    }
+
+    [Fact]
+    public async Task HostRestoresCommittedAbandonmentAfterReactivationWithoutChangingNewGeneration()
+    {
+        var store = new Store(UncertainReview());
+        using var handler = new Api { Corruption = "no-reviews" };
+        using var client = handler.Client();
+        await RunAbandonment(client, store);
+        store.State = new OrchestrationReducer(new Allow()).Apply(store.State,
+            new("reactivate", "owner/repo", 7, 1, 1, new("maintainer", ActorKind.Human, 55),
+                Now.AddMinutes(1), new Reactivate("Start a separate generation.")));
+        Assert.Equal(2, store.State.Issues[7].Generation);
+        var original = StateJson.Serialize(store.State);
+        handler.Requests.Clear();
+        handler.Corruption = "existing-request";
+
+        var result = await RunAbandonment(client, store);
+
+        Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
+        Assert.Equal(original, StateJson.Serialize(store.State));
+        Assert.DoesNotContain(handler.Requests, request => request.Contains("/tasks/") || request.Contains("/pulls/"));
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            RunAbandonment(client, store, reason: "Changed operator decision"));
+        Assert.Equal(original, StateJson.Serialize(store.State));
+    }
+
+    [Fact]
     public async Task HostRestoresCommittedAbandonmentOnReplayWithoutRepeatingEvidenceReads()
     {
         var store = new Store(UncertainReview());
@@ -789,6 +901,8 @@ public sealed class GitHubReviewIntegrationTests
         public bool Paginated { get; init; }
         public bool FailSecondPage { get; set; }
         public bool ConcurrentPreflight { get; init; }
+        public string? RequestedReviewerPagination { get; init; }
+        public Func<CancellationToken, Task>? BeforePostAsync { get; init; }
         private readonly TaskCompletionSource bothPreflights = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int preflightReads;
         public int Posts { get; private set; }
@@ -842,6 +956,7 @@ public sealed class GitHubReviewIntegrationTests
             {
                 Assert.Equal("/repos/owner/repo/pulls/17/requested_reviewers", path);
                 BeforePost?.Invoke();
+                if (BeforePostAsync is not null) await BeforePostAsync(token);
                 Posts++;
                 RequestBody = await request.Content!.ReadAsStringAsync(token);
                 if (Corruption == "lost-response") throw new HttpRequestException("Injected response loss");
@@ -874,11 +989,26 @@ public sealed class GitHubReviewIntegrationTests
             else if (path == "/repos/owner/repo/pulls/17") response = Pull();
             else if (path.StartsWith("/users/")) response = Actor();
             else if (path.EndsWith("/requested_reviewers"))
+            {
+                var paginated = request.RequestUri!.Query.Contains("per_page=100");
+                var firstPage = request.RequestUri.Query.EndsWith("&page=1", StringComparison.Ordinal);
+                if (paginated && RequestedReviewerPagination is not null)
+                {
+                    if (!firstPage && RequestedReviewerPagination == "error")
+                        throw new HttpRequestException("Injected requested-reviewer page failure");
+                    var users = firstPage || RequestedReviewerPagination == "overflow"
+                        ? Enumerable.Range(1, 100).Select(id => (object)new
+                            { id, node_id = $"USER_{id}", login = $"reviewer-{id}", type = "User" }).ToArray()
+                        : RequestedReviewerPagination == "copilot" ? [Actor()] : Array.Empty<object>();
+                    response = new { users, teams = Array.Empty<object>() };
+                }
+                else
                 response = new { users =
                     Corruption is "existing-request" or "abandon-pending" ? new object[] { Actor() } :
                     Corruption is "empty-pending-identity" or "node-pending-identity" or
                         "whitespace-pending-identity" or "malformed-pending-identity"
                         ? new object[] { AbandonmentActor } : [], teams = Array.Empty<object>() };
+            }
             else if (path.EndsWith("/reviews"))
             {
                 if (ConcurrentPreflight)

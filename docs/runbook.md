@@ -1651,12 +1651,19 @@ the old single-pass fixture eligible for repair-task execution.
 
 #### Audited abandonment of an uncertain Copilot request
 
+Normal and recovery runs share a repository-wide concurrency group with
+`cancel-in-progress: false`. Before the first recovery using this definition,
+disable new normal triggers and wait for every run started from an older,
+unserialized definition to finish. Do not recover while an older executor could
+still send a review POST; merging this workflow does not serialize existing runs.
+
 The request-review endpoint has no idempotency key or request/job ID. An absent
 pending reviewer and absent submitted review do **not** prove that an earlier
 POST never happened. For a state held only by an ambiguous request, an authorized
 operator may choose workflow operation `abandon-uncertain-review` only after
-the exact current PR/head, candidate task evidence, requested reviewers and
-paginated review history are re-read. The operation refuses changed/closed refs,
+the exact current PR/head, candidate task evidence, all requested-reviewer pages
+and review history are re-read. Pagination failures
+or capacity limits retain the hold. The operation refuses changed/closed refs,
 any pending Copilot request, any Copilot review history, a confirmed request
 boundary, or other unfinished work. It performs no review POST.
 

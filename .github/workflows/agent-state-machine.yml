@@ -79,6 +79,10 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: agent-state-machine-${{ github.repository_id }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   issues: write

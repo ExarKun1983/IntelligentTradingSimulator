@@ -64,6 +64,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         if (boundedScope is not null && message?.Data is Ready ready)
             message = message with { Data = ready with { SinglePassTest = true } };
         message = RestoreCommittedReadyReplay(snapshot.State, message);
+        message = RestoreCommittedReviewAbandonmentReplay(snapshot.State, message);
         ValidateGeneration(snapshot.State, issueNumber,
             repositoryGeneration, issueGeneration, message);
         if (isolatedStatusTest)
@@ -125,18 +126,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         if (message?.Data is AbandonUncertainReview abandonment)
         {
             var snapshot = (await stateStore.LoadAsync(token)).State;
-            if (snapshot.Inbox.GetValueOrDefault(message.Id)?.Event is { Data: AbandonUncertainReview previous } saved)
-            {
-                if (previous.IntentId != abandonment.IntentId || previous.PullRequest != abandonment.PullRequest ||
-                    previous.Sha != abandonment.Sha || previous.Reason != abandonment.Reason ||
-                    previous.AcknowledgePossiblePriorSubmission != abandonment.AcknowledgePossiblePriorSubmission ||
-                    saved.Actor != message.Actor || saved.IssueNumber != message.IssueNumber ||
-                    saved.RepositoryGeneration != message.RepositoryGeneration ||
-                    saved.IssueGeneration != message.IssueGeneration)
-                    throw new InvalidDataException("Replayed review-abandonment command changed its authorization.");
-                message = saved;
-            }
-            else
+            message = RestoreCommittedReviewAbandonmentReplay(snapshot, message)!;
+            if (!snapshot.Inbox.ContainsKey(message.Id))
             {
                 if (!snapshot.Issues.TryGetValue(message.IssueNumber, out var issue))
                     throw new InvalidDataException("Review-abandonment Issue is not in canonical state.");
@@ -302,6 +293,20 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             return message;
         if ((message with { Data = new Ready() }).Digest != (committed with { Data = new Ready() }).Digest)
             throw new InvalidDataException("Replayed Ready command changed its immutable event content.");
+        return committed;
+    }
+
+    private static OrchestrationEvent? RestoreCommittedReviewAbandonmentReplay(RepositoryState state,
+        OrchestrationEvent? message)
+    {
+        if (message?.Data is not AbandonUncertainReview abandonment ||
+            state.Inbox.GetValueOrDefault(message.Id)?.Event is not
+                { Data: AbandonUncertainReview previous } committed)
+            return message;
+        var incoming = message with { OccurredAt = committed.OccurredAt, Data = abandonment with { Evidence = null } };
+        var saved = committed with { Data = previous with { Evidence = null } };
+        if (incoming.Digest != saved.Digest)
+            throw new InvalidDataException("Replayed review-abandonment command changed its authorization.");
         return committed;
     }
 
