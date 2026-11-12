@@ -39,9 +39,11 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         GitHubStatusPublisher? statusPublisher = null, GitHubRequiredStatusApproval? statusApproval = null,
         int? maxRepairTasks = null, BoundedOrchestrationScope? boundedScope = null, bool commandOnly = false,
         bool isolatedStatusTest = false, string trustedWorkflowPath = ".github/workflows/agent-state-machine.yml",
-        string? isolatedManifestDigest = null)
+        string? isolatedManifestDigest = null, GitHubRecoveryApproval? recoveryApproval = null)
     {
-        if (approval?.AllowsTasks != true) throw new InvalidOperationException("Live activation prerequisites are not verified.");
+        if (approval is null ||
+            (!approval.AllowsTasks && !(commandOnly && recoveryApproval?.AllowsRecovery == true)))
+            throw new InvalidOperationException("Live activation or command-only recovery prerequisites are not verified.");
         if (boundedScope is not null && maxRepairTasks is not null &&
             boundedScope.MaxRepairTasks != maxRepairTasks)
             throw new InvalidDataException("Command repair-task cap does not match the bounded scope.");
@@ -119,29 +121,29 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                     throw new InvalidDataException("Requested changes no longer match the live open head.");
                 await tasks.ValidateCandidateShaAsync(state, state.Issues[message.IssueNumber], token);
             }
-            if (message?.Data is AbandonUncertainReview abandonment)
+        }
+        if (message?.Data is AbandonUncertainReview abandonment)
+        {
+            var snapshot = (await stateStore.LoadAsync(token)).State;
+            if (snapshot.Inbox.GetValueOrDefault(message.Id)?.Event is { Data: AbandonUncertainReview previous } saved)
             {
-                var snapshot = (await stateStore.LoadAsync(token)).State;
-                if (snapshot.Inbox.GetValueOrDefault(message.Id)?.Event is { Data: AbandonUncertainReview previous } saved)
-                {
-                    if (previous.IntentId != abandonment.IntentId || previous.PullRequest != abandonment.PullRequest ||
-                        previous.Sha != abandonment.Sha || previous.Reason != abandonment.Reason ||
-                        previous.AcknowledgePossiblePriorSubmission != abandonment.AcknowledgePossiblePriorSubmission ||
-                        saved.Actor != message.Actor || saved.IssueNumber != message.IssueNumber ||
-                        saved.RepositoryGeneration != message.RepositoryGeneration ||
-                        saved.IssueGeneration != message.IssueGeneration)
-                        throw new InvalidDataException("Replayed review-abandonment command changed its authorization.");
-                    message = saved;
-                }
-                else
-                {
-                    if (!snapshot.Issues.TryGetValue(message.IssueNumber, out var issue))
-                        throw new InvalidDataException("Review-abandonment Issue is not in canonical state.");
-                    var observedAt = clock.GetUtcNow();
-                    var evidence = await reviews.ReadAbandonmentEvidenceAsync(snapshot, issue, abandonment.IntentId,
-                        abandonment.Sha, observedAt, token);
-                    message = message with { OccurredAt = observedAt, Data = abandonment with { Evidence = evidence } };
-                }
+                if (previous.IntentId != abandonment.IntentId || previous.PullRequest != abandonment.PullRequest ||
+                    previous.Sha != abandonment.Sha || previous.Reason != abandonment.Reason ||
+                    previous.AcknowledgePossiblePriorSubmission != abandonment.AcknowledgePossiblePriorSubmission ||
+                    saved.Actor != message.Actor || saved.IssueNumber != message.IssueNumber ||
+                    saved.RepositoryGeneration != message.RepositoryGeneration ||
+                    saved.IssueGeneration != message.IssueGeneration)
+                    throw new InvalidDataException("Replayed review-abandonment command changed its authorization.");
+                message = saved;
+            }
+            else
+            {
+                if (!snapshot.Issues.TryGetValue(message.IssueNumber, out var issue))
+                    throw new InvalidDataException("Review-abandonment Issue is not in canonical state.");
+                var observedAt = clock.GetUtcNow();
+                var evidence = await reviews.ReadAbandonmentEvidenceAsync(snapshot, issue, abandonment.IntentId,
+                    abandonment.Sha, observedAt, token);
+                message = message with { OccurredAt = observedAt, Data = abandonment with { Evidence = evidence } };
             }
         }
         if (message?.Data is ResolveTaskTerminal resolution)

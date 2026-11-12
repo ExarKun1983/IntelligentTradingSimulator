@@ -1674,7 +1674,11 @@ hold. Replaying the same abandonment command is idempotent and never retries the
 review. This one recovery-only dispatch is allowed while
 `ORCHESTRATION_ACTIVATION_APPROVED=false`; it does not set activation or permit
 task execution. Environment protection, the trusted workflow pin, and explicit
-operator dispatch still apply.
+operator dispatch still apply. The CLI classifies the recovery command before
+loading activation-backed pipeline gates; settings and the host require a
+separate recovery approval based on verified credentials, trusted definition and
+cost controls. This approval never enables task launch or automatic wake-ups.
+Normal execution and `reactivate` still require activation and pipeline approval.
 
 For Issue #237, the canonical intent must be copied from its saved state, not
 guessed from a run title. After the new code is reviewed/merged and pinned, the

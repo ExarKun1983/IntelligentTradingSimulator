@@ -4,11 +4,19 @@ using System.Text.Json;
 
 namespace IntelligentTradingSimulator.Orchestration;
 
+public sealed record GitHubRecoveryApproval(bool ApiCredentialVerified = false,
+    bool TrustedDefinitionVerified = false, bool NoAdditionalChargesVerified = false)
+{
+    public bool AllowsRecovery => ApiCredentialVerified && TrustedDefinitionVerified && NoAdditionalChargesVerified;
+}
+
 public sealed record GitHubLiveSettings(string Repository, long RepositoryId, long ActorId, string BaseBranch,
     GitHubExecutionApproval Tasks, GitHubWakeApproval Wake, GitHubWakeRoute WakeRoute,
     GitHubReviewApproval Review, GitHubCiApproval Ci, GitHubCiRoute CiRoute, GitHubRequiredStatusApproval Status,
     int? TestIssue = null, int? TestMaxRepairTasks = null, int? RetiredTestIssue = null)
 {
+    public GitHubRecoveryApproval Recovery { get; init; } = new();
+
     public void ValidatePipelinePrerequisites()
     {
         if (!Review.AllowsReviews)
@@ -17,7 +25,7 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
             throw new InvalidOperationException("Managed CI prerequisites are unverified before pipeline execution.");
     }
 
-    public static GitHubLiveSettings Read(Func<string, string?> read)
+    public static GitHubLiveSettings Read(Func<string, string?> read, bool recoveryOnly = false)
     {
         bool Approved(string name) => read(name) == "true";
         string Required(string name) => !string.IsNullOrWhiteSpace(read(name)) ? read(name)! :
@@ -40,11 +48,13 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
         var cost = Approved("ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED");
         var tasks = new GitHubExecutionApproval(activation, credential, Approved("ORCHESTRATION_TASK_ENTITLEMENT_VERIFIED"), cost);
         var wake = new GitHubWakeApproval(activation, credential, Approved("ORCHESTRATION_TRUSTED_DEFINITION_VERIFIED"), cost);
-        if (!tasks.AllowsTasks || !wake.AllowsWake)
+        var recovery = new GitHubRecoveryApproval(credential,
+            Approved("ORCHESTRATION_TRUSTED_DEFINITION_VERIFIED"), cost);
+        if (recoveryOnly ? !recovery.AllowsRecovery : !tasks.AllowsTasks || !wake.AllowsWake)
             throw new InvalidOperationException("Live execution is disabled or its prerequisites are unverified.");
         var status = new GitHubRequiredStatusApproval(activation, credential, Approved("ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED"),
             Approved("ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED"), cost);
-        if (!status.AllowsPublication && testIssue is null)
+        if (!recoveryOnly && !status.AllowsPublication && testIssue is null)
             throw new InvalidOperationException("Required-status publication prerequisites are unverified.");
         return new(Required("GITHUB_REPOSITORY"), Identity("GITHUB_REPOSITORY_ID"), Identity("ORCHESTRATION_ACTOR_ID"),
             Required("ORCHESTRATION_BASE_BRANCH"), tasks, wake,
@@ -53,7 +63,8 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
                 Approved("ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED")),
             new(activation, credential, Approved("ORCHESTRATION_TRUSTED_CI_VERIFIED"), cost),
             new(Identity("ORCHESTRATION_CI_WORKFLOW_ID"), Required("ORCHESTRATION_CI_REF"),
-                Required("ORCHESTRATION_CI_DEFINITION_SHA")), status, testIssue, testMaxRepairTasks, retiredTestIssue);
+                Required("ORCHESTRATION_CI_DEFINITION_SHA")), status, testIssue, testMaxRepairTasks, retiredTestIssue)
+            { Recovery = recovery };
     }
 }
 
@@ -69,15 +80,13 @@ public static class GitHubLiveCommand
             if (!args.Contains("--execute", StringComparer.Ordinal) || args.Contains("--dry-run", StringComparer.Ordinal) ||
                 args.Contains("--replay", StringComparer.Ordinal) || args.Contains("--context", StringComparer.Ordinal))
                 throw new InvalidDataException("Live mode requires explicit execution and trusted Actions input.");
-            var settings = GitHubLiveSettings.Read(Environment.GetEnvironmentVariable);
             var path = Environment.GetEnvironmentVariable("GITHUB_EVENT_PATH");
             if (string.IsNullOrWhiteSpace(path) || new FileInfo(path).Length > 2 * 1024 * 1024)
                 throw new InvalidDataException("Missing or oversized Actions notification.");
             using var payload = JsonDocument.Parse(await File.ReadAllTextAsync(path));
             var eventName = Environment.GetEnvironmentVariable("GITHUB_EVENT_NAME") ?? throw new InvalidDataException("Missing event.");
-            var recoveryOnly = eventName == "workflow_dispatch" &&
-                payload.RootElement.GetProperty("inputs").GetProperty("operation").GetString() is
-                    "pause" or "resolve-task" or "abandon-uncertain-review";
+            var recoveryOnly = IsRecoveryOnlyCommand(eventName, payload.RootElement);
+            var settings = GitHubLiveSettings.Read(Environment.GetEnvironmentVariable, recoveryOnly);
             if (!recoveryOnly)
             {
                 try
@@ -139,7 +148,8 @@ public static class GitHubLiveCommand
                     [publisher.ActorId], publisher.ActorId, settings.BaseBranch, settings.ActorId,
                     settings.Tasks, ciRoute: settings.CiRoute, ciApproval: settings.Ci, reviewApproval: settings.Review,
                     statusPublisher: settings.Status.AllowsPublication ? publisher : null, statusApproval: settings.Status,
-                    boundedScope: CreateBoundedScope(settings), commandOnly: recoveryOnly);
+                    boundedScope: CreateBoundedScope(settings), commandOnly: recoveryOnly,
+                    recoveryApproval: settings.Recovery);
             }
             else
             {
@@ -162,6 +172,11 @@ public static class GitHubLiveCommand
             return 1;
         }
     }
+
+    internal static bool IsRecoveryOnlyCommand(string eventName, JsonElement payload) =>
+        eventName == "workflow_dispatch" &&
+        payload.GetProperty("inputs").GetProperty("operation").GetString() is
+            "pause" or "resolve-task" or "abandon-uncertain-review";
 
     private static void ValidateTestScope(RepositoryState state, GitHubLiveSettings settings, int? requestedIssue)
     {

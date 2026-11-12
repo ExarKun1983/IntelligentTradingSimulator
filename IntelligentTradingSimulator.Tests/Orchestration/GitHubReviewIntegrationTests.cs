@@ -524,6 +524,131 @@ public sealed class GitHubReviewIntegrationTests
         Assert.Equal(1, handler.Posts);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task HostAbandonsUnknownReviewWithFreshEvidenceWithoutLaunchingOrAdmittingWork(bool activation)
+    {
+        var store = new Store(UncertainReview());
+        store.State.Issues[8] = new() { Number = 8, Ready = true, Phase = Phase.READY, ReadyAt = Now };
+        using var handler = new Api { Corruption = "no-reviews" };
+        using var client = handler.Client();
+
+        var result = await RunAbandonment(client, store, activation: activation);
+
+        Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
+        Assert.Equal(0, result.Iterations);
+        Assert.Equal(DeliveryStatus.Failed, store.State.Outbox["review"].Status);
+        Assert.Equal(EffectFailureCode.OperatorAbandonedUnknownReview, store.State.Outbox["review"].FailureCode);
+        var issue = store.State.Issues[7];
+        Assert.Equal(Phase.BLOCKED, issue.Phase);
+        Assert.True(issue.ReactivationRequired);
+        Assert.False(issue.ActiveAuthorized);
+        Assert.Null(store.State.AdmittedIssue);
+        var resolution = Assert.IsType<ReviewOperatorResolution>(issue.Review!.OperatorResolution);
+        Assert.Equal(Now, resolution.Evidence.ObservedAt);
+        Assert.Equal("review", resolution.Evidence.IntentId);
+        Assert.Equal(55, resolution.Author.Id);
+        Assert.Empty(store.State.Issues[8].Tasks);
+        Assert.Single(issue.Tasks);
+        Assert.Contains(handler.Requests, request => request.Contains("/tasks/remote-task"));
+        Assert.Contains(handler.Requests, request => request.Contains("/reviews?"));
+        Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
+    }
+
+    [Fact]
+    public async Task HostRestoresCommittedAbandonmentOnReplayWithoutRepeatingEvidenceReads()
+    {
+        var store = new Store(UncertainReview());
+        store.AfterSave = () =>
+        {
+            store.AfterSave = null;
+            throw new IOException("Lost response after committed abandonment.");
+        };
+        using var handler = new Api { Corruption = "no-reviews" };
+        using var client = handler.Client();
+        await Assert.ThrowsAsync<IOException>(() => RunAbandonment(client, store));
+        var persisted = StateJson.Serialize(store.State);
+        handler.Requests.Clear();
+        handler.Corruption = "existing-request";
+
+        var result = await RunAbandonment(client, store);
+
+        Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
+        Assert.Equal(persisted, StateJson.Serialize(store.State));
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.Contains("/tasks/") || request.Contains("/pulls/"));
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            RunAbandonment(client, store, reason: "Changed operator decision"));
+        Assert.Equal(persisted, StateJson.Serialize(store.State));
+        Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
+    }
+
+    [Theory]
+    [InlineData("existing-request")]
+    [InlineData("abandon-review")]
+    [InlineData("live-sha")]
+    [InlineData("read-permission")]
+    [InlineData("definition-sha")]
+    public async Task HostRejectsUnsafeAbandonmentWithoutCanonicalMutation(string corruption)
+    {
+        var store = new Store(UncertainReview());
+        var original = StateJson.Serialize(store.State);
+        using var handler = new Api { Corruption = corruption };
+        using var client = handler.Client();
+        await Assert.ThrowsAnyAsync<Exception>(() => RunAbandonment(client, store));
+        Assert.Equal(original, StateJson.Serialize(store.State));
+        Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task RecoveryApprovalCannotEnableNormalHostExecutionOrBypassMissingRecoveryApproval(
+        bool commandOnly, bool missingApproval)
+    {
+        var store = new Store(UncertainReview());
+        using var handler = new Api { Corruption = "no-reviews" };
+        using var client = handler.Client();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            RunAbandonment(client, store, commandOnly: commandOnly, missingApproval: missingApproval));
+        Assert.Equal(DeliveryStatus.Unknown, store.State.Outbox["review"].Status);
+        Assert.Null(store.State.Issues[7].Review!.OperatorResolution);
+        Assert.DoesNotContain(handler.Requests, request => request.Contains("/tasks/"));
+    }
+
+    [Fact]
+    public async Task RecoveryOnlyHostRejectsReactivationEvenWithVerifiedRecoveryApproval()
+    {
+        var store = new Store(UncertainReview());
+        using var handler = new Api { Corruption = "no-reviews" };
+        using var client = handler.Client();
+        var original = StateJson.Serialize(store.State);
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            RunAbandonment(client, store, operation: "reactivate"));
+        Assert.Equal(original, StateJson.Serialize(store.State));
+    }
+
+    private static async Task<WorkerResult> RunAbandonment(HttpClient client, Store store, bool activation = false,
+        string reason = "Accept possible prior delivery", bool commandOnly = true, bool missingApproval = false,
+        string operation = "abandon-uncertain-review")
+    {
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            sender = new { id = 55, login = "maintainer", type = "User" },
+            inputs = new { issue = "7", operation, reason, review_intent = "review",
+                pull = "17", sha = Sha, acknowledge_possible_prior_submission = "true" }
+        });
+        var api = new GitHubRepositoryApi(client, "owner/repo", 1);
+        var occurredAt = await GitHubLiveCommand.VerifyCommandDefinitionAsync(api,
+            new(10, Sha), "44", "workflow_dispatch");
+        return await new GitHubOrchestrationHost(api, store, new Clock()).ReconcileAsync(payload,
+            "workflow_dispatch", "44", 1, 1, occurredAt, [], 99, "master", 55,
+            new(activation, true, true, true), commandOnly: commandOnly,
+            recoveryApproval: missingApproval ? null : new(true, true, true));
+    }
+
     private static RepositoryState Eligible()
     {
         // Independent completed-task/exact-SHA CI fixture, not provider proof or live orchestration.
@@ -557,6 +682,9 @@ public sealed class GitHubReviewIntegrationTests
         issue.ReactivationRequired = true;
         issue.HoldReason = "Effect outcome is ambiguous.";
         state.Outbox["review"].Status = DeliveryStatus.Unknown;
+        state.Outbox["launch"] = new() { Id = "launch", IssueNumber = 7, Generation = 1,
+            TaskId = "task", Round = 1, Kind = EffectKind.LaunchTask, Status = DeliveryStatus.Succeeded,
+            ExternalId = "remote-task" };
         return state;
     }
 
@@ -657,9 +785,9 @@ public sealed class GitHubReviewIntegrationTests
         private object Pull(bool acknowledgement = false) => new
         {
             number = 17, state = Corruption == "closed" ? "closed" : "open",
-            head = new { sha = Corruption == "live-sha" || acknowledgement && Corruption == "ack-sha" ? new string('b', 40) : Sha,
+            head = new { @ref = "agent/task", sha = Corruption == "live-sha" || acknowledgement && Corruption == "ack-sha" ? new string('b', 40) : Sha,
                 repo = new { id = Corruption == "repository" ? 2 : 1 } },
-            @base = new { repo = new { id = 1 } },
+            @base = new { @ref = "master", repo = new { id = 1 } },
             requested_reviewers = new[] { Actor(acknowledgement && Corruption == "ack-actor") }
         };
         private object Review(bool baseline) => new
@@ -688,7 +816,28 @@ public sealed class GitHubReviewIntegrationTests
                 response = Pull(true);
             }
             else if (path == "/repos/owner/repo") response = new { id = 1, full_name = "owner/repo" };
-            else if (path == "/repos/owner/repo/issues/7") response = new { number = 7, state = "open" };
+            else if (path == "/repos/owner/repo/issues/7") response = new { id = 70, number = 7, state = "open",
+                labels = new[] { new { name = "agent:blocked" } } };
+            else if (path == "/repos/owner/repo/actions/runs/44") response = new
+            {
+                id = 44, workflow_id = 10, path = ".github/workflows/agent-state-machine.yml",
+                @event = "workflow_dispatch", actor = new { id = 55 }, repository = new { id = 1 },
+                head_sha = Corruption == "definition-sha" ? new string('b', 40) : Sha,
+                created_at = Now.AddDays(-1)
+            };
+            else if (path == "/users/maintainer") response = new { id = 55, type = "User" };
+            else if (path == "/repos/owner/repo/collaborators/maintainer/permission")
+                response = new { permission = Corruption == "read-permission" ? "read" : "write", user = new { id = 55 } };
+            else if (path == "/agents/repos/owner/repo/tasks/remote-task") response = new
+            {
+                id = "remote-task", repository = new { id = 1 }, creator = new { id = 55 },
+                state = "completed", session_count = 1,
+                sessions = new[] { new { id = "session", state = "completed", task_id = "remote-task",
+                    repository = new { id = 1 } } },
+                artifacts = new[] { new { provider = "github", type = "branch",
+                    data = new { head_ref = "agent/task", base_ref = "master" } } }
+            };
+            else if (path == "/repos/owner/repo/pulls") response = new[] { new { number = 17 } };
             else if (path == "/repos/owner/repo/pulls/17") response = Pull();
             else if (path.StartsWith("/users/")) response = Actor();
             else if (path.EndsWith("/requested_reviewers"))
