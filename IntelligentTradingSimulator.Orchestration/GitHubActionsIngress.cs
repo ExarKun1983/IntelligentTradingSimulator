@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace IntelligentTradingSimulator.Orchestration;
 
-public enum NotificationKind { Ignore, Readiness, WithdrawReadiness, Projection, Closed, Reopened, Resume, Pause, Reactivate, ResolveTask, ClassifyReview }
+public enum NotificationKind { Ignore, Readiness, WithdrawReadiness, Projection, Closed, Reopened, Resume, Pause, Reactivate, ResolveTask, ClassifyReview, RequestChanges }
 
 public sealed record ActionsNotification(
     NotificationKind Kind, string SourceId, long RepositoryId, long IssueId, int IssueNumber,
@@ -47,13 +47,14 @@ public static class GitHubActionsIngress
             NotificationKind.ResolveTask => new ResolveTaskTerminal(payload.GetProperty("inputs").GetProperty("task").GetString()!,
                 "", notification.Reason!),
             NotificationKind.ClassifyReview => ReadClassification(payload.GetProperty("inputs"), notification.Reason!),
+            NotificationKind.RequestChanges => ReadChanges(payload.GetProperty("inputs"), notification.Reason!),
             _ => throw new InvalidDataException("Unsupported command.")
         };
         return new(notification.SourceId, evidence.Repository, notification.IssueNumber,
             repositoryGeneration, issueGeneration,
             new Actor(notification.ActorId.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ActorKind.Human, notification.ActorId,
-                Type: notification.Kind is NotificationKind.ResolveTask or NotificationKind.ClassifyReview ? evidence.ActorType : null),
+                Type: notification.Kind is NotificationKind.ResolveTask or NotificationKind.ClassifyReview or NotificationKind.RequestChanges ? evidence.ActorType : null),
             occurredAt, data);
     }
 
@@ -101,10 +102,11 @@ public static class GitHubActionsIngress
                 "reactivate" => NotificationKind.Reactivate,
                 "resolve-task" => NotificationKind.ResolveTask,
                 "classify-review" => NotificationKind.ClassifyReview,
+                "request-changes" => NotificationKind.RequestChanges,
                 _ => throw new InvalidDataException("Only guarded recovery operations are supported.")
             };
             var reason = inputs.TryGetProperty("reason", out var value) ? value.GetString() : null;
-            if (kind is NotificationKind.Pause or NotificationKind.Reactivate or NotificationKind.ResolveTask or NotificationKind.ClassifyReview &&
+            if (kind is NotificationKind.Pause or NotificationKind.Reactivate or NotificationKind.ResolveTask or NotificationKind.ClassifyReview or NotificationKind.RequestChanges &&
                 string.IsNullOrWhiteSpace(reason))
                 throw new InvalidDataException("Pause/reactivation requires a reason.");
             if (kind == NotificationKind.ResolveTask &&
@@ -141,6 +143,13 @@ public static class GitHubActionsIngress
         // A delayed removal is not a new opt-in. The reconciler must observe a fresh authorized ready action.
         return Result(action == "labeled" ? NotificationKind.Readiness : NotificationKind.Ignore, label);
     }
+
+    private static RequestChanges ReadChanges(JsonElement inputs, string reason) =>
+        new(inputs.GetProperty("handoff").GetString() ?? throw new InvalidDataException("Missing handoff."),
+            int.Parse(inputs.GetProperty("round").GetString()!, System.Globalization.CultureInfo.InvariantCulture),
+            int.Parse(inputs.GetProperty("pull").GetString()!, System.Globalization.CultureInfo.InvariantCulture),
+            inputs.GetProperty("sha").GetString() ?? throw new InvalidDataException("Missing head SHA."),
+            reason);
 
     private static HumanClassification ReadClassification(JsonElement inputs, string reason)
     {

@@ -24,6 +24,8 @@ public sealed class SharedHostLifecycleIntegrationTests
     [InlineData("feedback")]
     [InlineData("scheduled-feedback-contention")]
     [InlineData("head-changed")]
+    [InlineData("request-changes")]
+    [InlineData("request-changes-stale")]
     public async Task SharedHostWakeDrainsTaskCiReviewHumanClassificationAndPublishesOnlyExactSafeStatus(string afterApproval)
     {
         using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
@@ -88,6 +90,44 @@ public sealed class SharedHostLifecycleIntegrationTests
         Assert.Equal(RequiredStatusPolicy.Context, success.GetProperty("context").GetString());
         Assert.All(fixture.StatusWrites, write => Assert.Equal("/repos/owner/repo/statuses/" + Head, write));
         Assert.DoesNotContain(fixture.StatusWrites, write => write.EndsWith(Definition));
+
+        if (afterApproval.StartsWith("request-changes", StringComparison.Ordinal))
+        {
+            var payload = JsonSerializer.SerializeToElement(new
+            {
+                repository = new { id = 1, full_name = "owner/repo" },
+                sender = new { id = 55, login = "maintainer", type = "User" },
+                inputs = new { issue = "7", operation = "request-changes", reason = "Fix the human-reported edge case",
+                    handoff = accepted.CurrentHandoffId, round = accepted.Round.ToString(), pull = "17", sha = Head }
+            });
+            Task<WorkerResult> Request() => host.ReconcileAsync(payload, "workflow_dispatch", "92", 1, 1,
+                Now.AddMinutes(4), [], 99, "master", 55, TaskApproval, Bounded,
+                new GitHubTaskIntegrationTests.FinalHead(), reviewApproval: ReviewApproval, ciRoute: CiRoute,
+                ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
+            if (afterApproval == "request-changes-stale")
+            {
+                taskApi.Corruption = "later-push";
+                var unchanged = StateJson.Serialize(store.State);
+                await Assert.ThrowsAsync<InvalidDataException>(Request);
+                Assert.Equal(unchanged, StateJson.Serialize(store.State));
+                Assert.Single(taskApi.Writes, write => write.Path.StartsWith("/agents/"));
+                return;
+            }
+            taskApi.AfterLaunch = () => taskApi.RemoteState = "in_progress";
+            await Request();
+            await Request();
+            Assert.Equal(Phase.FIX_PENDING, store.State.Issues[7].Phase);
+            Assert.Equal(2, taskApi.Writes.Count(write => write.Path.StartsWith("/agents/")));
+            var repair = store.State.Issues[7].Tasks[store.State.Issues[7].ActiveTaskId!];
+            Assert.Equal(TaskKind.FeedbackRepair, repair.Kind);
+            Assert.Equal(TaskStatus.Running, repair.Status);
+            Assert.Equal(17, store.State.Issues[7].PullRequest);
+            Assert.Single(repair.FeedbackEventIds);
+            Assert.Equal(1, fixture.CiDispatches);
+            Assert.Equal(1, fixture.ReviewRequests);
+            Assert.NotEqual("success", fixture.Statuses.Last().GetProperty("state").GetString());
+            return;
+        }
 
         if (afterApproval is "feedback" or "scheduled-feedback-contention")
         {
@@ -328,7 +368,7 @@ public sealed class SharedHostLifecycleIntegrationTests
             if (path == prefix + "actions/runs/90")
                 response = new { id = 90, workflow_id = 10, path = ".github/workflows/agent-state-machine.yml",
                     head_sha = Definition, @event = WakeEvent, repository = new { id = 1 } };
-            else if (path == prefix + "actions/runs/91")
+            else if (path == prefix + "actions/runs/91" || path == prefix + "actions/runs/92")
                 response = new { @event = "workflow_dispatch", path = ".github/workflows/agent-state-machine.yml",
                     actor = new { id = 55 } };
             else if (path == prefix + "actions/workflows/88")

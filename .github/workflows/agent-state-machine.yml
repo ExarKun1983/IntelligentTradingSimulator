@@ -23,9 +23,9 @@ on:
         required: true
         default: resume
         type: choice
-        options: [resume, pause, reactivate, resolve-task, classify-review]
+        options: [resume, pause, reactivate, resolve-task, classify-review, request-changes]
       reason:
-        description: Required for pause/reactivation
+        description: Required for pause, reactivation, classification or requested changes
         required: false
         type: string
       repository_generation:
@@ -41,7 +41,7 @@ on:
         required: false
         type: string
       handoff:
-        description: Exact review handoff ID for authorized classification
+        description: Exact review handoff ID for classification or requested changes
         required: false
         type: string
       round:

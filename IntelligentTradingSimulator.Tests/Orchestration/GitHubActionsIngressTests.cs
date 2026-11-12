@@ -166,6 +166,7 @@ public class GitHubActionsIngressTests
     [InlineData("resume", "", NotificationKind.Resume)]
     [InlineData("pause", "operator hold", NotificationKind.Pause)]
     [InlineData("reactivate", "verified external launch retired", NotificationKind.Reactivate)]
+    [InlineData("request-changes", "Fix the edge case", NotificationKind.RequestChanges)]
     public void RecoveryOperationsRemainDistinct(string operation, string reason, NotificationKind expected)
     {
         var result = GitHubActionsIngress.Parse(Manual(operation, reason), "workflow_dispatch", "123", Evidence());
@@ -176,10 +177,30 @@ public class GitHubActionsIngressTests
     [InlineData("start", "")]
     [InlineData("pause", "")]
     [InlineData("reactivate", "")]
+    [InlineData("request-changes", "")]
     public void RecoveryCannotBecomeStartOrClearHoldWithoutReason(string operation, string reason)
     {
         Assert.Throws<InvalidDataException>(() =>
             GitHubActionsIngress.Parse(Manual(operation, reason), "workflow_dispatch", "123", Evidence()));
+    }
+
+    [Fact]
+    public void RequestedChangesCarryExplicitHumanHandoffAndRevision()
+    {
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 100, full_name = "owner/repo" },
+            sender = new { id = 42, type = "User" },
+            inputs = new { issue = "7", operation = "request-changes", reason = "Fix this case",
+                handoff = "handoff:7:1:review", round = "2", pull = "11", sha = new string('a', 40) }
+        });
+        var message = GitHubActionsIngress.PrepareEvent(payload, "workflow_dispatch", "123", Evidence(),
+            1, 1, DateTimeOffset.UnixEpoch);
+        Assert.Equal(new RequestChanges("handoff:7:1:review", 2, 11, new string('a', 40), "Fix this case"),
+            Assert.IsType<RequestChanges>(message!.Data));
+        Assert.Equal("User", message.Actor.Type);
+        Assert.Throws<InvalidDataException>(() => GitHubActionsIngress.PrepareEvent(payload,
+            "workflow_dispatch", "123", Evidence(permission: "read"), 1, 1, DateTimeOffset.UnixEpoch));
     }
 
     [Fact]
