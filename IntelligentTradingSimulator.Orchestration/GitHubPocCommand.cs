@@ -186,7 +186,8 @@ public static class GitHubPocCommand
     {
         if (issue?.Phase != Phase.HUMAN_REVIEW ||
             issue.Review?.Classification != ReviewClassification.Accepted ||
-            issue.Ci?.Green != true || issue.Ci.Sha != issue.HeadSha || issue.Review.Sha != issue.HeadSha)
+            issue.Ci?.Green != true || issue.Ci.Sha != issue.HeadSha || issue.Review.Sha != issue.HeadSha ||
+            issue.PendingFeedbackEventIds.Count != 0)
             return false;
         if (candidate is null)
             throw new InvalidDataException("PoC completion requires live candidate validation.");

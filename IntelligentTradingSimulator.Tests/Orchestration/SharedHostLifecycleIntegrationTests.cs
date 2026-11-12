@@ -421,6 +421,18 @@ public sealed class SharedHostLifecycleIntegrationTests
             taskApi.Corruption = "base";
             await Assert.ThrowsAsync<InvalidDataException>(() =>
                 GitHubPocCommand.IsCompleteAsync(store.State, handoff, candidate, default));
+            taskApi.Corruption = null;
+            taskApi.Comments.Add(JsonSerializer.SerializeToElement(new
+            {
+                id = 200, body = "Please address this follow-up before completion.",
+                updated_at = Now.AddMinutes(1),
+                user = new { id = 55, login = "maintainer", type = "User" }
+            }));
+            await Reconcile(Command("resume"), "workflow_dispatch", "93", repairHead);
+            Assert.Equal(Phase.HUMAN_REVIEW, store.State.Issues[7].Phase);
+            Assert.Single(store.State.Issues[7].PendingFeedbackEventIds);
+            Assert.False(await GitHubPocCommand.IsCompleteAsync(store.State,
+                store.State.Issues[7], candidate, default));
         }
         else
         {
@@ -602,7 +614,8 @@ public sealed class SharedHostLifecycleIntegrationTests
             if (path == prefix + "actions/runs/90")
                 response = new { id = 90, workflow_id = 10, path = taskApi.WorkflowPath,
                     head_sha = Definition, @event = WakeEvent, repository = new { id = 1 }, actor = new { id = 55 } };
-            else if (path == prefix + "actions/runs/91" || path == prefix + "actions/runs/92")
+            else if (path == prefix + "actions/runs/91" || path == prefix + "actions/runs/92" ||
+                     path == prefix + "actions/runs/93")
                 response = new { @event = "workflow_dispatch", path = taskApi.WorkflowPath,
                     actor = new { id = 55 } };
             else if (path == prefix + "actions/workflows/88")
