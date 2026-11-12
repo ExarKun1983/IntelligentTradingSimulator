@@ -264,6 +264,38 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     issue.Phase = Phase.FIX_PENDING;
                 }
                 break;
+            case RequestChanges changes:
+                if (string.IsNullOrWhiteSpace(changes.HandoffId) ||
+                    issue.SinglePassTest || issue.Phase != Phase.HUMAN_REVIEW || issue.Paused ||
+                    issue.ClosurePending || issue.HoldReason != "Awaiting human approval." ||
+                    !issue.ReactivationRequired || issue.ActiveAuthorized ||
+                    issue.Review is not { Classification: ReviewClassification.Accepted } acceptedReview ||
+                    issue.Ci is not { Green: true } acceptedCi ||
+                    issue.CurrentHandoffId != changes.HandoffId ||
+                    !issue.Handoffs.TryGetValue(changes.HandoffId, out var changesHandoff) ||
+                    changesHandoff.Generation != issue.Generation || changesHandoff.Round != changes.Round ||
+                    changesHandoff.Sha != changes.Sha || changesHandoff.TaskId != issue.ActiveTaskId ||
+                    changesHandoff.ReviewId != acceptedReview.ReviewId ||
+                    issue.Round != changes.Round || acceptedReview.Round != changes.Round ||
+                    acceptedReview.Sha != changes.Sha || acceptedReview.TaskId != issue.ActiveTaskId ||
+                    acceptedCi.TaskId != issue.ActiveTaskId || acceptedCi.Round != changes.Round ||
+                    acceptedCi.Sha != changes.Sha ||
+                    !CompletedTaskMatches(issue, issue.ActiveTaskId!, changes.Round, changes.Sha) ||
+                    HasUnfinishedWork(state, issue) || message.OccurredAt < changesHandoff.CreatedAt ||
+                    string.IsNullOrWhiteSpace(changes.Reason))
+                    throw new InvalidOperationException("Changes require the current settled human-review handoff.");
+                CheckMapping(issue, changes.PullRequest, changes.Sha);
+                issue.FeedbackEventIds.Add(message.Id);
+                issue.LastFeedbackText = changes.Reason;
+                issue.Feedback.Add(message.Id, new FeedbackRecord(message.Id, changes.Reason, message.Actor,
+                    message.OccurredAt, issue.Generation, changes.HandoffId, changes.Round, changes.Sha));
+                issue.PendingFeedbackEventIds.Add(message.Id);
+                issue.CurrentHandoffId = null;
+                issue.ReactivationRequired = false;
+                issue.ActiveAuthorized = true;
+                issue.HoldReason = null;
+                issue.Phase = Phase.FIX_PENDING;
+                break;
             case HumanClassification classification:
                 if (string.IsNullOrWhiteSpace(classification.HandoffId) ||
                     issue.Phase != Phase.BLOCKED || issue.HoldReason != "Review requires human classification." ||

@@ -81,6 +81,103 @@ public sealed class OrchestrationCoreTests
     }
 
     [Fact]
+    public void RequestedChangesReturnTheSamePullToCoderAndRequireFreshCiAndReview()
+    {
+        var reducer = Reducer();
+        var state = FinishReview(FinishCi(CompleteTask(Admitted(), 2), true, "ci-first"),
+            ReviewClassification.Accepted, "review-first");
+        var issue = state.Issues[7];
+        var originalTask = issue.ActiveTaskId!;
+        var handoff = issue.CurrentHandoffId!;
+        var command = Event(new RequestChanges(handoff, issue.Round, 11, issue.HeadSha!,
+            "Please fix the missing edge case."), "request-changes");
+
+        state = reducer.Apply(state, command);
+        Assert.Equal(Phase.FIX_PENDING, state.Issues[7].Phase);
+        Assert.False(state.Issues[7].ReactivationRequired);
+        Assert.Equal(StateJson.Serialize(state), StateJson.Serialize(reducer.Apply(state, command)));
+        state = reducer.Reconcile(state, Live(state)).State;
+        var repair = state.Issues[7].Tasks[state.Issues[7].ActiveTaskId!];
+        Assert.Equal(TaskKind.FeedbackRepair, repair.Kind);
+        Assert.Equal(originalTask, repair.ParentTaskId);
+        Assert.Equal(TaskLaunchSource.PullRequestHead, repair.LaunchSource);
+        Assert.Equal(Sha(2), repair.SourceSha);
+        Assert.Equal(11, state.Issues[7].PullRequest);
+        Assert.Equal(new[] { command.Id }, repair.FeedbackEventIds);
+        var launch = state.Outbox.Values.Single(effect => effect.TaskId == repair.Id);
+        Assert.Contains("Please fix the missing edge case.", launch.TaskPrompt);
+        Assert.Equal(handoff, state.Issues[7].Feedback[command.Id].HandoffId);
+        Assert.Equal(Phase.FIX_PENDING, state.Issues[7].Phase);
+        Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.RequestReview);
+        Assert.Throws<InvalidOperationException>(() => reducer.Apply(state, command with { Id = "repeat" }));
+        Assert.Equal(StateJson.Serialize(state), StateJson.Serialize(reducer.Apply(state, command)));
+
+        state = CompleteTask(state, 3);
+        Assert.Equal(Phase.CI_PENDING, state.Issues[7].Phase);
+        Assert.Null(state.Issues[7].Ci!.Green);
+        Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.RequestReview);
+        state = FinishReview(FinishCi(state, true, "ci-second"), ReviewClassification.Accepted, "review-second");
+        Assert.Equal(Phase.HUMAN_REVIEW, state.Issues[7].Phase);
+        Assert.Equal(Sha(3), state.Issues[7].Review!.Sha);
+        Assert.Equal(2, state.Outbox.Values.Count(effect => effect.Kind == EffectKind.RequestReview));
+    }
+
+    [Theory]
+    [InlineData("handoff")]
+    [InlineData("round")]
+    [InlineData("pull")]
+    [InlineData("sha")]
+    [InlineData("reason")]
+    [InlineData("paused")]
+    [InlineData("closed")]
+    [InlineData("single-pass")]
+    [InlineData("unclassified")]
+    [InlineData("ci")]
+    [InlineData("task")]
+    [InlineData("uncertain")]
+    [InlineData("stale")]
+    public void RequestedChangesCannotOverrideOtherHoldsOrStaleEvidence(string corruption)
+    {
+        var reducer = Reducer();
+        var state = FinishReview(FinishCi(CompleteTask(Admitted(), 2), true, "ci-first"),
+            ReviewClassification.Accepted, "review-first");
+        var issue = state.Issues[7];
+        var changes = new RequestChanges(issue.CurrentHandoffId!, issue.Round, 11, issue.HeadSha!, "Fix this case.");
+        switch (corruption)
+        {
+            case "handoff": changes = changes with { HandoffId = "other" }; break;
+            case "round": changes = changes with { Round = issue.Round + 1 }; break;
+            case "pull": changes = changes with { PullRequest = 99 }; break;
+            case "sha": changes = changes with { Sha = Sha(3) }; break;
+            case "reason": changes = changes with { Reason = "" }; break;
+            case "paused": issue.Paused = true; break;
+            case "closed": issue.ClosurePending = true; break;
+            case "single-pass": issue.SinglePassTest = true; break;
+            case "unclassified": issue.Review!.Classification = ReviewClassification.NeedsHuman; break;
+            case "ci": issue.Ci!.Green = false; break;
+            case "task": issue.Tasks[issue.ActiveTaskId!].Status = TaskStatus.Running; break;
+            case "uncertain": state.Outbox.Values.Single(effect => effect.Kind == EffectKind.RequestReview).Status = DeliveryStatus.Unknown; break;
+            case "stale": issue.Handoffs[issue.CurrentHandoffId!] = issue.Handoffs[issue.CurrentHandoffId!] with { CreatedAt = Now.AddMinutes(1) }; break;
+        }
+        var original = StateJson.Serialize(state);
+        Assert.Throws<InvalidOperationException>(() => reducer.Apply(state, Event(changes, "changes")));
+        Assert.Equal(original, StateJson.Serialize(state));
+    }
+
+    [Fact]
+    public void OrdinaryHumanReviewCommentsDoNotAuthorizeAnotherTask()
+    {
+        var reducer = Reducer();
+        var state = FinishReview(FinishCi(CompleteTask(Admitted(), 2), true, "ci-first"),
+            ReviewClassification.Accepted, "review-first");
+        state = reducer.Apply(state, Event(new HumanFeedback("Could this be clearer?"), "comment"));
+        state = reducer.Reconcile(state, Live(state)).State;
+        Assert.Equal(Phase.HUMAN_REVIEW, state.Issues[7].Phase);
+        Assert.True(state.Issues[7].ReactivationRequired);
+        Assert.Single(state.Issues[7].Tasks);
+    }
+
+    [Fact]
     public void ReducerClonesInputsAndDeduplicatesByFullEventDigest()
     {
         var input = Empty();

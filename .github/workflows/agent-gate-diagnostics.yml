@@ -25,6 +25,18 @@ jobs:
           REVIEW_POLICY_MATCH: ${{ vars.ORCHESTRATION_REVIEW_POLICY_VERIFIED == 'true' }}
           AUTOMATIC_REVIEWS_DISABLED_MATCH: ${{ vars.ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED == 'true' }}
           TRUSTED_CI_MATCH: ${{ vars.ORCHESTRATION_TRUSTED_CI_VERIFIED == 'true' }}
+          USER_TOKEN_MATCH: ${{ vars.ORCHESTRATION_USER_TOKEN_VERIFIED == 'true' }}
+          ENVIRONMENT_MATCH: ${{ vars.ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED == 'true' }}
+          TASK_ENTITLEMENT_MATCH: ${{ vars.ORCHESTRATION_TASK_ENTITLEMENT_VERIFIED == 'true' }}
+          DEFINITION_VERIFIED_MATCH: ${{ vars.ORCHESTRATION_TRUSTED_DEFINITION_VERIFIED == 'true' }}
+          COST_MATCH: ${{ vars.ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED == 'true' }}
+          STATUS_PUBLISHER_MATCH: ${{ vars.ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED == 'true' }}
+          REQUIRED_CONTEXT_MATCH: ${{ vars.ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED == 'true' }}
+          ACTOR_MATCH: ${{ vars.ORCHESTRATION_ACTOR_ID == '6195946' }}
+          WORKFLOW_MATCH: ${{ vars.ORCHESTRATION_WORKFLOW_ID == '412034684' }}
+          CI_WORKFLOW_MATCH: ${{ vars.ORCHESTRATION_CI_WORKFLOW_ID == '412034682' }}
+          BASE_MATCH: ${{ vars.ORCHESTRATION_BASE_BRANCH == 'master' }}
+          STATUS_TEST_INACTIVE: ${{ vars.ORCHESTRATION_STATUS_TEST_APPROVED == 'false' && vars.ORCHESTRATION_STATUS_TEST_BOOTSTRAP_APPROVED == 'false' }}
           CI_REF: ${{ vars.ORCHESTRATION_CI_REF }}
           CI_DEFINITION_SHA: ${{ vars.ORCHESTRATION_CI_DEFINITION_SHA }}
           GH_TOKEN: ${{ github.token }}
@@ -56,6 +68,18 @@ jobs:
             printf '| ORCHESTRATION_REVIEW_POLICY_VERIFIED == true | %s |\n' "$REVIEW_POLICY_MATCH"
             printf '| ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED == true | %s |\n' "$AUTOMATIC_REVIEWS_DISABLED_MATCH"
             printf '| ORCHESTRATION_TRUSTED_CI_VERIFIED == true | %s |\n' "$TRUSTED_CI_MATCH"
+            printf '| ORCHESTRATION_USER_TOKEN_VERIFIED == true | %s |\n' "$USER_TOKEN_MATCH"
+            printf '| ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED == true | %s |\n' "$ENVIRONMENT_MATCH"
+            printf '| ORCHESTRATION_TASK_ENTITLEMENT_VERIFIED == true | %s |\n' "$TASK_ENTITLEMENT_MATCH"
+            printf '| ORCHESTRATION_TRUSTED_DEFINITION_VERIFIED == true | %s |\n' "$DEFINITION_VERIFIED_MATCH"
+            printf '| ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED == true | %s |\n' "$COST_MATCH"
+            printf '| ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED == true | %s |\n' "$STATUS_PUBLISHER_MATCH"
+            printf '| ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED == true | %s |\n' "$REQUIRED_CONTEXT_MATCH"
+            printf '| ORCHESTRATION_ACTOR_ID == 6195946 | %s |\n' "$ACTOR_MATCH"
+            printf '| ORCHESTRATION_WORKFLOW_ID == 412034684 | %s |\n' "$WORKFLOW_MATCH"
+            printf '| ORCHESTRATION_CI_WORKFLOW_ID == 412034682 | %s |\n' "$CI_WORKFLOW_MATCH"
+            printf '| ORCHESTRATION_BASE_BRANCH == master | %s |\n' "$BASE_MATCH"
+            printf '| Isolated status test activation and bootstrap remain false | %s |\n' "$STATUS_TEST_INACTIVE"
             printf '| ORCHESTRATION_CI_REF == refs/tags/agent-managed-ci-test-237-v1 | %s |\n' "$ci_ref_match"
             printf '| New CI tag resolves to a commit | %s |\n' "$ci_tag_lookup"
             printf '| ORCHESTRATION_CI_DEFINITION_SHA matches the new tag target | %s |\n' "$ci_definition_match"

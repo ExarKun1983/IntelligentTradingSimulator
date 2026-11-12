@@ -1598,17 +1598,67 @@ is understood.
 
 ## Agent state machine: implementation and temporary test activation gates
 
+### Main workflow and configuration ownership
+
+The target lifecycle is `agent:ready` -> completed coding -> exact-head green CI
+-> Copilot PR review -> fixes and fresh CI/review when needed -> final human
+review. Nothing merges automatically. The isolated status-revocation experiment
+is a separate, currently stopped test, not the main workflow or its activation
+procedure.
+
+The implementation is not yet a proven automatic review loop: the current
+Copilot review API adapter records submitted output as `NeedsHuman`. It cannot
+infer acceptance from "no issues", `COMMENTED`, or the absence of inline comments.
+Automatic review classification requires a verified request-round/outcome
+contract; custom instructions alone do not provide that API guarantee. Until
+that gap is resolved, a bounded test must explicitly include a human
+`classify-review` step and must not be reported as a fully automatic happy path.
+
+Use the existing **Agent gate diagnostics (read-only)** workflow as the main
+configuration dashboard after its definition is reviewed/merged. It reports
+boolean comparisons for credentials/entitlement, cost, review, CI, status
+prerequisites, identity, definition pins, test scope and inactive isolated-test
+approvals. It never uses the task secret or changes variables, state, statuses,
+review requests or workflow enablement. A green diagnostic job means the report
+was produced, not that every comparison passed or activation was approved.
+Operator attestations are not runtime permission measurements.
+
+Do not add another environment or copy these variables between scopes:
+
+| Existing group | Owner and action |
+| --- | --- |
+| Repository `ORCHESTRATION_*`, excluding `ORCHESTRATION_STATUS_TEST_*` | Main workflow. Change only under its reviewed activation plan. Keep `ORCHESTRATION_ACTIVATION_APPROVED=false` while repairing/testing offline. |
+| Repository `ORCHESTRATION_STATUS_TEST_*` | Isolated status experiment only. Keep its `APPROVED` and `BOOTSTRAP_APPROVED` false; do not copy its refs, SHA or approvals into the main workflow. |
+| Environment `agent-orchestration`: `ORCHESTRATION_USER_TOKEN` | Main task credential. Keep secret; diagnostics must not access it. |
+| Environment `agent-status-revocation-test`: `ORCHESTRATION_STATUS_TEST_USER_TOKEN` | Isolated-test credential. Do not copy it or create environment-variable overrides. |
+
+Repository variables are required for job-level `if` expressions, before
+environment access. An absent value is not an approval and is not the same as
+an explicit `false` where the guard requires it. Do not delete historical
+variables, tags or state as "cleanup" while immutable workflows can still refer
+to them. First map consumers and disable the obsolete execution path; removal
+needs a separate reviewed migration. This change adds no configuration variables
+and does not migrate or remove existing ones.
+
+Before any new live test: reconcile the saved `Unknown` review request holding
+Issue #237 without another POST or erasing history; review/pin the corrected
+definitions; verify the main environment and CI protection; then obtain approval
+for one bounded attempt. The current workflow scope and single-pass restrictions
+remain in force, so adding `request-changes` does not permit repair tasks in the
+old single-pass fixture.
+
 The replacement orchestration component is separate from the trading application:
 `IntelligentTradingSimulator.Orchestration`. Issue #213's approved reduced-scope
 contract uses **label-controlled initiation**, not a mandatory Start button.
 Implementation/testing approval is not activation approval. The legacy workflow
 remains disabled in GitHub; never restart it for comparison, shadow mode, or rollback.
 The replacement jobs are **conditionally gated, not unconditionally disabled**.
-The current stopped-attempt recovery remains scoped to Issue `227`, with
-`ORCHESTRATION_TEST_MAX_REPAIR_TASKS=1`. Only after its audited resolution and
-the separately reviewed retest-gate change may the new test scope use
-`ORCHESTRATION_TEST_ISSUE=237`, `ORCHESTRATION_RETIRED_TEST_ISSUE=227`, and cap
-`1`.
+The current main-workflow test guard is scoped to
+`ORCHESTRATION_TEST_ISSUE=237`, `ORCHESTRATION_RETIRED_TEST_ISSUE=227`, and
+`ORCHESTRATION_TEST_MAX_REPAIR_TASKS=1`. Issue #227 is retained historical
+state, not an active recovery target. This bounded fixture is additionally
+single-pass and does not authorize repair tasks; it is not the final multi-Issue
+production configuration.
 The reconciler additionally requires its workflow definition to come from
 `refs/heads/master`; it does not use the event ref, which is not a branch ref
 for Issue events. Managed CI requires the configured `refs/tags/` ref.
@@ -1643,6 +1693,21 @@ The canonical phase projects the following labels:
 | `HUMAN_REVIEW` | `agent:review` | Human approval; never automatic merge |
 | `BLOCKED` | `agent:blocked` | Authorized decision; Resume cannot clear the hold |
 | `CLOSED` | No automatic-work label | Preserve terminal record |
+
+At `HUMAN_REVIEW`, ordinary comments are retained as feedback but do not grant
+permission to launch work. To send changes back, an authorized human uses
+`workflow_dispatch` operation `request-changes` with the exact repository/Issue
+generations, handoff ID, round, PR, SHA and a nonempty `reason` describing the
+changes. The status projection exposes the handoff ID, not arbitrary hold text. The host
+verifies the live open head and completed task's candidate evidence; the reducer
+accepts only the current settled accepted-review handoff, never another hold,
+pause, single-pass test or uncertain operation. It retains the old handoff,
+records the instruction as feedback, and queues `FeedbackRepair` on the same PR.
+Pending feedback is included in the repair prompt; existing repair budgets still
+apply. The repair must finish and pass fresh CI and review before returning to
+human review. Replaying the same command does not create another task. This is
+an explicit manual dispatch, not automatic handling of GitHub's "Request changes"
+review button. Final approval/merge remains a human action in GitHub.
 
 Duplicate ready notifications do not launch another task. Withdrawal prevents
 admission of queued, unstarted work. Withdrawal during active work must stop new

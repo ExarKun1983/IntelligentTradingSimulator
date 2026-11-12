@@ -107,6 +107,18 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                     throw new InvalidDataException("Review classification no longer matches the live open head.");
             }
         }
+        if (message?.Data is RequestChanges changes)
+        {
+            var state = (await stateStore.LoadAsync(token)).State;
+            if (!state.Inbox.ContainsKey(message.Id))
+            {
+                var live = await api.ObserveAsync(state, clock.GetUtcNow(), token, excludedIssueNumber);
+                if (!live.Issues.TryGetValue(message.IssueNumber, out var issue) || issue.Closed ||
+                    issue.PullRequest != changes.PullRequest || issue.HeadSha != changes.Sha)
+                    throw new InvalidDataException("Requested changes no longer match the live open head.");
+                await tasks.ValidateCandidateShaAsync(state, state.Issues[message.IssueNumber], token);
+            }
+        }
         if (message?.Data is ResolveTaskTerminal resolution)
         {
             var snapshot = (await stateStore.LoadAsync(token)).State;

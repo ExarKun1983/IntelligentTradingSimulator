@@ -13,6 +13,7 @@ public static class StatusProjection
         $"Consecutive CI failures: {issue.ConsecutiveCiFailures}/{issue.CiBudget}; " +
         $"review failures: {issue.ConsecutiveReviewFailures}/{issue.ReviewBudget}.\n" +
         $"Automation held: {issue.ReactivationRequired || issue.Paused}; terminal outcome: {issue.TerminalOutcome}.\n\n" +
+        $"Handoff: `{issue.CurrentHandoffId ?? "none"}`.\n\n" +
         "Canonical Git state is authoritative. Human approval is required; no automatic merge.";
 }
 

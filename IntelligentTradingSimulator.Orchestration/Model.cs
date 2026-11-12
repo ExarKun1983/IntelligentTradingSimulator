@@ -222,6 +222,7 @@ public sealed record RequiredStatusBoundary(long ActorId, string ActorLogin, str
 [JsonDerivedType(typeof(ReviewResult), "review-result")]
 [JsonDerivedType(typeof(HumanFeedback), "human-feedback")]
 [JsonDerivedType(typeof(HumanClassification), "human-classification")]
+[JsonDerivedType(typeof(RequestChanges), "request-changes")]
 [JsonDerivedType(typeof(Closure), "closure")]
 [JsonDerivedType(typeof(Reopen), "reopen")]
 public abstract record EventData;
@@ -331,6 +332,8 @@ public sealed record HumanFeedback(string Text, string? HandoffId = null, int? R
 public sealed record HumanClassification(string HandoffId, int Round, int PullRequest, string Sha,
     ReviewClassification Classification, string Reason, List<Finding>? Findings = null,
     List<FindingResponse>? Responses = null) : EventData;
+public sealed record RequestChanges(string HandoffId, int Round, int PullRequest, string Sha,
+    string Reason) : EventData;
 public sealed record Closure : EventData;
 public sealed record Reopen : EventData;
 
