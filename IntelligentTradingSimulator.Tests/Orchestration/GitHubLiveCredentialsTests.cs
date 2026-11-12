@@ -92,6 +92,20 @@ public sealed class GitHubLiveCredentialsTests
     }
 
     [Fact]
+    public void RecoveryWorkflowRequiresExplicitAcknowledgementForUncertainReviewAbandonment()
+    {
+        var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-state-machine.yml"));
+        Assert.Contains("abandon-uncertain-review", workflow);
+        Assert.Contains("review_intent:", workflow);
+        Assert.Contains("type: boolean", workflow);
+        Assert.Contains("default: false", workflow);
+        Assert.Contains("acknowledge_possible_prior_submission", workflow);
+        Assert.Contains("Exact canonical uncertain RequestReview intent; never a new launch", workflow);
+        Assert.Contains("github.event.inputs.operation == 'abandon-uncertain-review'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true' ||", workflow);
+    }
+
+    [Fact]
     public void GateDiagnosticsAreManualAndDoNotExposeLiveCapabilities()
     {
         var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-gate-diagnostics.yml"));

@@ -137,10 +137,15 @@ public sealed class ReviewIdentity
     public List<FindingResponse> Responses { get; set; } = [];
     public ReviewRequestBoundary? RequestBoundary { get; set; }
     public string? SourceEvidence { get; set; }
+    public ReviewOperatorResolution? OperatorResolution { get; set; }
 }
 
 public sealed record ReviewRequestBoundary(long ReviewerId, string ReviewerNodeId, DateTimeOffset PreparedAt,
     List<long> ExistingReviewIds, bool Confirmed = false);
+public sealed record ReviewAbandonmentEvidence(string IntentId, int PullRequest, string HeadSha,
+    DateTimeOffset ObservedAt, bool ReviewerRequestPending, List<long> ReviewerReviewIds);
+public sealed record ReviewOperatorResolution(string EventId, string IntentId, Actor Author, string Reason,
+    ReviewAbandonmentEvidence Evidence, bool AcknowledgedPossiblePriorSubmission);
 
 public sealed record Finding(string Id, string Description, string Evidence);
 public sealed record FindingResponse(string FindingId, string Evidence, bool Resolved);
@@ -223,6 +228,7 @@ public sealed record RequiredStatusBoundary(long ActorId, string ActorLogin, str
 [JsonDerivedType(typeof(HumanFeedback), "human-feedback")]
 [JsonDerivedType(typeof(HumanClassification), "human-classification")]
 [JsonDerivedType(typeof(RequestChanges), "request-changes")]
+[JsonDerivedType(typeof(AbandonUncertainReview), "abandon-uncertain-review")]
 [JsonDerivedType(typeof(Closure), "closure")]
 [JsonDerivedType(typeof(Reopen), "reopen")]
 public abstract record EventData;
@@ -334,6 +340,8 @@ public sealed record HumanClassification(string HandoffId, int Round, int PullRe
     List<FindingResponse>? Responses = null) : EventData;
 public sealed record RequestChanges(string HandoffId, int Round, int PullRequest, string Sha,
     string Reason) : EventData;
+public sealed record AbandonUncertainReview(string IntentId, int PullRequest, string Sha, string Reason,
+    bool AcknowledgePossiblePriorSubmission, ReviewAbandonmentEvidence? Evidence = null) : EventData;
 public sealed record Closure : EventData;
 public sealed record Reopen : EventData;
 

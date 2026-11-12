@@ -94,6 +94,63 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
             ? new(DeliveryStatus.Succeeded, Receipt(intent.Id)) : new(DeliveryStatus.Unknown);
     }
 
+    public async Task<ReviewAbandonmentEvidence> ReadAbandonmentEvidenceAsync(RepositoryState state,
+        IssueState issue, string intentId, string expectedSha, DateTimeOffset observedAt,
+        CancellationToken token)
+    {
+        if (state.Repository != api.Repository || state.AdmittedIssue != issue.Number ||
+            issue.Phase != Phase.BLOCKED || issue.HoldReason != "Effect outcome is ambiguous." ||
+            !issue.ReactivationRequired || issue.ActiveAuthorized || issue.Paused ||
+            issue.Review is not { Classification: null, ReviewId: null } review || review.IntentId != intentId ||
+            review.Sha != expectedSha || issue.HeadSha != expectedSha || issue.PullRequest is not { } pullNumber ||
+            !state.Outbox.TryGetValue(intentId, out var intent) ||
+            intent.Kind != EffectKind.RequestReview || intent.Status != DeliveryStatus.Unknown ||
+            intent.IssueNumber != issue.Number || intent.Generation != issue.Generation ||
+            intent.TaskId != review.TaskId || intent.Round != review.Round || intent.Sha != review.Sha ||
+            review.RequestBoundary?.Confirmed == true)
+            throw new InvalidDataException("Review abandonment does not match the canonical uncertain request.");
+        await ValidateCandidateShaAsync(state, issue, token);
+        await api.VerifyRepositoryAsync(token);
+        using var liveIssue = await api.GetAsync($"issues/{issue.Number}", token);
+        if (liveIssue.RootElement.GetProperty("number").GetInt32() != issue.Number ||
+            liveIssue.RootElement.GetProperty("state").GetString() != "open" ||
+            liveIssue.RootElement.TryGetProperty("pull_request", out _))
+            throw new InvalidDataException("Review abandonment requires the exact open Issue.");
+        using var pull = await api.GetAsync($"pulls/{pullNumber}", token);
+        var pullRoot = pull.RootElement;
+        if (pullRoot.GetProperty("number").GetInt32() != pullNumber ||
+            pullRoot.GetProperty("state").GetString() != "open" ||
+            pullRoot.GetProperty("head").GetProperty("sha").GetString() != expectedSha ||
+            pullRoot.GetProperty("head").GetProperty("repo").GetProperty("id").GetInt64() != api.RepositoryId ||
+            pullRoot.GetProperty("base").GetProperty("repo").GetProperty("id").GetInt64() != api.RepositoryId)
+            throw new InvalidDataException("Review abandonment requires the mapped open PR at the exact current head.");
+
+        using var pending = await api.GetAsync($"pulls/{pullNumber}/requested_reviewers", token);
+        foreach (var candidate in pending.RootElement.GetProperty("users").EnumerateArray())
+        {
+            if (!IsReviewerCandidate(candidate)) continue;
+            if (!VerifiedReviewer(candidate))
+                throw new InvalidDataException("Pending reviewer identity is ambiguous.");
+            throw new InvalidOperationException("Copilot review is still requested; do not abandon it.");
+        }
+
+        var reviewerIds = new List<long>();
+        foreach (var candidate in await api.ListAsync($"pulls/{pullNumber}/reviews", token))
+        {
+            if (!candidate.TryGetProperty("user", out var user) || user.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException("Review abandonment could not verify a review author.");
+            if (!IsReviewerCandidate(user)) continue;
+            if (!VerifiedReviewer(user))
+                throw new InvalidDataException("Historical reviewer identity is ambiguous.");
+            var id = candidate.GetProperty("id").GetInt64();
+            if (id <= 0) throw new InvalidDataException("Invalid historical reviewer identity.");
+            reviewerIds.Add(id);
+        }
+        if (reviewerIds.Count != 0)
+            throw new InvalidOperationException("Copilot review history exists; do not abandon this uncertain request.");
+        return new(intentId, pullNumber, expectedSha, observedAt, false, reviewerIds);
+    }
+
     public async Task<OrchestrationEvent?> ReadEventAsync(RepositoryState state, IssueState issue, CancellationToken token)
     {
         if (state.Repository != api.Repository || issue.PullRequest is not { } number ||
@@ -218,6 +275,10 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
         user.TryGetProperty("node_id", out var node) && node.GetString() == ReviewerNodeId &&
         user.TryGetProperty("login", out var login) && login.GetString() is Reviewer or "Copilot" &&
         user.TryGetProperty("type", out var type) && type.GetString() == "Bot";
+
+    private static bool IsReviewerCandidate(JsonElement user) =>
+        user.TryGetProperty("id", out var id) && id.TryGetInt64(out var number) && number == ReviewerId ||
+        user.TryGetProperty("login", out var login) && login.GetString() is Reviewer or "Copilot";
 
     private static bool ActorMatches(JsonElement user, ReviewRequestBoundary boundary) =>
         boundary.ReviewerId == ReviewerId && boundary.ReviewerNodeId == ReviewerNodeId && VerifiedReviewer(user);

@@ -54,8 +54,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             token, trustedWorkflowPath);
         var message = GitHubActionsIngress.PrepareEvent(trustedActionsPayload, eventName, runId, evidence,
             repositoryGeneration, issueGeneration, occurredAt, boundedScope?.MaxRepairTasks ?? maxRepairTasks);
-        if (commandOnly && message?.Data is not (Pause or ResolveTaskTerminal))
-            throw new InvalidDataException("Command-only execution supports only pause or terminal resolution.");
+        if (commandOnly && message?.Data is not (Pause or ResolveTaskTerminal or AbandonUncertainReview))
+            throw new InvalidDataException("Command-only execution supports only pause or audited terminal resolution.");
         if (isolatedStatusTest && (string.IsNullOrWhiteSpace(isolatedManifestDigest) ||
             message?.Data is not (Ready or Pause)))
             throw new InvalidDataException("Isolated status test requires its pinned manifest and start/pause command.");
@@ -96,6 +96,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         var authorization = new VerifiedEvents();
         var tasks = new GitHubTaskAdapter(api, stateStore, baseBranch, taskCreatorId, approval, finalHeadSource,
             taskApi, requireDraftPullRequest: isolatedStatusTest);
+        var reviews = new GitHubReviewAdapter(api, stateStore, clock, reviewApproval, tasks);
         if (message?.Data is HumanClassification classification)
         {
             var state = (await stateStore.LoadAsync(token)).State;
@@ -117,6 +118,30 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                     issue.PullRequest != changes.PullRequest || issue.HeadSha != changes.Sha)
                     throw new InvalidDataException("Requested changes no longer match the live open head.");
                 await tasks.ValidateCandidateShaAsync(state, state.Issues[message.IssueNumber], token);
+            }
+            if (message?.Data is AbandonUncertainReview abandonment)
+            {
+                var snapshot = (await stateStore.LoadAsync(token)).State;
+                if (snapshot.Inbox.GetValueOrDefault(message.Id)?.Event is { Data: AbandonUncertainReview previous } saved)
+                {
+                    if (previous.IntentId != abandonment.IntentId || previous.PullRequest != abandonment.PullRequest ||
+                        previous.Sha != abandonment.Sha || previous.Reason != abandonment.Reason ||
+                        previous.AcknowledgePossiblePriorSubmission != abandonment.AcknowledgePossiblePriorSubmission ||
+                        saved.Actor != message.Actor || saved.IssueNumber != message.IssueNumber ||
+                        saved.RepositoryGeneration != message.RepositoryGeneration ||
+                        saved.IssueGeneration != message.IssueGeneration)
+                        throw new InvalidDataException("Replayed review-abandonment command changed its authorization.");
+                    message = saved;
+                }
+                else
+                {
+                    if (!snapshot.Issues.TryGetValue(message.IssueNumber, out var issue))
+                        throw new InvalidDataException("Review-abandonment Issue is not in canonical state.");
+                    var observedAt = clock.GetUtcNow();
+                    var evidence = await reviews.ReadAbandonmentEvidenceAsync(snapshot, issue, abandonment.IntentId,
+                        abandonment.Sha, observedAt, token);
+                    message = message with { OccurredAt = observedAt, Data = abandonment with { Evidence = evidence } };
+                }
             }
         }
         if (message?.Data is ResolveTaskTerminal resolution)
@@ -178,7 +203,6 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                 throw new InvalidOperationException("Recovery command saved, but required-status revocation prerequisites are unverified.");
             return new(WorkerStopReason.EffectsDisabled, 0, new(state, [], true));
         }
-        var reviews = new GitHubReviewAdapter(api, stateStore, clock, reviewApproval, tasks);
         var ci = ciRoute is null ? null : new GitHubCiAdapter(api, stateStore, ciRoute, clock, ciApproval, tasks);
         var events = new ProductionEvents(message, api, tasks, reviews, ci, authorization, projectionActorId,
             excludedIssueNumber, !isolatedStatusTest);

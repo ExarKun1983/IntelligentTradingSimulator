@@ -76,7 +76,8 @@ public static class GitHubLiveCommand
             using var payload = JsonDocument.Parse(await File.ReadAllTextAsync(path));
             var eventName = Environment.GetEnvironmentVariable("GITHUB_EVENT_NAME") ?? throw new InvalidDataException("Missing event.");
             var recoveryOnly = eventName == "workflow_dispatch" &&
-                payload.RootElement.GetProperty("inputs").GetProperty("operation").GetString() is "pause" or "resolve-task";
+                payload.RootElement.GetProperty("inputs").GetProperty("operation").GetString() is
+                    "pause" or "resolve-task" or "abandon-uncertain-review";
             if (!recoveryOnly)
             {
                 try

@@ -415,6 +415,41 @@ public sealed class GitHubReviewIntegrationTests
         Assert.Equal(0, handler.Posts);
     }
 
+    [Fact]
+    public async Task AbandonmentReadEvidenceRequiresExactLiveHeadAndNoCopilotRequestOrReview()
+    {
+        var state = UncertainReview();
+        var handler = new Api { Corruption = "no-reviews" };
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, new Store(state));
+        var evidence = await adapter.ReadAbandonmentEvidenceAsync(state, state.Issues[7], "review", Sha, Now, default);
+        Assert.Equal("review", evidence.IntentId);
+        Assert.Equal(17, evidence.PullRequest);
+        Assert.Equal(Sha, evidence.HeadSha);
+        Assert.False(evidence.ReviewerRequestPending);
+        Assert.Empty(evidence.ReviewerReviewIds);
+        Assert.Equal(0, handler.Posts);
+        Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
+    }
+
+    [Theory]
+    [InlineData("existing-request")]
+    [InlineData("abandon-review")]
+    [InlineData("live-sha")]
+    [InlineData("closed")]
+    [InlineData("repository")]
+    public async Task AbandonmentEvidenceRefusesPendingReviewHistoryOrChangedPull(string corruption)
+    {
+        var state = UncertainReview();
+        var handler = new Api { Corruption = corruption };
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, new Store(state));
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            adapter.ReadAbandonmentEvidenceAsync(state, state.Issues[7], "review", Sha, Now, default));
+        Assert.Equal(0, handler.Posts);
+        Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
+    }
+
     [Theory]
     [InlineData("COMMENTED")]
     [InlineData("APPROVED")]
@@ -510,6 +545,18 @@ public sealed class GitHubReviewIntegrationTests
         state.Outbox["review"] = new() { Id = "review", Digest = "fixture", IssueNumber = 7,
             Kind = EffectKind.RequestReview, Status = DeliveryStatus.Executing, Sha = Sha,
             TaskId = "task", Round = 1, Generation = 1 };
+        return state;
+    }
+
+    private static RepositoryState UncertainReview()
+    {
+        var state = Eligible();
+        var issue = state.Issues[7];
+        issue.Phase = Phase.BLOCKED;
+        issue.ActiveAuthorized = false;
+        issue.ReactivationRequired = true;
+        issue.HoldReason = "Effect outcome is ambiguous.";
+        state.Outbox["review"].Status = DeliveryStatus.Unknown;
         return state;
     }
 
@@ -645,7 +692,8 @@ public sealed class GitHubReviewIntegrationTests
             else if (path == "/repos/owner/repo/pulls/17") response = Pull();
             else if (path.StartsWith("/users/")) response = Actor();
             else if (path.EndsWith("/requested_reviewers"))
-                response = new { users = Corruption == "existing-request" ? new[] { Actor() } : [], teams = Array.Empty<object>() };
+                response = new { users = Corruption == "existing-request" ? new[] { Actor() } :
+                    Corruption == "abandon-pending" ? new[] { Actor() } : [], teams = Array.Empty<object>() };
             else if (path.EndsWith("/reviews"))
             {
                 if (ConcurrentPreflight)
@@ -657,7 +705,7 @@ public sealed class GitHubReviewIntegrationTests
                 if (secondPage && FailSecondPage) throw new HttpRequestException("Injected second-page lookup failure");
                 if (Paginated && !secondPage)
                     response = Enumerable.Range(1, 100).Select(id => new { id, state = "COMMENTED", user = Actor() }).ToArray();
-                else response = Paginated ? HasOutput ? new[] { Review(false) } : [] :
+                else response = Corruption == "no-reviews" ? [] : Paginated ? HasOutput ? new[] { Review(false) } : [] :
                     HasOutput ? new[] { Review(true), Review(false) } : new[] { Review(true) };
             }
             else if (path.EndsWith("/comments"))

@@ -178,6 +178,108 @@ public sealed class OrchestrationCoreTests
     }
 
     [Fact]
+    public void AbandoningUnknownReviewIsAuditedAndRequiresSeparateReactivation()
+    {
+        var reducer = Reducer();
+        var state = FinishCi(CompleteTask(Admitted(), 2), true, "ci-unknown-review");
+        state = reducer.Reconcile(state, Live(state)).State;
+        var intent = state.Outbox.Values.Single(effect => effect.Kind == EffectKind.RequestReview);
+        state = reducer.MarkExecuting(state, intent.Id, Now);
+        state = reducer.RecordOutcome(state, intent.Id, new(DeliveryStatus.Unknown), Now);
+        var issue = state.Issues[7];
+        var reviewedSha = issue.HeadSha!;
+        var occurredAt = Now.AddMinutes(2);
+        var evidence = new ReviewAbandonmentEvidence(intent.Id, 11, reviewedSha, occurredAt, false, []);
+        var abandon = new AbandonUncertainReview(intent.Id, 11, reviewedSha,
+            "Live evidence is empty; I accept that a prior request may have been sent.",
+            true, evidence);
+        var command = new OrchestrationEvent("abandon-review", "owner/repo", 7, 1, 1,
+            new Actor("maintainer", ActorKind.Human, 55, Type: "User"), occurredAt, abandon);
+
+        state = reducer.Apply(state, command);
+        issue = state.Issues[7];
+        Assert.Equal(DeliveryStatus.Failed, state.Outbox[intent.Id].Status);
+        Assert.Equal(EffectFailureCode.OperatorAbandonedUnknownReview, state.Outbox[intent.Id].FailureCode);
+        Assert.Equal(evidence.IntentId, issue.Review!.OperatorResolution!.Evidence.IntentId);
+        Assert.Equal(evidence.PullRequest, issue.Review.OperatorResolution.Evidence.PullRequest);
+        Assert.Equal(evidence.HeadSha, issue.Review.OperatorResolution.Evidence.HeadSha);
+        Assert.Equal(evidence.ObservedAt, issue.Review.OperatorResolution.Evidence.ObservedAt);
+        Assert.Empty(issue.Review.OperatorResolution.Evidence.ReviewerReviewIds);
+        Assert.Equal(command.Actor, issue.Review.OperatorResolution.Author);
+        Assert.True(issue.Review.OperatorResolution.AcknowledgedPossiblePriorSubmission);
+        Assert.Equal("Uncertain review request explicitly abandoned by operator; reactivation requires a separate decision.",
+            issue.HoldReason);
+        Assert.True(issue.ReactivationRequired);
+        Assert.Null(state.AdmittedIssue);
+        var replay = reducer.Apply(state, command);
+        Assert.Equal(StateJson.Serialize(state), StateJson.Serialize(replay));
+
+        var reactivate = command with { Id = "reactivate", OccurredAt = occurredAt.AddMinutes(1),
+            Data = new Reactivate("The abandoned request risk was reviewed; restart as a new task round.") };
+        state = reducer.Apply(state, reactivate);
+        Assert.False(state.Issues[7].ReactivationRequired);
+        Assert.Equal(intent.Id, state.Issues[7].Review!.OperatorResolution!.IntentId);
+        state = reducer.Reconcile(state, Live(state)).State;
+        Assert.Equal(Phase.CODING, state.Issues[7].Phase);
+        Assert.NotEqual(intent.Id, state.Issues[7].ActiveTaskId);
+        Assert.Equal(11, state.Issues[7].PullRequest);
+        Assert.Equal(reviewedSha, state.Issues[7].Tasks[state.Issues[7].ActiveTaskId!].SourceSha);
+    }
+
+    [Theory]
+    [InlineData("no-acknowledgement")]
+    [InlineData("missing-evidence")]
+    [InlineData("pending-request")]
+    [InlineData("existing-review")]
+    [InlineData("wrong-intent")]
+    [InlineData("wrong-head")]
+    [InlineData("wrong-pull")]
+    [InlineData("wrong-time")]
+    [InlineData("confirmed-boundary")]
+    [InlineData("not-unknown")]
+    [InlineData("active-task")]
+    [InlineData("unverified-actor")]
+    [InlineData("unfinished-work")]
+    [InlineData("missing-ci")]
+    [InlineData("oversized-reason")]
+    public void UnknownReviewAbandonmentRejectsUnprovenOrOutOfScopeResolution(string corruption)
+    {
+        var reducer = Reducer();
+        var state = FinishCi(CompleteTask(Admitted(), 2), true, "ci-unknown-review");
+        state = reducer.Reconcile(state, Live(state)).State;
+        var intent = state.Outbox.Values.Single(effect => effect.Kind == EffectKind.RequestReview);
+        state = reducer.MarkExecuting(state, intent.Id, Now);
+        state = reducer.RecordOutcome(state, intent.Id, new(DeliveryStatus.Unknown), Now);
+        var issue = state.Issues[7];
+        var at = Now.AddMinutes(2);
+        var evidence = new ReviewAbandonmentEvidence(intent.Id, 11, issue.HeadSha!, at, false, []);
+        var request = new AbandonUncertainReview(intent.Id, 11, issue.HeadSha!, "explicit risk acceptance", true, evidence);
+        var actor = new Actor("maintainer", ActorKind.Human, 55, Type: "User");
+        switch (corruption)
+        {
+            case "no-acknowledgement": request = request with { AcknowledgePossiblePriorSubmission = false }; break;
+            case "missing-evidence": request = request with { Evidence = null }; break;
+            case "pending-request": request = request with { Evidence = evidence with { ReviewerRequestPending = true } }; break;
+            case "existing-review": request = request with { Evidence = evidence with { ReviewerReviewIds = [501] } }; break;
+            case "wrong-intent": request = request with { IntentId = "other" }; break;
+            case "wrong-head": request = request with { Sha = Sha(3) }; break;
+            case "wrong-pull": request = request with { PullRequest = 99 }; break;
+            case "wrong-time": request = request with { Evidence = evidence with { ObservedAt = at.AddSeconds(-1) } }; break;
+            case "confirmed-boundary": issue.Review!.RequestBoundary = new(175728472, "BOT_kgDOCnlnWA", at, [], true); break;
+            case "not-unknown": state.Outbox[intent.Id].Status = DeliveryStatus.Succeeded; break;
+            case "active-task": issue.ActiveAuthorized = true; break;
+            case "unverified-actor": actor = new("maintainer", ActorKind.Human, 55); break;
+            case "unfinished-work": state.Outbox[issue.Ci!.IntentId].Status = DeliveryStatus.Unknown; break;
+            case "missing-ci": issue.Ci!.Green = false; break;
+            case "oversized-reason": request = request with { Reason = new string('x', 2049) }; break;
+        }
+        var command = new OrchestrationEvent("abandon-review", "owner/repo", 7, 1, 1, actor, at, request);
+        var original = StateJson.Serialize(state);
+        Assert.Throws<InvalidOperationException>(() => reducer.Apply(state, command));
+        Assert.Equal(original, StateJson.Serialize(state));
+    }
+
+    [Fact]
     public void ReducerClonesInputsAndDeduplicatesByFullEventDigest()
     {
         var input = Empty();
