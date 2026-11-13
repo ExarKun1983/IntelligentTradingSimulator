@@ -73,6 +73,8 @@ public static class GitHubLiveCommand
 {
     public static async Task<int> RunAsync(string[] args, TextWriter output, TextWriter error)
     {
+        if (args.Contains("--github-poc-recovery", StringComparer.Ordinal))
+            return await GitHubPocRecoveryCommand.RunAsync(args, output, error);
         if (args.Contains("--github-poc", StringComparer.Ordinal))
             return await GitHubPocCommand.RunAsync(args, output, error);
         if (args.Contains("--github-isolated-status-test", StringComparer.Ordinal))

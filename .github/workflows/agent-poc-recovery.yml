@@ -1,0 +1,114 @@
+name: Bounded PoC uncertain task-launch recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Dedicated PoC Issue
+        required: true
+        default: "249"
+        type: string
+      operation:
+        description: Record the operator resolution for the single uncertain v1 task launch
+        required: true
+        type: choice
+        options: [poc-abandon-uncertain-launch]
+      confirmation:
+        description: Type POC-249-ACK-NO-TASK-CREATED to record this human attestation
+        required: true
+        type: string
+      acknowledge_no_task_created:
+        description: Repeat the exact attestation; this is not independent API verification
+        required: true
+        type: string
+      repository_generation:
+        description: Expected canonical repository generation
+        required: true
+        default: "1"
+        type: string
+      issue_generation:
+        description: Expected canonical Issue generation
+        required: true
+        default: "1"
+        type: string
+      task:
+        description: Exact v1 task ID
+        required: true
+        default: "task:249:1:1:1"
+        type: string
+      launch_intent:
+        description: Exact v1 launch intent ID
+        required: true
+        default: "LaunchTask:249:1:task:249:1:1:1:1"
+        type: string
+      reason:
+        description: Operator audit reason (not evidence from the task API)
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+  issues: read
+
+concurrency:
+  group: agent-poc-249-v1
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: >-
+      ${{
+        github.repository == 'ExarKun1983/IntelligentTradingSimulator' &&
+        github.workflow_ref == format('{0}/.github/workflows/agent-poc-recovery.yml@refs/heads/master', github.repository) &&
+        github.workflow_sha == vars.ORCHESTRATION_POC_DEFINITION_SHA &&
+        github.actor_id == vars.ORCHESTRATION_POC_ACTOR_ID &&
+        github.triggering_actor == github.actor &&
+        github.run_attempt == 1 &&
+        inputs.issue == '249' &&
+        inputs.operation == 'poc-abandon-uncertain-launch' &&
+        inputs.confirmation == 'POC-249-ACK-NO-TASK-CREATED' &&
+        inputs.acknowledge_no_task_created == 'POC-249-ACK-NO-TASK-CREATED' &&
+        vars.ORCHESTRATION_POC_RECOVERY_APPROVED == 'true' &&
+        vars.ORCHESTRATION_POC_APPROVED == 'false' &&
+        vars.ORCHESTRATION_POC_BOOTSTRAP_APPROVED == 'false'
+      }}
+    runs-on: ubuntu-latest
+    environment: agent-orchestration
+    timeout-minutes: 10
+    steps:
+      - name: Require reviewed master definition
+        env:
+          DEFINITION_SHA: ${{ vars.ORCHESTRATION_POC_DEFINITION_SHA }}
+        run: |
+          [[ "$DEFINITION_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GITHUB_WORKFLOW_SHA" == "$DEFINITION_SHA" ]]
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ vars.ORCHESTRATION_POC_DEFINITION_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+      - name: Build trusted recovery command
+        run: dotnet build IntelligentTradingSimulator.Orchestration --configuration Release
+      - name: Record the operator attestation without launching a task
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ORCHESTRATION_POC_DEFINITION_SHA: ${{ vars.ORCHESTRATION_POC_DEFINITION_SHA }}
+          ORCHESTRATION_POC_ACTOR_ID: ${{ vars.ORCHESTRATION_POC_ACTOR_ID }}
+          ORCHESTRATION_POC_RECOVERY_APPROVED: ${{ vars.ORCHESTRATION_POC_RECOVERY_APPROVED }}
+          ORCHESTRATION_POC_APPROVED: ${{ vars.ORCHESTRATION_POC_APPROVED }}
+          ORCHESTRATION_POC_BOOTSTRAP_APPROVED: ${{ vars.ORCHESTRATION_POC_BOOTSTRAP_APPROVED }}
+        run: |
+          dotnet run --no-build --project IntelligentTradingSimulator.Orchestration \
+            --configuration Release -- --github-live --github-poc-recovery --execute \
+            > "$RUNNER_TEMP/agent-poc-recovery-result.json"
+      - name: Preserve recovery evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-poc-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-poc-recovery-result.json
+          if-no-files-found: warn
+          retention-days: 7

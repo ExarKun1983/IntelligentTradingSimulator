@@ -1641,8 +1641,8 @@ not activate the main workflow or the status-revocation experiment. Its CLI mode
 is `--github-live --github-poc --execute`. These source changes alone do not
 provision resources or authorize a live run.
 
-The profile is fixed to Issue #249, PR base `master`, and separate state
-`refs/heads/agent-state-poc-249-v1`. Both driver and CI execute from `master`
+The current profile is fixed to Issue #249, PR base `master`, and separate state
+`refs/heads/agent-state-poc-249-v2`. Both driver and CI execute from `master`
 at the configured reviewed definition SHA; CI checks out the agent's exact task
 head separately. The task creates a draft PR against `master`. If `master`
 advances during the attempt, the profile stops rather than executing an
@@ -1657,6 +1657,13 @@ infrastructure failure or ambiguous API outcomes stop the attempt. Unclassified
 human feedback requiring a separate repair also stops the attempt. Changing configuration or extending expiry
 cannot silently reuse bootstrapped state. Missing state is an error, not a new
 attempt. Do not delete state or re-bootstrap to retry.
+
+The retired v1 state is history only. Its uncertain task launch can be closed
+only by the separate `agent-poc-recovery.yml` command, which never calls the
+Agent task API. That command accepts only the recorded v1 state revision and
+requires an explicit human attestation; it records what the operator asserts,
+not independent proof that no task was created. A fresh attempt must bootstrap
+v2 with a new manifest and current definition/expiry. Never reuse v1.
 
 Unlike the old bounded profile, this profile does not set `SinglePassTest`.
 It does require the mapped PR to stay draft and based on `master`.
@@ -1687,10 +1694,11 @@ Do not use the resources or state of #227, #237 or the status experiment.
 | --- | --- |
 | `ORCHESTRATION_POC_APPROVED` | `false` until the bounded live attempt is separately authorized |
 | `ORCHESTRATION_POC_BOOTSTRAP_APPROVED` | `false` except for separately authorized one-time bootstrap |
+| `ORCHESTRATION_POC_RECOVERY_APPROVED` | `false` except for a separately authorized one-time v1 recovery |
 | `ORCHESTRATION_POC_ACTOR_ID` | Numeric ID of the authorized human owning the task credential |
 | `ORCHESTRATION_POC_WORKFLOW_ID` | GitHub ID of `.github/workflows/agent-poc.yml` |
 | `ORCHESTRATION_POC_CI_WORKFLOW_ID` | GitHub ID of `.github/workflows/agent-poc-ci.yml`; distinct from driver |
-| `ORCHESTRATION_POC_DEFINITION_SHA` | Reviewed current `master` commit containing both workflows |
+| `ORCHESTRATION_POC_DEFINITION_SHA` | Reviewed current `master` commit containing the driver, CI and recovery workflows |
 | `ORCHESTRATION_POC_EXPIRES_AT` | Agreed UTC deadline, no more than 72 hours away |
 | `ORCHESTRATION_POC_CREDENTIALS_VERIFIED` | `true` only after verifying separate credentials and their protected environment |
 | `ORCHESTRATION_POC_TASK_ENTITLEMENT_VERIFIED` | `true` only after verifying task API entitlement |
@@ -1799,8 +1807,9 @@ environment access. An absent value is not an approval and is not the same as
 an explicit `false` where the guard requires it. Do not delete historical
 variables, tags or state as "cleanup" while immutable workflows can still refer
 to them. First map consumers and disable the obsolete execution path; removal
-needs a separate reviewed migration. This change adds no configuration variables
-and does not migrate or remove existing ones.
+needs a separate reviewed migration. The uncertain-launch recovery adds the single
+`ORCHESTRATION_POC_RECOVERY_APPROVED` variable. It does not migrate or remove
+existing variables.
 
 Before any new live test: reconcile the saved `Unknown` review request holding
 Issue #237 only through the audited operator action described below; never POST
@@ -1848,6 +1857,36 @@ loading activation-backed pipeline gates; settings and the host require a
 separate recovery approval based on verified credentials, trusted definition and
 cost controls. This approval never enables task launch or automatic wake-ups.
 Normal execution and `reactivate` still require activation and pipeline approval.
+
+#### Audited closure of Issue #249's uncertain v1 task launch
+
+The v1 task-create POST had an ambiguous outcome. Do not retry it, query by
+prompt similarity, or infer non-creation from the missing external ID. The
+separate recovery workflow is pinned to the reviewed master SHA, requires the
+authorized human and protected `agent-orchestration` environment, and uses only
+the workflow token for read-only identity checks and a compare-and-swap update
+of `refs/heads/agent-state-poc-249-v1`. It does not call the Agent API or
+perform task, PR, CI, review, label, or status effects. The normal PoC and
+bootstrap approvals must both remain `false`.
+
+After this recovery code is reviewed and merged, set
+`ORCHESTRATION_POC_DEFINITION_SHA` to that exact merge SHA and temporarily set
+`ORCHESTRATION_POC_RECOVERY_APPROVED=true`. Dispatch the recovery workflow from
+`master` with Issue/generations `249/1/1`, task
+`task:249:1:1:1`, launch intent
+`LaunchTask:249:1:task:249:1:1:1:1`, and both acknowledgement inputs set to
+`POC-249-ACK-NO-TASK-CREATED`. Supply an audit reason stating that this is the
+operator's confirmation, not task-service evidence. The command refuses any
+different v1 ref revision, task, intent, actor, definition, or run attempt. If
+state changed or the run outcome is uncertain, inspect the v1 ref before doing
+anything else; never dispatch recovery again against a changed state.
+
+Verify the recovery artifact and v1 state show the launch marked failed with
+the operator attestation recorded, and immediately return
+`ORCHESTRATION_POC_RECOVERY_APPROVED` to `false`. The v1 state remains blocked
+and immutable to the normal PoC driver. A future attempt uses only a newly
+bootstrapped v2 state and a fresh manifest; it requires a separate explicit
+authorization and must not be started in the recovery dispatch.
 
 For Issue #237, the canonical intent must be copied from its saved state, not
 guessed from a run title. After the new code is reviewed/merged and pinned, the

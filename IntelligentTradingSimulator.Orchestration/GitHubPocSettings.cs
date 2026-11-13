@@ -9,7 +9,7 @@ public sealed record GitHubPocSettings(string Repository, long RepositoryId, lon
     DateTimeOffset ExpiresAt, string ManifestDigest, bool BootstrapApproved)
 {
     public const int IssueNumber = 249;
-    public const string StateReference = "refs/heads/agent-state-poc-249-v1";
+    public const string StateReference = "refs/heads/agent-state-poc-249-v2";
     public const string BaseBranch = "master";
     public const string DefinitionReference = "refs/heads/master";
     public const string DriverWorkflowPath = ".github/workflows/agent-poc.yml";

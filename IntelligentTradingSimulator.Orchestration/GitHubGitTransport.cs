@@ -26,7 +26,7 @@ public sealed partial class GitHubGitTransport : IGitObjectRefTransport
         this.client = client;
         this.allowMutations = allowMutations;
         if (stateReference is not ("refs/heads/agent-state" or "refs/heads/agent-state-status-revocation-v1" or
-            GitHubPocSettings.StateReference))
+            GitHubPocRecoveryCommand.LegacyStateReference or GitHubPocSettings.StateReference))
             throw new ArgumentException("Only explicitly supported state refs are permitted.", nameof(stateReference));
         if (allowIsolatedInitialization && stateReference is not ("refs/heads/agent-state-status-revocation-v1" or
             GitHubPocSettings.StateReference))

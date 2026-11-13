@@ -336,6 +336,52 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 issue.ActiveAuthorized = false;
                 ReleaseIfSafe(state, issue);
                 break;
+            case AbandonUncertainTaskLaunch abandonment:
+                if (!abandonment.AcknowledgeNoTaskCreated ||
+                    message.Actor.Kind != ActorKind.Human || message.Actor.Type != "User" ||
+                    message.Actor.Id is not > 0 || string.IsNullOrWhiteSpace(abandonment.Reason) ||
+                    abandonment.Reason.Length > 2048 ||
+                    issue.Generation != 1 || issue.Phase != Phase.BLOCKED ||
+                    issue.HoldReason != "Effect outcome is ambiguous." ||
+                    !issue.ReactivationRequired || issue.ActiveAuthorized || issue.Paused ||
+                    issue.ClosurePending || state.AdmittedIssue != issue.Number ||
+                    issue.PullRequest is not null || issue.HeadSha is not null ||
+                    issue.Ci is not null || issue.Review is not null ||
+                    issue.ActiveTaskId != abandonment.TaskId || issue.Tasks.Count != 1 ||
+                    !issue.Tasks.TryGetValue(abandonment.TaskId, out var uncertainTask) ||
+                    uncertainTask.Id != abandonment.TaskId || uncertainTask.Kind != TaskKind.Coding ||
+                    uncertainTask.Status != TaskStatus.Unknown || uncertainTask.ParentTaskId is not null ||
+                    uncertainTask.Round != 1 || uncertainTask.LaunchSource != TaskLaunchSource.UnmappedIssue ||
+                    uncertainTask.SourceSha is not null || uncertainTask.FinalSha is not null ||
+                    uncertainTask.LaunchConfirmed || uncertainTask.ExternalId is not null ||
+                    uncertainTask.TerminalEvidence is not null || uncertainTask.OperatorResolution is not null ||
+                    uncertainTask.UncertainLaunchResolution is not null || uncertainTask.CandidateShaEvidence is not null ||
+                    !state.Outbox.TryGetValue(abandonment.IntentId, out var launchIntent) ||
+                    launchIntent.Kind != EffectKind.LaunchTask || launchIntent.Status != DeliveryStatus.Unknown ||
+                    launchIntent.IssueNumber != issue.Number || launchIntent.Generation != issue.Generation ||
+                    launchIntent.TaskId != uncertainTask.Id || launchIntent.Round != uncertainTask.Round ||
+                    launchIntent.Sha is not null || launchIntent.ExternalId is not null ||
+                    launchIntent.FailureCode != EffectFailureCode.ExecutionException ||
+                    state.Outbox.Values.Count(effect => effect.IssueNumber == issue.Number &&
+                        effect.Kind == EffectKind.LaunchTask) != 1 ||
+                    state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number &&
+                        effect.Kind is not (EffectKind.LaunchTask or EffectKind.ProjectLabels or EffectKind.ProjectStatus)) ||
+                    state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number &&
+                        effect.Id != launchIntent.Id && effect.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus) &&
+                        (effect.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown ||
+                         effect.Kind != EffectKind.PublishRequiredStatus && effect.Status == DeliveryStatus.Pending)))
+                    throw new InvalidOperationException("Task-launch abandonment requires the exact still-uncertain first task and an explicit no-task-created attestation.");
+                launchIntent.Status = DeliveryStatus.Failed;
+                launchIntent.CompletedAt = message.OccurredAt;
+                launchIntent.FailureCode = EffectFailureCode.OperatorAbandonedUnknownTaskLaunch;
+                uncertainTask.Status = TaskStatus.Failed;
+                uncertainTask.UncertainLaunchResolution = new(message.Id, launchIntent.Id, message.Actor,
+                    abandonment.Reason, message.OccurredAt, true);
+                issue.HoldReason = "Uncertain task launch explicitly abandoned by operator; a fresh isolated state is required.";
+                issue.ReactivationRequired = true;
+                issue.ActiveAuthorized = false;
+                ReleaseIfSafe(state, issue);
+                break;
             case HumanClassification classification:
                 if (string.IsNullOrWhiteSpace(classification.HandoffId) ||
                     issue.Phase != Phase.BLOCKED || issue.HoldReason != "Review requires human classification." ||
