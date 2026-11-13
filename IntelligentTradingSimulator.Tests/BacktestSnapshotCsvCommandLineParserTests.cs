@@ -145,4 +145,31 @@ public sealed class BacktestSnapshotCsvCommandLineParserTests
         Assert.Null(path);
         Assert.Contains("valid output paths", error);
     }
+
+    [Theory]
+    [InlineData("--run-backtest")]
+    [InlineData("--backtest-run-id=42")]
+    public void TryParse_RejectsInvalidStandaloneExportPath(string mode)
+    {
+        Assert.False(BacktestSnapshotCsvCommandLineParser.TryParse(
+            [mode, "--export-backtest-snapshots-csv=invalid\0.csv"], out var path, out var error));
+        Assert.Null(path);
+        Assert.Contains("valid output path", error);
+    }
+
+    [Theory]
+    [InlineData("--run-backtest")]
+    [InlineData("--backtest-run-id=42")]
+    public void TryParse_AcceptsStandaloneRelativeAndAbsolutePathsWithSpaces(string mode)
+    {
+        var paths = new[] { "results with spaces.csv", Path.GetFullPath("results with spaces.csv") };
+
+        foreach (var suppliedPath in paths)
+        {
+            Assert.True(BacktestSnapshotCsvCommandLineParser.TryParse(
+                [mode, $"--export-backtest-snapshots-csv={suppliedPath}"], out var path, out var error));
+            Assert.Equal(suppliedPath, path);
+            Assert.Null(error);
+        }
+    }
 }
