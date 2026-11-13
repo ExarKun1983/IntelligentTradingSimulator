@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 30,
+  "Version": 31,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": "B8C9C1EBEFAF08017067988F21468F96217F91186C138EFFE726830364242607",
   "LastEventId": "ci-observed:1277929203:1:RunCi:249:1:task:249:1:1:1:1",
@@ -22,7 +22,7 @@
       "SchemaVersion": 1,
       "Number": 249,
       "Generation": 1,
-      "Version": 28,
+      "Version": 29,
       "LastEventId": "ci-observed:1277929203:1:RunCi:249:1:task:249:1:1:1:1",
       "Phase": "REVIEW_PENDING",
       "Ready": false,
@@ -102,7 +102,13 @@
         "Classification": null,
         "Findings": [],
         "Responses": [],
-        "RequestBoundary": null,
+        "RequestBoundary": {
+          "ReviewerId": 175728472,
+          "ReviewerNodeId": "BOT_kgDOCnlnWA",
+          "PreparedAt": "2026-11-13T19:12:06.9281526+00:00",
+          "ExistingReviewIds": [],
+          "Confirmed": false
+        },
         "SourceEvidence": null,
         "OperatorResolution": null
       },
