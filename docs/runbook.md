@@ -1652,16 +1652,24 @@ setup is merged, bootstrap is completed, and activation is separately approved.
 The setup does not add `agent:ready`, change repository variables/secrets, create
 the managed-CI tag, request a review, or merge the generated PR.
 
-After merging the setup PR, record its full lowercase commit SHA and configure
-the repository variables `ORCHESTRATION_DEFINITION_SHA` to that SHA,
-`ORCHESTRATION_TEST_ISSUE=261`,
-`ORCHESTRATION_TEST_MAX_REPAIR_TASKS=1`, and leave
-`ORCHESTRATION_RETIRED_TEST_ISSUE` unset. Keep
-`ORCHESTRATION_ACTIVATION_APPROVED=false`. Set
-`ORCHESTRATION_REVIEW_E2E_BOOTSTRAP_APPROVED=true` only for the one-time setup.
-The configured actor ID must identify the human who will dispatch and operate
-the test. The existing `agent-orchestration` environment's protection rules must
-be reviewed before dispatch.
+After merging the setup PR, run the variable-preparation script from a local
+checkout authenticated as `ExarKun1983`:
+
+```bash
+bash .github/scripts/configure-review-e2e-261-vars.sh --dry-run
+bash .github/scripts/configure-review-e2e-261-vars.sh --apply
+```
+
+The script resolves the current `master` SHA and authenticated actor ID, then
+prepares only the repository variables for bootstrap: definition SHA, Issue
+`261`, repair cap `1`, unset retired Issue, bootstrap approval `true`, and
+activation `false` (only when activation was unset). It refuses to run if
+activation is already true, the operator differs, environment-scoped overrides
+exist, or Issue #261 is not open and unlabeled. It requires Actions-variable
+read/write access and typed confirmation for `--apply`; default mode is
+read-only. It never dispatches workflows, changes secrets or CI variables, adds
+labels, or sets activation to true. Review the existing `agent-orchestration`
+environment protection rules before dispatch.
 
 From `master`, manually run **Copilot review E2E state bootstrap (opt-in)** with
 Issue `261` and confirmation `BOOTSTRAP-REVIEW-E2E-261`. This workflow has only
@@ -1670,7 +1678,7 @@ does not receive the task credential, and only creates the empty
 `refs/heads/agent-state-review-e2e-261-v1` with a definition-bound manifest.
 It refuses an existing state ref or a non-empty state, is not a task/CI/review
 run, and cannot be repeated as a reset. Inspect its run and bootstrap receipt.
-Then set `ORCHESTRATION_REVIEW_E2E_BOOTSTRAP_APPROVED=false`.
+Then set `ORCHESTRATION_REVIEW_E2E_BOOTSTRAP_APPROVED=false` manually.
 
 Before enabling execution, create and protect a new immutable lightweight tag
 `agent-managed-ci-test-261-v1` at the reviewed merge commit; never move it.
