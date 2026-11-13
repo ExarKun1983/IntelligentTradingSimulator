@@ -13,7 +13,8 @@ public sealed record GitHubReviewApproval(bool ActivationApproved = false, bool 
 
 /// <summary>Requests Copilot review; REST observations require human round/classification confirmation.</summary>
 public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore store, TimeProvider? clock = null,
-    GitHubReviewApproval? approval = null, ICandidateShaValidator? candidateShaValidator = null) : IEffectAdapter
+    GitHubReviewApproval? approval = null, ICandidateShaValidator? candidateShaValidator = null,
+    GitHubReviewRequestDiagnostics? diagnostics = null) : IEffectAdapter
 {
     private const string Reviewer = "copilot-pull-request-reviewer[bot]";
     private const long ReviewerId = 175728472;
@@ -23,8 +24,26 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
 
     public async Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken token)
     {
+        diagnostics?.Begin(intent);
+        try
+        {
+            return await ExecuteRequestAsync(intent, token);
+        }
+        catch (Exception exception)
+        {
+            diagnostics?.RecordFailure(exception);
+            throw;
+        }
+    }
+
+    private async Task<EffectOutcome> ExecuteRequestAsync(EffectIntent intent, CancellationToken token)
+    {
         if (approval?.AllowsReviews != true)
+        {
+            diagnostics?.Refuse("prerequisites");
             return new(DeliveryStatus.Failed, FailureCode: EffectFailureCode.ReviewPrerequisitesUnverified);
+        }
+        diagnostics?.Stage("canonical_intent");
         var state = (await store.LoadAsync(token)).State;
         var issue = ValidateIntent(state, intent);
         if (issue.Review!.RequestBoundary is not null)
@@ -34,30 +53,44 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
         {
             boundary = await ReadPreflightAsync(state, issue, intent, token);
         }
-        catch (ReviewIdentityException)
+        catch (ReviewIdentityException exception)
         {
+            diagnostics?.RecordFailure(exception);
             return new(DeliveryStatus.Failed, FailureCode: EffectFailureCode.ReviewIdentityMismatch);
         }
         catch (Exception exception) when (exception is InvalidDataException or HttpRequestException or
             JsonException or KeyNotFoundException or InvalidOperationException)
         {
+            diagnostics?.RecordFailure(exception);
             return new(DeliveryStatus.Failed, FailureCode: EffectFailureCode.ReviewPreflightRejected);
         }
+        diagnostics?.Stage("save_boundary");
         await SaveBoundaryAsync(intent, boundary, token);
         // Revalidate after persistence and immediately before the non-idempotent mutation.
+        diagnostics?.Stage("revalidate_canonical");
         var latest = (await store.LoadAsync(token)).State;
         var latestIssue = ValidateIntent(latest, intent);
         ValidateEligibility(latest, latestIssue, intent);
+        diagnostics?.Stage("revalidate_candidate");
         await ValidateCandidateShaAsync(latest, latestIssue, token);
+        diagnostics?.Stage("revalidate_live");
         if (!await LiveEligibleAsync(latestIssue, token)) throw new InvalidDataException("Review live Issue/PR/head is ineligible.");
+        diagnostics?.Stage("post");
         using var response = await api.WriteAsync(HttpMethod.Post, $"pulls/{latestIssue.PullRequest}/requested_reviewers",
-            new { reviewers = new[] { Reviewer } }, token, expectedStatus: HttpStatusCode.Created);
+            new { reviewers = new[] { Reviewer } }, token, expectedStatus: HttpStatusCode.Created,
+            observeResponse: metadata => diagnostics?.ObserveResponse(metadata));
+        diagnostics?.Stage("acknowledgement_pull_validation");
         ValidatePull(response.RootElement, latestIssue);
+        diagnostics?.Stage("acknowledgement_reviewers_validation");
         var requested = response.RootElement.GetProperty("requested_reviewers").EnumerateArray().ToList();
+        var verified = requested.Any(candidate => ActorMatches(candidate, boundary));
+        diagnostics?.ObserveReviewers(requested.Count, verified);
         // Copilot can start immediately and be absent from the returned pending-reviewer list.
-        if (requested.Count != 0 && !requested.Any(candidate => ActorMatches(candidate, boundary)))
+        if (requested.Count != 0 && !verified)
             throw new InvalidDataException("Review request acknowledgement lacks the verified reviewer.");
+        diagnostics?.Stage("save_acknowledgement");
         await SaveBoundaryAsync(intent, boundary with { Confirmed = true }, token);
+        diagnostics?.Complete();
         // Local durable acknowledgement identity, explicitly NOT a GitHub review/job ID.
         return new(DeliveryStatus.Succeeded, Receipt(intent.Id));
     }
@@ -65,18 +98,24 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
     private async Task<ReviewRequestBoundary> ReadPreflightAsync(RepositoryState state, IssueState issue,
         EffectIntent intent, CancellationToken token)
     {
+        diagnostics?.Stage("preflight_eligibility");
         ValidateEligibility(state, issue, intent);
+        diagnostics?.Stage("preflight_candidate");
         await ValidateCandidateShaAsync(state, issue, token);
+        diagnostics?.Stage("preflight_live");
         if (!await LiveEligibleAsync(issue, token)) throw new InvalidDataException("Review live Issue/PR/head is ineligible.");
+        diagnostics?.Stage("preflight_reviewer_identity");
         using var user = await api.GetGlobalAsync("users/" + Uri.EscapeDataString(Reviewer), token);
         var actor = user.RootElement;
         if (!VerifiedReviewer(actor))
             throw new ReviewIdentityException();
+        diagnostics?.Stage("preflight_existing_requests");
         using var pending = await api.GetAsync($"pulls/{issue.PullRequest}/requested_reviewers", token);
         if (pending.RootElement.GetProperty("users").EnumerateArray().Any(candidate =>
                 candidate.GetProperty("id").GetInt64() == ReviewerId ||
                 candidate.GetProperty("login").GetString() is Reviewer or "Copilot"))
             throw new InvalidDataException("Existing review request requires reconciliation.");
+        diagnostics?.Stage("preflight_review_baseline");
         var baseline = await api.ListAsync($"pulls/{issue.PullRequest}/reviews", token);
         if (baseline.Any(review => review.GetProperty("state").GetString() == "PENDING" &&
                 review.GetProperty("user").ValueKind == JsonValueKind.Object &&

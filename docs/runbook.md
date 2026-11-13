@@ -1633,7 +1633,7 @@ is a code-path PoC only: it does not verify live credentials, repository
 protection, workflow pins, or deployed Actions configuration. The existing
 bounded Issue #237 profile remains single-pass and cannot run this repair cycle.
 
-### Bounded live coding/CI/review PoC for Issue #249
+### Bounded live coding/CI/review PoC for Issue #257
 
 The opt-in `agent-poc.yml` driver reuses `GitHubOrchestrationHost`, the existing
 task/CI/review adapters and reducer. It is not a second orchestrator and does
@@ -1641,8 +1641,8 @@ not activate the main workflow or the status-revocation experiment. Its CLI mode
 is `--github-live --github-poc --execute`. These source changes alone do not
 provision resources or authorize a live run.
 
-The current profile is fixed to Issue #249, PR base `master`, and separate state
-`refs/heads/agent-state-poc-249-v2`. Both driver and CI execute from `master`
+The current profile is fixed to Issue #257, PR base `master`, and separate state
+`refs/heads/agent-state-poc-257-v1`. Both driver and CI execute from `master`
 at the configured reviewed definition SHA; CI checks out the agent's exact task
 head separately. The task creates a draft PR against `master`. If `master`
 advances during the attempt, the profile stops rather than executing an
@@ -1662,8 +1662,11 @@ The retired v1 state is history only. Its uncertain task launch can be closed
 only by the separate `agent-poc-recovery.yml` command, which never calls the
 Agent task API. That command accepts only the recorded v1 state revision and
 requires an explicit human attestation; it records what the operator asserts,
-not independent proof that no task was created. A fresh attempt must bootstrap
-v2 with a new manifest and current definition/expiry. Never reuse v1.
+not independent proof that no task was created. The #249 v2 attempt completed
+coding and CI but stopped on an uncertain review request. Preserve both #249
+state refs and PR #256 unchanged; this profile neither resumes nor resolves them.
+The new #257 attempt bootstraps its own v1 ref with a new manifest and current
+definition/expiry. Never reuse an earlier attempt's state.
 
 Unlike the old bounded profile, this profile does not set `SinglePassTest`.
 It does require the mapped PR to stay draft and based on `master`.
@@ -1719,21 +1722,21 @@ is enforced by the reviewed driver/adapters/store.
 
 After separate authorization, enable only the two new PoC workflows if needed
 and set `ORCHESTRATION_POC_APPROVED=true`. All dispatches select `master` and supply
-`confirmation=POC-249-ONE-REPAIR-NO-MERGE`.
+`confirmation=POC-257-ONE-REPAIR-NO-MERGE`.
 
 1. Temporarily set `ORCHESTRATION_POC_BOOTSTRAP_APPROVED=true`. Dispatch the
-   driver with `operation=poc-bootstrap` and `issue=249`. This creates only the
+   driver with `operation=poc-bootstrap` and `issue=257`. This creates only the
    separate empty canonical state and its manifest. Verify the artifact and
    state ref, then set bootstrap approval back to `false` before starting.
-2. Check the coding requirements in Issue #249. Add `agent:ready` only when
+2. Check the coding requirements in Issue #257. Add `agent:ready` only when
    ready to authorize its coding task, then start the driver once:
 
    ```bash
    gh workflow run agent-poc.yml \
      --repo ExarKun1983/IntelligentTradingSimulator \
      --ref master \
-     -f issue=249 -f operation=poc-start \
-     -f confirmation=POC-249-ONE-REPAIR-NO-MERGE \
+     -f issue=257 -f operation=poc-start \
+     -f confirmation=POC-257-ONE-REPAIR-NO-MERGE \
      -f repository_generation=1 -f issue_generation=1
    ```
 
@@ -1775,7 +1778,33 @@ launch outcome, HTTP status, validated GitHub request ID, exception category/typ
 response root kind and presence of required task fields. It never includes the
 request prompt, credentials, response body or exception message. A missing HTTP
 response has no status/request ID; diagnostics do not resolve an unknown outcome
-or authorize retry. Errors report a sanitized error type and the state ref to
+or authorize retry.
+
+`ReviewRequestDiagnostic` additionally records the review intent/Issue, last
+stage, whether execution reached the POST call, HTTP status, validated GitHub
+request ID, returned reviewer count, presence of the pinned Copilot identity,
+and sanitized exception category/type. Stages distinguish preflight identity,
+eligibility/candidate/live checks, durable boundary save, post-save revalidation,
+POST/body read, acknowledgement PR/reviewer validation and acknowledgement save.
+`PostAttempted=true` means the POST call was entered, not proof GitHub received
+it. `Outcome=confirmed` means the acknowledgement was saved, not that review
+completed. A 201 response followed by `acknowledgement_reviewers_validation`,
+a nonzero reviewer count and `HasVerifiedReviewer=false` means the local
+validator rejected the returned reviewer list; it does not prove that GitHub
+did not start Copilot. Non-2xx statuses are HTTP rejections, whereas a missing
+status with `transport` indicates no response headers were observed.
+
+Each stage is written to the sanitized `agent-poc-diagnostics.log`, displayed
+in the Actions step and uploaded alongside the JSON even when the driver fails.
+The JSON retains the latest review request diagnostic (the log includes earlier
+rounds) and each effect's failure code. No raw response body, exception message,
+prompt or credential is logged. Diagnostics never change request success rules,
+resolve an uncertain write, or authorize an automatic retry. A null review
+diagnostic means no review execution was entered during that invocation;
+inspect the phase, hold reason and effect failure codes rather than inferring
+that a POST was rejected.
+
+Errors report a sanitized error type and the state ref to
 inspect; they never automatically repeat a POST. Use `operation=pause` with a
 reason to save a hold while authorization is still valid. Expiry stops further
 driver effects, not an already submitted remote task or CI run. Any further recovery after an

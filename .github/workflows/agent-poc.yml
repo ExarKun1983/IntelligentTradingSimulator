@@ -6,7 +6,7 @@ on:
       issue:
         description: Dedicated PoC Issue
         required: true
-        default: "249"
+        default: "257"
         type: string
       operation:
         description: Bootstrap once, start once, observe, classify review, or pause
@@ -14,7 +14,7 @@ on:
         type: choice
         options: [poc-bootstrap, poc-start, resume, classify-review, pause]
       confirmation:
-        description: Type POC-249-ONE-REPAIR-NO-MERGE to authorize this invocation
+        description: Type POC-257-ONE-REPAIR-NO-MERGE to authorize this invocation
         required: true
         type: string
       repository_generation:
@@ -68,7 +68,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: agent-poc-249-v1
+  group: agent-poc-257-v1
   cancel-in-progress: false
 
 jobs:
@@ -81,8 +81,8 @@ jobs:
         github.actor_id == vars.ORCHESTRATION_POC_ACTOR_ID &&
         github.triggering_actor == github.actor &&
         github.run_attempt == 1 &&
-        inputs.issue == '249' &&
-        inputs.confirmation == 'POC-249-ONE-REPAIR-NO-MERGE' &&
+        inputs.issue == '257' &&
+        inputs.confirmation == 'POC-257-ONE-REPAIR-NO-MERGE' &&
         vars.ORCHESTRATION_POC_APPROVED == 'true' &&
         (inputs.operation != 'poc-bootstrap' || vars.ORCHESTRATION_POC_BOOTSTRAP_APPROVED == 'true')
       }}
@@ -123,14 +123,20 @@ jobs:
           ORCHESTRATION_POC_DEFINITION_SHA: ${{ vars.ORCHESTRATION_POC_DEFINITION_SHA }}
           ORCHESTRATION_POC_EXPIRES_AT: ${{ vars.ORCHESTRATION_POC_EXPIRES_AT }}
         run: |
+          status=0
           dotnet run --no-build --project IntelligentTradingSimulator.Orchestration \
             --configuration Release -- --github-live --github-poc --execute \
-            > "$RUNNER_TEMP/agent-poc-result.json"
+            > "$RUNNER_TEMP/agent-poc-result.json" \
+            2> "$RUNNER_TEMP/agent-poc-diagnostics.log" || status=$?
+          cat "$RUNNER_TEMP/agent-poc-diagnostics.log"
+          exit "$status"
       - name: Preserve PoC evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: agent-poc-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/agent-poc-result.json
+          path: |
+            ${{ runner.temp }}/agent-poc-result.json
+            ${{ runner.temp }}/agent-poc-diagnostics.log
           if-no-files-found: warn
           retention-days: 7

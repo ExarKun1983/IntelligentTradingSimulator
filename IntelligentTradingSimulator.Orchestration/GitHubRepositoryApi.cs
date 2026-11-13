@@ -162,10 +162,11 @@ public sealed partial class GitHubRepositoryApi
     }
 
     internal async Task<JsonDocument> WriteAsync(HttpMethod method, string path, object payload, CancellationToken token,
-        HttpStatusCode? expectedStatus = null)
+        HttpStatusCode? expectedStatus = null, Action<GitHubApiResponseMetadata>? observeResponse = null)
     {
         using var request = new HttpRequestMessage(method, prefix + path) { Content = JsonContent.Create(payload) };
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+        observeResponse?.Invoke(new((int)response.StatusCode, GitHubRequestId(response)));
         if (expectedStatus is { } expected && response.StatusCode != expected)
         {
             response.EnsureSuccessStatusCode();
