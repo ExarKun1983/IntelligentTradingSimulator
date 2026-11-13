@@ -8,6 +8,7 @@ public enum EffectFailureCode
     ReviewPreflightRejected,
     ReviewIdentityMismatch,
     OperatorAbandonedUnknownReview,
+    OperatorAbandonedUnknownTaskLaunch,
     ExecutionException,
     RecoveryException
 }

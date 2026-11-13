@@ -102,6 +102,7 @@ public sealed class TaskIdentity
     public string? ExternalId { get; set; }
     public TaskTerminalRecord? TerminalEvidence { get; set; }
     public TaskOperatorResolution? OperatorResolution { get; set; }
+    public UncertainTaskLaunchResolution? UncertainLaunchResolution { get; set; }
     public CandidateShaEvidence? CandidateShaEvidence { get; set; }
     public List<Finding> ReviewBlockers { get; set; } = [];
     public List<Finding> CiBlockers { get; set; } = [];
@@ -178,6 +179,8 @@ public sealed record CandidateShaEvidence(int Version, string Policy, string Tas
     List<string> SessionIds, int PullRequest, string ObservedHeadSha);
 public sealed record TaskOperatorResolution(string EventId, string EvidenceEventId, Actor Author,
     string Reason, DateTimeOffset OccurredAt);
+public sealed record UncertainTaskLaunchResolution(string EventId, string IntentId, Actor Author,
+    string Reason, DateTimeOffset OccurredAt, bool AcknowledgedNoTaskCreated);
 
 public sealed class EffectIntent
 {
@@ -229,6 +232,7 @@ public sealed record RequiredStatusBoundary(long ActorId, string ActorLogin, str
 [JsonDerivedType(typeof(HumanClassification), "human-classification")]
 [JsonDerivedType(typeof(RequestChanges), "request-changes")]
 [JsonDerivedType(typeof(AbandonUncertainReview), "abandon-uncertain-review")]
+[JsonDerivedType(typeof(AbandonUncertainTaskLaunch), "abandon-uncertain-task-launch")]
 [JsonDerivedType(typeof(Closure), "closure")]
 [JsonDerivedType(typeof(Reopen), "reopen")]
 public abstract record EventData;
@@ -343,6 +347,8 @@ public sealed record RequestChanges(string HandoffId, int Round, int PullRequest
     string Reason) : EventData;
 public sealed record AbandonUncertainReview(string IntentId, int PullRequest, string Sha, string Reason,
     bool AcknowledgePossiblePriorSubmission, ReviewAbandonmentEvidence? Evidence = null) : EventData;
+public sealed record AbandonUncertainTaskLaunch(string TaskId, string IntentId, string Reason,
+    bool AcknowledgeNoTaskCreated) : EventData;
 public sealed record Closure : EventData;
 public sealed record Reopen : EventData;
 

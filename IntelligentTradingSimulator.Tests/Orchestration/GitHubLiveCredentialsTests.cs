@@ -107,6 +107,19 @@ public sealed class GitHubLiveCredentialsTests
     }
 
     [Fact]
+    public void PocUncertainLaunchRecoveryHasNoTaskCredentialAndRequiresSeparateApproval()
+    {
+        var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-poc-recovery.yml"));
+        Assert.Contains("vars.ORCHESTRATION_POC_RECOVERY_APPROVED == 'true'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_POC_APPROVED == 'false'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_POC_BOOTSTRAP_APPROVED == 'false'", workflow);
+        Assert.Contains("POC-249-ACK-NO-TASK-CREATED", workflow);
+        Assert.Contains("permissions:\n  actions: read\n  contents: write\n  issues: read", workflow);
+        Assert.DoesNotContain("ORCHESTRATION_USER_TOKEN", workflow);
+        Assert.Contains("--github-poc-recovery --execute", workflow);
+    }
+
+    [Fact]
     public void GateDiagnosticsAreManualAndDoNotExposeLiveCapabilities()
     {
         var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-gate-diagnostics.yml"));

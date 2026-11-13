@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace IntelligentTradingSimulator.Orchestration;
 
-public enum NotificationKind { Ignore, Readiness, WithdrawReadiness, Projection, Closed, Reopened, Resume, Pause, Reactivate, ResolveTask, ClassifyReview, RequestChanges, AbandonUncertainReview }
+public enum NotificationKind { Ignore, Readiness, WithdrawReadiness, Projection, Closed, Reopened, Resume, Pause, Reactivate, ResolveTask, ClassifyReview, RequestChanges, AbandonUncertainReview, AbandonUncertainTaskLaunch }
 
 public sealed record ActionsNotification(
     NotificationKind Kind, string SourceId, long RepositoryId, long IssueId, int IssueNumber,
@@ -51,6 +51,7 @@ public static class GitHubActionsIngress
             NotificationKind.ClassifyReview => ReadClassification(payload.GetProperty("inputs"), notification.Reason!),
             NotificationKind.RequestChanges => ReadChanges(payload.GetProperty("inputs"), notification.Reason!),
             NotificationKind.AbandonUncertainReview => ReadReviewAbandonment(payload.GetProperty("inputs"), notification.Reason!),
+            NotificationKind.AbandonUncertainTaskLaunch => ReadTaskLaunchAbandonment(payload.GetProperty("inputs"), notification.Reason!),
             _ => throw new InvalidDataException("Unsupported command.")
         };
         return new(notification.SourceId, evidence.Repository, notification.IssueNumber,
@@ -58,7 +59,8 @@ public static class GitHubActionsIngress
             new Actor(notification.ActorId.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ActorKind.Human, notification.ActorId,
                 Type: notification.Kind is NotificationKind.ResolveTask or NotificationKind.ClassifyReview or
-                    NotificationKind.RequestChanges or NotificationKind.AbandonUncertainReview ? evidence.ActorType : null),
+                    NotificationKind.RequestChanges or NotificationKind.AbandonUncertainReview or
+                    NotificationKind.AbandonUncertainTaskLaunch ? evidence.ActorType : null),
             occurredAt, data);
     }
 
@@ -109,11 +111,13 @@ public static class GitHubActionsIngress
                 "classify-review" => NotificationKind.ClassifyReview,
                 "request-changes" => NotificationKind.RequestChanges,
                 "abandon-uncertain-review" => NotificationKind.AbandonUncertainReview,
+                "poc-abandon-uncertain-launch" => NotificationKind.AbandonUncertainTaskLaunch,
                 _ => throw new InvalidDataException("Only guarded recovery operations are supported.")
             };
             var reason = inputs.TryGetProperty("reason", out var value) ? value.GetString() : null;
             if ((kind is NotificationKind.Pause or NotificationKind.Reactivate or NotificationKind.ResolveTask or
-                NotificationKind.ClassifyReview or NotificationKind.RequestChanges or NotificationKind.AbandonUncertainReview) &&
+                NotificationKind.ClassifyReview or NotificationKind.RequestChanges or NotificationKind.AbandonUncertainReview or
+                NotificationKind.AbandonUncertainTaskLaunch) &&
                 string.IsNullOrWhiteSpace(reason))
                 throw new InvalidDataException("Pause/reactivation requires a reason.");
             if (kind == NotificationKind.ResolveTask &&
@@ -129,6 +133,14 @@ public static class GitHubActionsIngress
                  !inputs.TryGetProperty("acknowledge_possible_prior_submission", out var acknowledge) ||
                  !IsExplicitTrue(acknowledge)))
                 throw new InvalidDataException("Review abandonment requires its exact intent and explicit ambiguity acknowledgement.");
+            if (kind == NotificationKind.AbandonUncertainTaskLaunch &&
+                (!inputs.TryGetProperty("task", out var taskId) || string.IsNullOrWhiteSpace(taskId.GetString()) ||
+                 taskId.GetString()!.Length > 256 ||
+                 !inputs.TryGetProperty("launch_intent", out var launchIntent) ||
+                 string.IsNullOrWhiteSpace(launchIntent.GetString()) || launchIntent.GetString()!.Length > 256 ||
+                 !inputs.TryGetProperty("acknowledge_no_task_created", out var acknowledged) ||
+                 acknowledged.GetString() != "POC-249-ACK-NO-TASK-CREATED"))
+                throw new InvalidDataException("Task-launch abandonment requires its exact identity and explicit operator attestation.");
             return Result(kind, reason: reason);
         }
 
@@ -173,6 +185,11 @@ public static class GitHubActionsIngress
             int.Parse(inputs.GetProperty("pull").GetString()!, System.Globalization.CultureInfo.InvariantCulture),
             inputs.GetProperty("sha").GetString() ?? throw new InvalidDataException("Missing head SHA."),
             reason, IsExplicitTrue(inputs.GetProperty("acknowledge_possible_prior_submission")));
+
+    private static AbandonUncertainTaskLaunch ReadTaskLaunchAbandonment(JsonElement inputs, string reason) =>
+        new(inputs.GetProperty("task").GetString()!, inputs.GetProperty("launch_intent").GetString()!,
+            reason, inputs.GetProperty("acknowledge_no_task_created").GetString() ==
+                "POC-249-ACK-NO-TASK-CREATED");
 
     private static bool IsExplicitTrue(JsonElement value) =>
         value.ValueKind == JsonValueKind.True ||
