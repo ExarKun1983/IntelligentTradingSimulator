@@ -36,14 +36,17 @@ public sealed class GitHubCiIntegrationTests
         Assert.Equal(0, api.Posts);
     }
 
-    [Fact]
-    public async Task IsolatedCiRoutePersistsItsOwnWorkflowPathThroughRunEvidence()
+    [Theory]
+    [InlineData(GitHubIsolatedStatusTestSettings.CiWorkflowPath)]
+    [InlineData(GitHubPocSettings.CiWorkflowPath)]
+    public async Task IsolatedCiRoutePersistsItsOwnWorkflowPathThroughRunEvidence(string path)
     {
-        var path = GitHubIsolatedStatusTestSettings.CiWorkflowPath;
         var store = new Store(State());
-        var api = new Api { WorkflowPath = path };
+        var api = new Api { WorkflowPath = path, BaseBranch = path == GitHubPocSettings.CiWorkflowPath
+            ? GitHubPocSettings.BaseBranch : GitHubIsolatedStatusTestSettings.BaseBranch };
         using var client = api.Client();
-        var route = Route with { WorkflowPath = path };
+        var route = Route with { WorkflowPath = path, Ref = path == GitHubPocSettings.CiWorkflowPath
+            ? GitHubPocSettings.DefinitionReference : Route.Ref };
         var adapter = CreateAdapter(client, store, route);
 
         var outcome = await adapter.ExecuteAsync(store.Value.Outbox["ci"], default);
@@ -51,6 +54,36 @@ public sealed class GitHubCiIntegrationTests
         Assert.Equal(path, store.Value.Issues[7].Ci!.DispatchBoundary!.WorkflowPath);
         store.Value = new OrchestrationReducer().RecordOutcome(store.Value, "ci", outcome, Now);
         Assert.NotNull(await adapter.ReadEventAsync(store.Value, store.Value.Issues[7], default));
+    }
+
+    [Theory]
+    [InlineData("other", true)]
+    [InlineData(GitHubPocSettings.BaseBranch, false)]
+    public async Task PocCiRejectsWrongBaseOrNonDraftBeforeDispatch(string baseBranch, bool draft)
+    {
+        var store = new Store(State());
+        var api = new Api { WorkflowPath = GitHubPocSettings.CiWorkflowPath, BaseBranch = baseBranch, Draft = draft };
+        using var client = api.Client();
+        var adapter = CreateAdapter(client, store, Route with { WorkflowPath = GitHubPocSettings.CiWorkflowPath,
+            Ref = GitHubPocSettings.DefinitionReference });
+        await Assert.ThrowsAsync<InvalidDataException>(() => adapter.ExecuteAsync(store.Value.Outbox["ci"], default));
+        Assert.Equal(0, api.Posts);
+    }
+
+    [Theory]
+    [InlineData("refs/tags/trusted-ci")]
+    [InlineData("refs/heads/other")]
+    public async Task PocCiRejectsDefinitionsOutsideMaster(string reference)
+    {
+        var store = new Store(State());
+        var api = new Api { WorkflowPath = GitHubPocSettings.CiWorkflowPath };
+        using var client = api.Client();
+        var adapter = CreateAdapter(client, store, Route with
+        {
+            WorkflowPath = GitHubPocSettings.CiWorkflowPath, Ref = reference
+        });
+        await Assert.ThrowsAsync<InvalidDataException>(() => adapter.ExecuteAsync(store.Value.Outbox["ci"], default));
+        Assert.Empty(api.Requests);
     }
 
     [Theory]
@@ -477,6 +510,8 @@ public sealed class GitHubCiIntegrationTests
         public string? Corruption { get; set; }
         public string Result { get; set; } = "success";
         public string WorkflowPath { get; set; } = GitHubCiAdapter.WorkflowPath;
+        public string BaseBranch { get; init; } = GitHubIsolatedStatusTestSettings.BaseBranch;
+        public bool Draft { get; init; } = true;
         public int Posts { get; private set; }
         public string Body { get; private set; } = "";
         public List<string> Requests { get; } = [];
@@ -513,10 +548,10 @@ public sealed class GitHubCiIntegrationTests
                     if (Interlocked.Increment(ref reads) == 2) preflights.TrySetResult();
                     await preflights.Task.WaitAsync(token);
                 }
-                result = new { number = 17, state = "open", draft = true,
+                result = new { number = 17, state = "open", draft = Draft,
                     head = new { sha = Corruption == "head-changed" ? Definition : Sha,
                         repo = new { id = Corruption == "repository" ? 2 : 1 } },
-                    @base = new { repo = new { id = 1 }, @ref = GitHubIsolatedStatusTestSettings.BaseBranch } };
+                    @base = new { repo = new { id = 1 }, @ref = BaseBranch } };
                 AfterPullRead?.Invoke();
             }
             else if (path.EndsWith("/runs/90"))

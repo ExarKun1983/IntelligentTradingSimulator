@@ -1,0 +1,136 @@
+name: Bounded coding CI review PoC (opt-in)
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Dedicated PoC Issue
+        required: true
+        default: "249"
+        type: string
+      operation:
+        description: Bootstrap once, start once, observe, classify review, or pause
+        required: true
+        type: choice
+        options: [poc-bootstrap, poc-start, resume, classify-review, pause]
+      confirmation:
+        description: Type POC-249-ONE-REPAIR-NO-MERGE to authorize this invocation
+        required: true
+        type: string
+      repository_generation:
+        description: Expected canonical repository generation
+        required: true
+        default: "1"
+        type: string
+      issue_generation:
+        description: Expected canonical Issue generation
+        required: true
+        default: "1"
+        type: string
+      reason:
+        description: Required audit reason for classification or pause
+        required: false
+        type: string
+      handoff:
+        description: Exact canonical review handoff ID
+        required: false
+        type: string
+      round:
+        description: Exact canonical review round
+        required: false
+        type: string
+      pull:
+        description: Mapped PR number
+        required: false
+        type: string
+      sha:
+        description: Exact reviewed head SHA
+        required: false
+        type: string
+      classification:
+        description: Explicit human decision; never inferred from review prose
+        required: false
+        type: choice
+        options: [needs-human, accepted, blocking]
+      findings:
+        description: JSON array of findings with stable Id, Description and Evidence
+        required: false
+        type: string
+      responses:
+        description: JSON array of FindingId, Evidence and Resolved responses
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: agent-poc-249-v1
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    if: >-
+      ${{
+        github.repository == 'ExarKun1983/IntelligentTradingSimulator' &&
+        github.workflow_ref == format('{0}/.github/workflows/agent-poc.yml@refs/heads/master', github.repository) &&
+        github.workflow_sha == vars.ORCHESTRATION_POC_DEFINITION_SHA &&
+        github.actor_id == vars.ORCHESTRATION_POC_ACTOR_ID &&
+        github.triggering_actor == github.actor &&
+        github.run_attempt == 1 &&
+        inputs.issue == '249' &&
+        inputs.confirmation == 'POC-249-ONE-REPAIR-NO-MERGE' &&
+        vars.ORCHESTRATION_POC_APPROVED == 'true' &&
+        (inputs.operation != 'poc-bootstrap' || vars.ORCHESTRATION_POC_BOOTSTRAP_APPROVED == 'true')
+      }}
+    runs-on: ubuntu-latest
+    environment: agent-orchestration
+    timeout-minutes: 35
+    steps:
+      - name: Require reviewed master definition
+        env:
+          DEFINITION_SHA: ${{ vars.ORCHESTRATION_POC_DEFINITION_SHA }}
+        run: |
+          [[ "$DEFINITION_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GITHUB_WORKFLOW_SHA" == "$DEFINITION_SHA" ]]
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ vars.ORCHESTRATION_POC_DEFINITION_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+      - name: Build trusted PoC driver
+        run: dotnet build IntelligentTradingSimulator.Orchestration --configuration Release
+      - name: Run bounded PoC
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ORCHESTRATION_USER_TOKEN: ${{ secrets.ORCHESTRATION_USER_TOKEN }}
+          ORCHESTRATION_POC_APPROVED: ${{ vars.ORCHESTRATION_POC_APPROVED }}
+          ORCHESTRATION_POC_BOOTSTRAP_APPROVED: ${{ vars.ORCHESTRATION_POC_BOOTSTRAP_APPROVED }}
+          ORCHESTRATION_POC_CREDENTIALS_VERIFIED: ${{ vars.ORCHESTRATION_POC_CREDENTIALS_VERIFIED }}
+          ORCHESTRATION_POC_TASK_ENTITLEMENT_VERIFIED: ${{ vars.ORCHESTRATION_POC_TASK_ENTITLEMENT_VERIFIED }}
+          ORCHESTRATION_POC_TRUSTED_DEFINITION_VERIFIED: ${{ vars.ORCHESTRATION_POC_TRUSTED_DEFINITION_VERIFIED }}
+          ORCHESTRATION_POC_NO_ADDED_CHARGES_VERIFIED: ${{ vars.ORCHESTRATION_POC_NO_ADDED_CHARGES_VERIFIED }}
+          ORCHESTRATION_POC_REVIEW_POLICY_VERIFIED: ${{ vars.ORCHESTRATION_POC_REVIEW_POLICY_VERIFIED }}
+          ORCHESTRATION_POC_AUTOMATIC_REVIEWS_DISABLED: ${{ vars.ORCHESTRATION_POC_AUTOMATIC_REVIEWS_DISABLED }}
+          ORCHESTRATION_POC_ACTOR_ID: ${{ vars.ORCHESTRATION_POC_ACTOR_ID }}
+          ORCHESTRATION_POC_WORKFLOW_ID: ${{ vars.ORCHESTRATION_POC_WORKFLOW_ID }}
+          ORCHESTRATION_POC_CI_WORKFLOW_ID: ${{ vars.ORCHESTRATION_POC_CI_WORKFLOW_ID }}
+          ORCHESTRATION_POC_DEFINITION_SHA: ${{ vars.ORCHESTRATION_POC_DEFINITION_SHA }}
+          ORCHESTRATION_POC_EXPIRES_AT: ${{ vars.ORCHESTRATION_POC_EXPIRES_AT }}
+        run: |
+          dotnet run --no-build --project IntelligentTradingSimulator.Orchestration \
+            --configuration Release -- --github-live --github-poc --execute \
+            > "$RUNNER_TEMP/agent-poc-result.json"
+      - name: Preserve PoC evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-poc-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-poc-result.json
+          if-no-files-found: warn
+          retention-days: 7

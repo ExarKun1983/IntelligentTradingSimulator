@@ -1614,6 +1614,153 @@ contract; custom instructions alone do not provide that API guarantee. Until
 that gap is resolved, a bounded test must explicitly include a human
 `classify-review` step and must not be reported as a fully automatic happy path.
 
+The offline integration test
+`OneRepairPoCCompletesCodingCiReviewRepairCiReviewAndStopsForHumanApproval`
+demonstrates one capped repair cycle using mocked GitHub APIs and
+`MaxRepairTasks=1`. It verifies exact-head CI/review after the repair, finding-
+specific human resolution, and a final human-review handoff without merge. This
+is a code-path PoC only: it does not verify live credentials, repository
+protection, workflow pins, or deployed Actions configuration. The existing
+bounded Issue #237 profile remains single-pass and cannot run this repair cycle.
+
+### Bounded live coding/CI/review PoC for Issue #249
+
+The opt-in `agent-poc.yml` driver reuses `GitHubOrchestrationHost`, the existing
+task/CI/review adapters and reducer. It is not a second orchestrator and does
+not activate the main workflow or the status-revocation experiment. Its CLI mode
+is `--github-live --github-poc --execute`. These source changes alone do not
+provision resources or authorize a live run.
+
+The profile is fixed to Issue #249, PR base `master`, and separate state
+`refs/heads/agent-state-poc-249-v1`. Both driver and CI execute from `master`
+at the configured reviewed definition SHA; CI checks out the agent's exact task
+head separately. The task creates a draft PR against `master`. If `master`
+advances during the attempt, the profile stops rather than executing an
+unreviewed definition. The driver validates the repository, configured human
+actor, original run actor, attempt 1, definition and generation before
+admission. Re-runs are rejected.
+
+The canonical manifest pins those identities and an expiry at most 72 hours
+away. Its store permits one coding task, at most one review repair task in total,
+at most two managed CI dispatches and two review requests. CI build/test failure,
+infrastructure failure or ambiguous API outcomes stop the attempt. Unclassified
+human feedback requiring a separate repair also stops the attempt. Changing configuration or extending expiry
+cannot silently reuse bootstrapped state. Missing state is an error, not a new
+attempt. Do not delete state or re-bootstrap to retry.
+
+Unlike the old bounded profile, this profile does not set `SinglePassTest`.
+It does require the mapped PR to stay draft and based on `master`.
+It deliberately does not publish required commit statuses, does not test
+status revocation, and is not evidence that production branch protection works.
+It never calls the merge API. Passing CI, review and final human handoff are
+the scope of this PoC, not deployment or automatic merge.
+
+#### Prepare once, after implementation review
+
+Keep the legacy/main execution workflows disabled and their variables unchanged.
+Do not use the resources or state of #227, #237 or the status experiment.
+
+1. Review and merge this implementation. Record the full lowercase `master`
+   commit SHA; keep `master` unchanged during the attempt. Do not merge the
+   generated task PR.
+2. Verify that `master` is admitted by the existing `agent-orchestration`
+   environment's deployment policy.
+   Reuse its `ORCHESTRATION_USER_TOKEN` secret; do not copy credentials into new
+   environments or repository variables. Verify task entitlement, review API
+   access, environment protection, effective workflow permissions, and agreed
+   AI/Actions cost limits independently.
+3. Obtain the driver and CI workflow IDs from GitHub after merge, and set the
+   repository variables below. Approval flags are operator attestations, not
+   measurements. Do not set them true merely because local tests passed.
+
+| Repository variable | Required value |
+| --- | --- |
+| `ORCHESTRATION_POC_APPROVED` | `false` until the bounded live attempt is separately authorized |
+| `ORCHESTRATION_POC_BOOTSTRAP_APPROVED` | `false` except for separately authorized one-time bootstrap |
+| `ORCHESTRATION_POC_ACTOR_ID` | Numeric ID of the authorized human owning the task credential |
+| `ORCHESTRATION_POC_WORKFLOW_ID` | GitHub ID of `.github/workflows/agent-poc.yml` |
+| `ORCHESTRATION_POC_CI_WORKFLOW_ID` | GitHub ID of `.github/workflows/agent-poc-ci.yml`; distinct from driver |
+| `ORCHESTRATION_POC_DEFINITION_SHA` | Reviewed current `master` commit containing both workflows |
+| `ORCHESTRATION_POC_EXPIRES_AT` | Agreed UTC deadline, no more than 72 hours away |
+| `ORCHESTRATION_POC_CREDENTIALS_VERIFIED` | `true` only after verifying separate credentials and their protected environment |
+| `ORCHESTRATION_POC_TASK_ENTITLEMENT_VERIFIED` | `true` only after verifying task API entitlement |
+| `ORCHESTRATION_POC_TRUSTED_DEFINITION_VERIFIED` | `true` only after reviewing the driver and CI at the configured SHA |
+| `ORCHESTRATION_POC_NO_ADDED_CHARGES_VERIFIED` | `true` only after confirming the agreed cost controls |
+| `ORCHESTRATION_POC_REVIEW_POLICY_VERIFIED` | `true` only after verifying Copilot review access/policy |
+| `ORCHESTRATION_POC_AUTOMATIC_REVIEWS_DISABLED` | `true` only after verifying native automatic reviews will not duplicate managed requests |
+
+Use the shared environment's approval rules for each driver invocation. This
+does not imply an independent second-person approval if the maintainer may
+approve their own run. The credential-bearing driver only builds and executes
+the trusted definition, never task-head code. The CI job checks out the captured
+task head with contents-read permission, no task secret and no state/status
+writes. Same-repository workflow credentials are not ref-scoped tokens; scope
+is enforced by the reviewed driver/adapters/store.
+
+#### Authorized live sequence
+
+After separate authorization, enable only the two new PoC workflows if needed
+and set `ORCHESTRATION_POC_APPROVED=true`. All dispatches select `master` and supply
+`confirmation=POC-249-ONE-REPAIR-NO-MERGE`.
+
+1. Temporarily set `ORCHESTRATION_POC_BOOTSTRAP_APPROVED=true`. Dispatch the
+   driver with `operation=poc-bootstrap` and `issue=249`. This creates only the
+   separate empty canonical state and its manifest. Verify the artifact and
+   state ref, then set bootstrap approval back to `false` before starting.
+2. Check the coding requirements in Issue #249. Add `agent:ready` only when
+   ready to authorize its coding task, then start the driver once:
+
+   ```bash
+   gh workflow run agent-poc.yml \
+     --repo ExarKun1983/IntelligentTradingSimulator \
+     --ref master \
+     -f issue=249 -f operation=poc-start \
+     -f confirmation=POC-249-ONE-REPAIR-NO-MERGE \
+     -f repository_generation=1 -f issue_generation=1
+   ```
+
+3. The worker observes task completion, captures/verifies its candidate head,
+   dispatches exact-head CI, then requests Copilot review after green CI.
+   A driver invocation is bounded to 30 minutes. `TimeLimit`/`IterationLimit`
+   is not completion: inspect canonical state and use a **new** manual
+   `operation=resume` invocation for observation/continuation, not another
+   `poc-start` and not GitHub's "Re-run jobs". There is no schedule or event
+   wake for this profile. Do not resume uncertain writes speculatively.
+4. Copilot review output produces `NeedsHuman`. Read the review on the captured
+   SHA and take `CurrentHandoffId`, `Round`, PR and SHA from canonical state
+   or the artifact. Dispatch `operation=classify-review` with those exact
+   `handoff`, `round`, `pull`, `sha` values, an audit `reason`, and
+   `classification=blocking` or `accepted`. For blockers, supply a JSON array
+   in `findings`, e.g.
+   `[{"Id":"review-finding-1","Description":"Actual review finding","Evidence":"Exact review comment URL"}]`.
+   Do not infer acceptance from the absence of comments or manufacture a finding
+   to force a repair.
+5. A blocking classification can launch the one repair on the same PR branch.
+   The resulting completed-task head must pass fresh CI and review. For final
+   acceptance of previously recorded blockers, provide finding-specific
+   `responses`, e.g.
+   `[{"FindingId":"review-finding-1","Evidence":"Verification on the repaired SHA","Resolved":true}]`.
+   A second required repair stops on the persisted budget; it never creates
+   a third task.
+6. Completion means phase `HUMAN_REVIEW`, explicitly accepted review, current
+   exact-head green CI and an unmerged draft PR. The artifact reports
+   `Completed=true` only after revalidating the task and live PR head, draft
+   status and `master` base at that handoff. A green driver job by itself is not
+   proof of completion. Preserve canonical state and evidence; set
+   `ORCHESTRATION_POC_APPROVED=false` after the attempt and leave bootstrap false.
+
+Every invocation saves `agent-poc-result.json` as a seven-day Actions artifact
+with phase, stop reason, task identities, current CI/review boundaries and effect
+receipts. Full review evidence and classification history remain in canonical
+state. Errors report a sanitized error type and the state ref to inspect; they
+never automatically repeat a POST. Use `operation=pause` with a reason to save
+a hold while authorization is still valid. Expiry stops further driver effects,
+not an already submitted remote task or CI run. Any further recovery after an
+ambiguous write or expiry needs a separate operator decision, not state
+replacement or an automatic expiry extension.
+
+### Main workflow diagnostics and recovery
+
 Use the existing **Agent gate diagnostics (read-only)** workflow as the main
 configuration dashboard after its definition is reviewed/merged. It reports
 boolean comparisons for credentials/entitlement, cost, review, CI, status

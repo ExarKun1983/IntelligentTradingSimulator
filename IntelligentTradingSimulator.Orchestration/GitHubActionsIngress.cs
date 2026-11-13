@@ -36,6 +36,8 @@ public static class GitHubActionsIngress
             // Live readiness can defer work, but cannot rewrite an immutable source notification.
             NotificationKind.Readiness when IsIsolatedStatusTestStart(payload) =>
                 new Ready(SinglePassTest: true),
+            NotificationKind.Readiness when IsPocStart(payload) =>
+                new Ready(maxRepairTasks),
             NotificationKind.Readiness or NotificationKind.WithdrawReadiness =>
                 payload.GetProperty("action").GetString() == "labeled" ? new Ready(maxRepairTasks) : new Withdraw(),
             NotificationKind.Projection => new StageEdited(),
@@ -93,7 +95,7 @@ public static class GitHubActionsIngress
                 issue != evidence.IssueNumber || evidence.IsPullRequest)
                 throw new InvalidDataException("Recovery Issue identity mismatch.");
             var operation = inputs.GetProperty("operation").GetString();
-            if (operation == "status-test-start" && (!evidence.IssueOpen || !evidence.Ready))
+            if (operation is "status-test-start" or "poc-start" && (!evidence.IssueOpen || !evidence.Ready))
                 throw new InvalidDataException("Isolated test start requires an open Issue with explicit readiness.");
             var kind = operation switch
             {
@@ -101,6 +103,7 @@ public static class GitHubActionsIngress
                 "pause" => NotificationKind.Pause,
                 "status-test-start" => NotificationKind.Readiness,
                 "status-test-bootstrap" => NotificationKind.Ignore,
+                "poc-start" => NotificationKind.Readiness,
                 "reactivate" => NotificationKind.Reactivate,
                 "resolve-task" => NotificationKind.ResolveTask,
                 "classify-review" => NotificationKind.ClassifyReview,
@@ -202,4 +205,9 @@ public static class GitHubActionsIngress
         payload.TryGetProperty("inputs", out var inputs) &&
         inputs.TryGetProperty("operation", out var operation) &&
         operation.GetString() == "status-test-start";
+
+    private static bool IsPocStart(JsonElement payload) =>
+        payload.TryGetProperty("inputs", out var inputs) &&
+        inputs.TryGetProperty("operation", out var operation) &&
+        operation.GetString() == "poc-start";
 }

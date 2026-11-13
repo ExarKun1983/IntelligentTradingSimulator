@@ -211,6 +211,241 @@ public sealed class SharedHostLifecycleIntegrationTests
     }
 
     [Fact]
+    public async Task PocDoesNotRequestReviewWhenDefinitionMovesAfterCiDispatch()
+    {
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture
+        {
+            BaseBranch = GitHubPocSettings.BaseBranch, WorkflowPath = GitHubPocSettings.DriverWorkflowPath,
+            Draft = true, RunEvent = "workflow_dispatch"
+        };
+        using var fixture = new PipelineApi(taskApi)
+        {
+            VerifyCredentials = true,
+            Route = CiRoute with { Ref = GitHubPocSettings.DefinitionReference,
+                WorkflowPath = GitHubPocSettings.CiWorkflowPath },
+            WakeEvent = "workflow_dispatch"
+        };
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        client.DefaultRequestHeaders.Authorization = new("Bearer", "offline-workflow");
+        using var userClient = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        userClient.DefaultRequestHeaders.Authorization = new("Bearer", "offline-user");
+        var initial = RepositoryState.Create("owner/repo");
+        initial.IsolatedTestManifestDigest = "poc-manifest";
+        var innerStore = new GitHubTaskIntegrationTests.Store(initial);
+        IStateStore store = new PocStateStore(innerStore, "owner/repo", 7, "poc-manifest");
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock(),
+            new(userClient, "owner/repo", 1));
+        var api = new GitHubRepositoryApi(client, "owner/repo", 1);
+        Task VerifyDefinition(CancellationToken token) =>
+            GitHubPocCommand.VerifyDefinitionAsync(api, Definition, token);
+        JsonElement Command(string operation) => JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            sender = new { id = 55, login = "maintainer", type = "User" },
+            inputs = new { issue = "7", operation }
+        });
+        Task<WorkerResult> Reconcile(string operation, string runId) =>
+            host.ReconcileAsync(Command(operation), "workflow_dispatch", runId, 1, 1, Now, [], 99,
+                GitHubPocSettings.BaseBranch, 55, TaskApproval, Bounded, token: default,
+                reviewApproval: ReviewApproval, ciRoute: fixture.Route, ciApproval: CiApproval,
+                boundedScope: new(7, 1, SinglePassTest: false),
+                trustedWorkflowPath: GitHubPocSettings.DriverWorkflowPath, requireDraftPullRequest: true,
+                beforeEffect: VerifyDefinition);
+
+        await Reconcile("poc-start", "44");
+        taskApi.RemoteState = "completed";
+        await Reconcile("resume", "90");
+        Assert.Equal(1, fixture.CiDispatches);
+
+        fixture.DefinitionSha = new('e', 40);
+        fixture.CiCompleted = true;
+        await Reconcile("resume", "91");
+
+        Assert.True(innerStore.State.Issues[7].Ci!.Green);
+        Assert.Equal(0, fixture.ReviewRequests);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task OneRepairPoCCompletesCodingCiReviewRepairCiReviewAndStopsForHumanApproval(
+        bool isolatedPoc, bool rejectNonDraftAcceptance)
+    {
+        var repairHead = new string('b', 40);
+        var baseBranch = isolatedPoc ? GitHubPocSettings.BaseBranch : "master";
+        var workflowPath = isolatedPoc ? GitHubPocSettings.DriverWorkflowPath : ".github/workflows/agent-state-machine.yml";
+        var route = isolatedPoc ? CiRoute with
+        {
+            Ref = GitHubPocSettings.DefinitionReference, WorkflowPath = GitHubPocSettings.CiWorkflowPath
+        } : CiRoute;
+        BoundedOrchestrationScope? scope = isolatedPoc ? new(7, 1, SinglePassTest: false) : null;
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture
+        {
+            BaseBranch = baseBranch, WorkflowPath = workflowPath, Draft = isolatedPoc,
+            RunEvent = isolatedPoc ? "workflow_dispatch" : "issues"
+        };
+        using var fixture = new PipelineApi(taskApi)
+        {
+            VerifyCredentials = true, Route = route, WakeEvent = isolatedPoc ? "workflow_dispatch" : "schedule"
+        };
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        client.DefaultRequestHeaders.Authorization = new("Bearer", "offline-workflow");
+        using var userClient = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        userClient.DefaultRequestHeaders.Authorization = new("Bearer", "offline-user");
+        var initial = RepositoryState.Create("owner/repo");
+        initial.IsolatedTestManifestDigest = isolatedPoc ? "poc-manifest" : null;
+        var store = new GitHubTaskIntegrationTests.Store(initial);
+        IStateStore guarded = isolatedPoc ? new PocStateStore(store, "owner/repo", 7, "poc-manifest") : store;
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), guarded, new Clock(),
+            new(userClient, "owner/repo", 1));
+
+        JsonElement Command(string operation) => JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            sender = new { id = 55, login = "maintainer", type = "User" },
+            inputs = new { issue = "7", operation }
+        });
+        Task<WorkerResult> Reconcile(JsonElement payload, string eventName, string runId, string? head = null) =>
+            host.ReconcileAsync(payload, eventName, runId, 1, 1, Now, [], 99, baseBranch, 55,
+                TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(head ?? taskApi.HeadSha),
+                reviewApproval: ReviewApproval, ciRoute: route, ciApproval: CiApproval,
+                statusPublisher: isolatedPoc ? null : Publisher, statusApproval: isolatedPoc ? null : StatusApproval,
+                maxRepairTasks: 1, boundedScope: scope, trustedWorkflowPath: workflowPath,
+                requireDraftPullRequest: isolatedPoc);
+        async Task Advance(string? head = null)
+        {
+            if (isolatedPoc) await Reconcile(Command("resume"), "workflow_dispatch", "90", head);
+            else await Wake(host, finalHeadSha: head ?? taskApi.HeadSha);
+        }
+
+        await Reconcile(isolatedPoc ? Command("poc-start") : taskApi.Notification(),
+            isolatedPoc ? "workflow_dispatch" : "issues", "44");
+        Assert.Equal(Phase.CODING, store.State.Issues[7].Phase);
+        Assert.Equal(TaskStatus.Running, Assert.Single(store.State.Issues[7].Tasks.Values).Status);
+        Assert.Single(taskApi.Writes, write => write.Path == "/agents/repos/owner/repo/tasks");
+
+        taskApi.RemoteState = "completed";
+        await Advance();
+        Assert.Equal(1, fixture.CiDispatches);
+        Assert.Equal(0, fixture.ReviewRequests);
+        fixture.CiCompleted = true;
+        await Advance();
+        Assert.True(store.State.Issues[7].Ci!.Green);
+        Assert.Equal(1, fixture.ReviewRequests);
+
+        fixture.ReviewSubmitted = true;
+        fixture.ReviewSubmittedCount = 1;
+        await Advance();
+        var firstReview = store.State.Issues[7];
+        Assert.Equal(ReviewClassification.NeedsHuman, firstReview.Review!.Classification);
+        Assert.True(firstReview.ReactivationRequired);
+        if (!isolatedPoc) Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+
+        taskApi.AfterLaunch = () => taskApi.RemoteState = "in_progress";
+        taskApi.RunEvent = "workflow_dispatch";
+        var blocking = Classification(firstReview, classification: "blocking",
+            findings: """[{"Id":"poc-finding","Description":"A bounded regression needs correction","Evidence":"The test fixture records this review finding."}]""");
+        await Reconcile(blocking, "workflow_dispatch", "91");
+        var repair = store.State.Issues[7];
+        Assert.Equal(Phase.FIX_PENDING, repair.Phase);
+        Assert.Equal(TaskKind.ReviewRepair, repair.Tasks[repair.ActiveTaskId!].Kind);
+        Assert.Equal(TaskStatus.Running, repair.Tasks[repair.ActiveTaskId!].Status);
+        Assert.Equal(1, repair.Tasks.Values.Count(task => task.Kind != TaskKind.Coding));
+        Assert.Equal(1, fixture.CiDispatches);
+        Assert.Equal(1, fixture.ReviewRequests);
+
+        taskApi.HeadSha = repairHead;
+        taskApi.RemoteState = "completed";
+        fixture.CiCompleted = false;
+        fixture.ReviewSubmittedCount = 1;
+        await Advance(repairHead);
+        Assert.Equal(2, fixture.CiDispatches);
+        Assert.Equal(repairHead, store.State.Issues[7].Ci!.Sha);
+        Assert.Null(store.State.Issues[7].Ci!.Green);
+        Assert.Equal(1, fixture.ReviewRequests);
+
+        fixture.CiCompleted = true;
+        fixture.ReviewSubmitted = false;
+        await Advance(repairHead);
+        Assert.True(store.State.Issues[7].Ci!.Green);
+        Assert.Equal(2, fixture.ReviewRequests);
+        fixture.ReviewSubmittedCount = 2;
+        await Advance(repairHead);
+
+        var finalReview = store.State.Issues[7];
+        Assert.Equal(ReviewClassification.NeedsHuman, finalReview.Review!.Classification);
+        Assert.Equal(repairHead, finalReview.Review.Sha);
+        if (!isolatedPoc) Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+
+        var accepted = Classification(finalReview,
+            responses: """[{"FindingId":"poc-finding","Evidence":"Human verified the repaired behavior on the new exact head.","Resolved":true}]""",
+            sha: repairHead);
+        if (rejectNonDraftAcceptance)
+        {
+            var before = StateJson.Serialize(store.State);
+            taskApi.Draft = false;
+            await Assert.ThrowsAsync<InvalidDataException>(() => Reconcile(accepted, "workflow_dispatch", "92", repairHead));
+            Assert.Equal(before, StateJson.Serialize(store.State));
+            Assert.Equal(2, fixture.CiDispatches);
+            Assert.Equal(2, fixture.ReviewRequests);
+            return;
+        }
+        await Reconcile(accepted, "workflow_dispatch", "92", repairHead);
+
+        var handoff = store.State.Issues[7];
+        Assert.Equal(Phase.HUMAN_REVIEW, handoff.Phase);
+        Assert.Equal(ReviewClassification.Accepted, handoff.Review!.Classification);
+        Assert.True(handoff.ReactivationRequired);
+        Assert.Null(store.State.AdmittedIssue);
+        Assert.Equal(2, handoff.Tasks.Count);
+        Assert.Equal(2, fixture.CiDispatches);
+        Assert.Equal(2, fixture.ReviewRequests);
+        if (isolatedPoc)
+        {
+            Assert.Empty(fixture.StatusWrites);
+            Assert.False(handoff.SinglePassTest);
+            Assert.Equal(1, handoff.MaxRepairTasks);
+            Assert.All(taskApi.Writes.Where(write => write.Path == "/agents/repos/owner/repo/tasks"), write =>
+            {
+                using var body = JsonDocument.Parse(write.Body);
+                Assert.Equal(baseBranch, body.RootElement.GetProperty("base_ref").GetString());
+            });
+            var candidate = new GitHubTaskAdapter(new(client, "owner/repo", 1), guarded, baseBranch, 55,
+                TaskApproval, taskApi: new(userClient, "owner/repo", 1), requireDraftPullRequest: true);
+            Assert.True(await GitHubPocCommand.IsCompleteAsync(store.State, handoff, candidate, default));
+            taskApi.Draft = false;
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                GitHubPocCommand.IsCompleteAsync(store.State, handoff, candidate, default));
+            taskApi.Draft = true;
+            taskApi.Corruption = "base";
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                GitHubPocCommand.IsCompleteAsync(store.State, handoff, candidate, default));
+            taskApi.Corruption = null;
+            taskApi.Comments.Add(JsonSerializer.SerializeToElement(new
+            {
+                id = 200, body = "Please address this follow-up before completion.",
+                updated_at = Now.AddMinutes(1),
+                user = new { id = 55, login = "maintainer", type = "User" }
+            }));
+            await Reconcile(Command("resume"), "workflow_dispatch", "93", repairHead);
+            Assert.Equal(Phase.HUMAN_REVIEW, store.State.Issues[7].Phase);
+            Assert.Single(store.State.Issues[7].PendingFeedbackEventIds);
+            Assert.False(await GitHubPocCommand.IsCompleteAsync(store.State,
+                store.State.Issues[7], candidate, default));
+        }
+        else
+        {
+            Assert.Equal(new[] { Head, repairHead }, fixture.StatusWrites
+                .Where(path => path.StartsWith("/repos/owner/repo/statuses/", StringComparison.Ordinal))
+                .Select(path => path["/repos/owner/repo/statuses/".Length..])
+                .Distinct().OrderBy(sha => sha, StringComparer.Ordinal));
+            Assert.Equal("success", fixture.Statuses.Last().GetProperty("state").GetString());
+        }
+        Assert.DoesNotContain(taskApi.Writes, write => write.Path.EndsWith("/merge", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ScheduledWakeDispatchesOnlyThePersistedBoundedCandidateSha()
     {
         using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
@@ -325,19 +560,21 @@ public sealed class SharedHostLifecycleIntegrationTests
         Assert.Equal("success", fixture.Statuses.Last().GetProperty("state").GetString());
     }
 
-    private static Task<WorkerResult?> Wake(GitHubOrchestrationHost host, string eventName = "schedule") =>
+    private static Task<WorkerResult?> Wake(GitHubOrchestrationHost host, string eventName = "schedule",
+        string? finalHeadSha = null) =>
         host.ReconcileWakeAsync(JsonSerializer.SerializeToElement(new
             { repository = new { id = 1, full_name = "owner/repo" } }), eventName, "90",
             new(10, Definition), new(true, true, true, true), 99, "master", 55, TaskApproval, Bounded,
-            new GitHubTaskIntegrationTests.FinalHead(), reviewApproval: ReviewApproval, ciRoute: CiRoute,
+            new GitHubTaskIntegrationTests.FinalHead(finalHeadSha), reviewApproval: ReviewApproval, ciRoute: CiRoute,
             ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
-    private static JsonElement Classification(IssueState issue, string responses = "[]") => JsonSerializer.SerializeToElement(new
+    private static JsonElement Classification(IssueState issue, string responses = "[]",
+        string classification = "accepted", string findings = "[]", string? sha = null) => JsonSerializer.SerializeToElement(new
     {
         repository = new { id = 1, full_name = "owner/repo" },
         sender = new { id = 55, login = "maintainer", type = "User" },
         inputs = new { issue = "7", operation = "classify-review", reason = "Human checked exact captured round",
-            handoff = issue.CurrentHandoffId, round = issue.Round.ToString(), pull = "17", sha = Head,
-            classification = "accepted", findings = "[]", responses }
+            handoff = issue.CurrentHandoffId, round = issue.Round.ToString(), pull = "17",
+            sha = sha ?? issue.HeadSha ?? Head, classification, findings, responses }
     });
     private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now.AddMinutes(3); }
 
@@ -345,18 +582,27 @@ public sealed class SharedHostLifecycleIntegrationTests
     {
         private const string Reviewer = "copilot-pull-request-reviewer[bot]";
         private readonly HttpMessageInvoker tasks;
+        private readonly GitHubTaskIntegrationTests.ApiFixture taskApi;
         public bool CiCompleted { get; set; }
         public bool ReviewSubmitted { get; set; }
+        public int ReviewSubmittedCount { get; set; }
         public bool VerifyCredentials { get; init; }
+        public GitHubCiRoute Route { get; init; } = CiRoute;
         public string WakeEvent { get; set; } = "schedule";
+        public string DefinitionSha { get; set; } = Definition;
         public int CiDispatches { get; private set; }
         public int ReviewRequests { get; private set; }
         public List<JsonElement> Statuses { get; } = [];
         public List<string> StatusWrites { get; } = [];
-        private string correlation = "";
+        private readonly Dictionary<int, (string Correlation, string Sha)> ciRuns = [];
+        private readonly List<string> reviewShas = [];
         private static object ReviewActor => new { id = 175728472, node_id = "BOT_kgDOCnlnWA", login = "Copilot", type = "Bot" };
         private static object StatusActor => new { id = 99, node_id = "publisher-node", login = "status-publisher", type = "Bot" };
-        public PipelineApi(HttpMessageHandler tasks) => this.tasks = new(tasks, false);
+        public PipelineApi(GitHubTaskIntegrationTests.ApiFixture tasks)
+        {
+            taskApi = tasks;
+            this.tasks = new(tasks, false);
+        }
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             var path = request.RequestUri!.AbsolutePath;
@@ -366,33 +612,42 @@ public sealed class SharedHostLifecycleIntegrationTests
             const string prefix = "/repos/owner/repo/";
             object response;
             if (path == prefix + "actions/runs/90")
-                response = new { id = 90, workflow_id = 10, path = ".github/workflows/agent-state-machine.yml",
-                    head_sha = Definition, @event = WakeEvent, repository = new { id = 1 } };
-            else if (path == prefix + "actions/runs/91" || path == prefix + "actions/runs/92")
-                response = new { @event = "workflow_dispatch", path = ".github/workflows/agent-state-machine.yml",
+                response = new { id = 90, workflow_id = 10, path = taskApi.WorkflowPath,
+                    head_sha = Definition, @event = WakeEvent, repository = new { id = 1 }, actor = new { id = 55 } };
+            else if (path == prefix + "actions/runs/91" || path == prefix + "actions/runs/92" ||
+                     path == prefix + "actions/runs/93")
+                response = new { @event = "workflow_dispatch", path = taskApi.WorkflowPath,
                     actor = new { id = 55 } };
             else if (path == prefix + "actions/workflows/88")
-                response = new { id = 88, path = GitHubCiAdapter.WorkflowPath, state = "active" };
+                response = new { id = 88, path = Route.WorkflowPath, state = "active" };
             else if (path.StartsWith(prefix + "commits/refs"))
-                response = new { sha = Definition };
+                response = new { sha = DefinitionSha };
             else if (path == prefix + "actions/workflows/88/dispatches")
             {
                 using var payload = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
-                Assert.Equal(CiRoute.Ref, payload.RootElement.GetProperty("ref").GetString());
-                Assert.Equal(Head, payload.RootElement.GetProperty("inputs").GetProperty("sha").GetString());
-                correlation = payload.RootElement.GetProperty("inputs").GetProperty("correlation").GetString()!;
+                Assert.Equal(Route.Ref, payload.RootElement.GetProperty("ref").GetString());
+                var sha = payload.RootElement.GetProperty("inputs").GetProperty("sha").GetString()!;
+                Assert.Equal(taskApi.HeadSha, sha);
                 CiDispatches++;
-                response = new { workflow_run_id = 777, run_url = "https://api.github.com/repos/owner/repo/actions/runs/777" };
+                var runId = 776 + CiDispatches;
+                ciRuns.Add(runId, (payload.RootElement.GetProperty("inputs").GetProperty("correlation").GetString()!, sha));
+                response = new { workflow_run_id = runId, run_url = $"https://api.github.com/repos/owner/repo/actions/runs/{runId}" };
             }
-            else if (path == prefix + "actions/runs/777")
-                response = new { id = 777, workflow_id = 88, path = GitHubCiAdapter.WorkflowPath,
+            else if (path.StartsWith(prefix + "actions/runs/", StringComparison.Ordinal) &&
+                int.TryParse(path[(prefix + "actions/runs/").Length..], out var ciRunId) &&
+                ciRuns.TryGetValue(ciRunId, out var ciRun))
+                response = new { id = ciRunId, workflow_id = 88, path = Route.WorkflowPath,
                     @event = "workflow_dispatch", head_sha = Definition, run_attempt = 1,
-                    display_title = correlation, repository = new { id = 1 },
+                    display_title = ciRun.Correlation, repository = new { id = 1 },
                     status = CiCompleted ? "completed" : "in_progress", conclusion = CiCompleted ? "success" : null,
                     updated_at = Now.AddMinutes(3) };
-            else if (path == prefix + "actions/runs/777/jobs")
-                response = new { total_count = 1, jobs = new[] { new { id = 778, run_id = 777, run_attempt = 1,
-                    head_sha = Definition, name = "Test " + Head, status = "completed", conclusion = "success",
+            else if (path.StartsWith(prefix + "actions/runs/", StringComparison.Ordinal) &&
+                path.EndsWith("/jobs", StringComparison.Ordinal) &&
+                int.TryParse(path[(prefix + "actions/runs/").Length..^"/jobs".Length], out var ciJobsRunId) &&
+                ciRuns.TryGetValue(ciJobsRunId, out var jobsRun))
+                response = new { total_count = 1, jobs = new[] { new { id = ciJobsRunId + 1,
+                    run_id = ciJobsRunId, run_attempt = 1, head_sha = Definition, name = "Test " + jobsRun.Sha,
+                    status = "completed", conclusion = "success",
                     steps = new[] { "Verify tested SHA", "Restore dependencies", "Build solution", "Run tests" }
                         .Select(name => new { name, status = "completed", conclusion = "success" }) } } };
             else if (path == "/users/" + Uri.EscapeDataString(Reviewer) || path == "/users/" + Reviewer)
@@ -403,16 +658,20 @@ public sealed class SharedHostLifecycleIntegrationTests
                 if (request.Method == HttpMethod.Post)
                 {
                     ReviewRequests++;
-                    response = new { number = 17, state = "open", head = new { sha = Head, repo = new { id = 1 } },
+                    reviewShas.Add(taskApi.HeadSha);
+                    response = new { number = 17, state = "open", head = new { sha = taskApi.HeadSha, repo = new { id = 1 } },
                         @base = new { repo = new { id = 1 } }, requested_reviewers = new[] { ReviewActor } };
                 }
                 else response = new { users = Array.Empty<object>() };
             }
             else if (path == prefix + "pulls/17/reviews")
-                response = ReviewSubmitted ? new[] { new { id = 501, user = ReviewActor, commit_id = Head,
-                    state = "APPROVED", body = "approved green done (untrusted prose)", submitted_at = Now.AddMinutes(3),
-                    pull_request_url = "https://api.github.com/repos/owner/repo/pulls/17" } } : Array.Empty<object>();
-            else if (path == prefix + "pulls/17/reviews/501/comments") response = Array.Empty<object>();
+                response = Enumerable.Range(0, Math.Min(reviewShas.Count,
+                        ReviewSubmittedCount > 0 ? ReviewSubmittedCount : ReviewSubmitted ? reviewShas.Count : 0))
+                    .Select(index => new { id = 501 + index, user = ReviewActor, commit_id = reviewShas[index],
+                        state = "APPROVED", body = "approved green done (untrusted prose)", submitted_at = Now.AddMinutes(3),
+                        pull_request_url = "https://api.github.com/repos/owner/repo/pulls/17" }).ToArray();
+            else if (path.StartsWith(prefix + "pulls/17/reviews/", StringComparison.Ordinal) &&
+                path.EndsWith("/comments", StringComparison.Ordinal)) response = Array.Empty<object>();
             else if (path.StartsWith(prefix + "statuses/"))
             {
                 using var payload = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));

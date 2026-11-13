@@ -39,7 +39,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         GitHubStatusPublisher? statusPublisher = null, GitHubRequiredStatusApproval? statusApproval = null,
         int? maxRepairTasks = null, BoundedOrchestrationScope? boundedScope = null, bool commandOnly = false,
         bool isolatedStatusTest = false, string trustedWorkflowPath = ".github/workflows/agent-state-machine.yml",
-        string? isolatedManifestDigest = null, GitHubRecoveryApproval? recoveryApproval = null)
+        string? isolatedManifestDigest = null, GitHubRecoveryApproval? recoveryApproval = null,
+        bool requireDraftPullRequest = false, Func<CancellationToken, Task>? beforeEffect = null)
     {
         if (approval is null ||
             (!approval.AllowsTasks && !(commandOnly && recoveryApproval?.AllowsRecovery == true)))
@@ -47,6 +48,11 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         if (boundedScope is not null && maxRepairTasks is not null &&
             boundedScope.MaxRepairTasks != maxRepairTasks)
             throw new InvalidDataException("Command repair-task cap does not match the bounded scope.");
+        if (eventName == "workflow_dispatch" &&
+            trustedActionsPayload.GetProperty("inputs").GetProperty("operation").GetString() == "poc-start" &&
+            (trustedWorkflowPath != GitHubPocSettings.DriverWorkflowPath ||
+             boundedScope is not { SinglePassTest: false, MaxRepairTasks: 1 } || !requireDraftPullRequest))
+            throw new InvalidDataException("PoC start requires its bounded draft-PR driver profile.");
         var scopedStore = ScopeStore(store, boundedScope);
         var snapshot = await scopedStore.LoadAsync(token);
         var issueNumber = IssueNumber(trustedActionsPayload, eventName);
@@ -62,7 +68,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             message?.Data is not (Ready or Pause)))
             throw new InvalidDataException("Isolated status test requires its pinned manifest and start/pause command.");
         if (boundedScope is not null && message?.Data is Ready ready)
-            message = message with { Data = ready with { SinglePassTest = true } };
+            message = message with { Data = ready with { SinglePassTest = boundedScope.SinglePassTest } };
         message = RestoreCommittedReadyReplay(snapshot.State, message);
         message = RestoreCommittedReviewAbandonmentReplay(snapshot.State, message);
         ValidateGeneration(snapshot.State, issueNumber,
@@ -85,7 +91,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         }
         return await RunVerifiedAsync(scopedStore, message, projectionActorId, baseBranch, taskCreatorId, approval, options,
             finalHeadSource, token, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval,
-            boundedScope?.RetiredIssueNumber, commandOnly, isolatedStatusTest, trustedWorkflowPath);
+            boundedScope?.RetiredIssueNumber, commandOnly, isolatedStatusTest, trustedWorkflowPath,
+            requireDraftPullRequest, beforeEffect);
     }
 
     private async Task<WorkerResult> RunVerifiedAsync(IStateStore stateStore, OrchestrationEvent? message,
@@ -94,11 +101,12 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         GitHubReviewApproval? reviewApproval, GitHubCiRoute? ciRoute, GitHubCiApproval? ciApproval,
         GitHubStatusPublisher? statusPublisher, GitHubRequiredStatusApproval? statusApproval,
         int? excludedIssueNumber, bool commandOnly, bool isolatedStatusTest = false,
-        string trustedWorkflowPath = ".github/workflows/agent-state-machine.yml")
+        string trustedWorkflowPath = ".github/workflows/agent-state-machine.yml",
+        bool requireDraftPullRequest = false, Func<CancellationToken, Task>? beforeEffect = null)
     {
         var authorization = new VerifiedEvents();
         var tasks = new GitHubTaskAdapter(api, stateStore, baseBranch, taskCreatorId, approval, finalHeadSource,
-            taskApi, requireDraftPullRequest: isolatedStatusTest);
+            taskApi, requireDraftPullRequest: isolatedStatusTest || requireDraftPullRequest);
         var reviews = new GitHubReviewAdapter(api, stateStore, clock, reviewApproval, tasks);
         if (message?.Data is HumanClassification classification)
         {
@@ -109,6 +117,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                 if (!live.Issues.TryGetValue(message.IssueNumber, out var issue) || issue.Closed ||
                     issue.PullRequest != classification.PullRequest || issue.HeadSha != classification.Sha)
                     throw new InvalidDataException("Review classification no longer matches the live open head.");
+                if (requireDraftPullRequest)
+                    await tasks.ValidateCandidateShaAsync(state, state.Issues[message.IssueNumber], token);
             }
         }
         if (message?.Data is RequestChanges changes)
@@ -205,9 +215,12 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         var events = new ProductionEvents(message, api, tasks, reviews, ci, authorization, projectionActorId,
             excludedIssueNumber, !isolatedStatusTest);
         var statuses = statusPublisher is null ? null : new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher, statusApproval, clock);
-        var effects = new ProductionEffects(tasks, reviews, ci, statuses, new GitHubProjectionAdapter(api, projectionActorId, true));
+        IVerifiedAgentEffectAdapter effects = new ProductionEffects(tasks, reviews, ci, statuses,
+            new GitHubProjectionAdapter(api, projectionActorId, true));
+        if (beforeEffect is not null) effects = new GuardedEffects(effects, beforeEffect);
         var reducer = new OrchestrationReducer(authorization, statuses is not null &&
-            statusApproval?.AllowsPublication == true, excludedIssueNumber, reviewRequestsEnabled: !isolatedStatusTest);
+            statusApproval?.AllowsPublication == true, excludedIssueNumber, reviewRequestsEnabled: !isolatedStatusTest,
+            stopOnCiFailure: trustedWorkflowPath == GitHubPocSettings.DriverWorkflowPath);
         var allowedEffects = isolatedStatusTest
             ? new HashSet<EffectKind> { EffectKind.LaunchTask, EffectKind.RunCi, EffectKind.PublishRequiredStatus }
             : null;
@@ -489,5 +502,23 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             EffectKind.ProjectLabels or EffectKind.ProjectStatus => projections.ReconcileAsync(intent, token),
             _ => Task.FromResult(new EffectOutcome(DeliveryStatus.Unknown))
         };
+    }
+
+    private sealed class GuardedEffects(IVerifiedAgentEffectAdapter inner,
+        Func<CancellationToken, Task> beforeEffect) : IVerifiedAgentEffectAdapter
+    {
+        public bool AgentEffectsAuthorized => inner.AgentEffectsAuthorized;
+
+        public async Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken token)
+        {
+            await beforeEffect(token);
+            return await inner.ExecuteAsync(intent, token);
+        }
+
+        public async Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken token)
+        {
+            await beforeEffect(token);
+            return await inner.ReconcileAsync(intent, token);
+        }
     }
 }

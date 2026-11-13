@@ -1,7 +1,7 @@
 namespace IntelligentTradingSimulator.Orchestration;
 
 public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = null, bool requiredStatusEnabled = false,
-    int? excludedIssueNumber = null, bool reviewRequestsEnabled = true)
+    int? excludedIssueNumber = null, bool reviewRequestsEnabled = true, bool stopOnCiFailure = false)
 {
     public const int MaximumIndexEntries = 2048;
     private readonly IAuthorizationPolicy authorization = authorization ?? new DenyAllAuthorizationPolicy();
@@ -199,6 +199,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 {
                     issue.ConsecutiveCiFailures++;
                     if (issue.SinglePassTest) Hold(issue, "Single-pass test stopped after CI failure.");
+                    else if (stopOnCiFailure) Hold(issue, "PoC stopped after CI failure.");
                     else if (issue.ConsecutiveCiFailures >= issue.CiBudget) Hold(issue, "CI repair budget exhausted.");
                     else issue.Phase = Phase.FIX_PENDING;
                 }

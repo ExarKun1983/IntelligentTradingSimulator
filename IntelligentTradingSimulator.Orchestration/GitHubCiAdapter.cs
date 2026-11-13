@@ -155,10 +155,14 @@ public sealed class GitHubCiAdapter(GitHubRepositoryApi api, IStateStore store, 
 
     private async Task VerifyRouteAsync(CancellationToken token)
     {
-        if (route.WorkflowId <= 0 || !route.Ref.StartsWith("refs/tags/", StringComparison.Ordinal) ||
-            route.Ref.Length <= "refs/tags/".Length ||
+        if (route.WorkflowId <= 0 ||
+            (route.WorkflowPath == GitHubPocSettings.CiWorkflowPath
+                ? route.Ref != GitHubPocSettings.DefinitionReference
+                : !route.Ref.StartsWith("refs/tags/", StringComparison.Ordinal) ||
+                    route.Ref.Length <= "refs/tags/".Length) ||
             route.WorkflowSha.Length != 40 || !route.WorkflowSha.All(Uri.IsHexDigit) ||
-            route.WorkflowPath is not (WorkflowPath or GitHubIsolatedStatusTestSettings.CiWorkflowPath))
+            route.WorkflowPath is not (WorkflowPath or GitHubIsolatedStatusTestSettings.CiWorkflowPath or
+                GitHubPocSettings.CiWorkflowPath))
             throw new InvalidDataException("Invalid trusted CI route.");
         await api.VerifyRepositoryAsync(token);
         using var workflow = await api.GetAsync($"actions/workflows/{route.WorkflowId}", token);
@@ -185,6 +189,9 @@ public sealed class GitHubCiAdapter(GitHubRepositoryApi api, IStateStore store, 
             (route.WorkflowPath != GitHubIsolatedStatusTestSettings.CiWorkflowPath ||
                 pull.RootElement.GetProperty("draft").GetBoolean() &&
                 pull.RootElement.GetProperty("base").GetProperty("ref").GetString() == GitHubIsolatedStatusTestSettings.BaseBranch) &&
+            (route.WorkflowPath != GitHubPocSettings.CiWorkflowPath ||
+                pull.RootElement.GetProperty("draft").GetBoolean() &&
+                pull.RootElement.GetProperty("base").GetProperty("ref").GetString() == GitHubPocSettings.BaseBranch) &&
             pull.RootElement.GetProperty("head").GetProperty("sha").GetString() == issue.HeadSha;
     }
 
