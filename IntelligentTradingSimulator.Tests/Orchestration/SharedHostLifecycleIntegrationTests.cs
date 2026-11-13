@@ -660,7 +660,7 @@ public sealed class SharedHostLifecycleIntegrationTests
                     ReviewRequests++;
                     reviewShas.Add(taskApi.HeadSha);
                     response = new { number = 17, state = "open", head = new { sha = taskApi.HeadSha, repo = new { id = 1 } },
-                        @base = new { repo = new { id = 1 } }, requested_reviewers = new[] { ReviewActor } };
+                        @base = new { repo = new { id = 1 } }, requested_reviewers = Array.Empty<object>() };
                 }
                 else response = new { users = Array.Empty<object>() };
             }
@@ -700,7 +700,9 @@ public sealed class SharedHostLifecycleIntegrationTests
                 response = Statuses.Where(status => status.GetProperty("sha").GetString() == sha).Reverse().ToArray();
             }
             else return await tasks.SendAsync(request, token);
-            return new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(response), Encoding.UTF8, "application/json") };
+            var responseStatus = request.Method == HttpMethod.Post && path == prefix + "pulls/17/requested_reviewers"
+                ? HttpStatusCode.Created : HttpStatusCode.OK;
+            return new(responseStatus) { Content = new StringContent(JsonSerializer.Serialize(response), Encoding.UTF8, "application/json") };
         }
         protected override void Dispose(bool disposing)
         {

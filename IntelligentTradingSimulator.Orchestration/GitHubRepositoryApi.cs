@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -160,10 +161,16 @@ public sealed partial class GitHubRepositoryApi
         throw new InvalidDataException("Requested reviewer pagination limit exceeded.");
     }
 
-    internal async Task<JsonDocument> WriteAsync(HttpMethod method, string path, object payload, CancellationToken token)
+    internal async Task<JsonDocument> WriteAsync(HttpMethod method, string path, object payload, CancellationToken token,
+        HttpStatusCode? expectedStatus = null)
     {
         using var request = new HttpRequestMessage(method, prefix + path) { Content = JsonContent.Create(payload) };
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+        if (expectedStatus is { } expected && response.StatusCode != expected)
+        {
+            response.EnsureSuccessStatusCode();
+            throw new InvalidDataException($"GitHub write acknowledgement requires HTTP {(int)expected}.");
+        }
         return await ReadJsonAsync(response, token);
     }
 

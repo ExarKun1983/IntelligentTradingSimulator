@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Text.Json;
 
@@ -50,10 +51,11 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
         await ValidateCandidateShaAsync(latest, latestIssue, token);
         if (!await LiveEligibleAsync(latestIssue, token)) throw new InvalidDataException("Review live Issue/PR/head is ineligible.");
         using var response = await api.WriteAsync(HttpMethod.Post, $"pulls/{latestIssue.PullRequest}/requested_reviewers",
-            new { reviewers = new[] { Reviewer } }, token);
+            new { reviewers = new[] { Reviewer } }, token, expectedStatus: HttpStatusCode.Created);
         ValidatePull(response.RootElement, latestIssue);
         var requested = response.RootElement.GetProperty("requested_reviewers").EnumerateArray().ToList();
-        if (!requested.Any(candidate => ActorMatches(candidate, boundary)))
+        // Copilot can start immediately and be absent from the returned pending-reviewer list.
+        if (requested.Count != 0 && !requested.Any(candidate => ActorMatches(candidate, boundary)))
             throw new InvalidDataException("Review request acknowledgement lacks the verified reviewer.");
         await SaveBoundaryAsync(intent, boundary with { Confirmed = true }, token);
         // Local durable acknowledgement identity, explicitly NOT a GitHub review/job ID.
