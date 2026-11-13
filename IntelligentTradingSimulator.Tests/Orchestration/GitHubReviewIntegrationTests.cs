@@ -36,6 +36,55 @@ public sealed class GitHubReviewIntegrationTests
         Assert.Equal(1, handler.Posts);
     }
 
+    [Fact]
+    public async Task CreatedAcknowledgementWithNoPendingReviewerCapturesOutputAndRecoversWithoutAnotherPost()
+    {
+        var store = new Store(Eligible());
+        var handler = new Api { EmptyAcknowledgementReviewers = true };
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, store);
+
+        var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
+
+        Assert.Equal(DeliveryStatus.Succeeded, outcome.Status);
+        Assert.True(store.State.Issues[7].Review!.RequestBoundary!.Confirmed);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", new(DeliveryStatus.Unknown), Now);
+        var recovered = await adapter.ReconcileAsync(store.State.Outbox["review"], default);
+        Assert.Equal(outcome, recovered);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", recovered, Now);
+        Assert.Null(await adapter.ReadEventAsync(store.State, store.State.Issues[7], default));
+        handler.HasOutput = true;
+
+        var message = await adapter.ReadEventAsync(store.State, store.State.Issues[7], default);
+
+        Assert.Equal(ReviewClassification.NeedsHuman, Assert.IsType<ReviewResult>(message!.Data).Classification);
+        Assert.Equal(1, handler.Posts);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.OK, true)]
+    [InlineData(HttpStatusCode.OK, false)]
+    [InlineData(HttpStatusCode.Accepted, true)]
+    [InlineData(HttpStatusCode.Accepted, false)]
+    [InlineData(HttpStatusCode.Forbidden, true)]
+    public async Task MissingCreatedAcknowledgementRemainsUnknownAndIsNotRetried(HttpStatusCode status, bool emptyReviewers)
+    {
+        var store = new Store(Eligible());
+        var handler = new Api { EmptyAcknowledgementReviewers = emptyReviewers, ReviewPostStatus = status };
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, store);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => adapter.ExecuteAsync(store.State.Outbox["review"], default));
+        Assert.False(store.State.Issues[7].Review!.RequestBoundary!.Confirmed);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", new(DeliveryStatus.Unknown), Now);
+        handler.HasOutput = true;
+
+        Assert.Equal(DeliveryStatus.Unknown, (await adapter.ReconcileAsync(store.State.Outbox["review"], default)).Status);
+        Assert.Null(await adapter.ReadEventAsync(store.State, store.State.Issues[7], default));
+        await Assert.ThrowsAsync<InvalidDataException>(() => adapter.ExecuteAsync(store.State.Outbox["review"], default));
+        Assert.Equal(1, handler.Posts);
+    }
+
     [Theory]
     [InlineData("approval", DeliveryStatus.Failed, EffectFailureCode.ReviewPrerequisitesUnverified, 0)]
     [InlineData("bot-id", DeliveryStatus.Failed, EffectFailureCode.ReviewIdentityMismatch, 0)]
@@ -380,14 +429,18 @@ public sealed class GitHubReviewIntegrationTests
     }
 
     [Theory]
-    [InlineData("lost-response")]
-    [InlineData("ack-sha")]
-    [InlineData("ack-actor")]
-    [InlineData("save-confirmation")]
-    public async Task AmbiguousPostOrReceiptWriteIsLookupOnlyAndNeverClearsHold(string corruption)
+    [InlineData("lost-response", false)]
+    [InlineData("ack-sha", false)]
+    [InlineData("ack-actor", false)]
+    [InlineData("save-confirmation", false)]
+    [InlineData("lost-response", true)]
+    [InlineData("ack-sha", true)]
+    [InlineData("ack-malformed", true)]
+    [InlineData("save-confirmation", true)]
+    public async Task AmbiguousPostOrReceiptWriteIsLookupOnlyAndNeverClearsHold(string corruption, bool emptyReviewers)
     {
         var store = new Store(Eligible());
-        var handler = new Api { Corruption = corruption };
+        var handler = new Api { Corruption = corruption, EmptyAcknowledgementReviewers = emptyReviewers };
         if (corruption == "save-confirmation") handler.BeforePost = () => store.FailWrites = true;
         using var client = handler.Client();
         var adapter = CreateAdapter(client, store);
@@ -930,6 +983,8 @@ public sealed class GitHubReviewIntegrationTests
     {
         public string? Corruption { get; set; }
         public string ReviewState { get; set; } = "COMMENTED";
+        public bool EmptyAcknowledgementReviewers { get; init; }
+        public HttpStatusCode ReviewPostStatus { get; init; } = HttpStatusCode.Created;
         public bool HasOutput { get; set; }
         public bool PublishOutputAfterPost { get; init; }
         public bool Paginated { get; init; }
@@ -971,7 +1026,8 @@ public sealed class GitHubReviewIntegrationTests
             head = new { @ref = "agent/task", sha = Corruption == "live-sha" || acknowledgement && Corruption == "ack-sha" ? new string('b', 40) : Sha,
                 repo = new { id = Corruption == "repository" ? 2 : 1 } },
             @base = new { @ref = "master", repo = new { id = 1 } },
-            requested_reviewers = new[] { Actor(acknowledgement && Corruption == "ack-actor") }
+            requested_reviewers = acknowledgement && EmptyAcknowledgementReviewers
+                ? Array.Empty<object>() : new[] { Actor(acknowledgement && Corruption == "ack-actor") }
         };
         private object Review(bool baseline) => new
         {
@@ -1011,7 +1067,7 @@ public sealed class GitHubReviewIntegrationTests
                 RequestBody = await request.Content!.ReadAsStringAsync(token);
                 if (Corruption == "lost-response") throw new HttpRequestException("Injected response loss");
                 if (PublishOutputAfterPost) HasOutput = true;
-                response = Pull(true);
+                response = Corruption == "ack-malformed" ? new { number = 17 } : Pull(true);
             }
             else if (path == "/repos/owner/repo") response = new { id = 1, full_name = "owner/repo" };
             else if (path == "/repos/owner/repo/issues/7") response = new { id = 70, number = 7, state = "open",
@@ -1087,7 +1143,9 @@ public sealed class GitHubReviewIntegrationTests
                     user = Actor(Corruption == "comment-actor"), body = "precise comment evidence", path = "source.cs",
                     pull_request_url = Corruption == "comment-url" ? "https://api.github.com/repos/other/repo/pulls/17" : PullUrl } };
             else throw new InvalidOperationException("Unexpected review fixture route");
-            return new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(response), Encoding.UTF8, "application/json") };
+            var status = request.Method == HttpMethod.Post && path.EndsWith("/requested_reviewers", StringComparison.Ordinal)
+                ? ReviewPostStatus : HttpStatusCode.OK;
+            return new(status) { Content = new StringContent(JsonSerializer.Serialize(response), Encoding.UTF8, "application/json") };
         }
     }
 }

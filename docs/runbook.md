@@ -1614,6 +1614,16 @@ contract; custom instructions alone do not provide that API guarantee. Until
 that gap is resolved, a bounded test must explicitly include a human
 `classify-review` step and must not be reported as a fully automatic happy path.
 
+Review submission requires a received `201 Created` response for the exact
+mapped PR, repository and head, after preflight verification of the Copilot bot.
+The response's `requested_reviewers` array can be empty when Copilot has already
+started; this does not invalidate that acknowledgement. A nonempty array must
+still contain the verified reviewer. Persisted confirmation acknowledges only
+the request, not review completion or acceptance. A lost/malformed response or
+failed confirmation write remains uncertain and lookup-only, without another
+POST. Submitted output must independently match the pinned reviewer and SHA,
+be newer than the saved baseline, and await human classification.
+
 The offline integration test
 `OneRepairPoCCompletesCodingCiReviewRepairCiReviewAndStopsForHumanApproval`
 demonstrates one capped repair cycle using mocked GitHub APIs and
