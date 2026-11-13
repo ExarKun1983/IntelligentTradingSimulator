@@ -203,6 +203,59 @@ public class GitHubActionsIngressTests
             "workflow_dispatch", "123", Evidence(permission: "read"), 1, 1, DateTimeOffset.UnixEpoch));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void UncertainReviewAbandonmentRequiresExplicitAcknowledgement(bool acknowledge)
+    {
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 100, full_name = "owner/repo" },
+            sender = new { id = 42, type = "User" },
+            inputs = new { issue = "7", operation = "abandon-uncertain-review",
+                reason = "I accept the possibility the earlier request was sent",
+                review_intent = "RequestReview:7:1:task:7:1:1:1:1",
+                pull = "11", sha = new string('a', 40),
+                acknowledge_possible_prior_submission = acknowledge }
+        });
+        if (acknowledge)
+        {
+            var message = GitHubActionsIngress.PrepareEvent(payload, "workflow_dispatch", "123", Evidence(),
+                1, 1, DateTimeOffset.UnixEpoch);
+            var abandonment = Assert.IsType<AbandonUncertainReview>(message!.Data);
+            Assert.True(abandonment.AcknowledgePossiblePriorSubmission);
+            Assert.Equal("RequestReview:7:1:task:7:1:1:1:1", abandonment.IntentId);
+        }
+        else
+            Assert.Throws<InvalidDataException>(() => GitHubActionsIngress.PrepareEvent(payload,
+                "workflow_dispatch", "123", Evidence(), 1, 1, DateTimeOffset.UnixEpoch));
+    }
+
+    [Fact]
+    public void UncertainReviewAbandonmentAcceptsStringBooleanFromWorkflowEventPayload()
+    {
+        using var document = JsonDocument.Parse("""
+            {
+              "repository": { "id": 100, "full_name": "owner/repo" },
+              "sender": { "id": 42, "type": "User" },
+              "inputs": {
+                "issue": "7",
+                "operation": "abandon-uncertain-review",
+                "reason": "I accept the possibility the earlier request was sent",
+                "review_intent": "RequestReview:7:1:task:7:1:1:1:1",
+                "pull": "11",
+                "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "acknowledge_possible_prior_submission": "true"
+              }
+            }
+            """);
+
+        var message = GitHubActionsIngress.PrepareEvent(document.RootElement, "workflow_dispatch", "123", Evidence(),
+            1, 1, DateTimeOffset.UnixEpoch);
+
+        Assert.True(Assert.IsType<AbandonUncertainReview>(message!.Data).AcknowledgePossiblePriorSubmission);
+    }
+
     [Fact]
     public void ReadyNotificationRunsSharedReducerAndReplayCreatesNoSecondTask()
     {

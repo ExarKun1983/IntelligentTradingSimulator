@@ -1641,11 +1641,58 @@ needs a separate reviewed migration. This change adds no configuration variables
 and does not migrate or remove existing ones.
 
 Before any new live test: reconcile the saved `Unknown` review request holding
-Issue #237 without another POST or erasing history; review/pin the corrected
-definitions; verify the main environment and CI protection; then obtain approval
-for one bounded attempt. The current workflow scope and single-pass restrictions
-remain in force, so adding `request-changes` does not permit repair tasks in the
-old single-pass fixture.
+Issue #237 only through the audited operator action described below; never POST
+the review request again or erase history. After this reviewed change is merged,
+set `ORCHESTRATION_DEFINITION_SHA` to that merge commit before the dashboard or
+manual command. Leave activation false until the exact command and one bounded
+attempt are separately approved. The current workflow scope and single-pass
+restrictions remain in force, so neither recovery nor `request-changes` makes
+the old single-pass fixture eligible for repair-task execution.
+
+#### Audited abandonment of an uncertain Copilot request
+
+Normal and recovery runs share a repository-wide concurrency group with
+`cancel-in-progress: false`. Before the first recovery using this definition,
+disable new normal triggers and wait for every run started from an older,
+unserialized definition to finish. Do not recover while an older executor could
+still send a review POST; merging this workflow does not serialize existing runs.
+
+The request-review endpoint has no idempotency key or request/job ID. An absent
+pending reviewer and absent submitted review do **not** prove that an earlier
+POST never happened. For a state held only by an ambiguous request, an authorized
+operator may choose workflow operation `abandon-uncertain-review` only after
+the exact current PR/head, candidate task evidence, all requested-reviewer pages
+and review history are re-read. Pagination failures
+or capacity limits retain the hold. The operation refuses changed/closed refs,
+any pending Copilot request, any Copilot review history, a confirmed request
+boundary, or other unfinished work. It performs no review POST.
+
+The dispatch must provide the canonical review-intent ID, current PR and SHA,
+an audit reason, and `acknowledge_possible_prior_submission=true`. It records
+the read evidence, operator identity, time, reason, and explicit risk acceptance
+in canonical state; marks only that uncertain effect failed with
+`OperatorAbandonedUnknownReview`; leaves the Issue blocked and admission released.
+This is an explicit choice to abandon a request whose past delivery remains
+unknown, not proof it was never sent. It does not reactivate or launch work.
+Starting a new coding round requires a separate authorized `reactivate` command,
+which is a distinct operator decision and task identity. If the read finds any
+pending request/review or cannot verify the exact identities, stop and retain the
+hold. Replaying the same abandonment command is idempotent and never retries the
+review. This one recovery-only dispatch is allowed while
+`ORCHESTRATION_ACTIVATION_APPROVED=false`; it does not set activation or permit
+task execution. Environment protection, the trusted workflow pin, and explicit
+operator dispatch still apply. The CLI classifies the recovery command before
+loading activation-backed pipeline gates; settings and the host require a
+separate recovery approval based on verified credentials, trusted definition and
+cost controls. This approval never enables task launch or automatic wake-ups.
+Normal execution and `reactivate` still require activation and pipeline approval.
+
+For Issue #237, the canonical intent must be copied from its saved state, not
+guessed from a run title. After the new code is reviewed/merged and pinned, the
+read-only dashboard must show the expected definition pin. Keep all other
+activation and status approvals unchanged; the abandonment command itself is
+the separately approved recovery action. Do not run it as part of ordinary
+`agent:ready` processing.
 
 The replacement orchestration component is separate from the trading application:
 `IntelligentTradingSimulator.Orchestration`. Issue #213's approved reduced-scope
@@ -2389,7 +2436,7 @@ entitlement, cost controls or repository protection must leave activation blocke
    | `ORCHESTRATION_ACTOR_ID` | Numeric PAT-owner ID from authenticated `/user` in step 2; **not** the bot ID. |
    | `ORCHESTRATION_BASE_BRANCH` | `master`, verified from repository `default_branch`. |
    | `ORCHESTRATION_WORKFLOW_ID` | Numeric ID for `agent-state-machine.yml` from workflow GET. |
-   | `ORCHESTRATION_DEFINITION_SHA` | Reviewed full commit SHA from step 5; must equal the triggering run's definition/head revision. Default-branch drift fails closed; review/update the pin when the branch changes. |
+   | `ORCHESTRATION_DEFINITION_SHA` | Reviewed full commit SHA from step 5; must equal the triggering run's definition/head revision. Update after every merged change to the trusted workflow/code, then verify the read-only dashboard before any live command. A mismatch fails closed; never set it to an unreviewed branch SHA. |
    | `ORCHESTRATION_CI_WORKFLOW_ID` | Numeric ID for `agent-managed-ci.yml` from workflow GET. |
    | `ORCHESTRATION_CI_REF` | Protected `refs/tags/agent-managed-ci-v1` from step 5. |
    | `ORCHESTRATION_CI_DEFINITION_SHA` | Full resolved CI tag commit SHA from step 5. |

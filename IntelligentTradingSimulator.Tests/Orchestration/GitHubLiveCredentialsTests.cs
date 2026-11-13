@@ -92,6 +92,21 @@ public sealed class GitHubLiveCredentialsTests
     }
 
     [Fact]
+    public void RecoveryWorkflowRequiresExplicitAcknowledgementForUncertainReviewAbandonment()
+    {
+        var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-state-machine.yml"));
+        Assert.Contains("abandon-uncertain-review", workflow);
+        Assert.Contains("review_intent:", workflow);
+        Assert.Contains("type: boolean", workflow);
+        Assert.Contains("default: false", workflow);
+        Assert.Contains("acknowledge_possible_prior_submission", workflow);
+        Assert.Contains("Exact canonical uncertain RequestReview intent; never a new launch", workflow);
+        Assert.Contains("github.event.inputs.operation == 'abandon-uncertain-review'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true' ||", workflow);
+        Assert.Contains("concurrency:\n  group: agent-state-machine-${{ github.repository_id }}\n  cancel-in-progress: false", workflow);
+    }
+
+    [Fact]
     public void GateDiagnosticsAreManualAndDoNotExposeLiveCapabilities()
     {
         var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-gate-diagnostics.yml"));
@@ -256,6 +271,56 @@ public sealed class GitHubLiveCredentialsTests
 
         Assert.Throws<InvalidOperationException>(() =>
             GitHubLiveSettings.Read(name => values.GetValueOrDefault(name)));
+    }
+
+    [Theory]
+    [InlineData("abandon-uncertain-review", true)]
+    [InlineData("pause", true)]
+    [InlineData("resolve-task", true)]
+    [InlineData("reactivate", false)]
+    [InlineData("resume", false)]
+    [InlineData("request-changes", false)]
+    public void DisabledActivationAllowsOnlyRecoverySettingsWithoutEnablingAnyPipelineCapability(
+        string operation, bool recoveryOnly)
+    {
+        var values = LiveSettingsValues();
+        foreach (var name in new[] { "ORCHESTRATION_ACTIVATION_APPROVED",
+            "ORCHESTRATION_TASK_ENTITLEMENT_VERIFIED", "ORCHESTRATION_REVIEW_POLICY_VERIFIED",
+            "ORCHESTRATION_TRUSTED_CI_VERIFIED", "ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED",
+            "ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED" })
+            values[name] = "false";
+        var payload = JsonSerializer.SerializeToElement(new { inputs = new { operation } });
+        Assert.Equal(recoveryOnly, GitHubLiveCommand.IsRecoveryOnlyCommand("workflow_dispatch", payload));
+        Assert.False(GitHubLiveCommand.IsRecoveryOnlyCommand("issues", payload));
+        if (!recoveryOnly)
+        {
+            Assert.Throws<InvalidOperationException>(() =>
+                GitHubLiveSettings.Read(values.GetValueOrDefault, recoveryOnly));
+            return;
+        }
+
+        var settings = GitHubLiveSettings.Read(values.GetValueOrDefault, recoveryOnly);
+        Assert.True(settings.Recovery.AllowsRecovery);
+        Assert.False(settings.Tasks.AllowsTasks);
+        Assert.False(settings.Wake.AllowsWake);
+        Assert.False(settings.Review.AllowsReviews);
+        Assert.False(settings.Ci.AllowsCi);
+        Assert.False(settings.Status.AllowsPublication);
+        Assert.Throws<InvalidOperationException>(settings.ValidatePipelinePrerequisites);
+    }
+
+    [Theory]
+    [InlineData("ORCHESTRATION_USER_TOKEN_VERIFIED")]
+    [InlineData("ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED")]
+    [InlineData("ORCHESTRATION_TRUSTED_DEFINITION_VERIFIED")]
+    [InlineData("ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED")]
+    public void RecoverySettingsStillRequireCredentialDefinitionAndCostVerification(string name)
+    {
+        var values = LiveSettingsValues();
+        values["ORCHESTRATION_ACTIVATION_APPROVED"] = "false";
+        values[name] = "false";
+        Assert.Throws<InvalidOperationException>(() =>
+            GitHubLiveSettings.Read(values.GetValueOrDefault, recoveryOnly: true));
     }
 
     private static string FindRoot()

@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace IntelligentTradingSimulator.Orchestration;
 
-public enum NotificationKind { Ignore, Readiness, WithdrawReadiness, Projection, Closed, Reopened, Resume, Pause, Reactivate, ResolveTask, ClassifyReview, RequestChanges }
+public enum NotificationKind { Ignore, Readiness, WithdrawReadiness, Projection, Closed, Reopened, Resume, Pause, Reactivate, ResolveTask, ClassifyReview, RequestChanges, AbandonUncertainReview }
 
 public sealed record ActionsNotification(
     NotificationKind Kind, string SourceId, long RepositoryId, long IssueId, int IssueNumber,
@@ -48,13 +48,15 @@ public static class GitHubActionsIngress
                 "", notification.Reason!),
             NotificationKind.ClassifyReview => ReadClassification(payload.GetProperty("inputs"), notification.Reason!),
             NotificationKind.RequestChanges => ReadChanges(payload.GetProperty("inputs"), notification.Reason!),
+            NotificationKind.AbandonUncertainReview => ReadReviewAbandonment(payload.GetProperty("inputs"), notification.Reason!),
             _ => throw new InvalidDataException("Unsupported command.")
         };
         return new(notification.SourceId, evidence.Repository, notification.IssueNumber,
             repositoryGeneration, issueGeneration,
             new Actor(notification.ActorId.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ActorKind.Human, notification.ActorId,
-                Type: notification.Kind is NotificationKind.ResolveTask or NotificationKind.ClassifyReview or NotificationKind.RequestChanges ? evidence.ActorType : null),
+                Type: notification.Kind is NotificationKind.ResolveTask or NotificationKind.ClassifyReview or
+                    NotificationKind.RequestChanges or NotificationKind.AbandonUncertainReview ? evidence.ActorType : null),
             occurredAt, data);
     }
 
@@ -103,15 +105,27 @@ public static class GitHubActionsIngress
                 "resolve-task" => NotificationKind.ResolveTask,
                 "classify-review" => NotificationKind.ClassifyReview,
                 "request-changes" => NotificationKind.RequestChanges,
+                "abandon-uncertain-review" => NotificationKind.AbandonUncertainReview,
                 _ => throw new InvalidDataException("Only guarded recovery operations are supported.")
             };
             var reason = inputs.TryGetProperty("reason", out var value) ? value.GetString() : null;
-            if (kind is NotificationKind.Pause or NotificationKind.Reactivate or NotificationKind.ResolveTask or NotificationKind.ClassifyReview or NotificationKind.RequestChanges &&
+            if ((kind is NotificationKind.Pause or NotificationKind.Reactivate or NotificationKind.ResolveTask or
+                NotificationKind.ClassifyReview or NotificationKind.RequestChanges or NotificationKind.AbandonUncertainReview) &&
                 string.IsNullOrWhiteSpace(reason))
                 throw new InvalidDataException("Pause/reactivation requires a reason.");
             if (kind == NotificationKind.ResolveTask &&
                 (!inputs.TryGetProperty("task", out var task) || string.IsNullOrWhiteSpace(task.GetString()) || task.GetString()!.Length > 256))
                 throw new InvalidDataException("Terminal task resolution requires the canonical task identity.");
+            if (kind == NotificationKind.AbandonUncertainReview &&
+                (!inputs.TryGetProperty("review_intent", out var intent) ||
+                 string.IsNullOrWhiteSpace(intent.GetString()) || intent.GetString()!.Length > 256 ||
+                 !inputs.TryGetProperty("pull", out var pull) || !int.TryParse(pull.GetString(), out var pullNumber) ||
+                 pullNumber <= 0 ||
+                 !inputs.TryGetProperty("sha", out var sha) ||
+                 sha.GetString() is not { Length: 40 } reviewedSha || !reviewedSha.All(Uri.IsHexDigit) ||
+                 !inputs.TryGetProperty("acknowledge_possible_prior_submission", out var acknowledge) ||
+                 !IsExplicitTrue(acknowledge)))
+                throw new InvalidDataException("Review abandonment requires its exact intent and explicit ambiguity acknowledgement.");
             return Result(kind, reason: reason);
         }
 
@@ -150,6 +164,16 @@ public static class GitHubActionsIngress
             int.Parse(inputs.GetProperty("pull").GetString()!, System.Globalization.CultureInfo.InvariantCulture),
             inputs.GetProperty("sha").GetString() ?? throw new InvalidDataException("Missing head SHA."),
             reason);
+
+    private static AbandonUncertainReview ReadReviewAbandonment(JsonElement inputs, string reason) =>
+        new(inputs.GetProperty("review_intent").GetString()!,
+            int.Parse(inputs.GetProperty("pull").GetString()!, System.Globalization.CultureInfo.InvariantCulture),
+            inputs.GetProperty("sha").GetString() ?? throw new InvalidDataException("Missing head SHA."),
+            reason, IsExplicitTrue(inputs.GetProperty("acknowledge_possible_prior_submission")));
+
+    private static bool IsExplicitTrue(JsonElement value) =>
+        value.ValueKind == JsonValueKind.True ||
+        value.ValueKind == JsonValueKind.String && value.GetString() == "true";
 
     private static HumanClassification ReadClassification(JsonElement inputs, string reason)
     {

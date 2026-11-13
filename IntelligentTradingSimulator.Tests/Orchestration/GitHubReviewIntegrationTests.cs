@@ -415,6 +415,63 @@ public sealed class GitHubReviewIntegrationTests
         Assert.Equal(0, handler.Posts);
     }
 
+    [Fact]
+    public async Task AbandonmentReadEvidenceRequiresExactLiveHeadAndNoCopilotRequestOrReview()
+    {
+        var state = UncertainReview();
+        var handler = new Api { Corruption = "no-reviews" };
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, new Store(state));
+        var evidence = await adapter.ReadAbandonmentEvidenceAsync(state, state.Issues[7], "review", Sha, Now, default);
+        Assert.Equal("review", evidence.IntentId);
+        Assert.Equal(17, evidence.PullRequest);
+        Assert.Equal(Sha, evidence.HeadSha);
+        Assert.False(evidence.ReviewerRequestPending);
+        Assert.Empty(evidence.ReviewerReviewIds);
+        Assert.Equal(0, handler.Posts);
+        Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
+    }
+
+    [Theory]
+    [InlineData("existing-request")]
+    [InlineData("abandon-review")]
+    [InlineData("live-sha")]
+    [InlineData("closed")]
+    [InlineData("repository")]
+    public async Task AbandonmentEvidenceRefusesPendingReviewHistoryOrChangedPull(string corruption)
+    {
+        var state = UncertainReview();
+        var handler = new Api { Corruption = corruption };
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, new Store(state));
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            adapter.ReadAbandonmentEvidenceAsync(state, state.Issues[7], "review", Sha, Now, default));
+        Assert.Equal(0, handler.Posts);
+        Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
+    }
+
+    [Theory]
+    [InlineData("empty-pending-identity")]
+    [InlineData("node-pending-identity")]
+    [InlineData("empty-history-identity")]
+    [InlineData("node-history-identity")]
+    [InlineData("whitespace-pending-identity")]
+    [InlineData("whitespace-history-identity")]
+    [InlineData("malformed-pending-identity")]
+    [InlineData("malformed-history-identity")]
+    public async Task AbandonmentRejectsIncompleteOrContradictoryReviewerIdentities(string corruption)
+    {
+        var state = UncertainReview();
+        var handler = new Api { Corruption = corruption };
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, new Store(state));
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            adapter.ReadAbandonmentEvidenceAsync(state, state.Issues[7], "review", Sha, Now, default));
+        Assert.Equal(0, handler.Posts);
+        Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
+    }
+
     [Theory]
     [InlineData("COMMENTED")]
     [InlineData("APPROVED")]
@@ -489,6 +546,277 @@ public sealed class GitHubReviewIntegrationTests
         Assert.Equal(1, handler.Posts);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task HostAbandonsUnknownReviewWithFreshEvidenceWithoutLaunchingOrAdmittingWork(bool activation)
+    {
+        var store = new Store(UncertainReview());
+        store.State.Issues[8] = new() { Number = 8, Ready = true, Phase = Phase.READY, ReadyAt = Now };
+        using var handler = new Api { Corruption = "no-reviews" };
+        using var client = handler.Client();
+
+        var result = await RunAbandonment(client, store, activation: activation);
+
+        Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
+        Assert.Equal(0, result.Iterations);
+        Assert.Equal(DeliveryStatus.Failed, store.State.Outbox["review"].Status);
+        Assert.Equal(EffectFailureCode.OperatorAbandonedUnknownReview, store.State.Outbox["review"].FailureCode);
+        var issue = store.State.Issues[7];
+        Assert.Equal(Phase.BLOCKED, issue.Phase);
+        Assert.True(issue.ReactivationRequired);
+        Assert.False(issue.ActiveAuthorized);
+        Assert.Null(store.State.AdmittedIssue);
+        var resolution = Assert.IsType<ReviewOperatorResolution>(issue.Review!.OperatorResolution);
+        Assert.Equal(Now, resolution.Evidence.ObservedAt);
+        Assert.Equal("review", resolution.Evidence.IntentId);
+        Assert.Equal(55, resolution.Author.Id);
+        Assert.Empty(store.State.Issues[8].Tasks);
+        Assert.Single(issue.Tasks);
+        Assert.Contains(handler.Requests, request => request.Contains("/tasks/remote-task"));
+        Assert.Contains(handler.Requests, request => request.Contains("/reviews?"));
+        Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
+    }
+
+    [Fact]
+    public async Task SerializedRecoveryWaitsForExecutorPausedImmediatelyBeforeReviewPost()
+    {
+        var store = new Store(Eligible());
+        var atPost = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePost = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var handler = new Api
+        {
+            Corruption = "no-reviews",
+            BeforePostAsync = async token =>
+            {
+                atPost.TrySetResult();
+                await releasePost.Task.WaitAsync(token);
+            }
+        };
+        using var client = handler.Client();
+        using var slot = new SemaphoreSlim(1);
+        // Model the shared, non-cancelling Actions concurrency slot.
+        async Task Execute()
+        {
+            await slot.WaitAsync();
+            try
+            {
+                var outcome = await CreateAdapter(client, store).ExecuteAsync(store.State.Outbox["review"], default);
+                store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
+            }
+            finally { slot.Release(); }
+        }
+        async Task Recover()
+        {
+            await slot.WaitAsync();
+            try { await RunAbandonment(client, store); }
+            finally { slot.Release(); }
+        }
+
+        var execution = Execute();
+        await atPost.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var recovery = Recover();
+        try
+        {
+            Assert.False(recovery.IsCompleted);
+            Assert.Equal(0, handler.Posts);
+            Assert.Equal(DeliveryStatus.Executing, store.State.Outbox["review"].Status);
+            Assert.Equal(7, store.State.AdmittedIssue);
+            Assert.Null(store.State.Issues[7].Review!.OperatorResolution);
+        }
+        finally { releasePost.TrySetResult(); }
+        await execution;
+        await Assert.ThrowsAsync<InvalidDataException>(() => recovery);
+        Assert.Equal(1, handler.Posts);
+        Assert.Equal(DeliveryStatus.Succeeded, store.State.Outbox["review"].Status);
+        Assert.Null(store.State.Issues[7].Review!.OperatorResolution);
+        Assert.Equal(7, store.State.AdmittedIssue);
+    }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("error")]
+    [InlineData("overflow")]
+    public async Task AbandonmentRejectsPendingReviewerOnLaterPageOrIncompletePagination(string pagination)
+    {
+        var store = new Store(UncertainReview());
+        var original = StateJson.Serialize(store.State);
+        using var handler = new Api { Corruption = "no-reviews", RequestedReviewerPagination = pagination };
+        using var client = handler.Client();
+
+        await Assert.ThrowsAnyAsync<Exception>(() => RunAbandonment(client, store));
+
+        Assert.Equal(original, StateJson.Serialize(store.State));
+        Assert.Contains(handler.Requests, request => request.Contains("requested_reviewers?per_page=100&page=2"));
+        Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
+    }
+
+    [Fact]
+    public async Task AbandonmentAcceptsEmptyEvidenceOnlyAfterLastRequestedReviewerPage()
+    {
+        var store = new Store(UncertainReview());
+        using var handler = new Api { Corruption = "no-reviews", RequestedReviewerPagination = "empty" };
+        using var client = handler.Client();
+
+        await RunAbandonment(client, store);
+
+        Assert.Contains(handler.Requests, request => request.Contains("requested_reviewers?per_page=100&page=2"));
+        Assert.Equal(DeliveryStatus.Failed, store.State.Outbox["review"].Status);
+        Assert.NotNull(store.State.Issues[7].Review!.OperatorResolution);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task HostRestoresCommittedAbandonmentAfterReactivationWithoutChangingNewGeneration(
+        bool statusEnabled, bool blocked)
+    {
+        var store = new Store(UncertainReview());
+        using var handler = new Api { Corruption = "no-reviews" };
+        using var client = handler.Client();
+        await RunAbandonment(client, store);
+        store.State = new OrchestrationReducer(new Allow()).Apply(store.State,
+            new("reactivate", "owner/repo", 7, 1, 1, new("maintainer", ActorKind.Human, 55),
+                Now.AddMinutes(1), new Reactivate("Start a separate generation.")));
+        Assert.Equal(2, store.State.Issues[7].Generation);
+        if (blocked)
+        {
+            store.State.Issues[7].Phase = Phase.BLOCKED;
+            store.State.Issues[7].ReactivationRequired = true;
+            store.State.Issues[7].HoldReason = "New generation is blocked.";
+        }
+        var original = StateJson.Serialize(store.State);
+        handler.Requests.Clear();
+        handler.Corruption = "existing-request";
+
+        var result = await RunAbandonment(client, store, statusEnabled: statusEnabled);
+
+        Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
+        Assert.Equal(original, StateJson.Serialize(store.State));
+        Assert.DoesNotContain(handler.Requests, request => request.Contains("/tasks/") || request.Contains("/pulls/"));
+        Assert.DoesNotContain(handler.Requests, request => request.Contains("/statuses"));
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            RunAbandonment(client, store, reason: "Changed operator decision", statusEnabled: statusEnabled));
+        Assert.Equal(original, StateJson.Serialize(store.State));
+    }
+
+    [Fact]
+    public async Task SameGenerationAbandonmentReplayStillAttemptsRequiredStatusRevocation()
+    {
+        var store = new Store(UncertainReview());
+        using var handler = new Api { Corruption = "no-reviews" };
+        using var client = handler.Client();
+        await RunAbandonment(client, store);
+        handler.Requests.Clear();
+
+        var result = await RunAbandonment(client, store, statusEnabled: true);
+
+        Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
+        var status = Assert.Single(store.State.Outbox.Values, item => item.Kind == EffectKind.PublishRequiredStatus);
+        Assert.Equal("error", status.RequiredStatus!.State);
+        Assert.Equal(DeliveryStatus.Succeeded, status.Status);
+        Assert.Equal(1, handler.StatusPosts);
+        Assert.Contains(handler.Requests, request => request.Contains("/users/status-publisher"));
+        await RunAbandonment(client, store, statusEnabled: true);
+        Assert.Equal(1, handler.StatusPosts);
+    }
+
+    [Fact]
+    public async Task HostRestoresCommittedAbandonmentOnReplayWithoutRepeatingEvidenceReads()
+    {
+        var store = new Store(UncertainReview());
+        store.AfterSave = () =>
+        {
+            store.AfterSave = null;
+            throw new IOException("Lost response after committed abandonment.");
+        };
+        using var handler = new Api { Corruption = "no-reviews" };
+        using var client = handler.Client();
+        await Assert.ThrowsAsync<IOException>(() => RunAbandonment(client, store));
+        var persisted = StateJson.Serialize(store.State);
+        handler.Requests.Clear();
+        handler.Corruption = "existing-request";
+
+        var result = await RunAbandonment(client, store);
+
+        Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
+        Assert.Equal(persisted, StateJson.Serialize(store.State));
+        Assert.DoesNotContain(handler.Requests, request =>
+            request.Contains("/tasks/") || request.Contains("/pulls/"));
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            RunAbandonment(client, store, reason: "Changed operator decision"));
+        Assert.Equal(persisted, StateJson.Serialize(store.State));
+        Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
+    }
+
+    [Theory]
+    [InlineData("existing-request")]
+    [InlineData("abandon-review")]
+    [InlineData("live-sha")]
+    [InlineData("read-permission")]
+    [InlineData("definition-sha")]
+    public async Task HostRejectsUnsafeAbandonmentWithoutCanonicalMutation(string corruption)
+    {
+        var store = new Store(UncertainReview());
+        var original = StateJson.Serialize(store.State);
+        using var handler = new Api { Corruption = corruption };
+        using var client = handler.Client();
+        await Assert.ThrowsAnyAsync<Exception>(() => RunAbandonment(client, store));
+        Assert.Equal(original, StateJson.Serialize(store.State));
+        Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task RecoveryApprovalCannotEnableNormalHostExecutionOrBypassMissingRecoveryApproval(
+        bool commandOnly, bool missingApproval)
+    {
+        var store = new Store(UncertainReview());
+        using var handler = new Api { Corruption = "no-reviews" };
+        using var client = handler.Client();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            RunAbandonment(client, store, commandOnly: commandOnly, missingApproval: missingApproval));
+        Assert.Equal(DeliveryStatus.Unknown, store.State.Outbox["review"].Status);
+        Assert.Null(store.State.Issues[7].Review!.OperatorResolution);
+        Assert.DoesNotContain(handler.Requests, request => request.Contains("/tasks/"));
+    }
+
+    [Fact]
+    public async Task RecoveryOnlyHostRejectsReactivationEvenWithVerifiedRecoveryApproval()
+    {
+        var store = new Store(UncertainReview());
+        using var handler = new Api { Corruption = "no-reviews" };
+        using var client = handler.Client();
+        var original = StateJson.Serialize(store.State);
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            RunAbandonment(client, store, operation: "reactivate"));
+        Assert.Equal(original, StateJson.Serialize(store.State));
+    }
+
+    private static async Task<WorkerResult> RunAbandonment(HttpClient client, Store store, bool activation = false,
+        string reason = "Accept possible prior delivery", bool commandOnly = true, bool missingApproval = false,
+        string operation = "abandon-uncertain-review", bool statusEnabled = false)
+    {
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            sender = new { id = 55, login = "maintainer", type = "User" },
+            inputs = new { issue = "7", operation, reason, review_intent = "review",
+                pull = "17", sha = Sha, acknowledge_possible_prior_submission = "true" }
+        });
+        var api = new GitHubRepositoryApi(client, "owner/repo", 1);
+        var occurredAt = await GitHubLiveCommand.VerifyCommandDefinitionAsync(api,
+            new(10, Sha), "44", "workflow_dispatch");
+        return await new GitHubOrchestrationHost(api, store, new Clock()).ReconcileAsync(payload,
+            "workflow_dispatch", "44", 1, 1, occurredAt, [], 99, "master", 55,
+            new(activation, true, true, true), commandOnly: commandOnly,
+            statusPublisher: statusEnabled ? new(99, "status-publisher", "publisher-node", "Bot") : null,
+            statusApproval: statusEnabled ? new(true, true, true, true, true) : null,
+            recoveryApproval: missingApproval ? null : new(true, true, true));
+    }
+
     private static RepositoryState Eligible()
     {
         // Independent completed-task/exact-SHA CI fixture, not provider proof or live orchestration.
@@ -510,6 +838,21 @@ public sealed class GitHubReviewIntegrationTests
         state.Outbox["review"] = new() { Id = "review", Digest = "fixture", IssueNumber = 7,
             Kind = EffectKind.RequestReview, Status = DeliveryStatus.Executing, Sha = Sha,
             TaskId = "task", Round = 1, Generation = 1 };
+        return state;
+    }
+
+    private static RepositoryState UncertainReview()
+    {
+        var state = Eligible();
+        var issue = state.Issues[7];
+        issue.Phase = Phase.BLOCKED;
+        issue.ActiveAuthorized = false;
+        issue.ReactivationRequired = true;
+        issue.HoldReason = "Effect outcome is ambiguous.";
+        state.Outbox["review"].Status = DeliveryStatus.Unknown;
+        state.Outbox["launch"] = new() { Id = "launch", IssueNumber = 7, Generation = 1,
+            TaskId = "task", Round = 1, Kind = EffectKind.LaunchTask, Status = DeliveryStatus.Succeeded,
+            ExternalId = "remote-task" };
         return state;
     }
 
@@ -592,14 +935,29 @@ public sealed class GitHubReviewIntegrationTests
         public bool Paginated { get; init; }
         public bool FailSecondPage { get; set; }
         public bool ConcurrentPreflight { get; init; }
+        public string? RequestedReviewerPagination { get; init; }
+        public Func<CancellationToken, Task>? BeforePostAsync { get; init; }
         private readonly TaskCompletionSource bothPreflights = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int preflightReads;
         public int Posts { get; private set; }
+        public int StatusPosts { get; private set; }
+        private object? createdStatus;
         public List<string> Requests { get; } = [];
         public string RequestBody { get; private set; } = "";
         public Action? BeforePost { get; set; }
         public HttpClient Client() => new(this) { BaseAddress = new("https://api.github.com/") };
         public string ReviewerLogin { get; init; } = "Copilot";
+        private object AbandonmentActor => Corruption switch
+        {
+            "empty-pending-identity" or "empty-history-identity" => new { },
+            "node-pending-identity" or "node-history-identity" => new
+                { id = 66, node_id = "BOT_kgDOCnlnWA", login = "impostor", type = "Bot" },
+            "whitespace-pending-identity" or "whitespace-history-identity" => new
+                { id = 66, node_id = " \t ", login = "maintainer", type = "User" },
+            "malformed-pending-identity" or "malformed-history-identity" => new
+                { id = "66", node_id = "USER_node", login = "maintainer", type = "User" },
+            _ => Actor()
+        };
         private object Actor(bool bad = false) => new
         {
             id = bad || Corruption == "bot-id" ? 66 : 175728472,
@@ -610,9 +968,9 @@ public sealed class GitHubReviewIntegrationTests
         private object Pull(bool acknowledgement = false) => new
         {
             number = 17, state = Corruption == "closed" ? "closed" : "open",
-            head = new { sha = Corruption == "live-sha" || acknowledgement && Corruption == "ack-sha" ? new string('b', 40) : Sha,
+            head = new { @ref = "agent/task", sha = Corruption == "live-sha" || acknowledgement && Corruption == "ack-sha" ? new string('b', 40) : Sha,
                 repo = new { id = Corruption == "repository" ? 2 : 1 } },
-            @base = new { repo = new { id = 1 } },
+            @base = new { @ref = "master", repo = new { id = 1 } },
             requested_reviewers = new[] { Actor(acknowledgement && Corruption == "ack-actor") }
         };
         private object Review(bool baseline) => new
@@ -630,10 +988,25 @@ public sealed class GitHubReviewIntegrationTests
             var path = request.RequestUri!.AbsolutePath;
             Requests.Add(request.Method + " " + request.RequestUri!.PathAndQuery);
             object response;
-            if (request.Method == HttpMethod.Post)
+            if (request.Method == HttpMethod.Post && path == $"/repos/owner/repo/statuses/{Sha}")
+            {
+                StatusPosts++;
+                using var content = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
+                var body = content.RootElement;
+                response = createdStatus = new
+                {
+                    id = 100, url = "https://api.github.com/repos/owner/repo/statuses/100",
+                    creator = new { id = 99, login = "status-publisher", node_id = "publisher-node", type = "Bot" },
+                    state = body.GetProperty("state").GetString(), context = body.GetProperty("context").GetString(),
+                    description = body.GetProperty("description").GetString(),
+                    target_url = body.GetProperty("target_url").GetString(), created_at = Now
+                };
+            }
+            else if (request.Method == HttpMethod.Post)
             {
                 Assert.Equal("/repos/owner/repo/pulls/17/requested_reviewers", path);
                 BeforePost?.Invoke();
+                if (BeforePostAsync is not null) await BeforePostAsync(token);
                 Posts++;
                 RequestBody = await request.Content!.ReadAsStringAsync(token);
                 if (Corruption == "lost-response") throw new HttpRequestException("Injected response loss");
@@ -641,11 +1014,57 @@ public sealed class GitHubReviewIntegrationTests
                 response = Pull(true);
             }
             else if (path == "/repos/owner/repo") response = new { id = 1, full_name = "owner/repo" };
-            else if (path == "/repos/owner/repo/issues/7") response = new { number = 7, state = "open" };
+            else if (path == "/repos/owner/repo/issues/7") response = new { id = 70, number = 7, state = "open",
+                labels = new[] { new { name = "agent:blocked" } } };
+            else if (path == "/repos/owner/repo/actions/runs/44") response = new
+            {
+                id = 44, workflow_id = 10, path = ".github/workflows/agent-state-machine.yml",
+                @event = "workflow_dispatch", actor = new { id = 55 }, repository = new { id = 1 },
+                head_sha = Corruption == "definition-sha" ? new string('b', 40) : Sha,
+                created_at = Now.AddDays(-1)
+            };
+            else if (path == "/users/maintainer") response = new { id = 55, type = "User" };
+            else if (path == "/repos/owner/repo/collaborators/maintainer/permission")
+                response = new { permission = Corruption == "read-permission" ? "read" : "write", user = new { id = 55 } };
+            else if (path == "/agents/repos/owner/repo/tasks/remote-task") response = new
+            {
+                id = "remote-task", repository = new { id = 1 }, creator = new { id = 55 },
+                state = "completed", session_count = 1,
+                sessions = new[] { new { id = "session", state = "completed", task_id = "remote-task",
+                    repository = new { id = 1 } } },
+                artifacts = new[] { new { provider = "github", type = "branch",
+                    data = new { head_ref = "agent/task", base_ref = "master" } } }
+            };
+            else if (path == "/repos/owner/repo/pulls") response = new[] { new { number = 17 } };
             else if (path == "/repos/owner/repo/pulls/17") response = Pull();
+            else if (path == "/users/status-publisher")
+                response = new { id = 99, login = "status-publisher", node_id = "publisher-node", type = "Bot" };
+            else if (path == $"/repos/owner/repo/commits/{Sha}/status")
+                response = new { sha = Sha, repository = new { id = 1, full_name = "owner/repo" } };
+            else if (path == $"/repos/owner/repo/commits/{Sha}/statuses")
+                response = createdStatus is null ? Array.Empty<object>() : new[] { createdStatus };
             else if (path.StartsWith("/users/")) response = Actor();
             else if (path.EndsWith("/requested_reviewers"))
-                response = new { users = Corruption == "existing-request" ? new[] { Actor() } : [], teams = Array.Empty<object>() };
+            {
+                var paginated = request.RequestUri!.Query.Contains("per_page=100");
+                var firstPage = request.RequestUri.Query.EndsWith("&page=1", StringComparison.Ordinal);
+                if (paginated && RequestedReviewerPagination is not null)
+                {
+                    if (!firstPage && RequestedReviewerPagination == "error")
+                        throw new HttpRequestException("Injected requested-reviewer page failure");
+                    var users = firstPage || RequestedReviewerPagination == "overflow"
+                        ? Enumerable.Range(1, 100).Select(id => (object)new
+                            { id, node_id = $"USER_{id}", login = $"reviewer-{id}", type = "User" }).ToArray()
+                        : RequestedReviewerPagination == "copilot" ? [Actor()] : Array.Empty<object>();
+                    response = new { users, teams = Array.Empty<object>() };
+                }
+                else
+                response = new { users =
+                    Corruption is "existing-request" or "abandon-pending" ? new object[] { Actor() } :
+                    Corruption is "empty-pending-identity" or "node-pending-identity" or
+                        "whitespace-pending-identity" or "malformed-pending-identity"
+                        ? new object[] { AbandonmentActor } : [], teams = Array.Empty<object>() };
+            }
             else if (path.EndsWith("/reviews"))
             {
                 if (ConcurrentPreflight)
@@ -657,7 +1076,10 @@ public sealed class GitHubReviewIntegrationTests
                 if (secondPage && FailSecondPage) throw new HttpRequestException("Injected second-page lookup failure");
                 if (Paginated && !secondPage)
                     response = Enumerable.Range(1, 100).Select(id => new { id, state = "COMMENTED", user = Actor() }).ToArray();
-                else response = Paginated ? HasOutput ? new[] { Review(false) } : [] :
+                else if (Corruption is "empty-history-identity" or "node-history-identity" or
+                    "whitespace-history-identity" or "malformed-history-identity")
+                    response = new[] { new { id = 101, state = "COMMENTED", user = AbandonmentActor } };
+                else response = Corruption == "no-reviews" ? [] : Paginated ? HasOutput ? new[] { Review(false) } : [] :
                     HasOutput ? new[] { Review(true), Review(false) } : new[] { Review(true) };
             }
             else if (path.EndsWith("/comments"))

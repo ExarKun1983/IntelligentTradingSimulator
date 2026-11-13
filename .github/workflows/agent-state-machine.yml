@@ -19,13 +19,13 @@ on:
         required: true
         type: string
       operation:
-        description: Resume never clears a hold; reactivation requires a reason
+        description: Resume never clears a hold; uncertain review abandonment needs explicit risk acknowledgement
         required: true
         default: resume
         type: choice
-        options: [resume, pause, reactivate, resolve-task, classify-review, request-changes]
+        options: [resume, pause, reactivate, resolve-task, classify-review, request-changes, abandon-uncertain-review]
       reason:
-        description: Required for pause, reactivation, classification or requested changes
+        description: Required for pause, reactivation, classification, requested changes or review abandonment
         required: false
         type: string
       repository_generation:
@@ -40,6 +40,15 @@ on:
         description: Canonical task ID for lookup-only terminal resolution
         required: false
         type: string
+      review_intent:
+        description: Exact canonical uncertain RequestReview intent; never a new launch
+        required: false
+        type: string
+      acknowledge_possible_prior_submission:
+        description: Explicitly accept that an earlier Copilot review request may have been sent
+        required: true
+        default: false
+        type: boolean
       handoff:
         description: Exact review handoff ID for classification or requested changes
         required: false
@@ -70,6 +79,10 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: agent-state-machine-${{ github.repository_id }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   issues: write
@@ -80,7 +93,8 @@ permissions:
 jobs:
   reconcile:
     # Temporary opt-in for the single reviewed test Issue; not production cutover.
-    if: ${{ github.workflow_ref == format('{0}/.github/workflows/agent-state-machine.yml@refs/heads/master', github.repository) && vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true' && vars.ORCHESTRATION_TEST_ISSUE == '237' && vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '227' && vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1' }}
+    # Audited abandonment is recovery-only and separately operator-dispatched; it never enables task execution.
+    if: ${{ github.workflow_ref == format('{0}/.github/workflows/agent-state-machine.yml@refs/heads/master', github.repository) && (vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.operation == 'abandon-uncertain-review')) && vars.ORCHESTRATION_TEST_ISSUE == '237' && vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '227' && vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     environment: agent-orchestration

@@ -296,6 +296,45 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 issue.HoldReason = null;
                 issue.Phase = Phase.FIX_PENDING;
                 break;
+            case AbandonUncertainReview abandonment:
+                var evidence = abandonment.Evidence;
+                if (!abandonment.AcknowledgePossiblePriorSubmission ||
+                    message.Actor.Kind != ActorKind.Human || message.Actor.Type != "User" ||
+                    message.Actor.Id is not > 0 || string.IsNullOrWhiteSpace(abandonment.Reason) ||
+                    abandonment.Reason.Length > 2048 ||
+                    evidence is null || evidence.IntentId != abandonment.IntentId ||
+                    evidence.PullRequest != abandonment.PullRequest || evidence.HeadSha != abandonment.Sha ||
+                    evidence.ObservedAt != message.OccurredAt || evidence.ReviewerRequestPending ||
+                    evidence.ReviewerReviewIds.Count != 0 ||
+                    issue.Phase != Phase.BLOCKED || issue.HoldReason != "Effect outcome is ambiguous." ||
+                    !issue.ReactivationRequired || issue.ActiveAuthorized || issue.Paused ||
+                    issue.ClosurePending || state.AdmittedIssue != issue.Number ||
+                    issue.Review is not { Classification: null, ReviewId: null } uncertainReview ||
+                    uncertainReview.IntentId != abandonment.IntentId ||
+                    uncertainReview.RequestBoundary?.Confirmed == true ||
+                    issue.PullRequest != abandonment.PullRequest || issue.HeadSha != abandonment.Sha ||
+                    issue.ActiveTaskId != uncertainReview.TaskId ||
+                    !CompletedTaskMatches(issue, uncertainReview.TaskId, uncertainReview.Round, uncertainReview.Sha) ||
+                    issue.Ci is not { Green: true } savedCi || savedCi.TaskId != uncertainReview.TaskId ||
+                    savedCi.Round != uncertainReview.Round || savedCi.Sha != uncertainReview.Sha ||
+                    !state.Outbox.TryGetValue(abandonment.IntentId, out var uncertainIntent) ||
+                    uncertainIntent.Kind != EffectKind.RequestReview ||
+                    uncertainIntent.Status != DeliveryStatus.Unknown ||
+                    uncertainIntent.IssueNumber != issue.Number || uncertainIntent.Generation != issue.Generation ||
+                    uncertainIntent.TaskId != uncertainReview.TaskId || uncertainIntent.Round != uncertainReview.Round ||
+                    uncertainIntent.Sha != uncertainReview.Sha || HasOtherUnfinishedWork(state, issue, uncertainIntent.Id))
+                    throw new InvalidOperationException("Review abandonment requires an exact, still-uncertain request and fresh empty live evidence.");
+                CheckMapping(issue, abandonment.PullRequest, abandonment.Sha);
+                uncertainIntent.Status = DeliveryStatus.Failed;
+                uncertainIntent.CompletedAt = evidence.ObservedAt;
+                uncertainIntent.FailureCode = EffectFailureCode.OperatorAbandonedUnknownReview;
+                uncertainReview.OperatorResolution = new(message.Id, uncertainIntent.Id, message.Actor,
+                    abandonment.Reason, evidence, abandonment.AcknowledgePossiblePriorSubmission);
+                issue.HoldReason = "Uncertain review request explicitly abandoned by operator; reactivation requires a separate decision.";
+                issue.ReactivationRequired = true;
+                issue.ActiveAuthorized = false;
+                ReleaseIfSafe(state, issue);
+                break;
             case HumanClassification classification:
                 if (string.IsNullOrWhiteSpace(classification.HandoffId) ||
                     issue.Phase != Phase.BLOCKED || issue.HoldReason != "Review requires human classification." ||
@@ -932,6 +971,16 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         state.Outbox.Values.Any(e => e.IssueNumber == issue.Number && e.Kind != EffectKind.PublishRequiredStatus &&
             (e.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown ||
                 e.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus) && e.Status == DeliveryStatus.Pending));
+
+    private static bool HasOtherUnfinishedWork(RepositoryState state, IssueState issue, string excludedIntentId) =>
+        issue.Tasks.Values.Any(t => t.Status is TaskStatus.Intended or TaskStatus.Executing or TaskStatus.Running or
+            TaskStatus.AwaitingHeadConfirmation or TaskStatus.Unknown) ||
+        issue.Ci is { RunId: not null, Green: null, TerminalStopReason: null } ||
+        state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number && effect.Id != excludedIntentId &&
+            effect.Kind != EffectKind.PublishRequiredStatus &&
+            (effect.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown ||
+                effect.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus) &&
+                effect.Status == DeliveryStatus.Pending));
 
     private static void ReleaseIfSafe(RepositoryState state, IssueState issue)
     {
