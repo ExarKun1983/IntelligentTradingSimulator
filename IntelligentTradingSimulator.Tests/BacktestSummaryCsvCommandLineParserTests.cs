@@ -17,6 +17,28 @@ public sealed class BacktestSummaryCsvCommandLineParserTests
     }
 
     [Fact]
+    public void TryParse_AcceptsAbsolutePathAndPreservesOriginalPath()
+    {
+        var suppliedPath = Path.Combine(Path.GetTempPath(), "results with spaces.csv");
+
+        Assert.True(BacktestSummaryCsvCommandLineParser.TryParse(
+            ["--run-backtest", $"--export-backtest-csv={suppliedPath}"], out var path, out var error));
+        Assert.Equal(suppliedPath, path);
+        Assert.Null(error);
+    }
+
+    [Theory]
+    [InlineData("--run-backtest")]
+    [InlineData("--backtest-run-id=42")]
+    public void TryParse_RejectsEmbeddedNullInPath(string mode)
+    {
+        Assert.False(BacktestSummaryCsvCommandLineParser.TryParse(
+            [mode, "--export-backtest-csv=invalid\0.csv"], out var path, out var error));
+        Assert.Null(path);
+        Assert.Contains("valid output path", error);
+    }
+
+    [Fact]
     public void TryParse_WithoutExportPreservesExistingCommands()
     {
         Assert.True(BacktestSummaryCsvCommandLineParser.TryParse(
