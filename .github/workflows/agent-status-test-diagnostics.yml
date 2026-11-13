@@ -1,46 +1,45 @@
-name: Isolated status test diagnostics (no mutations)
+name: One-shot Copilot review API probe (test branch only)
 
 on:
   workflow_dispatch:
+    inputs:
+      pull:
+        description: Dedicated draft test PR number
+        required: true
+        type: string
+      confirmation:
+        description: Type ONE-COPILOT-REVIEW-NO-CODING-NO-MERGE
+        required: true
+        type: string
 
 permissions:
-  actions: read
   contents: read
+  pull-requests: write
+
+concurrency:
+  group: poc-review-api-probe
+  cancel-in-progress: false
 
 jobs:
-  diagnose:
+  probe:
     if: >-
       ${{
         github.repository == 'ExarKun1983/IntelligentTradingSimulator' &&
-        github.workflow_ref == format('{0}/.github/workflows/agent-status-test-diagnostics.yml@refs/heads/master', github.repository) &&
+        github.ref == 'refs/heads/copilot/poc-review-api-probe' &&
         github.actor_id == '6195946' &&
         github.triggering_actor == github.actor &&
-        vars.ORCHESTRATION_STATUS_TEST_APPROVED == 'false' &&
-        vars.ORCHESTRATION_STATUS_TEST_BOOTSTRAP_APPROVED == 'false' &&
-        vars.ORCHESTRATION_STATUS_TEST_STATUS_PUBLISHER_VERIFIED == 'false'
+        github.run_attempt == 1 &&
+        inputs.confirmation == 'ONE-COPILOT-REVIEW-NO-CODING-NO-MERGE'
       }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 4
     steps:
-      - name: Read publisher identity and isolated definition pins
+      - name: Request one review using only the workflow token
         env:
           WORKFLOW_TOKEN: ${{ github.token }}
-          ISSUE: ${{ vars.ORCHESTRATION_STATUS_TEST_ISSUE }}
-          ACTOR_ID: ${{ vars.ORCHESTRATION_STATUS_TEST_ACTOR_ID }}
-          DRIVER_ID: ${{ vars.ORCHESTRATION_STATUS_TEST_WORKFLOW_ID }}
-          CI_ID: ${{ vars.ORCHESTRATION_STATUS_TEST_CI_WORKFLOW_ID }}
-          DRIVER_SHA: ${{ vars.ORCHESTRATION_STATUS_TEST_DEFINITION_SHA }}
-          CI_SHA: ${{ vars.ORCHESTRATION_STATUS_TEST_CI_DEFINITION_SHA }}
-          DRIVER_REF: ${{ vars.ORCHESTRATION_STATUS_TEST_DRIVER_REF }}
-          CI_REF: ${{ vars.ORCHESTRATION_STATUS_TEST_CI_REF }}
-          STATE_REF: ${{ vars.ORCHESTRATION_STATUS_TEST_STATE_REF }}
-          BASE_BRANCH: ${{ vars.ORCHESTRATION_STATUS_TEST_BASE_BRANCH }}
-          TEST_ENVIRONMENT: ${{ vars.ORCHESTRATION_STATUS_TEST_ENVIRONMENT }}
-          EXPIRES_AT: ${{ vars.ORCHESTRATION_STATUS_TEST_EXPIRES_AT }}
+          TEST_PULL: ${{ inputs.pull }}
         shell: python
         run: |
-          import datetime
-          import http.client
           import json
           import os
           import re
@@ -51,112 +50,61 @@ jobs:
               def redirect_request(self, req, fp, code, msg, headers, newurl):
                   return None
 
-          def read(path, query=None):
-              request = urllib.request.Request(
+          def request(path, data=None):
+              req = urllib.request.Request(
                   "https://api.github.com/" + path,
+                  data=None if data is None else json.dumps(data).encode(),
                   headers={
                       "Authorization": "Bearer " + os.environ["WORKFLOW_TOKEN"],
                       "Accept": "application/vnd.github+json",
                       "Content-Type": "application/json",
                       "X-GitHub-Api-Version": "2026-03-10",
-                      "User-Agent": "IntelligentTradingSimulator-StatusDiagnostics",
                   },
-                  data=None if query is None else json.dumps({"query": query}).encode(),
-                  method="GET" if query is None else "POST",
+                  method="GET" if data is None else "POST",
               )
               try:
-                  with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
-                      payload = response.read(2 * 1024 * 1024 + 1)
+                  with urllib.request.build_opener(NoRedirect).open(req, timeout=30) as response:
+                      result = json.load(response)
+                      print("GitHub API HTTP", response.status)
+                      return result
               except urllib.error.HTTPError as error:
-                  raise SystemExit("Diagnostic read failed; HTTP status " + str(error.code)) from None
-              except (urllib.error.URLError, OSError, http.client.HTTPException):
-                  raise SystemExit("Diagnostic read failed; transport error.") from None
-              if len(payload) > 2 * 1024 * 1024:
-                  raise SystemExit("Diagnostic response exceeds capacity.")
-              try:
-                  result = json.loads(payload)
-              except (ValueError, UnicodeError):
-                  raise SystemExit("Diagnostic response is not valid JSON.") from None
-              if not isinstance(result, dict):
-                  raise SystemExit("Diagnostic response is not an object.")
-              return result
+                  raise SystemExit("GitHub API HTTP " + str(error.code) + "; no retry.") from None
+              except urllib.error.URLError:
+                  raise SystemExit("GitHub API transport failure; outcome may be uncertain; no retry.") from None
 
-          if not os.environ["WORKFLOW_TOKEN"]:
-              raise SystemExit("Workflow credential is missing.")
-          repository = "repos/ExarKun1983/IntelligentTradingSimulator"
-          identity = read("graphql", "query { viewer { login databaseId id } }")
-          if identity.get("errors", []) != []:
-              raise SystemExit("Publisher identity query returned errors.")
-          data = identity.get("data")
-          if not isinstance(data, dict) or not isinstance(data.get("viewer"), dict):
-              raise SystemExit("Publisher identity response is incomplete.")
-          viewer = data["viewer"]
-          bot = read("users/github-actions%5Bbot%5D")
-          repo = read(repository)
-          tag = read(repository + "/git/ref/tags/agent-status-revocation-definition-v2")
-          if not isinstance(tag.get("object"), dict):
-              raise SystemExit("Definition tag response is incomplete.")
-          driver = read(repository + "/actions/workflows/414090147")
-          ci = read(repository + "/actions/workflows/414090145")
-          try:
-              expiration = datetime.datetime.fromisoformat(os.environ["EXPIRES_AT"].replace("Z", "+00:00"))
-              now = datetime.datetime.now(datetime.timezone.utc)
-              valid_expiration = now < expiration <= now + datetime.timedelta(hours=72)
-          except (ValueError, TypeError):
-              valid_expiration = False
-
-          expected_sha = os.environ["DRIVER_SHA"]
-          expected_ref = "refs/tags/agent-status-revocation-definition-v2"
-          checks = {
-              "publisher_identity": (
-                  viewer.get("login") == bot.get("login") == "github-actions[bot]"
-                  and viewer.get("databaseId") == bot.get("id") == 41898282
-                  and bot.get("type") == "Bot"
-                  and isinstance(bot.get("node_id"), str) and bool(bot["node_id"])
-                  and viewer.get("id") == bot["node_id"]
-              ),
-              "repository_identity": repo.get("id") == 1277929203,
-              "issue_and_actor_configuration": os.environ["ISSUE"] == "242" and os.environ["ACTOR_ID"] == "6195946",
-              "driver_definition": (
-                  os.environ["DRIVER_ID"] == "414090147" and driver.get("id") == 414090147
-                  and driver.get("path") == ".github/workflows/agent-status-revocation-test.yml"
-                  and driver.get("state") == "active"
-              ),
-              "ci_definition": (
-                  os.environ["CI_ID"] == "414090145" and ci.get("id") == 414090145
-                  and ci.get("path") == ".github/workflows/agent-status-revocation-ci.yml"
-                  and ci.get("state") == "active"
-              ),
-              "shared_tag_and_sha": (
-                  os.environ["DRIVER_REF"] == os.environ["CI_REF"] == tag.get("ref") == expected_ref
-                  and os.environ["CI_SHA"] == expected_sha
-                  and re.fullmatch("[0-9a-f]{40}", expected_sha) is not None
-                  and tag["object"].get("type") == "commit"
-                  and tag["object"].get("sha") == expected_sha
-              ),
-              "isolated_resources_configuration": (
-                  os.environ["STATE_REF"] == "refs/heads/agent-state-status-revocation-v1"
-                  and os.environ["BASE_BRANCH"] == "agent-status-revocation-base-v1"
-                  and os.environ["TEST_ENVIRONMENT"] == "agent-status-revocation-test"
-              ),
-              "authorization_window": valid_expiration,
-          }
-          report = [
-              "## Isolated status test diagnostics", "",
-              "| Check | Match |", "| --- | --- |",
-              *["| " + name + " | " + str(value).lower() + " |" for name, value in checks.items()],
-              "",
-              "No AI task, CI dispatch, status publication, state write or configuration change was requested.",
-              "This diagnostic token has no statuses permission and cannot verify another run's effective grant.",
-              "Identity checks do not prove status-write access. Inspect GITHUB_TOKEN Permissions in an approved driver run.",
-              "This token belongs to this diagnostic run, not to a future driver run.",
-              "No environment or user secret was accessed; user-token identity/entitlement remains unverified here.",
-              "Protected resources and cost controls require separate operator verification.",
-              "A green diagnostic does not authorize bootstrap or the live test; keep both approval flags false.",
-          ]
-          summary = "\n".join(report) + "\n"
-          print(summary, end="")
+          pull = os.environ["TEST_PULL"]
+          if re.fullmatch("[1-9][0-9]*", pull) is None:
+              raise SystemExit("Invalid test PR number.")
+          repository = "ExarKun1983/IntelligentTradingSimulator"
+          path = "repos/" + repository + "/pulls/" + pull
+          pr = request(path)
+          if not (
+              pr["state"] == "open" and pr["draft"] is True
+              and pr["head"]["repo"]["full_name"] == repository
+              and pr["base"]["repo"]["full_name"] == repository
+              and pr["head"]["ref"] == "copilot/poc-review-api-probe"
+              and pr["head"]["sha"] == os.environ["GITHUB_SHA"]
+              and pr["base"]["ref"] == "master"
+              and pr["user"]["id"] == 6195946
+          ):
+              raise SystemExit("PR is not the expected exact-head draft test fixture.")
+          for endpoint in ("requested_reviewers", "reviews"):
+              value = request(path + "/" + endpoint + "?per_page=100&page=1")
+              entries = value["users"] + value["teams"] if endpoint == "requested_reviewers" else value
+              if entries:
+                  raise SystemExit("Existing reviewers or reviews; refusing another request.")
+          reviewer = "copilot-pull-request-reviewer[bot]"
+          result = request(path + "/requested_reviewers", {"reviewers": [reviewer]})
+          accepted = any(user.get("login") in (reviewer, "Copilot")
+                         for user in result.get("requested_reviewers", []))
+          summary = (
+              "One review POST was sent using GITHUB_TOKEN; no retries.\n"
+              "Copilot appears in the response: " + str(accepted).lower() + "\n"
+              "No user secret, coding task, state write or merge was used.\n"
+              "This verifies this probe token only, not a future driver token or cost policy.\n"
+          )
+          print(summary)
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
               output.write(summary)
-          if not all(checks.values()):
-              raise SystemExit("One or more isolated diagnostic checks failed.")
+          if not accepted:
+              raise SystemExit("Request response did not confirm Copilot; inspect before any further action.")
