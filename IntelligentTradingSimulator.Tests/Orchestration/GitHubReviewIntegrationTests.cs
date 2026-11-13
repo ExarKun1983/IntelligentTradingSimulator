@@ -217,6 +217,27 @@ public sealed class GitHubReviewIntegrationTests
         Assert.Equal(2, handler.Posts);
     }
 
+    [Fact]
+    public async Task HeadChangeDuringRateLimitRetryPersistsRejectionWithoutAnotherPost()
+    {
+        var store = new Store(Eligible());
+        var handler = new Api { ReviewPostStatuses = [HttpStatusCode.TooManyRequests, HttpStatusCode.Created] };
+        handler.BeforePost = () => handler.Corruption = "live-sha";
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, store);
+
+        var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
+
+        Assert.Equal(DeliveryStatus.Failed, outcome.Status);
+        Assert.Equal(EffectFailureCode.ReviewRequestRejected, outcome.FailureCode);
+        Assert.Equal(1, handler.Posts);
+        Assert.Equal(DeliveryStatus.Failed, store.State.Outbox["review"].Status);
+        Assert.Equal(EffectFailureCode.ReviewRequestRejected, store.State.Outbox["review"].FailureCode);
+        Assert.Equal("HTTP_429", store.State.Issues[7].Review!.RequestFailureReason);
+        Assert.Equal(ReviewLifecycleState.Failed, store.State.Issues[7].Review!.LifecycleState);
+        Assert.Null(store.State.AdmittedIssue);
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.Created)]
     [InlineData(HttpStatusCode.Conflict)]
@@ -344,6 +365,34 @@ public sealed class GitHubReviewIntegrationTests
         Assert.Equal(ReviewLifecycleState.NotRequested, review.LifecycleState);
         Assert.Null(review.ReviewDeadlineAt);
         Assert.Null(await adapter.ReadEventAsync(store.State, store.State.Issues[7], default));
+        Assert.Equal(0, handler.Posts);
+    }
+
+    [Fact]
+    public async Task LegacyConfirmedReviewWithoutDeadlineRecoversFromUnknownAndAcceptsResult()
+    {
+        var state = Eligible();
+        state.Issues[7].Review!.RequestBoundary = new(175728472, "BOT_kgDOCnlnWA", Now,
+            [], Confirmed: true, RequestNodeId: "RRR_kwDOAA", AcceptedAt: Now);
+        state = new OrchestrationReducer().RecordOutcome(state, "review", new(DeliveryStatus.Unknown), Now);
+        Assert.Equal(ReviewLifecycleState.RequestUnknown, state.Issues[7].Review!.LifecycleState);
+        var store = new Store(state);
+        var handler = new Api();
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, store);
+
+        var recovered = await adapter.ReconcileAsync(store.State.Outbox["review"], default);
+        Assert.Equal(DeliveryStatus.Succeeded, recovered.Status);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", recovered, Now);
+        Assert.Equal(ReviewLifecycleState.NotRequested, store.State.Issues[7].Review!.LifecycleState);
+        Assert.Null(store.State.Issues[7].Review!.ReviewDeadlineAt);
+        handler.HasOutput = true;
+
+        var message = await adapter.ReadEventAsync(store.State, store.State.Issues[7], default);
+        Assert.IsType<ReviewResult>(message!.Data);
+        store.State = new OrchestrationReducer(new Allow()).Apply(store.State, message);
+
+        Assert.Equal(ReviewLifecycleState.Completed, store.State.Issues[7].Review!.LifecycleState);
         Assert.Equal(0, handler.Posts);
     }
 

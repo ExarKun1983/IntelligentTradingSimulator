@@ -123,13 +123,9 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
                 {
                     diagnostics?.Stage("retry_wait");
                     await Task.Delay(delay < TimeSpan.Zero ? TimeSpan.Zero : delay, token);
-                    var retryState = (await store.LoadAsync(token)).State;
-                    var retryIssue = ValidateIntent(retryState, intent);
-                    ValidateEligibility(retryState, retryIssue, intent);
-                    await ValidateCandidateShaAsync(retryState, retryIssue, token);
-                    if (!await LiveEligibleAsync(retryIssue, token))
-                        throw new InvalidDataException("Review live Issue/PR/head changed before retry.");
-                    continue;
+                    diagnostics?.Stage("retry_revalidate");
+                    if (await RetryEligibleAsync(intent, token))
+                        continue;
                 }
             }
 
@@ -140,6 +136,24 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
             diagnostics?.RecordApiFailure(failureReason);
             await SaveFailureReasonAsync(intent, failureReason, token);
             return new(DeliveryStatus.Failed, FailureCode: EffectFailureCode.ReviewRequestRejected);
+        }
+    }
+
+    private async Task<bool> RetryEligibleAsync(EffectIntent intent, CancellationToken token)
+    {
+        // A failed revalidation leaves the preceding rate-limit rejection as the definitive outcome.
+        try
+        {
+            var retryState = (await store.LoadAsync(token)).State;
+            var retryIssue = ValidateIntent(retryState, intent);
+            ValidateEligibility(retryState, retryIssue, intent);
+            await ValidateCandidateShaAsync(retryState, retryIssue, token);
+            return await LiveEligibleAsync(retryIssue, token);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or HttpRequestException or
+            JsonException or KeyNotFoundException or InvalidOperationException)
+        {
+            return false;
         }
     }
 

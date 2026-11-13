@@ -923,9 +923,11 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     issue.Review.LifecycleState = ReviewLifecycleState.Failed;
                 else if (outcome.Status == DeliveryStatus.Unknown)
                     issue.Review.LifecycleState = ReviewLifecycleState.RequestUnknown;
-                else if (outcome.Status == DeliveryStatus.Succeeded && issue.Review.ReviewDeadlineAt is not null &&
+                else if (outcome.Status == DeliveryStatus.Succeeded &&
                     issue.Review.LifecycleState is ReviewLifecycleState.NotRequested or ReviewLifecycleState.RequestUnknown)
-                    issue.Review.LifecycleState = ReviewLifecycleState.Requested;
+                    issue.Review.LifecycleState = issue.Review.ReviewDeadlineAt is null
+                        ? ReviewLifecycleState.NotRequested
+                        : ReviewLifecycleState.Requested;
             }
             else if (effect.Kind == EffectKind.ProjectStatus && outcome.Status == DeliveryStatus.Succeeded)
                 issue.StatusProjectionDigest = StateJson.Digest(effect.StatusBody!);
