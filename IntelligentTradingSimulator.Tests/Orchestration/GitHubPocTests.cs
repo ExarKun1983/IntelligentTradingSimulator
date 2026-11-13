@@ -183,6 +183,26 @@ public sealed class GitHubPocTests
         });
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FinalStateReadsProduceExactlyOneJsonResult(bool failRead)
+    {
+        await WithCommand("pause", failRead ? "pause-read-failure" : "pause-receipt",
+            (values, api, output, error, result) =>
+            {
+                using var receipt = JsonDocument.Parse(output.ToString());
+                Assert.Equal(failRead ? 1 : 0, result);
+                Assert.Equal(failRead ? "github-poc-failure" : "github-poc",
+                    receipt.RootElement.GetProperty("Mode").GetString());
+                Assert.Equal(2, api.FinalStateReads);
+                Assert.Equal(0, api.Mutations);
+                if (failRead) Assert.Contains("inspect canonical state", error.ToString());
+                else Assert.Empty(error.ToString());
+                return Task.CompletedTask;
+            });
+    }
+
     private static async Task WithCommand(string operation, string corruption,
         Func<Dictionary<string, string>, CommandApi, StringWriter, StringWriter, int, Task> assert)
     {
@@ -231,7 +251,7 @@ public sealed class GitHubPocTests
     {
         repository = new { id = 1, full_name = Repository },
         sender = new { id = actor, login = "maintainer", type = "User" },
-        inputs = new { issue, operation, confirmation,
+        inputs = new { issue, operation, confirmation, reason = "Operator pause.",
             repository_generation = "1", issue_generation = "1" }
     });
 
@@ -266,6 +286,8 @@ public sealed class GitHubPocTests
         private static readonly string Blob = new('d', 40);
         public bool Exists { get; private set; } = exists && corruption != "missing-state";
         public int Mutations { get; private set; }
+        public int FinalStateReads { get; private set; }
+        private int definitionReads;
         public RepositoryState? StoredState { get; private set; }
         private RepositoryState CurrentState
         {
@@ -273,6 +295,17 @@ public sealed class GitHubPocTests
             {
                 if (StoredState is not null) return StoredState;
                 var state = corruption == "second-start" ? State(manifest) : RepositoryState.Create(Repository);
+                if (corruption.StartsWith("pause-", StringComparison.Ordinal))
+                {
+                    state = State(manifest);
+                    state.Issues[249].Paused = true;
+                    var evidence = new IngressEvidence(Repository, 1, 55, "User", "write",
+                        2490, 249, true, false, false, []);
+                    var message = GitHubActionsIngress.PrepareEvent(Notification("pause"),
+                        "workflow_dispatch", "44", evidence, 1, 1, Now)!;
+                    state.Inbox[message.Id] = new(message.Id, message.Digest,
+                        DeliveryStatus.Succeeded, Now, Now, StateJson.SerializeEvent(message));
+                }
                 state.IsolatedTestManifestDigest = corruption == "manifest" ? "wrong" : manifest;
                 return state;
             }
@@ -301,7 +334,10 @@ public sealed class GitHubPocTests
                     run_attempt = corruption == "rerun" ? 2 : 1, actor = new { id = 55 },
                     triggering_actor = new { id = corruption == "triggering-actor" ? 66 : 55 }, created_at = Now };
             else if (path == prefix + "/commits/" + GitHubPocSettings.DefinitionReference)
+            {
+                definitionReads++;
                 response = new { sha = corruption == "moved-master" ? Tip : Definition };
+            }
             else if (path == "/users/maintainer") response = new { id = 55, type = "User" };
             else if (path == prefix + "/collaborators/maintainer/permission")
                 response = new { user = new { id = 55 }, permission = "write" };
@@ -337,6 +373,12 @@ public sealed class GitHubPocTests
                     { new { path = "state.json", type = "blob", mode = "100644", sha = Blob } } };
             else if (path == prefix + "/git/blobs/" + Blob)
             {
+                if (definitionReads >= 2)
+                {
+                    FinalStateReads++;
+                    if (corruption == "pause-read-failure" && FinalStateReads == 2)
+                        throw new HttpRequestException("Final state read failed.");
+                }
                 var json = StateJson.Serialize(CurrentState);
                 response = new { encoding = "base64", size = Encoding.UTF8.GetByteCount(json),
                     content = Convert.ToBase64String(Encoding.UTF8.GetBytes(json)) };

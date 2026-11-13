@@ -108,8 +108,8 @@ public static class GitHubPocCommand
             var candidate = new GitHubTaskAdapter(api, store, GitHubPocSettings.BaseBranch, settings.ActorId,
                 settings.Tasks, taskApi: taskApi, requireDraftPullRequest: true);
             await VerifyDefinitionAsync(api, settings.DefinitionSha, token);
-            await WriteEvidenceAsync(output, store, operation!, result, candidate, token);
             var final = (await store.LoadAsync(token)).State.Issues[GitHubPocSettings.IssueNumber];
+            await WriteEvidenceAsync(output, store, operation!, result, candidate, token);
             return result.Reason == WorkerStopReason.Blocked &&
                 final.HoldReason != "Review requires human classification." ? 1 : 0;
         }
