@@ -1496,7 +1496,7 @@ search, model-driven advice, and production deployment are not implemented.
 
 ## Verify local setup
 
-From the repository root, restore, build, and test the solution using the SDK configured in `global.json`. The tests use in-memory databases and do not require a running SQL Server or Yahoo Finance access:
+From the repository root, restore and build the solution using the SDK configured in `global.json`, then run the existing tests in Release configuration. The tests use in-memory databases and do not require a running SQL Server or Yahoo Finance access:
 
 ```bash
 dotnet restore IntelligentTradingSimulator.sln
