@@ -665,8 +665,12 @@ public sealed class GitHubReviewIntegrationTests
         Assert.NotNull(store.State.Issues[7].Review!.OperatorResolution);
     }
 
-    [Fact]
-    public async Task HostRestoresCommittedAbandonmentAfterReactivationWithoutChangingNewGeneration()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task HostRestoresCommittedAbandonmentAfterReactivationWithoutChangingNewGeneration(
+        bool statusEnabled, bool blocked)
     {
         var store = new Store(UncertainReview());
         using var handler = new Api { Corruption = "no-reviews" };
@@ -676,18 +680,46 @@ public sealed class GitHubReviewIntegrationTests
             new("reactivate", "owner/repo", 7, 1, 1, new("maintainer", ActorKind.Human, 55),
                 Now.AddMinutes(1), new Reactivate("Start a separate generation.")));
         Assert.Equal(2, store.State.Issues[7].Generation);
+        if (blocked)
+        {
+            store.State.Issues[7].Phase = Phase.BLOCKED;
+            store.State.Issues[7].ReactivationRequired = true;
+            store.State.Issues[7].HoldReason = "New generation is blocked.";
+        }
         var original = StateJson.Serialize(store.State);
         handler.Requests.Clear();
         handler.Corruption = "existing-request";
 
-        var result = await RunAbandonment(client, store);
+        var result = await RunAbandonment(client, store, statusEnabled: statusEnabled);
 
         Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
         Assert.Equal(original, StateJson.Serialize(store.State));
         Assert.DoesNotContain(handler.Requests, request => request.Contains("/tasks/") || request.Contains("/pulls/"));
+        Assert.DoesNotContain(handler.Requests, request => request.Contains("/statuses"));
         await Assert.ThrowsAsync<InvalidDataException>(() =>
-            RunAbandonment(client, store, reason: "Changed operator decision"));
+            RunAbandonment(client, store, reason: "Changed operator decision", statusEnabled: statusEnabled));
         Assert.Equal(original, StateJson.Serialize(store.State));
+    }
+
+    [Fact]
+    public async Task SameGenerationAbandonmentReplayStillAttemptsRequiredStatusRevocation()
+    {
+        var store = new Store(UncertainReview());
+        using var handler = new Api { Corruption = "no-reviews" };
+        using var client = handler.Client();
+        await RunAbandonment(client, store);
+        handler.Requests.Clear();
+
+        var result = await RunAbandonment(client, store, statusEnabled: true);
+
+        Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
+        var status = Assert.Single(store.State.Outbox.Values, item => item.Kind == EffectKind.PublishRequiredStatus);
+        Assert.Equal("error", status.RequiredStatus!.State);
+        Assert.Equal(DeliveryStatus.Succeeded, status.Status);
+        Assert.Equal(1, handler.StatusPosts);
+        Assert.Contains(handler.Requests, request => request.Contains("/users/status-publisher"));
+        await RunAbandonment(client, store, statusEnabled: true);
+        Assert.Equal(1, handler.StatusPosts);
     }
 
     [Fact]
@@ -765,7 +797,7 @@ public sealed class GitHubReviewIntegrationTests
 
     private static async Task<WorkerResult> RunAbandonment(HttpClient client, Store store, bool activation = false,
         string reason = "Accept possible prior delivery", bool commandOnly = true, bool missingApproval = false,
-        string operation = "abandon-uncertain-review")
+        string operation = "abandon-uncertain-review", bool statusEnabled = false)
     {
         var payload = JsonSerializer.SerializeToElement(new
         {
@@ -780,6 +812,8 @@ public sealed class GitHubReviewIntegrationTests
         return await new GitHubOrchestrationHost(api, store, new Clock()).ReconcileAsync(payload,
             "workflow_dispatch", "44", 1, 1, occurredAt, [], 99, "master", 55,
             new(activation, true, true, true), commandOnly: commandOnly,
+            statusPublisher: statusEnabled ? new(99, "status-publisher", "publisher-node", "Bot") : null,
+            statusApproval: statusEnabled ? new(true, true, true, true, true) : null,
             recoveryApproval: missingApproval ? null : new(true, true, true));
     }
 
@@ -906,6 +940,8 @@ public sealed class GitHubReviewIntegrationTests
         private readonly TaskCompletionSource bothPreflights = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int preflightReads;
         public int Posts { get; private set; }
+        public int StatusPosts { get; private set; }
+        private object? createdStatus;
         public List<string> Requests { get; } = [];
         public string RequestBody { get; private set; } = "";
         public Action? BeforePost { get; set; }
@@ -952,7 +988,21 @@ public sealed class GitHubReviewIntegrationTests
             var path = request.RequestUri!.AbsolutePath;
             Requests.Add(request.Method + " " + request.RequestUri!.PathAndQuery);
             object response;
-            if (request.Method == HttpMethod.Post)
+            if (request.Method == HttpMethod.Post && path == $"/repos/owner/repo/statuses/{Sha}")
+            {
+                StatusPosts++;
+                using var content = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
+                var body = content.RootElement;
+                response = createdStatus = new
+                {
+                    id = 100, url = "https://api.github.com/repos/owner/repo/statuses/100",
+                    creator = new { id = 99, login = "status-publisher", node_id = "publisher-node", type = "Bot" },
+                    state = body.GetProperty("state").GetString(), context = body.GetProperty("context").GetString(),
+                    description = body.GetProperty("description").GetString(),
+                    target_url = body.GetProperty("target_url").GetString(), created_at = Now
+                };
+            }
+            else if (request.Method == HttpMethod.Post)
             {
                 Assert.Equal("/repos/owner/repo/pulls/17/requested_reviewers", path);
                 BeforePost?.Invoke();
@@ -987,6 +1037,12 @@ public sealed class GitHubReviewIntegrationTests
             };
             else if (path == "/repos/owner/repo/pulls") response = new[] { new { number = 17 } };
             else if (path == "/repos/owner/repo/pulls/17") response = Pull();
+            else if (path == "/users/status-publisher")
+                response = new { id = 99, login = "status-publisher", node_id = "publisher-node", type = "Bot" };
+            else if (path == $"/repos/owner/repo/commits/{Sha}/status")
+                response = new { sha = Sha, repository = new { id = 1, full_name = "owner/repo" } };
+            else if (path == $"/repos/owner/repo/commits/{Sha}/statuses")
+                response = createdStatus is null ? Array.Empty<object>() : new[] { createdStatus };
             else if (path.StartsWith("/users/")) response = Actor();
             else if (path.EndsWith("/requested_reviewers"))
             {

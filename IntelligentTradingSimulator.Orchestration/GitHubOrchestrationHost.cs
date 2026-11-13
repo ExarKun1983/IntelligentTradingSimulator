@@ -127,6 +127,11 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         {
             var snapshot = (await stateStore.LoadAsync(token)).State;
             message = RestoreCommittedReviewAbandonmentReplay(snapshot, message)!;
+            if (commandOnly && snapshot.Inbox.TryGetValue(message.Id, out var committed) &&
+                committed.Status == DeliveryStatus.Succeeded && committed.Digest == message.Digest &&
+                snapshot.Issues.TryGetValue(message.IssueNumber, out var currentIssue) &&
+                currentIssue.Generation > message.IssueGeneration)
+                return new(WorkerStopReason.EffectsDisabled, 0, new(snapshot, [], true));
             if (!snapshot.Inbox.ContainsKey(message.Id))
             {
                 if (!snapshot.Issues.TryGetValue(message.IssueNumber, out var issue))
