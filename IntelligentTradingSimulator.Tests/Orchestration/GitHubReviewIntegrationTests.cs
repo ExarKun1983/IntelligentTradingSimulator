@@ -15,6 +15,76 @@ public sealed class GitHubReviewIntegrationTests
         new(new(client, "owner/repo", 1), store, new Clock(), Approved, new CandidateValidator());
 
     [Theory]
+    [InlineData("bot-id", 201, "preflight_reviewer_identity", "other", false)]
+    [InlineData("closed", 201, "preflight_live", "validation", false)]
+    [InlineData("lost-response", 201, "post", "transport", true)]
+    [InlineData("body-io", 201, "post", "transport", true)]
+    [InlineData("", 302, "post", "http_status", true)]
+    [InlineData("", 403, "post", "http_status", true)]
+    [InlineData("", 200, "post", "validation", true)]
+    [InlineData("ack-sha", 201, "acknowledgement_pull_validation", "validation", true)]
+    [InlineData("ack-human-only", 201, "acknowledgement_reviewers_validation", "validation", true)]
+    public async Task DiagnosticsIdentifyTheFailedStageWithoutChangingUnknownWriteSafety(
+        string corruption, int status, string stage, string category, bool posted)
+    {
+        var store = new Store(Eligible());
+        var handler = new Api { Corruption = corruption, ReviewPostStatus = (HttpStatusCode)status };
+        using var client = handler.Client();
+        using var log = new StringWriter();
+        var diagnostics = new GitHubReviewRequestDiagnostics(log);
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(),
+            Approved, new CandidateValidator(), diagnostics);
+
+        if (posted)
+            await Assert.ThrowsAnyAsync<Exception>(() => adapter.ExecuteAsync(store.State.Outbox["review"], default));
+        else
+            Assert.Equal(DeliveryStatus.Failed,
+                (await adapter.ExecuteAsync(store.State.Outbox["review"], default)).Status);
+
+        var diagnostic = Assert.IsType<GitHubReviewRequestDiagnostic>(diagnostics.Snapshot);
+        Assert.Equal(stage, diagnostic.Stage);
+        Assert.Equal(category, diagnostic.ErrorCategory);
+        Assert.Equal(posted, diagnostic.PostAttempted);
+        Assert.Equal(posted ? 1 : 0, handler.Posts);
+        Assert.Equal(posted && corruption != "lost-response" ? (int?)status : null, diagnostic.HttpStatus);
+        Assert.Equal(posted && corruption != "lost-response" ? "review:request:123" : null, diagnostic.GitHubRequestId);
+        if (corruption == "ack-human-only")
+        {
+            Assert.Equal(1, diagnostic.ReturnedReviewerCount);
+            Assert.False(diagnostic.HasVerifiedReviewer);
+        }
+        Assert.DoesNotContain("Injected", log.ToString());
+        Assert.DoesNotContain("Review body preserved", log.ToString());
+        Assert.Contains(stage, log.ToString());
+        if (posted)
+        {
+            Assert.False(store.State.Issues[7].Review!.RequestBoundary!.Confirmed);
+            store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", new(DeliveryStatus.Unknown), Now);
+            Assert.Equal(DeliveryStatus.Unknown,
+                (await adapter.ReconcileAsync(store.State.Outbox["review"], default)).Status);
+            Assert.Equal(1, handler.Posts);
+        }
+    }
+
+    [Fact]
+    public async Task DiagnosticsSeparateBoundaryPersistenceFailureFromAnHttpRequest()
+    {
+        var store = new Store(Eligible()) { FailWrites = true };
+        var handler = new Api();
+        using var client = handler.Client();
+        var diagnostics = new GitHubReviewRequestDiagnostics();
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(),
+            Approved, new CandidateValidator(), diagnostics);
+
+        await Assert.ThrowsAsync<IOException>(() => adapter.ExecuteAsync(store.State.Outbox["review"], default));
+
+        Assert.Equal("save_boundary", diagnostics.Snapshot!.Stage);
+        Assert.Equal("persistence_or_io", diagnostics.Snapshot.ErrorCategory);
+        Assert.False(diagnostics.Snapshot.PostAttempted);
+        Assert.Equal(0, handler.Posts);
+    }
+
+    [Theory]
     [InlineData("Copilot")]
     [InlineData("copilot-pull-request-reviewer[bot]")]
     public async Task VerifiedReviewerAliasesAcceptTheSamePinnedBotAcrossRequestAndSubmission(string login)
@@ -22,10 +92,14 @@ public sealed class GitHubReviewIntegrationTests
         var store = new Store(Eligible());
         var handler = new Api { ReviewerLogin = login };
         using var client = handler.Client();
-        var adapter = CreateAdapter(client, store);
+        var diagnostics = new GitHubReviewRequestDiagnostics();
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(),
+            Approved, new CandidateValidator(), diagnostics);
 
         var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
         Assert.Equal(DeliveryStatus.Succeeded, outcome.Status);
+        Assert.Equal("confirmed", diagnostics.Snapshot!.Outcome);
+        Assert.Equal(201, diagnostics.Snapshot.HttpStatus);
         var boundary = store.State.Issues[7].Review!.RequestBoundary!;
         Assert.Equal(175728472, boundary.ReviewerId);
         Assert.Equal("BOT_kgDOCnlnWA", boundary.ReviewerNodeId);
@@ -1027,7 +1101,9 @@ public sealed class GitHubReviewIntegrationTests
                 repo = new { id = Corruption == "repository" ? 2 : 1 } },
             @base = new { @ref = "master", repo = new { id = 1 } },
             requested_reviewers = acknowledgement && EmptyAcknowledgementReviewers
-                ? Array.Empty<object>() : new[] { Actor(acknowledgement && Corruption == "ack-actor") }
+                ? Array.Empty<object>() : acknowledgement && Corruption == "ack-human-only"
+                    ? new object[] { new { id = 55, node_id = "USER_node", login = "maintainer", type = "User" } }
+                    : new[] { Actor(acknowledgement && Corruption == "ack-actor") }
         };
         private object Review(bool baseline) => new
         {
@@ -1145,7 +1221,23 @@ public sealed class GitHubReviewIntegrationTests
             else throw new InvalidOperationException("Unexpected review fixture route");
             var status = request.Method == HttpMethod.Post && path.EndsWith("/requested_reviewers", StringComparison.Ordinal)
                 ? ReviewPostStatus : HttpStatusCode.OK;
-            return new(status) { Content = new StringContent(JsonSerializer.Serialize(response), Encoding.UTF8, "application/json") };
+            var result = new HttpResponseMessage(status)
+            {
+                Content = request.Method == HttpMethod.Post && Corruption == "body-io"
+                    ? new FailingContent()
+                    : new StringContent(JsonSerializer.Serialize(response), Encoding.UTF8, "application/json")
+            };
+            result.Headers.Add("X-GitHub-Request-Id", "review:request:123");
+            return result;
+        }
+
+        private sealed class FailingContent : HttpContent
+        {
+            protected override bool TryComputeLength(out long length) { length = 0; return false; }
+            protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+                Task.FromException(new IOException("Injected response-body read failure."));
+            protected override Task<Stream> CreateContentReadStreamAsync() =>
+                Task.FromException<Stream>(new IOException("Injected response-body read failure."));
         }
     }
 }

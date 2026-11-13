@@ -6,7 +6,7 @@ namespace IntelligentTradingSimulator.Orchestration;
 
 public static class GitHubPocCommand
 {
-    public const string Confirmation = "POC-249-ONE-REPAIR-NO-MERGE";
+    public const string Confirmation = "POC-257-ONE-REPAIR-NO-MERGE";
 
     public static Task<int> RunAsync(string[] args, TextWriter output, TextWriter error) =>
         RunAsync(args, output, error, Environment.GetEnvironmentVariable, CreateClient);
@@ -15,6 +15,7 @@ public static class GitHubPocCommand
         Func<string, string?> read, Func<string, HttpClient> createClient)
     {
         var taskLaunchDiagnostics = new GitHubTaskLaunchDiagnostics();
+        var reviewRequestDiagnostics = new GitHubReviewRequestDiagnostics(error);
         try
         {
             if (!args.Contains("--execute", StringComparer.Ordinal) ||
@@ -98,7 +99,7 @@ public static class GitHubPocCommand
                 throw new InvalidOperationException("PoC has not been started.");
 
             var host = new GitHubOrchestrationHost(api, store, taskApi: taskApi,
-                taskLaunchDiagnostics: taskLaunchDiagnostics);
+                taskLaunchDiagnostics: taskLaunchDiagnostics, reviewRequestDiagnostics: reviewRequestDiagnostics);
             var result = await host.ReconcileAsync(root, "workflow_dispatch", runId, repositoryGeneration,
                 issueGeneration, occurredAt, [publisher.ActorId], publisher.ActorId, GitHubPocSettings.BaseBranch,
                 settings.ActorId, settings.Tasks, token: token, reviewApproval: settings.Review,
@@ -111,7 +112,8 @@ public static class GitHubPocCommand
                 settings.Tasks, taskApi: taskApi, requireDraftPullRequest: true);
             await VerifyDefinitionAsync(api, settings.DefinitionSha, token);
             var final = (await store.LoadAsync(token)).State.Issues[GitHubPocSettings.IssueNumber];
-            await WriteEvidenceAsync(output, store, operation!, result, candidate, token, taskLaunchDiagnostics);
+            await WriteEvidenceAsync(output, store, operation!, result, candidate, token, taskLaunchDiagnostics,
+                reviewRequestDiagnostics);
             return result.Reason == WorkerStopReason.Blocked &&
                 final.HoldReason != "Review requires human classification." ? 1 : 0;
         }
@@ -123,7 +125,8 @@ public static class GitHubPocCommand
             {
                 Mode = "github-poc-failure", ErrorType = exception.GetType().Name,
                 Issue = GitHubPocSettings.IssueNumber, StateRef = GitHubPocSettings.StateReference,
-                TaskLaunchDiagnostic = taskLaunchDiagnostics.Snapshot
+                TaskLaunchDiagnostic = taskLaunchDiagnostics.Snapshot,
+                ReviewRequestDiagnostic = reviewRequestDiagnostics.Snapshot
             }, StateJson.Options));
             error.WriteLine($"PoC stopped ({exception.GetType().Name}); inspect canonical state before continuing. Do not retry an uncertain write.");
             return 1;
@@ -159,7 +162,8 @@ public static class GitHubPocCommand
 
     internal static async Task WriteEvidenceAsync(TextWriter output, IStateStore store, string operation,
         WorkerResult? result, GitHubTaskAdapter? candidate, CancellationToken token,
-        GitHubTaskLaunchDiagnostics? taskLaunchDiagnostics = null)
+        GitHubTaskLaunchDiagnostics? taskLaunchDiagnostics = null,
+        GitHubReviewRequestDiagnostics? reviewRequestDiagnostics = null)
     {
         var snapshot = await store.LoadAsync(token);
         var issue = snapshot.State.Issues.GetValueOrDefault(GitHubPocSettings.IssueNumber);
@@ -172,6 +176,7 @@ public static class GitHubPocCommand
             Phase = issue?.Phase.ToString(), issue?.PullRequest, issue?.HeadSha, issue?.HoldReason,
             issue?.CurrentHandoffId, issue?.Round, StopReason = result?.Reason.ToString(),
             TaskLaunchDiagnostic = taskLaunchDiagnostics?.Snapshot,
+            ReviewRequestDiagnostic = reviewRequestDiagnostics?.Snapshot,
             Tasks = issue?.Tasks.Values.Select(task => new
                 { task.Id, task.Kind, task.Status, task.ExternalId, task.SourceSha, task.FinalSha }).ToArray(),
             Ci = issue?.Ci,
@@ -180,7 +185,7 @@ public static class GitHubPocCommand
             Effects = snapshot.State.Outbox.Values.Where(effect =>
                 effect.Kind is EffectKind.LaunchTask or EffectKind.RunCi or EffectKind.RequestReview)
                 .Select(effect => new { effect.Id, effect.Kind, effect.Status, effect.TaskId, effect.Sha,
-                    effect.ExternalId, effect.CreatedAt, effect.CompletedAt }).ToArray(),
+                    effect.ExternalId, effect.CreatedAt, effect.CompletedAt, effect.FailureCode }).ToArray(),
             Completed = completed,
             MergeEnabled = false, RequiredStatusPublicationEnabled = false
         }, StateJson.Options));

@@ -4,7 +4,8 @@ namespace IntelligentTradingSimulator.Orchestration;
 
 /// <summary>Production composition with explicit prerequisite gates; ordinary CLI defaults remain read-only.</summary>
 public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore store, TimeProvider? clock = null,
-    GitHubRepositoryApi? taskApi = null, GitHubTaskLaunchDiagnostics? taskLaunchDiagnostics = null)
+    GitHubRepositoryApi? taskApi = null, GitHubTaskLaunchDiagnostics? taskLaunchDiagnostics = null,
+    GitHubReviewRequestDiagnostics? reviewRequestDiagnostics = null)
 {
     private readonly TimeProvider clock = clock ?? TimeProvider.System;
 
@@ -108,7 +109,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         var tasks = new GitHubTaskAdapter(api, stateStore, baseBranch, taskCreatorId, approval, finalHeadSource,
             taskApi, requireDraftPullRequest: isolatedStatusTest || requireDraftPullRequest,
             launchDiagnostics: taskLaunchDiagnostics);
-        var reviews = new GitHubReviewAdapter(api, stateStore, clock, reviewApproval, tasks);
+        var reviews = new GitHubReviewAdapter(api, stateStore, clock, reviewApproval, tasks, reviewRequestDiagnostics);
         if (message?.Data is HumanClassification classification)
         {
             var state = (await stateStore.LoadAsync(token)).State;
