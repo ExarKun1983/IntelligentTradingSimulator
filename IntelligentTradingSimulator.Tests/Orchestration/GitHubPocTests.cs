@@ -203,6 +203,27 @@ public sealed class GitHubPocTests
             });
     }
 
+    [Fact]
+    public async Task PocReceiptIncludesSafeTaskLaunchDiagnosticsWithoutExceptionMessage()
+    {
+        var diagnostics = new GitHubTaskLaunchDiagnostics();
+        diagnostics.Begin();
+        diagnostics.ObserveResponse(new(502, "request:502:abc"));
+        diagnostics.RecordFailure(new HttpRequestException("private task prompt and token"));
+        using var output = new StringWriter();
+
+        await GitHubPocCommand.WriteEvidenceAsync(output,
+            new GitHubTaskIntegrationTests.Store(), "poc-start", null, null, default, diagnostics);
+
+        using var receipt = JsonDocument.Parse(output.ToString());
+        var diagnostic = receipt.RootElement.GetProperty("TaskLaunchDiagnostic");
+        Assert.Equal("http_status", diagnostic.GetProperty("ErrorCategory").GetString());
+        Assert.Equal(502, diagnostic.GetProperty("HttpStatus").GetInt32());
+        Assert.Equal("request:502:abc", diagnostic.GetProperty("GitHubRequestId").GetString());
+        Assert.DoesNotContain("private task prompt and token", output.ToString());
+        Assert.DoesNotContain("private-user-token", output.ToString());
+    }
+
     private static async Task WithCommand(string operation, string corruption,
         Func<Dictionary<string, string>, CommandApi, StringWriter, StringWriter, int, Task> assert)
     {

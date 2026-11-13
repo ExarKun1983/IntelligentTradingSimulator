@@ -669,17 +669,59 @@ public sealed class GitHubTaskIntegrationTests
         var fixture = new ApiFixture { LoseLaunchResponse = true };
         var store = new Store();
         using var client = fixture.Client();
-        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        var diagnostics = new GitHubTaskLaunchDiagnostics();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock(),
+            taskLaunchDiagnostics: diagnostics);
         Assert.Equal(WorkerStopReason.Blocked, (await Run(host, fixture.Notification())).Reason);
         var launch = store.State.Outbox.Values.Single(effect => effect.Kind == EffectKind.LaunchTask);
         Assert.Equal(DeliveryStatus.Unknown, launch.Status);
         Assert.Null(launch.ExternalId);
         Assert.Equal(7, store.State.AdmittedIssue);
+        Assert.Equal("failed", diagnostics.Snapshot!.Outcome);
+        Assert.Equal("transport", diagnostics.Snapshot.ErrorCategory);
+        Assert.Equal(nameof(HttpRequestException), diagnostics.Snapshot.ErrorType);
+        Assert.Null(diagnostics.Snapshot.HttpStatus);
+        Assert.Null(diagnostics.Snapshot.GitHubRequestId);
 
         await Run(host, fixture.Notification());
         Assert.Single(fixture.Writes, write => write.Path.StartsWith("/agents/"));
         Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
         Assert.Equal(7, store.State.AdmittedIssue);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadGateway, "http_status", "request:502:abc", "HttpRequestException")]
+    [InlineData(HttpStatusCode.Created, "response_validation", "request:invalid:task", "KeyNotFoundException")]
+    public async Task FailedLaunchRecordsSanitizedHttpAndResponseDiagnostics(HttpStatusCode status,
+        string expectedCategory, string requestId, string expectedErrorType)
+    {
+        var fixture = new ApiFixture
+        {
+            TaskPostStatus = status,
+            TaskPostRequestId = requestId,
+            Corruption = status == HttpStatusCode.Created ? "missing-creator" : null
+        };
+        var store = new Store();
+        using var client = fixture.Client();
+        var diagnostics = new GitHubTaskLaunchDiagnostics();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock(),
+            taskLaunchDiagnostics: diagnostics);
+
+        Assert.NotEqual(WorkerStopReason.Settled, (await Run(host, fixture.Notification())).Reason);
+
+        var diagnostic = Assert.IsType<GitHubTaskLaunchDiagnostic>(diagnostics.Snapshot);
+        Assert.Equal("failed", diagnostic.Outcome);
+        Assert.Equal((int)status, diagnostic.HttpStatus);
+        Assert.Equal(requestId, diagnostic.GitHubRequestId);
+        Assert.Equal(expectedCategory, diagnostic.ErrorCategory);
+        Assert.Equal(expectedErrorType, diagnostic.ErrorType);
+        Assert.Equal(status == HttpStatusCode.Created ? "Object" : null, diagnostic.ResponseKind);
+        Assert.Equal(status == HttpStatusCode.Created ? true : null, diagnostic.HasTaskId);
+        Assert.Equal(status == HttpStatusCode.Created ? true : null, diagnostic.HasRepository);
+        Assert.Equal(status == HttpStatusCode.Created ? false : null, diagnostic.HasCreator);
+        Assert.Equal(status == HttpStatusCode.Created ? true : null, diagnostic.HasState);
+        Assert.Equal(DeliveryStatus.Unknown,
+            store.State.Outbox.Values.Single(effect => effect.Kind == EffectKind.LaunchTask).Status);
     }
 
     [Fact]
@@ -904,6 +946,8 @@ public sealed class GitHubTaskIntegrationTests
         public string? Corruption { get; set; }
         public string RunEvent { get; set; } = "issues";
         public bool LoseLaunchResponse { get; init; }
+        public HttpStatusCode TaskPostStatus { get; init; } = HttpStatusCode.Created;
+        public string? TaskPostRequestId { get; init; } = "task-create-request";
         public bool PermissionMismatch { get; init; }
         public Action? AfterLaunch { get; set; }
         private int launchCount;
@@ -949,7 +993,10 @@ public sealed class GitHubTaskIntegrationTests
                     var taskId = ++launchCount == 1 ? "remote-task" : $"remote-task-{launchCount}";
                     AfterLaunch?.Invoke();
                     if (LoseLaunchResponse) throw new HttpRequestException("Lost launch response.");
-                    return Response(TaskResponse(taskId));
+                    var response = Response(TaskResponse(taskId), TaskPostStatus);
+                    if (TaskPostRequestId is not null)
+                        response.Headers.Add("X-GitHub-Request-Id", TaskPostRequestId);
+                    return response;
                 }
                 if (path == prefix + "issues/7/labels" || path == prefix + "issues/237/labels")
                     labels.AddRange(json.RootElement.GetProperty("labels").EnumerateArray().Select(value => value.GetString()!));
@@ -999,17 +1046,27 @@ public sealed class GitHubTaskIntegrationTests
             return Response(result);
         }
 
-        private object TaskResponse(string taskId) => new
+        private object TaskResponse(string taskId)
         {
-            id = Corruption == "task" ? "other-task" : taskId,
-            repository = new { id = Corruption == "repository" ? 2 : 1 },
-            creator = new { id = Corruption == "creator" ? 66 : 55 },
-            state = Corruption == "failed" ? "failed" : Corruption == "waiting" ? "waiting_for_user" : RemoteState,
-            updated_at = Now.AddMinutes(1), session_count = Corruption == "session-count" ? 2 : 1,
-            sessions = new[] { new { id = "session", task_id = taskId, state = Corruption == "session" ? "in_progress" : "completed",
-                repository = new { id = 1 }, completed_at = Now.AddMinutes(1) } },
-            artifacts = Artifacts()
-        };
+            if (Corruption == "missing-creator")
+                return new Dictionary<string, object?>
+                {
+                    ["id"] = taskId,
+                    ["repository"] = new { id = 1 },
+                    ["state"] = RemoteState
+                };
+            return new
+            {
+                id = Corruption == "task" ? "other-task" : taskId,
+                repository = new { id = Corruption == "repository" ? 2 : 1 },
+                creator = new { id = Corruption == "creator" ? 66 : 55 },
+                state = Corruption == "failed" ? "failed" : Corruption == "waiting" ? "waiting_for_user" : RemoteState,
+                updated_at = Now.AddMinutes(1), session_count = Corruption == "session-count" ? 2 : 1,
+                sessions = new[] { new { id = "session", task_id = taskId, state = Corruption == "session" ? "in_progress" : "completed",
+                    repository = new { id = 1 }, completed_at = Now.AddMinutes(1) } },
+                artifacts = Artifacts()
+            };
+        }
         private object[] Artifacts()
         {
             if (Corruption == "artifact") return [];
@@ -1045,7 +1102,7 @@ public sealed class GitHubTaskIntegrationTests
             @base = new { @ref = Corruption == "base" ? "other" : BaseBranch,
                 repo = new { id = Corruption == "base-repository" ? 2 : 1 } }
         };
-        private static HttpResponseMessage Response(object result) => new(HttpStatusCode.OK)
+        private static HttpResponseMessage Response(object result, HttpStatusCode status = HttpStatusCode.OK) => new(status)
             { Content = new StringContent(JsonSerializer.Serialize(result), Encoding.UTF8, "application/json") };
     }
 }
