@@ -94,7 +94,7 @@ jobs:
   reconcile:
     # Temporary opt-in for the single reviewed test Issue; not production cutover.
     # Audited abandonment is recovery-only and separately operator-dispatched; it never enables task execution.
-    if: ${{ github.workflow_ref == format('{0}/.github/workflows/agent-state-machine.yml@refs/heads/master', github.repository) && (vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.operation == 'abandon-uncertain-review')) && vars.ORCHESTRATION_TEST_ISSUE == '237' && vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '227' && vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1' }}
+    if: ${{ github.workflow_ref == format('{0}/.github/workflows/agent-state-machine.yml@refs/heads/master', github.repository) && (vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.operation == 'abandon-uncertain-review')) && vars.ORCHESTRATION_TEST_ISSUE == '261' && vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '' && vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     environment: agent-orchestration

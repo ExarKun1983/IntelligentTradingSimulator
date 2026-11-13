@@ -1,0 +1,80 @@
+name: Copilot review E2E state bootstrap (opt-in)
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Dedicated review E2E Issue
+        required: true
+        default: "261"
+        type: string
+      confirmation:
+        description: Type BOOTSTRAP-REVIEW-E2E-261 to authorize one-time empty-state creation
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+  issues: read
+
+concurrency:
+  group: review-e2e-261-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    if: >-
+      ${{
+        github.repository == 'ExarKun1983/IntelligentTradingSimulator' &&
+        github.workflow_ref == format('{0}/.github/workflows/agent-review-e2e-bootstrap.yml@refs/heads/master', github.repository) &&
+        github.workflow_sha == vars.ORCHESTRATION_DEFINITION_SHA &&
+        github.actor_id == vars.ORCHESTRATION_ACTOR_ID &&
+        github.triggering_actor == github.actor &&
+        github.run_attempt == 1 &&
+        inputs.issue == '261' &&
+        inputs.confirmation == 'BOOTSTRAP-REVIEW-E2E-261' &&
+        vars.ORCHESTRATION_REVIEW_E2E_BOOTSTRAP_APPROVED == 'true' &&
+        vars.ORCHESTRATION_ACTIVATION_APPROVED == 'false' &&
+        vars.ORCHESTRATION_TEST_ISSUE == '261' &&
+        vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '' &&
+        vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'
+      }}
+    runs-on: ubuntu-latest
+    environment: agent-orchestration
+    timeout-minutes: 10
+    steps:
+      - name: Require reviewed master definition
+        env:
+          DEFINITION_SHA: ${{ vars.ORCHESTRATION_DEFINITION_SHA }}
+        run: |
+          [[ "$DEFINITION_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GITHUB_WORKFLOW_SHA" == "$DEFINITION_SHA" ]]
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ vars.ORCHESTRATION_DEFINITION_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+      - name: Build trusted bootstrap command
+        run: dotnet build IntelligentTradingSimulator.Orchestration --configuration Release
+      - name: Create the empty isolated state once
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ORCHESTRATION_DEFINITION_SHA: ${{ vars.ORCHESTRATION_DEFINITION_SHA }}
+          ORCHESTRATION_ACTOR_ID: ${{ vars.ORCHESTRATION_ACTOR_ID }}
+          ORCHESTRATION_REVIEW_E2E_BOOTSTRAP_APPROVED: ${{ vars.ORCHESTRATION_REVIEW_E2E_BOOTSTRAP_APPROVED }}
+          ORCHESTRATION_ACTIVATION_APPROVED: ${{ vars.ORCHESTRATION_ACTIVATION_APPROVED }}
+        run: |
+          dotnet run --no-build --project IntelligentTradingSimulator.Orchestration \
+            --configuration Release -- --github-live --github-review-e2e-bootstrap --execute \
+            > "$RUNNER_TEMP/review-e2e-bootstrap-result.json"
+      - name: Preserve bootstrap receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: review-e2e-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/review-e2e-bootstrap-result.json
+          if-no-files-found: warn
+          retention-days: 7

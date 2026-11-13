@@ -106,6 +106,7 @@ public class GitHubGitTransportTests
     [Theory]
     [InlineData(GitHubIsolatedStatusTestSettings.StateReference)]
     [InlineData(GitHubPocSettings.StateReference)]
+    [InlineData(GitHubReviewE2ETestProfile.StateReference)]
     public async Task IsolatedTransportCanOnlyReadItsDedicatedRefAndCannotCreateItDuringRuntime(string reference)
     {
         var handler = new StubHandler((request, _) =>
@@ -127,6 +128,7 @@ public class GitHubGitTransportTests
     [Theory]
     [InlineData(GitHubIsolatedStatusTestSettings.StateReference)]
     [InlineData(GitHubPocSettings.StateReference)]
+    [InlineData(GitHubReviewE2ETestProfile.StateReference)]
     public async Task IsolatedBootstrapSendsFullyQualifiedRefAndDoesNotRepeatCreation(string reference)
     {
         var exists = false;

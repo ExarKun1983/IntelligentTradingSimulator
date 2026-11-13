@@ -17,6 +17,12 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
 {
     public GitHubRecoveryApproval Recovery { get; init; } = new();
     public int MaxRepairTasks { get; init; } = 5;
+    public string StateReference => TestIssue == GitHubReviewE2ETestProfile.IssueNumber
+        ? GitHubReviewE2ETestProfile.StateReference : "refs/heads/agent-state";
+
+    public string? TestManifestDigest => TestIssue == GitHubReviewE2ETestProfile.IssueNumber
+        ? GitHubReviewE2ETestProfile.ManifestDigest(Repository, RepositoryId, WakeRoute.DefinitionSha)
+        : null;
 
     public void ValidatePipelinePrerequisites()
     {
@@ -86,6 +92,8 @@ public static class GitHubLiveCommand
 {
     public static async Task<int> RunAsync(string[] args, TextWriter output, TextWriter error)
     {
+        if (args.Contains("--github-review-e2e-bootstrap", StringComparer.Ordinal))
+            return await GitHubReviewE2ETestBootstrapCommand.RunAsync(args, output, error);
         if (args.Contains("--github-poc-recovery", StringComparer.Ordinal))
             return await GitHubPocRecoveryCommand.RunAsync(args, output, error);
         if (args.Contains("--github-poc", StringComparer.Ordinal))
@@ -134,13 +142,15 @@ public static class GitHubLiveCommand
             var api = new GitHubRepositoryApi(client, settings.Repository, settings.RepositoryId);
             var taskApi = new GitHubRepositoryApi(userClient, settings.Repository, settings.RepositoryId);
             var publisher = await GitHubLiveCredentials.VerifyAsync(api, taskApi, settings.ActorId);
-            var store = new GitStateStore(new GitHubGitTransport(client, settings.Repository, allowMutations: true), settings.Repository);
+            var store = new GitStateStore(new GitHubGitTransport(client, settings.Repository, allowMutations: true,
+                stateReference: settings.StateReference), settings.Repository, settings.StateReference);
             var host = new GitHubOrchestrationHost(api, store, taskApi: taskApi);
             var runId = Environment.GetEnvironmentVariable("GITHUB_RUN_ID") ?? throw new InvalidDataException("Missing run ID.");
             WorkerResult? result;
             if (eventName is "issues" or "workflow_dispatch")
             {
                 var state = (await store.LoadAsync(default)).State;
+                ValidateReviewTestManifest(state, settings);
                 var issue = eventName == "issues" ? payload.RootElement.GetProperty("issue").GetProperty("number").GetInt32() :
                     int.Parse(payload.RootElement.GetProperty("inputs").GetProperty("issue").GetString()!, CultureInfo.InvariantCulture);
                 ValidateTestScope(state, settings, issue);
@@ -172,7 +182,11 @@ public static class GitHubLiveCommand
             else
             {
                 if (settings.TestIssue is not null)
-                    ValidateTestScope((await store.LoadAsync(default)).State, settings, null);
+                {
+                    var state = (await store.LoadAsync(default)).State;
+                    ValidateReviewTestManifest(state, settings);
+                    ValidateTestScope(state, settings, null);
+                }
                 result = await host.ReconcileWakeAsync(payload.RootElement, eventName, runId, settings.WakeRoute,
                     settings.Wake, publisher.ActorId, settings.BaseBranch, settings.ActorId, settings.Tasks,
                     ciRoute: settings.CiRoute, ciApproval: settings.Ci, reviewApproval: settings.Review,
@@ -202,6 +216,13 @@ public static class GitHubLiveCommand
         if (requestedIssue is { } requested && requested != testIssue)
             throw new InvalidDataException("Bounded test mode rejected an Issue outside its configured scope.");
         CreateBoundedScope(settings)!.Validate(state);
+    }
+
+    private static void ValidateReviewTestManifest(RepositoryState state, GitHubLiveSettings settings)
+    {
+        if (settings.TestManifestDigest is { } expected &&
+            state.IsolatedTestManifestDigest != expected)
+            throw new InvalidDataException("Review E2E state is not bootstrapped for the current trusted definition.");
     }
 
     private static BoundedOrchestrationScope? CreateBoundedScope(GitHubLiveSettings settings) =>

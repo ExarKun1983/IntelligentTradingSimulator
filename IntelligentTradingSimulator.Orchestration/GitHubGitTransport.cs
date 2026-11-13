@@ -26,10 +26,11 @@ public sealed partial class GitHubGitTransport : IGitObjectRefTransport
         this.client = client;
         this.allowMutations = allowMutations;
         if (stateReference is not ("refs/heads/agent-state" or "refs/heads/agent-state-status-revocation-v1" or
-            GitHubPocRecoveryCommand.LegacyStateReference or GitHubPocSettings.StateReference))
+            GitHubPocRecoveryCommand.LegacyStateReference or GitHubPocSettings.StateReference or
+            GitHubReviewE2ETestProfile.StateReference))
             throw new ArgumentException("Only explicitly supported state refs are permitted.", nameof(stateReference));
         if (allowIsolatedInitialization && stateReference is not ("refs/heads/agent-state-status-revocation-v1" or
-            GitHubPocSettings.StateReference))
+            GitHubPocSettings.StateReference or GitHubReviewE2ETestProfile.StateReference))
             throw new ArgumentException("Only the dedicated isolated test ref supports one-shot initialization.", nameof(allowIsolatedInitialization));
         this.stateReference = stateReference;
         this.allowIsolatedInitialization = allowIsolatedInitialization;
@@ -114,7 +115,7 @@ public sealed partial class GitHubGitTransport : IGitObjectRefTransport
         if (expectedTip is null)
         {
             if (!allowIsolatedInitialization || stateReference is not ("refs/heads/agent-state-status-revocation-v1" or
-                GitHubPocSettings.StateReference))
+                GitHubPocSettings.StateReference or GitHubReviewE2ETestProfile.StateReference))
                 throw new InvalidOperationException("Automatic state-ref creation is not supported.");
             if (await ReadRefAsync(reference, cancellationToken) is not null) return new(false);
             using var created = await client.PostAsJsonAsync(prefix + "git/refs",

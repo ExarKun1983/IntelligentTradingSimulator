@@ -71,8 +71,8 @@ public sealed class GitHubLiveCredentialsTests
         Assert.Contains("github.workflow_ref == format('{0}/.github/workflows/agent-state-machine.yml@refs/heads/master', github.repository)", workflow);
         Assert.DoesNotContain("github.ref == 'refs/heads/master'", workflow);
         Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true'", workflow);
-        Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '237'", workflow);
-        Assert.Contains("vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '227'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '261'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_RETIRED_TEST_ISSUE == ''", workflow);
         Assert.Contains("vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'", workflow);
         Assert.Contains("GITHUB_TOKEN: ${{ github.token }}", workflow);
         Assert.Contains("ORCHESTRATION_USER_TOKEN: ${{ secrets.ORCHESTRATION_USER_TOKEN }}", workflow);
@@ -87,7 +87,8 @@ public sealed class GitHubLiveCredentialsTests
         Assert.Contains("github.ref == vars.ORCHESTRATION_CI_REF", ci);
         Assert.Contains("startsWith(github.ref, 'refs/tags/')", ci);
         Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true'", ci);
-        Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '237'", ci);
+        Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '261'", ci);
+        Assert.Contains("vars.ORCHESTRATION_RETIRED_TEST_ISSUE == ''", ci);
         Assert.Contains("vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'", ci);
     }
 
@@ -120,6 +121,29 @@ public sealed class GitHubLiveCredentialsTests
     }
 
     [Fact]
+    public void ReviewE2eBootstrapIsOneShotAndCannotActivateTheOrchestrator()
+    {
+        var workflow = File.ReadAllText(Path.Combine(FindRoot(),
+            ".github/workflows/agent-review-e2e-bootstrap.yml"));
+        Assert.Contains("workflow_dispatch:", workflow);
+        Assert.Contains("permissions:\n  actions: read\n  contents: write\n  issues: read", workflow);
+        Assert.Contains("vars.ORCHESTRATION_REVIEW_E2E_BOOTSTRAP_APPROVED == 'true'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'false'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '261'", workflow);
+        var profile = File.ReadAllText(Path.Combine(FindRoot(),
+            "IntelligentTradingSimulator.Orchestration/GitHubReviewE2ETestProfile.cs"));
+        Assert.Contains("refs/heads/agent-state-review-e2e-261-v1", profile);
+        Assert.Contains("BOOTSTRAP-REVIEW-E2E-261", workflow);
+        Assert.Contains("--github-review-e2e-bootstrap --execute", workflow);
+        Assert.DoesNotContain("ORCHESTRATION_USER_TOKEN", workflow);
+        Assert.DoesNotContain("agent:ready", workflow);
+        var command = File.ReadAllText(Path.Combine(FindRoot(),
+            "IntelligentTradingSimulator.Orchestration/GitHubReviewE2ETestBootstrapCommand.cs"));
+        Assert.Contains("ingress.Ready", command);
+        Assert.Contains("GetProperty(\"id\").GetInt64() != runId", command);
+    }
+
+    [Fact]
     public void GateDiagnosticsAreManualAndDoNotExposeLiveCapabilities()
     {
         var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-gate-diagnostics.yml"));
@@ -128,14 +152,14 @@ public sealed class GitHubLiveCredentialsTests
         Assert.Contains("timeout-minutes: 2", workflow);
         Assert.Contains("github.workflow_ref == format('{0}/.github/workflows/agent-gate-diagnostics.yml@refs/heads/master', github.repository)", workflow);
         Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true'", workflow);
-        Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '237'", workflow);
-        Assert.Contains("vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '227'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '261'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_RETIRED_TEST_ISSUE == ''", workflow);
         Assert.Contains("vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'", workflow);
         Assert.Contains("vars.ORCHESTRATION_DEFINITION_SHA == github.sha", workflow);
         Assert.Contains("vars.ORCHESTRATION_REVIEW_POLICY_VERIFIED == 'true'", workflow);
         Assert.Contains("vars.ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED == 'true'", workflow);
         Assert.Contains("vars.ORCHESTRATION_TRUSTED_CI_VERIFIED == 'true'", workflow);
-        Assert.Contains("agent-managed-ci-test-237-v1", workflow);
+        Assert.Contains("agent-managed-ci-test-261-v1", workflow);
         Assert.Contains("GH_TOKEN: ${{ github.token }}", workflow);
         Assert.Contains("CI_DEFINITION_SHA matches the new tag target", workflow);
         Assert.Contains("GITHUB_STEP_SUMMARY", workflow);
@@ -145,7 +169,7 @@ public sealed class GitHubLiveCredentialsTests
         Assert.DoesNotContain("contents: write", workflow);
         Assert.DoesNotContain("uses:", workflow);
         Assert.DoesNotContain("--github-live", workflow);
-        Assert.Contains("git/ref/tags/agent-managed-ci-test-237-v1", workflow);
+        Assert.Contains("git/ref/tags/agent-managed-ci-test-261-v1", workflow);
         Assert.Contains("select(.object.type == \"commit\")", workflow);
         Assert.DoesNotContain("gh workflow", workflow);
         Assert.DoesNotContain("curl ", workflow);
@@ -234,6 +258,24 @@ public sealed class GitHubLiveCredentialsTests
             GitHubLiveSettings.Read(name => values.GetValueOrDefault(name)));
         values.Remove("ORCHESTRATION_TEST_ISSUE");
         values["ORCHESTRATION_TEST_MAX_REPAIR_TASKS"] = "1";
+        Assert.Throws<InvalidDataException>(() =>
+            GitHubLiveSettings.Read(name => values.GetValueOrDefault(name)));
+    }
+
+    [Fact]
+    public void ReviewE2eIssueUsesItsOwnManifestAndStateRefWithoutRetiredIssue()
+    {
+        var values = LiveSettingsValues();
+        values["ORCHESTRATION_TEST_ISSUE"] = "261";
+        values["ORCHESTRATION_TEST_MAX_REPAIR_TASKS"] = "1";
+        values.Remove("ORCHESTRATION_RETIRED_TEST_ISSUE");
+
+        var settings = GitHubLiveSettings.Read(name => values.GetValueOrDefault(name));
+
+        Assert.Equal(GitHubReviewE2ETestProfile.StateReference, settings.StateReference);
+        Assert.Equal(GitHubReviewE2ETestProfile.ManifestDigest(
+            settings.Repository, settings.RepositoryId, settings.WakeRoute.DefinitionSha), settings.TestManifestDigest);
+        values["ORCHESTRATION_RETIRED_TEST_ISSUE"] = "227";
         Assert.Throws<InvalidDataException>(() =>
             GitHubLiveSettings.Read(name => values.GetValueOrDefault(name)));
     }
