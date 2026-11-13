@@ -38,6 +38,22 @@ public sealed class GitHubReviewRequestDiagnostics(TextWriter? log = null)
         }
     }
 
+    internal void BeginAttempt(int attempt)
+    {
+        lock (gate)
+        {
+            if (current is null) return;
+            current = current with
+            {
+                Stage = "post", PostAttempted = true, Attempt = attempt,
+                HttpStatus = null, GitHubRequestId = null, RequestNodeId = null,
+                ResponseState = null, FailureReason = null, RetryAfterSeconds = null,
+                ErrorCategory = null, ErrorType = null
+            };
+            Write();
+        }
+    }
+
     internal void ObserveResponse(GitHubCopilotReviewResponse response, int attempt)
     {
         lock (gate)
@@ -109,6 +125,7 @@ public sealed class GitHubReviewRequestDiagnostics(TextWriter? log = null)
                 JsonException => "invalid_json",
                 InvalidDataException or InvalidOperationException or KeyNotFoundException or FormatException => "validation",
                 OperationCanceledException => "cancelled",
+                IOException when current.Stage == "acknowledgement_save" => "persistence_or_io",
                 IOException when current.HttpStatus is < 200 or >= 300 => "http_status",
                 IOException when current.HttpStatus == 201 => "response_body",
                 IOException when current.Stage == "post" => "transport",
