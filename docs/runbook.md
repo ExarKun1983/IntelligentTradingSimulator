@@ -1762,10 +1762,15 @@ and set `ORCHESTRATION_POC_APPROVED=true`. All dispatches select `master` and su
 Every invocation saves `agent-poc-result.json` as a seven-day Actions artifact
 with phase, stop reason, task identities, current CI/review boundaries and effect
 receipts. Full review evidence and classification history remain in canonical
-state. Errors report a sanitized error type and the state ref to inspect; they
-never automatically repeat a POST. Use `operation=pause` with a reason to save
-a hold while authorization is still valid. Expiry stops further driver effects,
-not an already submitted remote task or CI run. Any further recovery after an
+state. The receipt also includes a bounded `TaskLaunchDiagnostic` containing the
+launch outcome, HTTP status, validated GitHub request ID, exception category/type,
+response root kind and presence of required task fields. It never includes the
+request prompt, credentials, response body or exception message. A missing HTTP
+response has no status/request ID; diagnostics do not resolve an unknown outcome
+or authorize retry. Errors report a sanitized error type and the state ref to
+inspect; they never automatically repeat a POST. Use `operation=pause` with a
+reason to save a hold while authorization is still valid. Expiry stops further
+driver effects, not an already submitted remote task or CI run. Any further recovery after an
 ambiguous write or expiry needs a separate operator decision, not state
 replacement or an automatic expiry extension.
 

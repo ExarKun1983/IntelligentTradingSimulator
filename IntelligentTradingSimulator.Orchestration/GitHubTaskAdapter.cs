@@ -27,7 +27,8 @@ public interface ICandidateShaValidator
 public sealed class GitHubTaskAdapter(
     GitHubRepositoryApi api, IStateStore store, string baseBranch, long taskCreatorId,
     GitHubExecutionApproval? approval = null, ITaskFinalHeadSource? finalHeadSource = null,
-    GitHubRepositoryApi? taskApi = null, bool requireDraftPullRequest = false) :
+    GitHubRepositoryApi? taskApi = null, bool requireDraftPullRequest = false,
+    GitHubTaskLaunchDiagnostics? launchDiagnostics = null) :
     IVerifiedAgentEffectAdapter, ICandidateShaValidator
 {
     public bool AgentEffectsAuthorized => approval?.AllowsTasks == true;
@@ -71,10 +72,25 @@ public sealed class GitHubTaskAdapter(
             headRef = pr.RootElement.GetProperty("head").GetProperty("ref").GetString();
         }
         else throw new InvalidDataException("Invalid task launch source.");
-        using var result = await taskApi.PostGlobalAsync(TaskPath,
-            new { prompt = intent.TaskPrompt, base_ref = baseBranch, head_ref = headRef, create_pull_request = headRef is null }, token);
-        var id = ValidateTask(result.RootElement, null);
-        return new(DeliveryStatus.Succeeded, id);
+        launchDiagnostics?.Begin();
+        try
+        {
+            Action<GitHubApiResponseMetadata>? observeResponse =
+                launchDiagnostics is null ? null : launchDiagnostics.ObserveResponse;
+            using var result = await taskApi.PostGlobalAsync(TaskPath,
+                new { prompt = intent.TaskPrompt, base_ref = baseBranch, head_ref = headRef,
+                    create_pull_request = headRef is null }, token, observeResponse);
+            launchDiagnostics?.ObserveBody(result.RootElement);
+            var id = ValidateTask(result.RootElement, null);
+            launchDiagnostics?.MarkValidated();
+            return new(DeliveryStatus.Succeeded, id);
+        }
+        catch (Exception exception) when (exception is HttpRequestException or JsonException or InvalidDataException or
+            InvalidOperationException or KeyNotFoundException or FormatException or OperationCanceledException or IOException)
+        {
+            launchDiagnostics?.RecordFailure(exception);
+            throw;
+        }
     }
 
     public async Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken token)

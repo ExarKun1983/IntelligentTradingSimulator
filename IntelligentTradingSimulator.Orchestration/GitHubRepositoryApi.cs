@@ -180,11 +180,23 @@ public sealed partial class GitHubRepositoryApi
         return await ReadJsonAsync(response, token);
     }
 
-    internal async Task<JsonDocument> PostGlobalAsync(string path, object payload, CancellationToken token)
+    internal async Task<JsonDocument> PostGlobalAsync(string path, object payload, CancellationToken token,
+        Action<GitHubApiResponseMetadata>? observeResponse = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(payload) };
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+        observeResponse?.Invoke(new((int)response.StatusCode, GitHubRequestId(response)));
         return await ReadJsonAsync(response, token);
+    }
+
+    private static string? GitHubRequestId(HttpResponseMessage response)
+    {
+        if (!response.Headers.TryGetValues("X-GitHub-Request-Id", out var values)) return null;
+        var requestId = values.FirstOrDefault();
+        return requestId is { Length: > 0 and <= 128 } &&
+            requestId.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or ':')
+                ? requestId
+                : null;
     }
 
     internal async Task<int> ResolvePullArtifactAsync(JsonElement artifact, CancellationToken token,

@@ -14,6 +14,7 @@ public static class GitHubPocCommand
     internal static async Task<int> RunAsync(string[] args, TextWriter output, TextWriter error,
         Func<string, string?> read, Func<string, HttpClient> createClient)
     {
+        var taskLaunchDiagnostics = new GitHubTaskLaunchDiagnostics();
         try
         {
             if (!args.Contains("--execute", StringComparer.Ordinal) ||
@@ -96,7 +97,8 @@ public static class GitHubPocCommand
             if (operation != "poc-start" && !snapshot.State.Issues.ContainsKey(GitHubPocSettings.IssueNumber))
                 throw new InvalidOperationException("PoC has not been started.");
 
-            var host = new GitHubOrchestrationHost(api, store, taskApi: taskApi);
+            var host = new GitHubOrchestrationHost(api, store, taskApi: taskApi,
+                taskLaunchDiagnostics: taskLaunchDiagnostics);
             var result = await host.ReconcileAsync(root, "workflow_dispatch", runId, repositoryGeneration,
                 issueGeneration, occurredAt, [publisher.ActorId], publisher.ActorId, GitHubPocSettings.BaseBranch,
                 settings.ActorId, settings.Tasks, token: token, reviewApproval: settings.Review,
@@ -109,7 +111,7 @@ public static class GitHubPocCommand
                 settings.Tasks, taskApi: taskApi, requireDraftPullRequest: true);
             await VerifyDefinitionAsync(api, settings.DefinitionSha, token);
             var final = (await store.LoadAsync(token)).State.Issues[GitHubPocSettings.IssueNumber];
-            await WriteEvidenceAsync(output, store, operation!, result, candidate, token);
+            await WriteEvidenceAsync(output, store, operation!, result, candidate, token, taskLaunchDiagnostics);
             return result.Reason == WorkerStopReason.Blocked &&
                 final.HoldReason != "Review requires human classification." ? 1 : 0;
         }
@@ -120,7 +122,8 @@ public static class GitHubPocCommand
             output.WriteLine(JsonSerializer.Serialize(new
             {
                 Mode = "github-poc-failure", ErrorType = exception.GetType().Name,
-                Issue = GitHubPocSettings.IssueNumber, StateRef = GitHubPocSettings.StateReference
+                Issue = GitHubPocSettings.IssueNumber, StateRef = GitHubPocSettings.StateReference,
+                TaskLaunchDiagnostic = taskLaunchDiagnostics.Snapshot
             }, StateJson.Options));
             error.WriteLine($"PoC stopped ({exception.GetType().Name}); inspect canonical state before continuing. Do not retry an uncertain write.");
             return 1;
@@ -155,7 +158,8 @@ public static class GitHubPocCommand
     }
 
     internal static async Task WriteEvidenceAsync(TextWriter output, IStateStore store, string operation,
-        WorkerResult? result, GitHubTaskAdapter? candidate, CancellationToken token)
+        WorkerResult? result, GitHubTaskAdapter? candidate, CancellationToken token,
+        GitHubTaskLaunchDiagnostics? taskLaunchDiagnostics = null)
     {
         var snapshot = await store.LoadAsync(token);
         var issue = snapshot.State.Issues.GetValueOrDefault(GitHubPocSettings.IssueNumber);
@@ -167,6 +171,7 @@ public static class GitHubPocCommand
             ManifestDigest = snapshot.State.IsolatedTestManifestDigest, snapshot.State.Version,
             Phase = issue?.Phase.ToString(), issue?.PullRequest, issue?.HeadSha, issue?.HoldReason,
             issue?.CurrentHandoffId, issue?.Round, StopReason = result?.Reason.ToString(),
+            TaskLaunchDiagnostic = taskLaunchDiagnostics?.Snapshot,
             Tasks = issue?.Tasks.Values.Select(task => new
                 { task.Id, task.Kind, task.Status, task.ExternalId, task.SourceSha, task.FinalSha }).ToArray(),
             Ci = issue?.Ci,
