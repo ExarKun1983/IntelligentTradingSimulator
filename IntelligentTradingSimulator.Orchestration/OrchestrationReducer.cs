@@ -236,7 +236,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 if (string.IsNullOrWhiteSpace(result.ReviewId) || issue.Review is not { } review ||
                     review.ReviewId != result.ReviewId || review.TaskId != result.TaskId ||
                     review.Round != result.Round || review.Sha != result.Sha ||
-                    review.LifecycleState is not (ReviewLifecycleState.NotRequested or ReviewLifecycleState.Requested or ReviewLifecycleState.Pending) ||
+                    review.LifecycleState is not (ReviewLifecycleState.NotRequested or ReviewLifecycleState.Requested or
+                        ReviewLifecycleState.Pending or ReviewLifecycleState.TimedOut) ||
                     review.Classification is not null ||
                     issue.Ci?.Green != true || !CompletedTaskMatches(issue, result.TaskId, result.Round, result.Sha))
                     throw new InvalidOperationException("Ineligible review result.");
@@ -740,6 +741,9 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             (outcome.ExternalId is null || existing.ExternalId == outcome.ExternalId) &&
             (outcome.FailureCode is null || existing.FailureCode == outcome.FailureCode))
             return StateJson.Clone(input);
+        if (existing.Status == DeliveryStatus.Failed && outcome.Status == DeliveryStatus.Failed &&
+            existing.ExternalId == outcome.ExternalId && existing.FailureCode == outcome.FailureCode)
+            return StateJson.Clone(input);
         return ChangeEffect(input, id, effect =>
         {
             if (effect.Status is not (DeliveryStatus.Executing or DeliveryStatus.Unknown))
@@ -801,7 +805,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         return state;
     }
 
-    public RepositoryState RecordReviewFailureReason(RepositoryState input, string id, string reason)
+    public RepositoryState RecordReviewRejection(RepositoryState input, string id, string reason, DateTimeOffset now)
     {
         ValidateState(input);
         var state = StateJson.Clone(input);
@@ -810,11 +814,19 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         if (intent.Kind != EffectKind.RequestReview || intent.Status != DeliveryStatus.Executing ||
             issue.Generation != intent.Generation || issue.Review?.IntentId != id ||
             issue.Review.RequestBoundary is not { Confirmed: false } ||
+            issue.Review.ReviewId is not null ||
             string.IsNullOrWhiteSpace(reason) || reason.Length > 64 ||
             !reason.All(character => char.IsAsciiLetterUpper(character) || char.IsAsciiDigit(character) || character == '_'))
             throw new InvalidOperationException("Invalid review failure evidence.");
         issue.Review.RequestFailureReason = reason;
+        issue.Review.LifecycleState = ReviewLifecycleState.Failed;
+        intent.Status = DeliveryStatus.Failed;
+        intent.CompletedAt = now;
+        intent.FailureCode = EffectFailureCode.ReviewRequestRejected;
+        Hold(issue, "Effect failed.");
+        CancelPendingWork(state, issue);
         Touch(state, issue, state.LastEventId);
+        ReleaseIfSafe(state, issue);
         return state;
     }
 
@@ -911,7 +923,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     issue.Review.LifecycleState = ReviewLifecycleState.Failed;
                 else if (outcome.Status == DeliveryStatus.Unknown)
                     issue.Review.LifecycleState = ReviewLifecycleState.RequestUnknown;
-                else if (outcome.Status == DeliveryStatus.Succeeded &&
+                else if (outcome.Status == DeliveryStatus.Succeeded && issue.Review.ReviewDeadlineAt is not null &&
                     issue.Review.LifecycleState is ReviewLifecycleState.NotRequested or ReviewLifecycleState.RequestUnknown)
                     issue.Review.LifecycleState = ReviewLifecycleState.Requested;
             }

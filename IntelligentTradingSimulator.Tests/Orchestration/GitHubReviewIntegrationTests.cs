@@ -75,6 +75,41 @@ public sealed class GitHubReviewIntegrationTests
         Assert.Equal(0, handler.Posts);
     }
 
+    [Fact]
+    public async Task LateReviewResultReleasesAdmissionWithoutClearingTimeoutHold()
+    {
+        var state = Eligible();
+        var issue = state.Issues[7];
+        issue.Phase = Phase.BLOCKED;
+        issue.ActiveAuthorized = false;
+        issue.ReactivationRequired = true;
+        issue.HoldReason = "Copilot review timed out.";
+        issue.Review!.RequestBoundary = new(175728472, "BOT_kgDOCnlnWA", Now.AddMinutes(-2),
+            [100], Confirmed: true, RequestNodeId: "RRR_kwDOAA",
+            AcceptedAt: Now.AddMinutes(-2), DeadlineAt: Now.AddMinutes(-1));
+        issue.Review.ReviewId = "review-request:review";
+        issue.Review.LifecycleState = ReviewLifecycleState.TimedOut;
+        issue.Review.ReviewDeadlineAt = Now.AddMinutes(-1);
+        state.Outbox["review"].Status = DeliveryStatus.Succeeded;
+        state.Outbox["review"].ExternalId = "review-request:review";
+        var store = new Store(state);
+        var handler = new Api { HasOutput = true };
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, store);
+
+        var message = await adapter.ReadEventAsync(store.State, issue, default);
+        Assert.IsType<ReviewResult>(message!.Data);
+        store.State = new OrchestrationReducer(new Allow()).Apply(store.State, message);
+
+        Assert.Equal(ReviewLifecycleState.Completed, store.State.Issues[7].Review!.LifecycleState);
+        Assert.Equal(ReviewClassification.NeedsHuman, store.State.Issues[7].Review!.Classification);
+        Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
+        Assert.Equal("Copilot review timed out.", store.State.Issues[7].HoldReason);
+        Assert.True(store.State.Issues[7].ReactivationRequired);
+        Assert.Null(store.State.AdmittedIssue);
+        Assert.Equal(0, handler.Posts);
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.Forbidden, "ACTOR_FLAGGED")]
     [InlineData(HttpStatusCode.NotFound, null)]
@@ -102,6 +137,43 @@ public sealed class GitHubReviewIntegrationTests
         Assert.Equal(1, handler.Posts);
     }
 
+    [Fact]
+    public async Task ReviewRejectionAndReasonArePersistedAtomically()
+    {
+        var store = new Store(Eligible());
+        var handler = new Api
+        {
+            ReviewPostStatus = HttpStatusCode.Forbidden,
+            ApiFailureReason = "ACTOR_FLAGGED"
+        };
+        handler.BeforePost = () =>
+        {
+            store.AfterSave = () =>
+            {
+                store.AfterSave = null;
+                throw new IOException("Lost response after committed rejection.");
+            };
+        };
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, store);
+
+        await Assert.ThrowsAsync<IOException>(() =>
+            adapter.ExecuteAsync(store.State.Outbox["review"], default));
+
+        Assert.Equal(DeliveryStatus.Failed, store.State.Outbox["review"].Status);
+        Assert.Equal(EffectFailureCode.ReviewRequestRejected, store.State.Outbox["review"].FailureCode);
+        Assert.NotNull(store.State.Outbox["review"].CompletedAt);
+        var review = store.State.Issues[7].Review!;
+        Assert.Equal("ACTOR_FLAGGED", review.RequestFailureReason);
+        Assert.Equal(ReviewLifecycleState.Failed, review.LifecycleState);
+        Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
+        Assert.Null(store.State.AdmittedIssue);
+        var serialized = StateJson.Serialize(store.State);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review",
+            new(DeliveryStatus.Failed, FailureCode: EffectFailureCode.ReviewRequestRejected), Now);
+        Assert.Equal(serialized, StateJson.Serialize(store.State));
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.TooManyRequests)]
     public async Task ExplicitTransientRejectionsRetryWithinBoundAndThenConfirm(HttpStatusCode transient)
@@ -116,6 +188,54 @@ public sealed class GitHubReviewIntegrationTests
         Assert.Equal(DeliveryStatus.Succeeded, outcome.Status);
         Assert.Equal(2, handler.Posts);
         Assert.Equal(ReviewLifecycleState.Requested, store.State.Issues[7].Review!.LifecycleState);
+    }
+
+    [Fact]
+    public async Task AmbiguousRetryClearsPriorResponseDiagnosticsBeforeSending()
+    {
+        var store = new Store(Eligible());
+        var handler = new Api
+        {
+            ReviewPostStatuses = [HttpStatusCode.TooManyRequests, HttpStatusCode.Created],
+            LoseReviewPostResponseOn = 2
+        };
+        using var client = handler.Client();
+        var diagnostics = new GitHubReviewRequestDiagnostics();
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(),
+            Approved, new CandidateValidator(), diagnostics);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            adapter.ExecuteAsync(store.State.Outbox["review"], default));
+
+        Assert.Equal(2, diagnostics.Snapshot!.Attempt);
+        Assert.Null(diagnostics.Snapshot.HttpStatus);
+        Assert.Null(diagnostics.Snapshot.GitHubRequestId);
+        Assert.Null(diagnostics.Snapshot.RequestNodeId);
+        Assert.Null(diagnostics.Snapshot.ResponseState);
+        Assert.Null(diagnostics.Snapshot.FailureReason);
+        Assert.Equal("transport", diagnostics.Snapshot.ErrorCategory);
+        Assert.Equal(2, handler.Posts);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Created)]
+    [InlineData(HttpStatusCode.Conflict)]
+    public async Task AcknowledgementPersistenceFailureIsNotReportedAsResponseFailure(HttpStatusCode responseStatus)
+    {
+        var store = new Store(Eligible());
+        var handler = new Api { ReviewPostStatus = responseStatus };
+        handler.BeforePost = () => store.FailWrites = true;
+        using var client = handler.Client();
+        var diagnostics = new GitHubReviewRequestDiagnostics();
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(),
+            Approved, new CandidateValidator(), diagnostics);
+
+        await Assert.ThrowsAsync<IOException>(() =>
+            adapter.ExecuteAsync(store.State.Outbox["review"], default));
+
+        Assert.Equal("acknowledgement_save", diagnostics.Snapshot!.Stage);
+        Assert.Equal("persistence_or_io", diagnostics.Snapshot.ErrorCategory);
+        Assert.Equal((int)responseStatus, diagnostics.Snapshot.HttpStatus);
     }
 
     [Theory]
@@ -205,6 +325,26 @@ public sealed class GitHubReviewIntegrationTests
 
         Assert.Equal(ReviewClassification.NeedsHuman, Assert.IsType<ReviewResult>(message!.Data).Classification);
         Assert.Equal(1, handler.Posts);
+    }
+
+    [Fact]
+    public async Task LegacyConfirmedReviewWithoutDeadlineIsNotPromotedToPending()
+    {
+        var state = Eligible();
+        state.Issues[7].Review!.RequestBoundary = new(175728472, "BOT_kgDOCnlnWA", Now,
+            [], Confirmed: true, RequestNodeId: "RRR_kwDOAA", AcceptedAt: Now);
+        state = new OrchestrationReducer().RecordOutcome(state, "review",
+            new(DeliveryStatus.Succeeded, "review-request:review"), Now);
+        var store = new Store(state);
+        var handler = new Api();
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, store);
+
+        var review = store.State.Issues[7].Review!;
+        Assert.Equal(ReviewLifecycleState.NotRequested, review.LifecycleState);
+        Assert.Null(review.ReviewDeadlineAt);
+        Assert.Null(await adapter.ReadEventAsync(store.State, store.State.Issues[7], default));
+        Assert.Equal(0, handler.Posts);
     }
 
     [Theory]
@@ -1152,6 +1292,7 @@ public sealed class GitHubReviewIntegrationTests
         public HttpStatusCode ReviewPostStatus { get; init; } = HttpStatusCode.Created;
         public IReadOnlyList<HttpStatusCode> ReviewPostStatuses { get; init; } = [];
         public string? ApiFailureReason { get; init; }
+        public int? LoseReviewPostResponseOn { get; init; }
         public string RequestNodeId { get; init; } = "RRR_kwDOAA";
         public bool HasOutput { get; set; }
         public bool PublishOutputAfterPost { get; init; }
@@ -1232,7 +1373,8 @@ public sealed class GitHubReviewIntegrationTests
                 var postedStatus = ReviewPostStatuses.Count >= Posts
                     ? ReviewPostStatuses[Posts - 1] : ReviewPostStatus;
                 RequestBody = await request.Content!.ReadAsStringAsync(token);
-                if (Corruption == "lost-response") throw new HttpRequestException("Injected response loss");
+                if (Corruption == "lost-response" || Posts == LoseReviewPostResponseOn)
+                    throw new HttpRequestException("Injected response loss");
                 if (PublishOutputAfterPost) HasOutput = true;
                 response = Corruption switch
                 {

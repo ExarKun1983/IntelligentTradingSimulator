@@ -78,10 +78,9 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
         await ValidateCandidateShaAsync(latest, latestIssue, token);
         diagnostics?.Stage("revalidate_live");
         if (!await LiveEligibleAsync(latestIssue, token)) throw new InvalidDataException("Review live Issue/PR/head is ineligible.");
-        diagnostics?.Stage("post");
         for (var attempt = 1; ; attempt++)
         {
-            diagnostics?.Stage("post");
+            diagnostics?.BeginAttempt(attempt);
             var response = await api.RequestCopilotCodeReviewAsync(latestIssue.PullRequest!.Value, token,
                 metadata => diagnostics?.ObserveResponseMetadata(metadata, attempt));
             if (response.StatusCode == (int)HttpStatusCode.Conflict)
@@ -90,6 +89,7 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
             if (response.StatusCode == (int)HttpStatusCode.Created)
             {
                 var acceptedAt = clock.GetUtcNow();
+                diagnostics?.Stage("acknowledgement_save");
                 await SaveBoundaryAsync(intent, boundary with
                 {
                     Confirmed = true,
@@ -104,6 +104,7 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
             if (response.StatusCode == (int)HttpStatusCode.Conflict)
             {
                 var acceptedAt = clock.GetUtcNow();
+                diagnostics?.Stage("acknowledgement_save");
                 await SaveBoundaryAsync(intent, boundary with
                 {
                     Confirmed = true,
@@ -236,7 +237,7 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
     {
         if (state.Repository != api.Repository || issue.PullRequest is not { } number ||
             issue.Review is not { Classification: null, RequestBoundary: { Confirmed: true } boundary } review ||
-            review.LifecycleState is ReviewLifecycleState.Failed or ReviewLifecycleState.TimedOut ||
+            review.LifecycleState == ReviewLifecycleState.Failed ||
             review.ReviewId != Receipt(review.IntentId) ||
             !state.Outbox.TryGetValue(review.IntentId, out var intent) || intent.Status != DeliveryStatus.Succeeded ||
             issue.Ci?.Green != true || issue.ActiveTaskId != review.TaskId ||
@@ -425,7 +426,8 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
         {
             var snapshot = await store.LoadAsync(token);
             ValidateIntent(snapshot.State, intent);
-            var next = new OrchestrationReducer().RecordReviewFailureReason(snapshot.State, intent.Id, failureReason);
+            var next = new OrchestrationReducer().RecordReviewRejection(snapshot.State, intent.Id, failureReason,
+                clock.GetUtcNow());
             if (await store.TrySaveAsync(snapshot, next, token)) return;
         }
         throw new InvalidOperationException("Review failure publication conflict; inspect canonical state.");
