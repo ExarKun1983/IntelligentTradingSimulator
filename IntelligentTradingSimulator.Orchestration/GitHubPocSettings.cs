@@ -22,6 +22,14 @@ public sealed record GitHubPocSettings(string Repository, long RepositoryId, lon
             throw new InvalidDataException("Missing PoC configuration.");
         long Id(string name) => long.TryParse(Required(name), NumberStyles.None, CultureInfo.InvariantCulture,
             out var value) && value > 0 ? value : throw new InvalidDataException("Invalid PoC identity.");
+        int ReviewTimeoutMinutes()
+        {
+            var value = read("ORCHESTRATION_POC_REVIEW_TIMEOUT_MINUTES");
+            if (string.IsNullOrWhiteSpace(value)) return 15;
+            return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var minutes) &&
+                minutes is >= 1 and <= 30
+                ? minutes : throw new InvalidDataException("Invalid Copilot review timeout.");
+        }
         bool Approved(string name) => read("ORCHESTRATION_POC_" + name) == "true";
 
         var repository = Required("GITHUB_REPOSITORY");
@@ -29,6 +37,7 @@ public sealed record GitHubPocSettings(string Repository, long RepositoryId, lon
         var actorId = Id("ORCHESTRATION_POC_ACTOR_ID");
         var driverId = Id("ORCHESTRATION_POC_WORKFLOW_ID");
         var ciId = Id("ORCHESTRATION_POC_CI_WORKFLOW_ID");
+        var reviewTimeoutMinutes = ReviewTimeoutMinutes();
         var definition = Required("ORCHESTRATION_POC_DEFINITION_SHA");
         if (repository != "ExarKun1983/IntelligentTradingSimulator" || driverId == ciId ||
             definition.Length != 40 || !definition.All(Uri.IsHexDigit))
@@ -43,7 +52,8 @@ public sealed record GitHubPocSettings(string Repository, long RepositoryId, lon
         var tasks = new GitHubExecutionApproval(activation, credential, Approved("TASK_ENTITLEMENT_VERIFIED"), cost);
         var ci = new GitHubCiApproval(activation, credential, Approved("TRUSTED_DEFINITION_VERIFIED"), cost);
         var review = new GitHubReviewApproval(activation, Approved("REVIEW_POLICY_VERIFIED"), cost,
-            Approved("AUTOMATIC_REVIEWS_DISABLED"));
+            Approved("AUTOMATIC_REVIEWS_DISABLED"))
+            { ReviewTimeout = TimeSpan.FromMinutes(reviewTimeoutMinutes) };
         if (!tasks.AllowsTasks || !ci.AllowsCi || !review.AllowsReviews)
             throw new InvalidOperationException("PoC execution prerequisites are unverified.");
 
@@ -53,7 +63,8 @@ public sealed record GitHubPocSettings(string Repository, long RepositoryId, lon
             definition = definition.ToLowerInvariant(), issue = IssueNumber,
             stateRef = StateReference, baseBranch = BaseBranch, definitionRef = DefinitionReference,
             driverPath = DriverWorkflowPath, ciPath = CiWorkflowPath, environment = EnvironmentName,
-            expiresAt = expiresAt.ToUniversalTime(), maxRepairTasks = 1, maxCiRuns = 2, maxReviews = 2
+            expiresAt = expiresAt.ToUniversalTime(), maxRepairTasks = 1, maxCiRuns = 2, maxReviews = 2,
+            reviewTimeoutMinutes
         };
         return new(repository, repositoryId, actorId, driverId, definition,
             new(ciId, DefinitionReference, definition, CiWorkflowPath), tasks, ci, review,

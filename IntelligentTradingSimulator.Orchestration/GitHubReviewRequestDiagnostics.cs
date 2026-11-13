@@ -5,7 +5,8 @@ namespace IntelligentTradingSimulator.Orchestration;
 public sealed record GitHubReviewRequestDiagnostic(
     string IntentId, int Issue, DateTimeOffset StartedAt, string Stage, string Outcome,
     bool PostAttempted = false, int? HttpStatus = null, string? GitHubRequestId = null,
-    int? ReturnedReviewerCount = null, bool? HasVerifiedReviewer = null,
+    string? RequestNodeId = null, string? ResponseState = null, string? FailureReason = null,
+    int Attempt = 0, int? RetryAfterSeconds = null,
     string? ErrorCategory = null, string? ErrorType = null);
 
 public sealed class GitHubReviewRequestDiagnostics(TextWriter? log = null)
@@ -37,32 +38,59 @@ public sealed class GitHubReviewRequestDiagnostics(TextWriter? log = null)
         }
     }
 
-    internal void ObserveResponse(GitHubApiResponseMetadata response)
+    internal void ObserveResponse(GitHubCopilotReviewResponse response, int attempt)
     {
         lock (gate)
         {
             if (current is null) return;
-            current = current with { HttpStatus = response.StatusCode, GitHubRequestId = response.RequestId };
+            current = current with
+            {
+                HttpStatus = response.StatusCode, GitHubRequestId = response.RequestId,
+                RequestNodeId = response.NodeId, ResponseState = response.State,
+                FailureReason = response.FailureReason, Attempt = attempt,
+                RetryAfterSeconds = response.RetryAfter is { } retry ? (int)Math.Clamp(retry.TotalSeconds, 0, 3600) : null
+            };
             Write();
         }
     }
 
-    internal void ObserveReviewers(int count, bool verified)
+    internal void ObserveResponseMetadata(GitHubApiResponseMetadata metadata, int attempt)
     {
         lock (gate)
         {
             if (current is null) return;
-            current = current with { ReturnedReviewerCount = count, HasVerifiedReviewer = verified };
+            current = current with
+            {
+                HttpStatus = metadata.StatusCode,
+                GitHubRequestId = metadata.RequestId,
+                Attempt = attempt,
+                RetryAfterSeconds = metadata.RetryAfter is { } retry
+                    ? (int)Math.Clamp(retry.TotalSeconds, 0, 3600) : null
+            };
             Write();
         }
     }
 
-    internal void Complete()
+    internal void Complete(string outcome = "confirmed")
     {
         lock (gate)
         {
             if (current is null) return;
-            current = current with { Stage = "acknowledgement_saved", Outcome = "confirmed" };
+            current = current with { Stage = "acknowledgement_saved", Outcome = outcome };
+            Write();
+        }
+    }
+
+    internal void RecordApiFailure(string failureReason)
+    {
+        lock (gate)
+        {
+            if (current is null) return;
+            current = current with
+            {
+                Outcome = "rejected", Stage = "api_rejected",
+                FailureReason = failureReason, ErrorCategory = "http_status"
+            };
             Write();
         }
     }
@@ -76,10 +104,13 @@ public sealed class GitHubReviewRequestDiagnostics(TextWriter? log = null)
             var category = exception switch
             {
                 HttpRequestException when status is < 200 or >= 300 => "http_status",
+                HttpRequestException when status == 201 => "response_body",
                 HttpRequestException => "transport",
                 JsonException => "invalid_json",
                 InvalidDataException or InvalidOperationException or KeyNotFoundException or FormatException => "validation",
                 OperationCanceledException => "cancelled",
+                IOException when current.HttpStatus is < 200 or >= 300 => "http_status",
+                IOException when current.HttpStatus == 201 => "response_body",
                 IOException when current.Stage == "post" => "transport",
                 IOException => "persistence_or_io",
                 _ => "other"

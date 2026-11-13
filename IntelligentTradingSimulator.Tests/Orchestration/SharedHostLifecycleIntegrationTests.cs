@@ -653,17 +653,15 @@ public sealed class SharedHostLifecycleIntegrationTests
             else if (path == "/users/" + Uri.EscapeDataString(Reviewer) || path == "/users/" + Reviewer)
                 response = ReviewActor;
             else if (path == "/users/status-publisher") response = StatusActor;
-            else if (path == prefix + "pulls/17/requested_reviewers")
+            else if (path == prefix + "pulls/17/copilot-code-review")
             {
-                if (request.Method == HttpMethod.Post)
-                {
-                    ReviewRequests++;
-                    reviewShas.Add(taskApi.HeadSha);
-                    response = new { number = 17, state = "open", head = new { sha = taskApi.HeadSha, repo = new { id = 1 } },
-                        @base = new { repo = new { id = 1 } }, requested_reviewers = Array.Empty<object>() };
-                }
-                else response = new { users = Array.Empty<object>() };
+                Assert.Equal(HttpMethod.Post, request.Method);
+                ReviewRequests++;
+                reviewShas.Add(taskApi.HeadSha);
+                response = new { node_id = $"RRR_{ReviewRequests}", state = "PENDING" };
             }
+            else if (path == prefix + "pulls/17/requested_reviewers")
+                response = new { users = Array.Empty<object>() };
             else if (path == prefix + "pulls/17/reviews")
                 response = Enumerable.Range(0, Math.Min(reviewShas.Count,
                         ReviewSubmittedCount > 0 ? ReviewSubmittedCount : ReviewSubmitted ? reviewShas.Count : 0))
@@ -700,7 +698,7 @@ public sealed class SharedHostLifecycleIntegrationTests
                 response = Statuses.Where(status => status.GetProperty("sha").GetString() == sha).Reverse().ToArray();
             }
             else return await tasks.SendAsync(request, token);
-            var responseStatus = request.Method == HttpMethod.Post && path == prefix + "pulls/17/requested_reviewers"
+            var responseStatus = request.Method == HttpMethod.Post && path == prefix + "pulls/17/copilot-code-review"
                 ? HttpStatusCode.Created : HttpStatusCode.OK;
             return new(responseStatus) { Content = new StringContent(JsonSerializer.Serialize(response), Encoding.UTF8, "application/json") };
         }

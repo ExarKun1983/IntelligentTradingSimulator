@@ -33,6 +33,8 @@ public sealed class GitHubPocTests
     [InlineData("ORCHESTRATION_POC_DEFINITION_SHA", "master")]
     [InlineData("ORCHESTRATION_POC_EXPIRES_AT", "2026-11-12T12:00:00Z")]
     [InlineData("ORCHESTRATION_POC_EXPIRES_AT", "2026-11-16T12:00:00Z")]
+    [InlineData("ORCHESTRATION_POC_REVIEW_TIMEOUT_MINUTES", "0")]
+    [InlineData("ORCHESTRATION_POC_REVIEW_TIMEOUT_MINUTES", "31")]
     public void InvalidIdentityOrExpiryRejectsProfile(string name, string value)
     {
         var values = Settings();
@@ -50,6 +52,10 @@ public sealed class GitHubPocTests
         values["ORCHESTRATION_POC_DEFINITION_SHA"] = Definition;
         values["ORCHESTRATION_POC_EXPIRES_AT"] = Now.AddHours(3).ToString("O");
         Assert.NotEqual(original.ManifestDigest, GitHubPocSettings.Read(values.GetValueOrDefault, Now).ManifestDigest);
+        values["ORCHESTRATION_POC_EXPIRES_AT"] = Now.AddHours(2).ToString("O");
+        values["ORCHESTRATION_POC_REVIEW_TIMEOUT_MINUTES"] = "20";
+        Assert.NotEqual(original.ManifestDigest, GitHubPocSettings.Read(values.GetValueOrDefault, Now).ManifestDigest);
+        Assert.Equal(TimeSpan.FromMinutes(20), GitHubPocSettings.Read(values.GetValueOrDefault, Now).Review.ReviewTimeout);
     }
 
     [Theory]
@@ -231,9 +237,8 @@ public sealed class GitHubPocTests
         var diagnostics = new GitHubReviewRequestDiagnostics(log);
         diagnostics.Begin(new() { Id = "review", IssueNumber = 257 });
         diagnostics.Stage("post");
-        diagnostics.ObserveResponse(new(201, "request:review:123"));
-        diagnostics.Stage("acknowledgement_reviewers_validation");
-        diagnostics.ObserveReviewers(1, false);
+        diagnostics.ObserveResponse(new(201, "request:review:123", "RRR_node", "PENDING", null, null), 1);
+        diagnostics.Stage("api_response_validation");
         diagnostics.RecordFailure(new InvalidDataException("private response body or token"));
         using var output = new StringWriter();
 
@@ -243,12 +248,12 @@ public sealed class GitHubPocTests
 
         using var receipt = JsonDocument.Parse(output.ToString());
         var diagnostic = receipt.RootElement.GetProperty("ReviewRequestDiagnostic");
-        Assert.Equal("acknowledgement_reviewers_validation", diagnostic.GetProperty("Stage").GetString());
+        Assert.Equal("api_response_validation", diagnostic.GetProperty("Stage").GetString());
         Assert.True(diagnostic.GetProperty("PostAttempted").GetBoolean());
         Assert.Equal(201, diagnostic.GetProperty("HttpStatus").GetInt32());
         Assert.Equal("request:review:123", diagnostic.GetProperty("GitHubRequestId").GetString());
-        Assert.Equal(1, diagnostic.GetProperty("ReturnedReviewerCount").GetInt32());
-        Assert.False(diagnostic.GetProperty("HasVerifiedReviewer").GetBoolean());
+        Assert.Equal("RRR_node", diagnostic.GetProperty("RequestNodeId").GetString());
+        Assert.Equal("PENDING", diagnostic.GetProperty("ResponseState").GetString());
         Assert.Equal("validation", diagnostic.GetProperty("ErrorCategory").GetString());
         Assert.DoesNotContain("private response body or token", output.ToString() + log);
     }

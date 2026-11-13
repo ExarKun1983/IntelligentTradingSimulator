@@ -16,7 +16,10 @@ public sealed record GitHubTaskLaunchDiagnostic(
     bool? HasCreator,
     bool? HasState);
 
-internal sealed record GitHubApiResponseMetadata(int StatusCode, string? RequestId);
+internal sealed record GitHubApiResponseMetadata(int StatusCode, string? RequestId,
+    TimeSpan? RetryAfter = null);
+internal sealed record GitHubCopilotReviewResponse(int StatusCode, string? RequestId, string? NodeId,
+    string? State, string? FailureReason, TimeSpan? RetryAfter);
 
 public sealed class GitHubTaskLaunchDiagnostics
 {

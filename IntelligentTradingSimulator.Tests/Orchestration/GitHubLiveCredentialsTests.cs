@@ -239,6 +239,25 @@ public sealed class GitHubLiveCredentialsTests
     }
 
     [Fact]
+    public void LiveReviewTimeoutAndRepairCapAreBounded()
+    {
+        var values = LiveSettingsValues();
+        var defaults = GitHubLiveSettings.Read(values.GetValueOrDefault);
+        Assert.Equal(5, defaults.MaxRepairTasks);
+        Assert.Equal(TimeSpan.FromMinutes(15), defaults.Review.ReviewTimeout);
+        values["ORCHESTRATION_MAX_REPAIR_TASKS"] = "2";
+        values["ORCHESTRATION_REVIEW_TIMEOUT_MINUTES"] = "20";
+        var configured = GitHubLiveSettings.Read(values.GetValueOrDefault);
+        Assert.Equal(2, configured.MaxRepairTasks);
+        Assert.Equal(TimeSpan.FromMinutes(20), configured.Review.ReviewTimeout);
+        values["ORCHESTRATION_MAX_REPAIR_TASKS"] = "9";
+        Assert.Throws<InvalidDataException>(() => GitHubLiveSettings.Read(values.GetValueOrDefault));
+        values["ORCHESTRATION_MAX_REPAIR_TASKS"] = "2";
+        values["ORCHESTRATION_REVIEW_TIMEOUT_MINUTES"] = "31";
+        Assert.Throws<InvalidDataException>(() => GitHubLiveSettings.Read(values.GetValueOrDefault));
+    }
+
+    [Fact]
     public void SinglePassTestCanRunWithoutRequiredStatusContextAndDoesNotEnableStatusPublication()
     {
         var values = LiveSettingsValues();

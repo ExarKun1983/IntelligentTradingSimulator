@@ -7,8 +7,11 @@ namespace IntelligentTradingSimulator.Orchestration;
 public sealed record GitHubReviewApproval(bool ActivationApproved = false, bool ApiPolicyAndCredentialVerified = false,
     bool NoAdditionalChargesVerified = false, bool AutomaticReviewsDisabledVerified = false)
 {
+    public TimeSpan ReviewTimeout { get; init; } = TimeSpan.FromMinutes(15);
+
     public bool AllowsReviews => ActivationApproved && ApiPolicyAndCredentialVerified &&
-        NoAdditionalChargesVerified && AutomaticReviewsDisabledVerified;
+        NoAdditionalChargesVerified && AutomaticReviewsDisabledVerified &&
+        ReviewTimeout >= TimeSpan.FromMinutes(1) && ReviewTimeout <= TimeSpan.FromMinutes(30);
 }
 
 /// <summary>Requests Copilot review; REST observations require human round/classification confirmation.</summary>
@@ -76,23 +79,67 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
         diagnostics?.Stage("revalidate_live");
         if (!await LiveEligibleAsync(latestIssue, token)) throw new InvalidDataException("Review live Issue/PR/head is ineligible.");
         diagnostics?.Stage("post");
-        using var response = await api.WriteAsync(HttpMethod.Post, $"pulls/{latestIssue.PullRequest}/requested_reviewers",
-            new { reviewers = new[] { Reviewer } }, token, expectedStatus: HttpStatusCode.Created,
-            observeResponse: metadata => diagnostics?.ObserveResponse(metadata));
-        diagnostics?.Stage("acknowledgement_pull_validation");
-        ValidatePull(response.RootElement, latestIssue);
-        diagnostics?.Stage("acknowledgement_reviewers_validation");
-        var requested = response.RootElement.GetProperty("requested_reviewers").EnumerateArray().ToList();
-        var verified = requested.Any(candidate => ActorMatches(candidate, boundary));
-        diagnostics?.ObserveReviewers(requested.Count, verified);
-        // Copilot can start immediately and be absent from the returned pending-reviewer list.
-        if (requested.Count != 0 && !verified)
-            throw new InvalidDataException("Review request acknowledgement lacks the verified reviewer.");
-        diagnostics?.Stage("save_acknowledgement");
-        await SaveBoundaryAsync(intent, boundary with { Confirmed = true }, token);
-        diagnostics?.Complete();
-        // Local durable acknowledgement identity, explicitly NOT a GitHub review/job ID.
-        return new(DeliveryStatus.Succeeded, Receipt(intent.Id));
+        for (var attempt = 1; ; attempt++)
+        {
+            diagnostics?.Stage("post");
+            var response = await api.RequestCopilotCodeReviewAsync(latestIssue.PullRequest!.Value, token,
+                metadata => diagnostics?.ObserveResponseMetadata(metadata, attempt));
+            if (response.StatusCode == (int)HttpStatusCode.Conflict)
+                response = response with { State = "PENDING" };
+            diagnostics?.ObserveResponse(response, attempt);
+            if (response.StatusCode == (int)HttpStatusCode.Created)
+            {
+                var acceptedAt = clock.GetUtcNow();
+                await SaveBoundaryAsync(intent, boundary with
+                {
+                    Confirmed = true,
+                    RequestNodeId = response.NodeId,
+                    AcceptedAt = acceptedAt,
+                    DeadlineAt = acceptedAt + approval!.ReviewTimeout
+                }, token);
+                diagnostics?.Complete();
+                return new(DeliveryStatus.Succeeded, Receipt(intent.Id));
+            }
+
+            if (response.StatusCode == (int)HttpStatusCode.Conflict)
+            {
+                var acceptedAt = clock.GetUtcNow();
+                await SaveBoundaryAsync(intent, boundary with
+                {
+                    Confirmed = true,
+                    AcceptedAt = acceptedAt,
+                    DeadlineAt = acceptedAt + approval!.ReviewTimeout,
+                    AlreadyPending = true
+                }, token);
+                diagnostics?.Complete("already_pending");
+                return new(DeliveryStatus.Succeeded, Receipt(intent.Id));
+            }
+
+            if (response.StatusCode == 429 && attempt < 3)
+            {
+                var delay = response.RetryAfter ?? TimeSpan.FromSeconds(attempt);
+                if (delay <= TimeSpan.FromSeconds(30))
+                {
+                    diagnostics?.Stage("retry_wait");
+                    await Task.Delay(delay < TimeSpan.Zero ? TimeSpan.Zero : delay, token);
+                    var retryState = (await store.LoadAsync(token)).State;
+                    var retryIssue = ValidateIntent(retryState, intent);
+                    ValidateEligibility(retryState, retryIssue, intent);
+                    await ValidateCandidateShaAsync(retryState, retryIssue, token);
+                    if (!await LiveEligibleAsync(retryIssue, token))
+                        throw new InvalidDataException("Review live Issue/PR/head changed before retry.");
+                    continue;
+                }
+            }
+
+            if (response.StatusCode is not (401 or 403 or 404 or 422 or 429))
+                throw new HttpRequestException("Review request outcome is ambiguous.");
+
+            var failureReason = response.FailureReason ?? $"HTTP_{response.StatusCode}";
+            diagnostics?.RecordApiFailure(failureReason);
+            await SaveFailureReasonAsync(intent, failureReason, token);
+            return new(DeliveryStatus.Failed, FailureCode: EffectFailureCode.ReviewRequestRejected);
+        }
     }
 
     private async Task<ReviewRequestBoundary> ReadPreflightAsync(RepositoryState state, IssueState issue,
@@ -109,12 +156,6 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
         var actor = user.RootElement;
         if (!VerifiedReviewer(actor))
             throw new ReviewIdentityException();
-        diagnostics?.Stage("preflight_existing_requests");
-        using var pending = await api.GetAsync($"pulls/{issue.PullRequest}/requested_reviewers", token);
-        if (pending.RootElement.GetProperty("users").EnumerateArray().Any(candidate =>
-                candidate.GetProperty("id").GetInt64() == ReviewerId ||
-                candidate.GetProperty("login").GetString() is Reviewer or "Copilot"))
-            throw new InvalidDataException("Existing review request requires reconciliation.");
         diagnostics?.Stage("preflight_review_baseline");
         var baseline = await api.ListAsync($"pulls/{issue.PullRequest}/reviews", token);
         if (baseline.Any(review => review.GetProperty("state").GetString() == "PENDING" &&
@@ -195,6 +236,7 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
     {
         if (state.Repository != api.Repository || issue.PullRequest is not { } number ||
             issue.Review is not { Classification: null, RequestBoundary: { Confirmed: true } boundary } review ||
+            review.LifecycleState is ReviewLifecycleState.Failed or ReviewLifecycleState.TimedOut ||
             review.ReviewId != Receipt(review.IntentId) ||
             !state.Outbox.TryGetValue(review.IntentId, out var intent) || intent.Status != DeliveryStatus.Succeeded ||
             issue.Ci?.Green != true || issue.ActiveTaskId != review.TaskId ||
@@ -220,7 +262,15 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
             if (submitted < boundary.PreparedAt) continue;
             observed.Add(candidate);
         }
-        if (observed.Count == 0) return null;
+        if (observed.Count == 0)
+        {
+            if (review.LifecycleState is ReviewLifecycleState.Requested or ReviewLifecycleState.Pending &&
+                boundary.DeadlineAt is { } deadline && clock.GetUtcNow() >= deadline)
+                return ReviewProgressEvent(state, issue, review, number, clock.GetUtcNow(), timedOut: true);
+            if (review.LifecycleState == ReviewLifecycleState.Requested)
+                return ReviewProgressEvent(state, issue, review, number, clock.GetUtcNow(), timedOut: false);
+            return null;
+        }
         var comments = new List<JsonElement>();
         foreach (var candidate in observed)
         {
@@ -277,11 +327,29 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
             !state.Outbox.TryGetValue(ci.IntentId, out var ciEffect) || ciEffect.Status != DeliveryStatus.Succeeded ||
             ciEffect.ExternalId != ci.RunId || string.IsNullOrWhiteSpace(ci.RunId))
             throw new InvalidDataException("Review requires completed coding and exact-SHA green CI with no feedback or hold.");
+        if (state.Outbox.Values.Any(previous => previous.Id != intent.Id &&
+            previous.Kind == EffectKind.RequestReview && previous.Sha == intent.Sha &&
+            previous.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown or DeliveryStatus.Succeeded &&
+            state.Issues.TryGetValue(previous.IssueNumber, out var previousIssue) &&
+            previousIssue.PullRequest == issue.PullRequest))
+            throw new InvalidDataException("A review request for this PR and commit already exists or is uncertain.");
     }
 
     private Task ValidateCandidateShaAsync(RepositoryState state, IssueState issue, CancellationToken token) =>
         candidateShaValidator?.ValidateCandidateShaAsync(state, issue, token) ??
         throw new InvalidDataException("Candidate SHA validator is unavailable.");
+
+    private OrchestrationEvent ReviewProgressEvent(RepositoryState state, IssueState issue, ReviewIdentity review,
+        int pullNumber, DateTimeOffset occurredAt, bool timedOut)
+    {
+        var data = timedOut
+            ? (EventData)new ReviewTimedOut(review.IntentId, pullNumber, review.Sha)
+            : new ReviewPending(review.IntentId, pullNumber, review.Sha);
+        var kind = timedOut ? "timed-out" : "pending";
+        return new($"copilot-review-{kind}:{api.RepositoryId}:{issue.Generation}:{review.IntentId}",
+            api.Repository, issue.Number, state.Generation, issue.Generation,
+            new(Reviewer, ActorKind.ReviewService, ReviewerId, ReviewerNodeId, "Bot"), occurredAt, data);
+    }
 
     private async Task<bool> LiveEligibleAsync(IssueState issue, CancellationToken token)
     {
@@ -349,5 +417,17 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
             if (await store.TrySaveAsync(snapshot, next, token)) return;
         }
         throw new InvalidOperationException("Review boundary publication conflict; request must remain lookup-only.");
+    }
+
+    private async Task SaveFailureReasonAsync(EffectIntent intent, string failureReason, CancellationToken token)
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var snapshot = await store.LoadAsync(token);
+            ValidateIntent(snapshot.State, intent);
+            var next = new OrchestrationReducer().RecordReviewFailureReason(snapshot.State, intent.Id, failureReason);
+            if (await store.TrySaveAsync(snapshot, next, token)) return;
+        }
+        throw new InvalidOperationException("Review failure publication conflict; inspect canonical state.");
     }
 }

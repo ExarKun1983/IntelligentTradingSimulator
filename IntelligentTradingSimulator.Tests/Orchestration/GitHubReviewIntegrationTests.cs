@@ -14,74 +14,145 @@ public sealed class GitHubReviewIntegrationTests
     private static GitHubReviewAdapter CreateAdapter(HttpClient client, Store store) =>
         new(new(client, "owner/repo", 1), store, new Clock(), Approved, new CandidateValidator());
 
-    [Theory]
-    [InlineData("bot-id", 201, "preflight_reviewer_identity", "other", false)]
-    [InlineData("closed", 201, "preflight_live", "validation", false)]
-    [InlineData("lost-response", 201, "post", "transport", true)]
-    [InlineData("body-io", 201, "post", "transport", true)]
-    [InlineData("", 302, "post", "http_status", true)]
-    [InlineData("", 403, "post", "http_status", true)]
-    [InlineData("", 200, "post", "validation", true)]
-    [InlineData("ack-sha", 201, "acknowledgement_pull_validation", "validation", true)]
-    [InlineData("ack-human-only", 201, "acknowledgement_reviewers_validation", "validation", true)]
-    public async Task DiagnosticsIdentifyTheFailedStageWithoutChangingUnknownWriteSafety(
-        string corruption, int status, string stage, string category, bool posted)
+    [Fact]
+    public async Task DedicatedApiAcknowledgementTracksPendingThenCompletedReviewForExactHead()
     {
         var store = new Store(Eligible());
-        var handler = new Api { Corruption = corruption, ReviewPostStatus = (HttpStatusCode)status };
+        var handler = new Api();
         using var client = handler.Client();
         using var log = new StringWriter();
         var diagnostics = new GitHubReviewRequestDiagnostics(log);
         var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(),
             Approved, new CandidateValidator(), diagnostics);
 
-        if (posted)
-            await Assert.ThrowsAnyAsync<Exception>(() => adapter.ExecuteAsync(store.State.Outbox["review"], default));
-        else
-            Assert.Equal(DeliveryStatus.Failed,
-                (await adapter.ExecuteAsync(store.State.Outbox["review"], default)).Status);
+        var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
+        Assert.Equal(DeliveryStatus.Succeeded, outcome.Status);
+        Assert.Equal(1, handler.Posts);
+        Assert.Contains("POST /repos/owner/repo/pulls/17/copilot-code-review", handler.Requests);
+        Assert.Equal("RRR_kwDOAA", store.State.Issues[7].Review!.CopilotRequestNodeId);
+        Assert.Equal(ReviewLifecycleState.Requested, store.State.Issues[7].Review!.LifecycleState);
+        Assert.Equal("PENDING", diagnostics.Snapshot!.ResponseState);
+        Assert.Equal("RRR_kwDOAA", diagnostics.Snapshot.RequestNodeId);
 
-        var diagnostic = Assert.IsType<GitHubReviewRequestDiagnostic>(diagnostics.Snapshot);
-        Assert.Equal(stage, diagnostic.Stage);
-        Assert.Equal(category, diagnostic.ErrorCategory);
-        Assert.Equal(posted, diagnostic.PostAttempted);
-        Assert.Equal(posted ? 1 : 0, handler.Posts);
-        Assert.Equal(posted && corruption != "lost-response" ? (int?)status : null, diagnostic.HttpStatus);
-        Assert.Equal(posted && corruption != "lost-response" ? "review:request:123" : null, diagnostic.GitHubRequestId);
-        if (corruption == "ack-human-only")
-        {
-            Assert.Equal(1, diagnostic.ReturnedReviewerCount);
-            Assert.False(diagnostic.HasVerifiedReviewer);
-        }
-        Assert.DoesNotContain("Injected", log.ToString());
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
+        var pendingEvent = await adapter.ReadEventAsync(store.State, store.State.Issues[7], default);
+        Assert.IsType<ReviewPending>(pendingEvent!.Data);
+        store.State = new OrchestrationReducer(new Allow()).Apply(store.State, pendingEvent);
+        Assert.Equal(ReviewLifecycleState.Pending, store.State.Issues[7].Review!.LifecycleState);
+
+        handler.HasOutput = true;
+        var completedEvent = await adapter.ReadEventAsync(store.State, store.State.Issues[7], default);
+        Assert.IsType<ReviewResult>(completedEvent!.Data);
+        store.State = new OrchestrationReducer(new Allow()).Apply(store.State, completedEvent);
+        Assert.Equal(ReviewLifecycleState.Completed, store.State.Issues[7].Review!.LifecycleState);
+        Assert.Equal(1, handler.Posts);
         Assert.DoesNotContain("Review body preserved", log.ToString());
-        Assert.Contains(stage, log.ToString());
-        if (posted)
-        {
-            Assert.False(store.State.Issues[7].Review!.RequestBoundary!.Confirmed);
-            store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", new(DeliveryStatus.Unknown), Now);
-            Assert.Equal(DeliveryStatus.Unknown,
-                (await adapter.ReconcileAsync(store.State.Outbox["review"], default)).Status);
-            Assert.Equal(1, handler.Posts);
-        }
     }
 
     [Fact]
-    public async Task DiagnosticsSeparateBoundaryPersistenceFailureFromAnHttpRequest()
+    public async Task ReviewTimeoutIsPersistedWithoutReissuingTheRequest()
     {
-        var store = new Store(Eligible()) { FailWrites = true };
+        var state = Eligible();
+        var issue = state.Issues[7];
+        issue.Review!.RequestBoundary = new(175728472, "BOT_kgDOCnlnWA", Now,
+            [100], Confirmed: true, RequestNodeId: "RRR_kwDOAA",
+            AcceptedAt: Now.AddMinutes(-2), DeadlineAt: Now.AddMinutes(-1));
+        issue.Review.ReviewId = "review-request:review";
+        issue.Review.LifecycleState = ReviewLifecycleState.Pending;
+        issue.Review.ReviewDeadlineAt = Now.AddMinutes(-1);
+        state.Outbox["review"].Status = DeliveryStatus.Succeeded;
+        state.Outbox["review"].ExternalId = "review-request:review";
+        var store = new Store(state);
         var handler = new Api();
+        using var client = handler.Client();
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store,
+            new Clock(Now), Approved, new CandidateValidator());
+        var message = await adapter.ReadEventAsync(store.State, store.State.Issues[7], default);
+        Assert.IsType<ReviewTimedOut>(message!.Data);
+        store.State = new OrchestrationReducer(new Allow()).Apply(store.State, message);
+        Assert.Equal(ReviewLifecycleState.TimedOut, store.State.Issues[7].Review!.LifecycleState);
+        Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
+        Assert.Equal(0, handler.Posts);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden, "ACTOR_FLAGGED")]
+    [InlineData(HttpStatusCode.NotFound, null)]
+    [InlineData(HttpStatusCode.UnprocessableEntity, "NO_QUOTA")]
+    public async Task DocumentedApiRejectionsAreDefiniteFailures(HttpStatusCode status, string? failureReason)
+    {
+        var store = new Store(Eligible());
+        var handler = new Api { ReviewPostStatus = status, ApiFailureReason = failureReason };
         using var client = handler.Client();
         var diagnostics = new GitHubReviewRequestDiagnostics();
         var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(),
             Approved, new CandidateValidator(), diagnostics);
 
-        await Assert.ThrowsAsync<IOException>(() => adapter.ExecuteAsync(store.State.Outbox["review"], default));
+        var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
 
-        Assert.Equal("save_boundary", diagnostics.Snapshot!.Stage);
-        Assert.Equal("persistence_or_io", diagnostics.Snapshot.ErrorCategory);
-        Assert.False(diagnostics.Snapshot.PostAttempted);
-        Assert.Equal(0, handler.Posts);
+        Assert.Equal(DeliveryStatus.Failed, outcome.Status);
+        Assert.Equal(EffectFailureCode.ReviewRequestRejected, outcome.FailureCode);
+        Assert.Equal("rejected", diagnostics.Snapshot!.Outcome);
+        Assert.Equal(failureReason ?? "HTTP_" + (int)status, diagnostics.Snapshot.FailureReason);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
+        Assert.Equal(ReviewLifecycleState.Failed, store.State.Issues[7].Review!.LifecycleState);
+        Assert.Equal(1, handler.Posts);
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            adapter.ExecuteAsync(store.State.Outbox["review"], default));
+        Assert.Equal(1, handler.Posts);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    public async Task ExplicitTransientRejectionsRetryWithinBoundAndThenConfirm(HttpStatusCode transient)
+    {
+        var store = new Store(Eligible());
+        var handler = new Api { ReviewPostStatuses = [transient, HttpStatusCode.Created] };
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, store);
+
+        var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
+
+        Assert.Equal(DeliveryStatus.Succeeded, outcome.Status);
+        Assert.Equal(2, handler.Posts);
+        Assert.Equal(ReviewLifecycleState.Requested, store.State.Issues[7].Review!.LifecycleState);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    [InlineData(HttpStatusCode.OK)]
+    public async Task AmbiguousHttpResponseNeverTriggersAnotherRequest(HttpStatusCode status)
+    {
+        var store = new Store(Eligible());
+        var handler = new Api { ReviewPostStatus = status };
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, store);
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            adapter.ExecuteAsync(store.State.Outbox["review"], default));
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", new(DeliveryStatus.Unknown), Now);
+        Assert.Equal(DeliveryStatus.Unknown, (await adapter.ReconcileAsync(store.State.Outbox["review"], default)).Status);
+        Assert.Equal(1, handler.Posts);
+    }
+
+    [Fact]
+    public async Task ConflictMeansAlreadyPendingAndNeverCreatesAnotherReview()
+    {
+        var store = new Store(Eligible());
+        var handler = new Api { ReviewPostStatus = HttpStatusCode.Conflict };
+        using var client = handler.Client();
+        var adapter = CreateAdapter(client, store);
+
+        var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
+
+        Assert.Equal(DeliveryStatus.Succeeded, outcome.Status);
+        Assert.Equal(1, handler.Posts);
+        Assert.True(store.State.Issues[7].Review!.RequestBoundary!.AlreadyPending);
+        Assert.Equal(ReviewLifecycleState.Pending, store.State.Issues[7].Review!.LifecycleState);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", new(DeliveryStatus.Unknown), Now);
+        Assert.Equal(DeliveryStatus.Succeeded,
+            (await adapter.ReconcileAsync(store.State.Outbox["review"], default)).Status);
+        Assert.Equal(1, handler.Posts);
     }
 
     [Theory]
@@ -111,10 +182,10 @@ public sealed class GitHubReviewIntegrationTests
     }
 
     [Fact]
-    public async Task CreatedAcknowledgementWithNoPendingReviewerCapturesOutputAndRecoversWithoutAnotherPost()
+    public async Task CreatedAcknowledgementRecoversWithoutAnotherPost()
     {
         var store = new Store(Eligible());
-        var handler = new Api { EmptyAcknowledgementReviewers = true };
+        var handler = new Api();
         using var client = handler.Client();
         var adapter = CreateAdapter(client, store);
 
@@ -122,11 +193,12 @@ public sealed class GitHubReviewIntegrationTests
 
         Assert.Equal(DeliveryStatus.Succeeded, outcome.Status);
         Assert.True(store.State.Issues[7].Review!.RequestBoundary!.Confirmed);
+        Assert.Equal("RRR_kwDOAA", store.State.Issues[7].Review!.CopilotRequestNodeId);
         store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", new(DeliveryStatus.Unknown), Now);
         var recovered = await adapter.ReconcileAsync(store.State.Outbox["review"], default);
         Assert.Equal(outcome, recovered);
         store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", recovered, Now);
-        Assert.Null(await adapter.ReadEventAsync(store.State, store.State.Issues[7], default));
+        Assert.IsType<ReviewPending>((await adapter.ReadEventAsync(store.State, store.State.Issues[7], default))!.Data);
         handler.HasOutput = true;
 
         var message = await adapter.ReadEventAsync(store.State, store.State.Issues[7], default);
@@ -136,15 +208,14 @@ public sealed class GitHubReviewIntegrationTests
     }
 
     [Theory]
-    [InlineData(HttpStatusCode.OK, true)]
-    [InlineData(HttpStatusCode.OK, false)]
-    [InlineData(HttpStatusCode.Accepted, true)]
-    [InlineData(HttpStatusCode.Accepted, false)]
-    [InlineData(HttpStatusCode.Forbidden, true)]
-    public async Task MissingCreatedAcknowledgementRemainsUnknownAndIsNotRetried(HttpStatusCode status, bool emptyReviewers)
+    [InlineData("ack-malformed")]
+    [InlineData("ack-state")]
+    [InlineData("body-io")]
+    [InlineData("lost-response")]
+    public async Task InvalidOrLostCreatedAcknowledgementRemainsUnknownAndIsNotRetried(string corruption)
     {
         var store = new Store(Eligible());
-        var handler = new Api { EmptyAcknowledgementReviewers = emptyReviewers, ReviewPostStatus = status };
+        var handler = new Api { Corruption = corruption };
         using var client = handler.Client();
         var adapter = CreateAdapter(client, store);
 
@@ -249,6 +320,26 @@ public sealed class GitHubReviewIntegrationTests
         Assert.Single(results, success => success);
         Assert.Equal(1, handler.Posts);
         Assert.True(store.State.Issues[7].Review!.RequestBoundary!.Confirmed);
+    }
+
+    [Theory]
+    [InlineData(DeliveryStatus.Succeeded)]
+    [InlineData(DeliveryStatus.Unknown)]
+    [InlineData(DeliveryStatus.Executing)]
+    public async Task EarlierRequestForSamePullAndCommitPreventsAnotherPost(DeliveryStatus priorStatus)
+    {
+        var state = Eligible();
+        state.Outbox["previous"] = new()
+        {
+            Id = "previous", IssueNumber = 7, Generation = 1, Kind = EffectKind.RequestReview,
+            Sha = Sha, Status = priorStatus
+        };
+        var handler = new Api();
+        using var client = handler.Client();
+        var outcome = await CreateAdapter(client, new Store(state)).ExecuteAsync(state.Outbox["review"], default);
+        Assert.Equal(DeliveryStatus.Failed, outcome.Status);
+        Assert.Equal(EffectFailureCode.ReviewPreflightRejected, outcome.FailureCode);
+        Assert.Equal(0, handler.Posts);
     }
 
     [Fact]
@@ -459,7 +550,6 @@ public sealed class GitHubReviewIntegrationTests
     [InlineData("bot-id")]
     [InlineData("bot-node")]
     [InlineData("bot-login")]
-    [InlineData("existing-request")]
     [InlineData("pending-review")]
     public async Task LivePreflightFailuresNeverLaunchReview(string corruption)
     {
@@ -491,8 +581,10 @@ public sealed class GitHubReviewIntegrationTests
         var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
         Assert.Equal("review-request:review", outcome.ExternalId);
         Assert.True(store.State.Issues[7].Review!.RequestBoundary!.Confirmed);
+        Assert.Equal("RRR_kwDOAA", store.State.Issues[7].Review!.CopilotRequestNodeId);
         Assert.Equal(1, handler.Posts);
-        Assert.Contains("copilot-pull-request-reviewer[bot]", handler.RequestBody);
+        Assert.Contains("POST /repos/owner/repo/pulls/17/copilot-code-review", handler.Requests);
+        Assert.Equal("{}", handler.RequestBody);
         // Simulate loss of the outer outcome publication; recover the saved acknowledgement without another POST.
         store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", new(DeliveryStatus.Unknown), Now);
         var recovered = await adapter.ReconcileAsync(store.State.Outbox["review"], default);
@@ -503,18 +595,15 @@ public sealed class GitHubReviewIntegrationTests
     }
 
     [Theory]
-    [InlineData("lost-response", false)]
-    [InlineData("ack-sha", false)]
-    [InlineData("ack-actor", false)]
-    [InlineData("save-confirmation", false)]
-    [InlineData("lost-response", true)]
-    [InlineData("ack-sha", true)]
-    [InlineData("ack-malformed", true)]
-    [InlineData("save-confirmation", true)]
-    public async Task AmbiguousPostOrReceiptWriteIsLookupOnlyAndNeverClearsHold(string corruption, bool emptyReviewers)
+    [InlineData("lost-response")]
+    [InlineData("ack-state")]
+    [InlineData("ack-malformed")]
+    [InlineData("body-io")]
+    [InlineData("save-confirmation")]
+    public async Task AmbiguousPostOrReceiptWriteIsLookupOnlyAndNeverClearsHold(string corruption)
     {
         var store = new Store(Eligible());
-        var handler = new Api { Corruption = corruption, EmptyAcknowledgementReviewers = emptyReviewers };
+        var handler = new Api { Corruption = corruption };
         if (corruption == "save-confirmation") handler.BeforePost = () => store.FailWrites = true;
         using var client = handler.Client();
         var adapter = CreateAdapter(client, store);
@@ -648,7 +737,7 @@ public sealed class GitHubReviewIntegrationTests
         store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
         handler.HasOutput = true;
         handler.Corruption = corruption;
-        Assert.Null(await adapter.ReadEventAsync(store.State, store.State.Issues[7], default));
+        Assert.IsType<ReviewPending>((await adapter.ReadEventAsync(store.State, store.State.Issues[7], default))!.Data);
         Assert.Null(store.State.Issues[7].Review!.Classification);
         Assert.Equal(1, handler.Posts);
     }
@@ -1029,7 +1118,10 @@ public sealed class GitHubReviewIntegrationTests
         }
     }
     private sealed class Allow : IAuthorizationPolicy { public bool IsAuthorized(OrchestrationEvent message) => true; }
-    private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now; }
+    private sealed class Clock(DateTimeOffset? instant = null) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => instant ?? Now;
+    }
     private sealed class Store(RepositoryState state) : IStateStore
     {
         private readonly object gate = new();
@@ -1057,8 +1149,10 @@ public sealed class GitHubReviewIntegrationTests
     {
         public string? Corruption { get; set; }
         public string ReviewState { get; set; } = "COMMENTED";
-        public bool EmptyAcknowledgementReviewers { get; init; }
         public HttpStatusCode ReviewPostStatus { get; init; } = HttpStatusCode.Created;
+        public IReadOnlyList<HttpStatusCode> ReviewPostStatuses { get; init; } = [];
+        public string? ApiFailureReason { get; init; }
+        public string RequestNodeId { get; init; } = "RRR_kwDOAA";
         public bool HasOutput { get; set; }
         public bool PublishOutputAfterPost { get; init; }
         public bool Paginated { get; init; }
@@ -1094,16 +1188,12 @@ public sealed class GitHubReviewIntegrationTests
             login = Corruption == "bot-login" ? "impostor" : ReviewerLogin,
             type = Corruption == "bot-type" ? "User" : "Bot"
         };
-        private object Pull(bool acknowledgement = false) => new
+        private object Pull() => new
         {
             number = 17, state = Corruption == "closed" ? "closed" : "open",
-            head = new { @ref = "agent/task", sha = Corruption == "live-sha" || acknowledgement && Corruption == "ack-sha" ? new string('b', 40) : Sha,
+            head = new { @ref = "agent/task", sha = Corruption == "live-sha" ? new string('b', 40) : Sha,
                 repo = new { id = Corruption == "repository" ? 2 : 1 } },
-            @base = new { @ref = "master", repo = new { id = 1 } },
-            requested_reviewers = acknowledgement && EmptyAcknowledgementReviewers
-                ? Array.Empty<object>() : acknowledgement && Corruption == "ack-human-only"
-                    ? new object[] { new { id = 55, node_id = "USER_node", login = "maintainer", type = "User" } }
-                    : new[] { Actor(acknowledgement && Corruption == "ack-actor") }
+            @base = new { @ref = "master", repo = new { id = 1 } }
         };
         private object Review(bool baseline) => new
         {
@@ -1134,16 +1224,24 @@ public sealed class GitHubReviewIntegrationTests
                     target_url = body.GetProperty("target_url").GetString(), created_at = Now
                 };
             }
-            else if (request.Method == HttpMethod.Post)
+            else if (request.Method == HttpMethod.Post && path == "/repos/owner/repo/pulls/17/copilot-code-review")
             {
-                Assert.Equal("/repos/owner/repo/pulls/17/requested_reviewers", path);
                 BeforePost?.Invoke();
                 if (BeforePostAsync is not null) await BeforePostAsync(token);
                 Posts++;
+                var postedStatus = ReviewPostStatuses.Count >= Posts
+                    ? ReviewPostStatuses[Posts - 1] : ReviewPostStatus;
                 RequestBody = await request.Content!.ReadAsStringAsync(token);
                 if (Corruption == "lost-response") throw new HttpRequestException("Injected response loss");
                 if (PublishOutputAfterPost) HasOutput = true;
-                response = Corruption == "ack-malformed" ? new { number = 17 } : Pull(true);
+                response = Corruption switch
+                {
+                    "ack-malformed" => new { node_id = "", state = "PENDING" },
+                    "ack-state" => new { node_id = RequestNodeId, state = "COMPLETED" },
+                    _ when postedStatus != HttpStatusCode.Created =>
+                        new { message = "Copilot review request rejected.", failure_reason = ApiFailureReason },
+                    _ => new { node_id = RequestNodeId, state = "PENDING" }
+                };
             }
             else if (path == "/repos/owner/repo") response = new { id = 1, full_name = "owner/repo" };
             else if (path == "/repos/owner/repo/issues/7") response = new { id = 70, number = 7, state = "open",
@@ -1219,15 +1317,19 @@ public sealed class GitHubReviewIntegrationTests
                     user = Actor(Corruption == "comment-actor"), body = "precise comment evidence", path = "source.cs",
                     pull_request_url = Corruption == "comment-url" ? "https://api.github.com/repos/other/repo/pulls/17" : PullUrl } };
             else throw new InvalidOperationException("Unexpected review fixture route");
-            var status = request.Method == HttpMethod.Post && path.EndsWith("/requested_reviewers", StringComparison.Ordinal)
-                ? ReviewPostStatus : HttpStatusCode.OK;
+            var status = request.Method == HttpMethod.Post && path.EndsWith("/copilot-code-review", StringComparison.Ordinal)
+                ? ReviewPostStatuses.Count >= Posts ? ReviewPostStatuses[Posts - 1] : ReviewPostStatus
+                : HttpStatusCode.OK;
             var result = new HttpResponseMessage(status)
             {
-                Content = request.Method == HttpMethod.Post && Corruption == "body-io"
+                Content = request.Method == HttpMethod.Post && path.EndsWith("/copilot-code-review", StringComparison.Ordinal) &&
+                    Corruption == "body-io"
                     ? new FailingContent()
                     : new StringContent(JsonSerializer.Serialize(response), Encoding.UTF8, "application/json")
             };
             result.Headers.Add("X-GitHub-Request-Id", "review:request:123");
+            if (status is HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable)
+                result.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.Zero);
             return result;
         }
 

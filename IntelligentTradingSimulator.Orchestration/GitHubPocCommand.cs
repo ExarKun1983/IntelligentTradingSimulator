@@ -181,7 +181,9 @@ public static class GitHubPocCommand
                 { task.Id, task.Kind, task.Status, task.ExternalId, task.SourceSha, task.FinalSha }).ToArray(),
             Ci = issue?.Ci,
             Review = issue?.Review is { } review ? new
-                { review.IntentId, review.ReviewId, review.Sha, review.Classification, review.RequestBoundary } : null,
+                { review.IntentId, review.ReviewId, review.Sha, review.Classification, review.LifecycleState,
+                    review.CopilotRequestNodeId, review.ReviewRequestedAt, review.ReviewDeadlineAt,
+                    review.RequestFailureReason, review.RequestBoundary } : null,
             Effects = snapshot.State.Outbox.Values.Where(effect =>
                 effect.Kind is EffectKind.LaunchTask or EffectKind.RunCi or EffectKind.RequestReview)
                 .Select(effect => new { effect.Id, effect.Kind, effect.Status, effect.TaskId, effect.Sha,
