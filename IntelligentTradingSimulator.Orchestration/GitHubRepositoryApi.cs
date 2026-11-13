@@ -175,6 +175,63 @@ public sealed partial class GitHubRepositoryApi
         return await ReadJsonAsync(response, token);
     }
 
+    internal async Task<GitHubCopilotReviewResponse> RequestCopilotCodeReviewAsync(int pullNumber,
+        CancellationToken token, Action<GitHubApiResponseMetadata>? observeResponse = null)
+    {
+        if (pullNumber <= 0) throw new ArgumentOutOfRangeException(nameof(pullNumber));
+        using var request = new HttpRequestMessage(HttpMethod.Post,
+            prefix + $"pulls/{pullNumber}/copilot-code-review")
+        {
+            Content = JsonContent.Create(new { })
+        };
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+        var retryAfter = response.Headers.RetryAfter?.Delta ??
+            (response.Headers.RetryAfter?.Date is { } retryDate ? retryDate - DateTimeOffset.UtcNow : null);
+        var metadata = new GitHubApiResponseMetadata((int)response.StatusCode, GitHubRequestId(response), retryAfter);
+        observeResponse?.Invoke(metadata);
+        var status = (int)response.StatusCode;
+        if (response.StatusCode == HttpStatusCode.Created)
+        {
+            using var body = await ReadJsonAsync(response, token, ensureSuccess: false);
+            var root = body.RootElement;
+            var nodeId = root.TryGetProperty("node_id", out var node) &&
+                node.ValueKind == JsonValueKind.String ? node.GetString() : null;
+            var state = root.TryGetProperty("state", out var stateValue) &&
+                stateValue.ValueKind == JsonValueKind.String ? stateValue.GetString() : null;
+            if (string.IsNullOrWhiteSpace(nodeId) || nodeId.Length > 256 ||
+                !nodeId.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '-' or ':') ||
+                state != "PENDING")
+                throw new InvalidDataException("Copilot review acknowledgement identity or state is invalid.");
+            return new(status, metadata.RequestId, nodeId, state, null, retryAfter);
+        }
+
+        if (response.StatusCode == HttpStatusCode.Conflict)
+            return new(status, metadata.RequestId, null, "PENDING", null, retryAfter);
+
+        if (response.StatusCode is not (HttpStatusCode.UnprocessableEntity or HttpStatusCode.Forbidden or
+            HttpStatusCode.TooManyRequests))
+            return new(status, metadata.RequestId, null, null, null, retryAfter);
+
+        string? failureReason = null;
+        try
+        {
+            using var body = await ReadJsonAsync(response, token, ensureSuccess: false);
+            var root = body.RootElement;
+            failureReason = root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("failure_reason", out var failure) &&
+                failure.ValueKind == JsonValueKind.String && failure.GetString() is { } reason &&
+                reason.Length is > 0 and <= 64 &&
+                reason.All(character => char.IsAsciiLetterUpper(character) || character == '_')
+                    ? reason : null;
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidDataException or
+            IOException or HttpRequestException)
+        {
+            // These rejection statuses remain definitive if the optional detail body is unavailable.
+        }
+        return new(status, metadata.RequestId, null, null, failureReason, retryAfter);
+    }
+
     internal async Task<JsonDocument> GetGlobalAsync(string path, CancellationToken token)
     {
         using var response = await client.GetAsync(path, HttpCompletionOption.ResponseHeadersRead, token);
@@ -253,9 +310,10 @@ public sealed partial class GitHubRepositoryApi
               System.Globalization.CultureInfo.InvariantCulture, out var id)
             ? id : throw new InvalidDataException("Invalid GraphQL database identity.");
 
-    private static async Task<JsonDocument> ReadJsonAsync(HttpResponseMessage response, CancellationToken token)
+    private static async Task<JsonDocument> ReadJsonAsync(HttpResponseMessage response, CancellationToken token,
+        bool ensureSuccess = true)
     {
-        response.EnsureSuccessStatusCode();
+        if (ensureSuccess) response.EnsureSuccessStatusCode();
         const int maximumBytes = 2 * 1024 * 1024;
         if (response.Content.Headers.ContentLength > maximumBytes)
             throw new InvalidDataException("API response capacity exceeded.");

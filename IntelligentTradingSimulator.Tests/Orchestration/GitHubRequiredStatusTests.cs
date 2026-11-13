@@ -588,6 +588,7 @@ public sealed class GitHubRequiredStatusTests
         issue.ReactivationRequired = false;
         issue.HoldReason = null;
         issue.Review!.Classification = null;
+        issue.Review.LifecycleState = ReviewLifecycleState.Requested;
         state.AdmittedIssue = 7;
         var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
         state = reducer.Reconcile(state, Live()).State;
@@ -629,6 +630,7 @@ public sealed class GitHubRequiredStatusTests
         issue.ReactivationRequired = false;
         issue.HoldReason = null;
         issue.Review!.Classification = null;
+        issue.Review.LifecycleState = ReviewLifecycleState.Requested;
         issue.Review.Findings.Add(new("prior-blocker", "Needs fix", "specific prior evidence"));
         var response = new FindingResponse("prior-blocker", "Specific fix verified in accepted review", true);
         state = new OrchestrationReducer(new Allow()).Apply(state,

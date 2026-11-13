@@ -1614,15 +1614,54 @@ contract; custom instructions alone do not provide that API guarantee. Until
 that gap is resolved, a bounded test must explicitly include a human
 `classify-review` step and must not be reported as a fully automatic happy path.
 
-Review submission requires a received `201 Created` response for the exact
-mapped PR, repository and head, after preflight verification of the Copilot bot.
-The response's `requested_reviewers` array can be empty when Copilot has already
-started; this does not invalidate that acknowledgement. A nonempty array must
-still contain the verified reviewer. Persisted confirmation acknowledges only
-the request, not review completion or acceptance. A lost/malformed response or
-failed confirmation write remains uncertain and lookup-only, without another
-POST. Submitted output must independently match the pinned reviewer and SHA,
-be newer than the saved baseline, and await human classification.
+After exact-head green CI, the adapter uses `GITHUB_TOKEN` and REST API version
+`2026-03-10` to call
+`POST /repos/{owner}/{repo}/pulls/{pull_number}/copilot-code-review`.
+The [endpoint documentation](https://docs.github.com/en/rest/pulls/copilot-code-review?apiVersion=2026-03-10)
+defines `201` with a request node ID and `PENDING`: this acknowledges a request,
+not review completion. `409` means an existing review is pending on the PR;
+it does not identify that review's commit or prove this workflow requested it.
+The adapter records that distinction and does not issue another request.
+The result must independently match the mapped PR, exact head SHA and pinned
+Copilot author, be newer than the saved baseline, and await human classification.
+The REST review list does not expose a proven request-to-submission round token.
+An earlier executing, uncertain or successful request in canonical state for
+the same PR and commit prevents a new POST; a definitive rejection can be
+handled through the existing guarded recovery process.
+
+Lifecycle state distinguishes requested, pending, completed, failed and timed
+out; the default deadline is 15 minutes. Set optional repository variable
+`ORCHESTRATION_POC_REVIEW_TIMEOUT_MINUTES` for the PoC or
+`ORCHESTRATION_REVIEW_TIMEOUT_MINUTES` for the main driver to an integer 1–30.
+Timeout is checked while polling, not by a separate timer. The worker must be
+running or invoked again to observe it. A timeout blocks the issue and does not
+cancel remote work.
+
+For new Issues, the main driver sets a maximum of five repair tasks by default;
+set `ORCHESTRATION_MAX_REPAIR_TASKS` to 1–8 before admission to choose another
+limit. This caps CI, review and feedback repairs together, and therefore bounds
+the number of review/fix cycles. Existing admitted Issues retain their saved
+limit; an older Issue without one is not retroactively capped. The isolated PoC
+remains fixed at one repair task and two reviews.
+
+The workflow grants `pull-requests: write`; `GITHUB_TOKEN` is a GitHub App
+installation token and the official OpenAPI marks this endpoint as enabled for
+GitHub Apps. The endpoint documentation does not explicitly state the minimum
+permission or confirm this particular Actions token's entitlement: verify it
+in a separately authorized live run. Copilot review access, policy, licensing,
+quota and billing must also be verified for the requesting actor/repository.
+No PAT substitution is implied. [Actions suppresses most workflow events caused
+by GITHUB_TOKEN](https://docs.github.com/en/actions/concepts/security/github_token#when-github_token-triggers-workflow-runs);
+this driver polls the reviews API rather than depending on a review-triggered
+workflow, but the suppression rule alone does not establish whether Copilot
+itself starts.
+
+Documented `401`, `403`, `404`, `422` and exhausted `429` responses are recorded
+as rejections; retry `429` at most twice, within the bounded delay, after
+revalidating the candidate. A lost or malformed acknowledgement, `503`, other
+unexpected response, or failed confirmation write remains uncertain and
+lookup-only: do not automatically POST again. A `503` can come from an
+intermediary, so it is not assumed to prove that no request was created.
 
 The offline integration test
 `OneRepairPoCCompletesCodingCiReviewRepairCiReviewAndStopsForHumanApproval`
@@ -1709,6 +1748,7 @@ Do not use the resources or state of #227, #237 or the status experiment.
 | `ORCHESTRATION_POC_NO_ADDED_CHARGES_VERIFIED` | `true` only after confirming the agreed cost controls |
 | `ORCHESTRATION_POC_REVIEW_POLICY_VERIFIED` | `true` only after verifying Copilot review access/policy |
 | `ORCHESTRATION_POC_AUTOMATIC_REVIEWS_DISABLED` | `true` only after verifying native automatic reviews will not duplicate managed requests |
+| `ORCHESTRATION_POC_REVIEW_TIMEOUT_MINUTES` | Optional integer 1–30; defaults to 15 and is part of the PoC manifest |
 
 Use the shared environment's approval rules for each driver invocation. This
 does not imply an independent second-person approval if the maintainer may
@@ -1781,18 +1821,17 @@ response has no status/request ID; diagnostics do not resolve an unknown outcome
 or authorize retry.
 
 `ReviewRequestDiagnostic` additionally records the review intent/Issue, last
-stage, whether execution reached the POST call, HTTP status, validated GitHub
-request ID, returned reviewer count, presence of the pinned Copilot identity,
-and sanitized exception category/type. Stages distinguish preflight identity,
-eligibility/candidate/live checks, durable boundary save, post-save revalidation,
-POST/body read, acknowledgement PR/reviewer validation and acknowledgement save.
+stage, whether execution reached the POST call, attempt, HTTP status, validated
+GitHub request ID, response state/request node ID, bounded retry delay, stable
+failure reason and sanitized exception category/type. Stages distinguish preflight,
+durable boundary save, post-save revalidation, POST/body read and acknowledgement save.
 `PostAttempted=true` means the POST call was entered, not proof GitHub received
 it. `Outcome=confirmed` means the acknowledgement was saved, not that review
-completed. A 201 response followed by `acknowledgement_reviewers_validation`,
+completed. In historical runs using the old endpoint, a 201 response followed by `acknowledgement_reviewers_validation`,
 a nonzero reviewer count and `HasVerifiedReviewer=false` means the local
 validator rejected the returned reviewer list; it does not prove that GitHub
-did not start Copilot. Non-2xx statuses are HTTP rejections, whereas a missing
-status with `transport` indicates no response headers were observed.
+did not start Copilot. A missing status with `transport` indicates no response
+headers were observed. Unexpected HTTP responses may also be ambiguous.
 
 Each stage is written to the sanitized `agent-poc-diagnostics.log`, displayed
 in the Actions step and uploaded alongside the JSON even when the driver fails.

@@ -16,6 +16,7 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
     int? TestIssue = null, int? TestMaxRepairTasks = null, int? RetiredTestIssue = null)
 {
     public GitHubRecoveryApproval Recovery { get; init; } = new();
+    public int MaxRepairTasks { get; init; } = 5;
 
     public void ValidatePipelinePrerequisites()
     {
@@ -35,9 +36,20 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
         int? OptionalIdentity(string name) => string.IsNullOrWhiteSpace(read(name)) ? null :
             int.TryParse(read(name), NumberStyles.None, CultureInfo.InvariantCulture, out var value) && value > 0
                 ? value : throw new InvalidDataException("Invalid bounded-test identity.");
+        int ReviewTimeoutMinutes()
+        {
+            var value = read("ORCHESTRATION_REVIEW_TIMEOUT_MINUTES");
+            if (string.IsNullOrWhiteSpace(value)) return 15;
+            return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var minutes) &&
+                minutes is >= 1 and <= 30
+                ? minutes : throw new InvalidDataException("Invalid Copilot review timeout.");
+        }
         var testIssue = OptionalIdentity("ORCHESTRATION_TEST_ISSUE");
         var testMaxRepairTasks = OptionalIdentity("ORCHESTRATION_TEST_MAX_REPAIR_TASKS");
         var retiredTestIssue = OptionalIdentity("ORCHESTRATION_RETIRED_TEST_ISSUE");
+        var maxRepairTasks = OptionalIdentity("ORCHESTRATION_MAX_REPAIR_TASKS") ?? 5;
+        if (maxRepairTasks > 8)
+            throw new InvalidDataException("Repair-task cap is outside the supported range.");
         if ((testIssue is null) != (testMaxRepairTasks is null) || testMaxRepairTasks is not (null or 1) ||
             (retiredTestIssue is not null && (testIssue != 237 || retiredTestIssue != 227)) ||
             (testIssue == 237 && retiredTestIssue != 227))
@@ -59,12 +71,13 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
         return new(Required("GITHUB_REPOSITORY"), Identity("GITHUB_REPOSITORY_ID"), Identity("ORCHESTRATION_ACTOR_ID"),
             Required("ORCHESTRATION_BASE_BRANCH"), tasks, wake,
             new(Identity("ORCHESTRATION_WORKFLOW_ID"), Required("ORCHESTRATION_DEFINITION_SHA")),
-            new(activation, Approved("ORCHESTRATION_REVIEW_POLICY_VERIFIED"), cost,
-                Approved("ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED")),
+            new GitHubReviewApproval(activation, Approved("ORCHESTRATION_REVIEW_POLICY_VERIFIED"), cost,
+                Approved("ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED"))
+                { ReviewTimeout = TimeSpan.FromMinutes(ReviewTimeoutMinutes()) },
             new(activation, credential, Approved("ORCHESTRATION_TRUSTED_CI_VERIFIED"), cost),
             new(Identity("ORCHESTRATION_CI_WORKFLOW_ID"), Required("ORCHESTRATION_CI_REF"),
                 Required("ORCHESTRATION_CI_DEFINITION_SHA")), status, testIssue, testMaxRepairTasks, retiredTestIssue)
-            { Recovery = recovery };
+            { Recovery = recovery, MaxRepairTasks = maxRepairTasks };
     }
 }
 
@@ -152,6 +165,7 @@ public static class GitHubLiveCommand
                     [publisher.ActorId], publisher.ActorId, settings.BaseBranch, settings.ActorId,
                     settings.Tasks, ciRoute: settings.CiRoute, ciApproval: settings.Ci, reviewApproval: settings.Review,
                     statusPublisher: settings.Status.AllowsPublication ? publisher : null, statusApproval: settings.Status,
+                    maxRepairTasks: settings.TestMaxRepairTasks ?? settings.MaxRepairTasks,
                     boundedScope: CreateBoundedScope(settings), commandOnly: recoveryOnly,
                     recoveryApproval: settings.Recovery);
             }

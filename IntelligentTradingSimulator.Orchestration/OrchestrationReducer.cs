@@ -204,11 +204,39 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     else issue.Phase = Phase.FIX_PENDING;
                 }
                 break;
+            case ReviewPending pending:
+                CheckMapping(issue, pending.PullRequest, pending.Sha, requireHead: false);
+                if (!ValidReviewProgressActor(message, issue) ||
+                    issue.Review is not { } pendingReview ||
+                    pendingReview.IntentId != pending.IntentId || pendingReview.Sha != pending.Sha ||
+                    pendingReview.LifecycleState != ReviewLifecycleState.Requested ||
+                    pendingReview.ReviewDeadlineAt is not { } pendingDeadline ||
+                    message.OccurredAt >= pendingDeadline ||
+                    issue.Ci is not { Green: true } pendingCi || pendingCi.Sha != pending.Sha ||
+                    issue.HeadSha != pending.Sha)
+                    throw new InvalidOperationException("Review-pending observation does not match the accepted request.");
+                pendingReview.LifecycleState = ReviewLifecycleState.Pending;
+                break;
+            case ReviewTimedOut timedOut:
+                CheckMapping(issue, timedOut.PullRequest, timedOut.Sha, requireHead: false);
+                if (!ValidReviewProgressActor(message, issue) ||
+                    issue.Review is not { } timedOutReview ||
+                    timedOutReview.IntentId != timedOut.IntentId || timedOutReview.Sha != timedOut.Sha ||
+                    timedOutReview.LifecycleState is not (ReviewLifecycleState.Requested or ReviewLifecycleState.Pending) ||
+                    timedOutReview.ReviewDeadlineAt is not { } timeoutDeadline ||
+                    message.OccurredAt < timeoutDeadline || issue.HeadSha != timedOut.Sha ||
+                    issue.Ci is not { Green: true } timeoutCi || timeoutCi.Sha != timedOut.Sha)
+                    throw new InvalidOperationException("Review-timeout observation does not match the accepted request.");
+                timedOutReview.LifecycleState = ReviewLifecycleState.TimedOut;
+                Hold(issue, "Copilot review timed out.");
+                CancelPendingWork(state, issue);
+                break;
             case ReviewResult result:
                 CheckMapping(issue, result.PullRequest, result.Sha, requireHead: false);
                 if (string.IsNullOrWhiteSpace(result.ReviewId) || issue.Review is not { } review ||
                     review.ReviewId != result.ReviewId || review.TaskId != result.TaskId ||
                     review.Round != result.Round || review.Sha != result.Sha ||
+                    review.LifecycleState is not (ReviewLifecycleState.NotRequested or ReviewLifecycleState.Requested or ReviewLifecycleState.Pending) ||
                     review.Classification is not null ||
                     issue.Ci?.Green != true || !CompletedTaskMatches(issue, result.TaskId, result.Round, result.Sha))
                     throw new InvalidOperationException("Ineligible review result.");
@@ -220,6 +248,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     review.Findings.Any(finding => finding.Id == response.FindingId) &&
                     !review.Responses.Contains(response));
                 review.Classification = result.Classification;
+                review.LifecycleState = ReviewLifecycleState.Completed;
                 review.SourceEvidence = result.SourceEvidence;
                 review.Findings = RetainUnresolvedFindings(review, result.Classification, result.Findings, result.Responses);
                 review.Responses.AddRange(result.Responses.Where(response => !review.Responses.Contains(response)));
@@ -737,7 +766,12 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             boundary.ReviewerId <= 0 || string.IsNullOrWhiteSpace(boundary.ReviewerNodeId) ||
             boundary.ExistingReviewIds.Count > MaximumIndexEntries ||
             boundary.ExistingReviewIds.Any(value => value <= 0) ||
-            boundary.ExistingReviewIds.Distinct().Count() != boundary.ExistingReviewIds.Count)
+            boundary.ExistingReviewIds.Distinct().Count() != boundary.ExistingReviewIds.Count ||
+            boundary.Confirmed && (boundary.AcceptedAt is null || boundary.DeadlineAt is null ||
+                boundary.DeadlineAt <= boundary.AcceptedAt ||
+                boundary.AlreadyPending == (boundary.RequestNodeId is not null)) ||
+            !boundary.Confirmed && (boundary.RequestNodeId is not null || boundary.AcceptedAt is not null ||
+                boundary.DeadlineAt is not null || boundary.AlreadyPending))
             throw new InvalidOperationException("Invalid executing review request boundary.");
         var previous = issue.Review.RequestBoundary;
         if (previous is not null)
@@ -745,11 +779,41 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             if (previous.ReviewerId != boundary.ReviewerId || previous.ReviewerNodeId != boundary.ReviewerNodeId ||
                 previous.PreparedAt != boundary.PreparedAt ||
                 !previous.ExistingReviewIds.SequenceEqual(boundary.ExistingReviewIds) ||
+                previous.RequestNodeId is not null && previous.RequestNodeId != boundary.RequestNodeId ||
+                previous.AcceptedAt is not null && previous.AcceptedAt != boundary.AcceptedAt ||
+                previous.DeadlineAt is not null && previous.DeadlineAt != boundary.DeadlineAt ||
+                previous.Confirmed && previous.AlreadyPending != boundary.AlreadyPending ||
                 previous.Confirmed && !boundary.Confirmed)
                 throw new InvalidOperationException("Review request boundary identity changed.");
         }
         else if (boundary.Confirmed) throw new InvalidOperationException("Review must be prepared before confirmation.");
         issue.Review.RequestBoundary = boundary;
+        issue.Review.LifecycleState = boundary.Confirmed
+            ? boundary.AlreadyPending ? ReviewLifecycleState.Pending : ReviewLifecycleState.Requested
+            : ReviewLifecycleState.Requesting;
+        if (boundary.Confirmed)
+        {
+            issue.Review.CopilotRequestNodeId = boundary.RequestNodeId;
+            issue.Review.ReviewRequestedAt = boundary.AcceptedAt;
+            issue.Review.ReviewDeadlineAt = boundary.DeadlineAt;
+        }
+        Touch(state, issue, state.LastEventId);
+        return state;
+    }
+
+    public RepositoryState RecordReviewFailureReason(RepositoryState input, string id, string reason)
+    {
+        ValidateState(input);
+        var state = StateJson.Clone(input);
+        var intent = state.Outbox[id];
+        var issue = state.Issues[intent.IssueNumber];
+        if (intent.Kind != EffectKind.RequestReview || intent.Status != DeliveryStatus.Executing ||
+            issue.Generation != intent.Generation || issue.Review?.IntentId != id ||
+            issue.Review.RequestBoundary is not { Confirmed: false } ||
+            string.IsNullOrWhiteSpace(reason) || reason.Length > 64 ||
+            !reason.All(character => char.IsAsciiLetterUpper(character) || char.IsAsciiDigit(character) || character == '_'))
+            throw new InvalidOperationException("Invalid review failure evidence.");
+        issue.Review.RequestFailureReason = reason;
         Touch(state, issue, state.LastEventId);
         return state;
     }
@@ -841,7 +905,16 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             else if (effect.Kind == EffectKind.RunCi && issue.Ci?.IntentId == id)
                 issue.Ci.RunId = effect.ExternalId;
             else if (effect.Kind == EffectKind.RequestReview && issue.Review?.IntentId == id)
+            {
                 issue.Review.ReviewId = effect.ExternalId;
+                if (outcome.Status == DeliveryStatus.Failed)
+                    issue.Review.LifecycleState = ReviewLifecycleState.Failed;
+                else if (outcome.Status == DeliveryStatus.Unknown)
+                    issue.Review.LifecycleState = ReviewLifecycleState.RequestUnknown;
+                else if (outcome.Status == DeliveryStatus.Succeeded &&
+                    issue.Review.LifecycleState is ReviewLifecycleState.NotRequested or ReviewLifecycleState.RequestUnknown)
+                    issue.Review.LifecycleState = ReviewLifecycleState.Requested;
+            }
             else if (effect.Kind == EffectKind.ProjectStatus && outcome.Status == DeliveryStatus.Succeeded)
                 issue.StatusProjectionDigest = StateJson.Digest(effect.StatusBody!);
             if (outcome.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown)
@@ -856,6 +929,11 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         ReleaseIfSafe(state, issue);
         return state;
     }
+
+    private static bool ValidReviewProgressActor(OrchestrationEvent message, IssueState issue) =>
+        message.Actor.Kind == ActorKind.ReviewService && message.Actor.Type == "Bot" &&
+        issue.Review?.RequestBoundary is { Confirmed: true } boundary &&
+        message.Actor.Id == boundary.ReviewerId && message.Actor.NodeId == boundary.ReviewerNodeId;
 
     public static IReadOnlyList<string> ProjectLabels(IssueState issue)
     {
@@ -889,7 +967,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
     {
         TaskCompleted or TaskPrMapped or TaskStopped or TaskTerminalObserved => message.Actor.Kind == ActorKind.TaskService,
         CiResult or CiStopped => message.Actor.Kind == ActorKind.CiService,
-        ReviewResult => message.Actor.Kind == ActorKind.ReviewService,
+        ReviewResult or ReviewPending or ReviewTimedOut => message.Actor.Kind == ActorKind.ReviewService,
         _ => message.Actor.Kind == ActorKind.Human
     };
 

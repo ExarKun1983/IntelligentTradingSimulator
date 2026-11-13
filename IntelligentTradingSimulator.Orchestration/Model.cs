@@ -12,6 +12,7 @@ public enum TaskStatus { Intended, Executing, Running, AwaitingHeadConfirmation,
 public enum EffectKind { LaunchTask, RunCi, RequestReview, ProjectLabels, ProjectStatus, PublishRequiredStatus }
 public enum DeliveryStatus { Pending, Executing, Succeeded, Failed, Unknown, Cancelled }
 public enum ReviewClassification { Accepted, Blocking, NeedsHuman }
+public enum ReviewLifecycleState { NotRequested, Requesting, RequestUnknown, Requested, Pending, Completed, Failed, TimedOut }
 public enum ActorKind { Human, TaskService, CiService, ReviewService }
 public enum TerminalOutcome { None, Merged, Unmerged, Unknown }
 
@@ -134,6 +135,11 @@ public sealed class ReviewIdentity
     public int Round { get; set; }
     public string Sha { get; set; } = "";
     public ReviewClassification? Classification { get; set; }
+    public ReviewLifecycleState LifecycleState { get; set; }
+    public string? CopilotRequestNodeId { get; set; }
+    public DateTimeOffset? ReviewRequestedAt { get; set; }
+    public DateTimeOffset? ReviewDeadlineAt { get; set; }
+    public string? RequestFailureReason { get; set; }
     public List<Finding> Findings { get; set; } = [];
     public List<FindingResponse> Responses { get; set; } = [];
     public ReviewRequestBoundary? RequestBoundary { get; set; }
@@ -142,7 +148,9 @@ public sealed class ReviewIdentity
 }
 
 public sealed record ReviewRequestBoundary(long ReviewerId, string ReviewerNodeId, DateTimeOffset PreparedAt,
-    List<long> ExistingReviewIds, bool Confirmed = false);
+    List<long> ExistingReviewIds, bool Confirmed = false, string? RequestNodeId = null,
+    DateTimeOffset? AcceptedAt = null, DateTimeOffset? DeadlineAt = null,
+    bool AlreadyPending = false);
 public sealed record ReviewAbandonmentEvidence(string IntentId, int PullRequest, string HeadSha,
     DateTimeOffset ObservedAt, bool ReviewerRequestPending, List<long> ReviewerReviewIds);
 public sealed record ReviewOperatorResolution(string EventId, string IntentId, Actor Author, string Reason,
@@ -228,6 +236,8 @@ public sealed record RequiredStatusBoundary(long ActorId, string ActorLogin, str
 [JsonDerivedType(typeof(CiResult), "ci-result")]
 [JsonDerivedType(typeof(CiStopped), "ci-stopped")]
 [JsonDerivedType(typeof(ReviewResult), "review-result")]
+[JsonDerivedType(typeof(ReviewPending), "review-pending")]
+[JsonDerivedType(typeof(ReviewTimedOut), "review-timed-out")]
 [JsonDerivedType(typeof(HumanFeedback), "human-feedback")]
 [JsonDerivedType(typeof(HumanClassification), "human-classification")]
 [JsonDerivedType(typeof(RequestChanges), "request-changes")]
@@ -339,6 +349,8 @@ public sealed record CiStopped(string RunId, string TaskId, int Round, string Sh
 public sealed record ReviewResult(string ReviewId, string TaskId, int Round, int PullRequest, string Sha,
     ReviewClassification Classification, List<Finding> Findings, List<FindingResponse> Responses,
     string? SourceEvidence = null) : EventData;
+public sealed record ReviewPending(string IntentId, int PullRequest, string Sha) : EventData;
+public sealed record ReviewTimedOut(string IntentId, int PullRequest, string Sha) : EventData;
 public sealed record HumanFeedback(string Text, string? HandoffId = null, int? Round = null, string? Sha = null) : EventData;
 public sealed record HumanClassification(string HandoffId, int Round, int PullRequest, string Sha,
     ReviewClassification Classification, string Reason, List<Finding>? Findings = null,
