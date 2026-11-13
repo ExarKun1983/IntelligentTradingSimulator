@@ -692,6 +692,9 @@ public sealed class GitHubTaskIntegrationTests
     [Theory]
     [InlineData(HttpStatusCode.BadGateway, "http_status", "request:502:abc", "HttpRequestException")]
     [InlineData(HttpStatusCode.Created, "response_validation", "request:invalid:task", "KeyNotFoundException")]
+    [InlineData(HttpStatusCode.Created, "response_validation", "request:numeric:identity", "FormatException")]
+    [InlineData(HttpStatusCode.Found, "http_status", "request:302:redirect", "HttpRequestException")]
+    [InlineData(HttpStatusCode.Created, "transport", "request:body:io", "IOException")]
     public async Task FailedLaunchRecordsSanitizedHttpAndResponseDiagnostics(HttpStatusCode status,
         string expectedCategory, string requestId, string expectedErrorType)
     {
@@ -699,7 +702,13 @@ public sealed class GitHubTaskIntegrationTests
         {
             TaskPostStatus = status,
             TaskPostRequestId = requestId,
-            Corruption = status == HttpStatusCode.Created ? "missing-creator" : null
+            Corruption = requestId switch
+            {
+                "request:invalid:task" => "missing-creator",
+                "request:numeric:identity" => "numeric-identity",
+                "request:body:io" => "body-io",
+                _ => null
+            }
         };
         var store = new Store();
         using var client = fixture.Client();
@@ -715,11 +724,13 @@ public sealed class GitHubTaskIntegrationTests
         Assert.Equal(requestId, diagnostic.GitHubRequestId);
         Assert.Equal(expectedCategory, diagnostic.ErrorCategory);
         Assert.Equal(expectedErrorType, diagnostic.ErrorType);
-        Assert.Equal(status == HttpStatusCode.Created ? "Object" : null, diagnostic.ResponseKind);
-        Assert.Equal(status == HttpStatusCode.Created ? true : null, diagnostic.HasTaskId);
-        Assert.Equal(status == HttpStatusCode.Created ? true : null, diagnostic.HasRepository);
-        Assert.Equal(status == HttpStatusCode.Created ? false : null, diagnostic.HasCreator);
-        Assert.Equal(status == HttpStatusCode.Created ? true : null, diagnostic.HasState);
+        var parsedBody = status == HttpStatusCode.Created && requestId is not ("request:body:io");
+        Assert.Equal(parsedBody ? "Object" : null, diagnostic.ResponseKind);
+        Assert.Equal(parsedBody ? true : null, diagnostic.HasTaskId);
+        Assert.Equal(parsedBody ? true : null, diagnostic.HasRepository);
+        Assert.Equal(parsedBody && requestId != "request:invalid:task" ? true :
+            parsedBody ? false : null, diagnostic.HasCreator);
+        Assert.Equal(parsedBody ? true : null, diagnostic.HasState);
         Assert.Equal(DeliveryStatus.Unknown,
             store.State.Outbox.Values.Single(effect => effect.Kind == EffectKind.LaunchTask).Status);
     }
@@ -993,7 +1004,9 @@ public sealed class GitHubTaskIntegrationTests
                     var taskId = ++launchCount == 1 ? "remote-task" : $"remote-task-{launchCount}";
                     AfterLaunch?.Invoke();
                     if (LoseLaunchResponse) throw new HttpRequestException("Lost launch response.");
-                    var response = Response(TaskResponse(taskId), TaskPostStatus);
+                    var response = Corruption == "body-io"
+                        ? new HttpResponseMessage(TaskPostStatus) { Content = new FailingContent() }
+                        : Response(TaskResponse(taskId), TaskPostStatus);
                     if (TaskPostRequestId is not null)
                         response.Headers.Add("X-GitHub-Request-Id", TaskPostRequestId);
                     return response;
@@ -1055,6 +1068,14 @@ public sealed class GitHubTaskIntegrationTests
                     ["repository"] = new { id = 1 },
                     ["state"] = RemoteState
                 };
+            if (Corruption == "numeric-identity")
+                return new
+                {
+                    id = taskId,
+                    repository = new { id = 1.5m },
+                    creator = new { id = 55 },
+                    state = RemoteState
+                };
             return new
             {
                 id = Corruption == "task" ? "other-task" : taskId,
@@ -1104,5 +1125,20 @@ public sealed class GitHubTaskIntegrationTests
         };
         private static HttpResponseMessage Response(object result, HttpStatusCode status = HttpStatusCode.OK) => new(status)
             { Content = new StringContent(JsonSerializer.Serialize(result), Encoding.UTF8, "application/json") };
+
+        private sealed class FailingContent : HttpContent
+        {
+            protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context) =>
+                Task.FromException(new IOException("Injected response-body read failure."));
+
+            protected override bool TryComputeLength(out long length)
+            {
+                length = 0;
+                return true;
+            }
+
+            protected override Task<Stream> CreateContentReadStreamAsync() =>
+                Task.FromException<Stream>(new IOException("Injected response-body read failure."));
+        }
     }
 }

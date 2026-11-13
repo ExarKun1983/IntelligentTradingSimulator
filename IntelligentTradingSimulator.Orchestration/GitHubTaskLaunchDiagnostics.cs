@@ -80,11 +80,12 @@ public sealed class GitHubTaskLaunchDiagnostics
             if (current is null) return;
             var category = exception switch
             {
-                HttpRequestException when current.HttpStatus is >= 400 => "http_status",
+                HttpRequestException when current.HttpStatus is < 200 or >= 300 => "http_status",
                 HttpRequestException => "transport",
                 JsonException => "invalid_json",
-                InvalidDataException or InvalidOperationException or KeyNotFoundException => "response_validation",
+                InvalidDataException or InvalidOperationException or KeyNotFoundException or FormatException => "response_validation",
                 OperationCanceledException => "cancelled",
+                IOException => "transport",
                 _ => "other"
             };
             current = current with

@@ -86,7 +86,7 @@ public sealed class GitHubTaskAdapter(
             return new(DeliveryStatus.Succeeded, id);
         }
         catch (Exception exception) when (exception is HttpRequestException or JsonException or InvalidDataException or
-            InvalidOperationException or KeyNotFoundException or OperationCanceledException or IOException)
+            InvalidOperationException or KeyNotFoundException or FormatException or OperationCanceledException or IOException)
         {
             launchDiagnostics?.RecordFailure(exception);
             throw;
