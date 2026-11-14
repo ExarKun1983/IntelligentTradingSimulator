@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 19,
+  "Version": 20,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": "310CCF43B8865E31053C831E74886F1221D2F7A157EA8196A63821656F4E4735",
   "LastEventId": "task-completed:1277929203:1:5f4f3816-9889-4852-a3ea-02557096e6c2",
@@ -22,7 +22,7 @@
       "SchemaVersion": 1,
       "Number": 265,
       "Generation": 1,
-      "Version": 17,
+      "Version": 18,
       "LastEventId": "task-completed:1277929203:1:5f4f3816-9889-4852-a3ea-02557096e6c2",
       "Phase": "CI_PENDING",
       "Ready": false,
@@ -83,7 +83,15 @@
         "Green": null,
         "TerminalStopReason": null,
         "Blockers": [],
-        "DispatchBoundary": null
+        "DispatchBoundary": {
+          "WorkflowId": 412034682,
+          "WorkflowSha": "8ec3ca23b4f35a640fe37831dd9a81ff52811164",
+          "Ref": "refs/tags/agent-managed-ci-test-265-v1",
+          "Correlation": "managed-ci-7287a92dc8caffad6caa76e151ea30d3eeaa380d33cc98a30aaa10535909fb24",
+          "PreparedAt": "2026-11-14T01:04:13.5326763+00:00",
+          "RunId": null,
+          "WorkflowPath": ".github/workflows/agent-managed-ci.yml"
+        }
       },
       "Review": null,
       "FeedbackEventIds": [],
