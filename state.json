@@ -1,11 +1,11 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 39,
+  "Version": 40,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": "654A3C62B6BD115EF3614A61FC56A4165A7F99DBDD7CFC5A38DE039E5AEB99E1",
-  "LastEventId": "copilot-review-pending:1277929203:1:RequestReview:261:1:task:261:1:1:1:1",
-  "AdmittedIssue": 261,
+  "LastEventId": "review-observed:1277929203:1:RequestReview:261:1:task:261:1:1:1:1",
+  "AdmittedIssue": null,
   "WorkerLease": {
     "Owner": "a029b03b4d064434aba53a67447b7168",
     "ExpiresAt": "2026-11-14T00:38:41.9884609+00:00"
@@ -22,16 +22,16 @@
       "SchemaVersion": 1,
       "Number": 261,
       "Generation": 1,
-      "Version": 37,
-      "LastEventId": "copilot-review-pending:1277929203:1:RequestReview:261:1:task:261:1:1:1:1",
-      "Phase": "REVIEW_PENDING",
+      "Version": 38,
+      "LastEventId": "review-observed:1277929203:1:RequestReview:261:1:task:261:1:1:1:1",
+      "Phase": "BLOCKED",
       "Ready": false,
-      "ActiveAuthorized": true,
+      "ActiveAuthorized": false,
       "ReadyAt": "2026-11-14T00:06:55+00:00",
       "FeedbackSince": "2026-11-14T00:06:55+00:00",
-      "ReactivationRequired": false,
+      "ReactivationRequired": true,
       "Paused": false,
-      "HoldReason": null,
+      "HoldReason": "Review requires human classification.",
       "PullRequest": 264,
       "HeadSha": "f9bb272692cf6edc6eec9a0c1a581276747c4e91",
       "Round": 1,
@@ -99,8 +99,8 @@
         "TaskId": "task:261:1:1:1",
         "Round": 1,
         "Sha": "f9bb272692cf6edc6eec9a0c1a581276747c4e91",
-        "Classification": null,
-        "LifecycleState": "Pending",
+        "Classification": "NeedsHuman",
+        "LifecycleState": "Completed",
         "CopilotRequestNodeId": "RR_kwDOTCum887wJC0d",
         "ReviewRequestedAt": "2026-11-14T00:14:27.0955304+00:00",
         "ReviewDeadlineAt": "2026-11-14T00:29:27.0955304+00:00",
@@ -118,7 +118,7 @@
           "DeadlineAt": "2026-11-14T00:29:27.0955304+00:00",
           "AlreadyPending": false
         },
-        "SourceEvidence": null,
+        "SourceEvidence": "{\u0022reason\u0022:\u0022REST has no request-to-submission round token; prose is not classified approval or blockers. Human confirmation required.\u0022,\u0022request\u0022:\u0022review-request:RequestReview:261:1:task:261:1:1:1:1\u0022,\u0022observedReviews\u0022:[{\u0022id\u0022:5899892390,\u0022node_id\u0022:\u0022PRR_kwDOTCum888AAAABX6k2pg\u0022,\u0022user\u0022:{\u0022login\u0022:\u0022copilot-pull-request-reviewer[bot]\u0022,\u0022id\u0022:175728472,\u0022node_id\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022avatar_url\u0022:\u0022https://avatars.githubusercontent.com/in/946600?v=4\u0022,\u0022gravatar_id\u0022:\u0022\u0022,\u0022url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D\u0022,\u0022html_url\u0022:\u0022https://github.com/apps/copilot-pull-request-reviewer\u0022,\u0022followers_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/followers\u0022,\u0022following_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/following{/other_user}\u0022,\u0022gists_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/gists{/gist_id}\u0022,\u0022starred_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/starred{/owner}{/repo}\u0022,\u0022subscriptions_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/subscriptions\u0022,\u0022organizations_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/orgs\u0022,\u0022repos_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/repos\u0022,\u0022events_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/events{/privacy}\u0022,\u0022received_events_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/received_events\u0022,\u0022type\u0022:\u0022Bot\u0022,\u0022user_view_type\u0022:\u0022public\u0022,\u0022site_admin\u0022:false},\u0022body\u0022:\u0022\\u003C!-- ccr-overview-v2 --\\u003E\\n\\n### \\uD83D\\uDFE2 Approval recommended\\n\\nNo active review issues were identified for this test-only update to rate-limited retry coverage when a pull request\\u2019s head changes.\\n\\n**No open issues** \\uD83C\\uDF89\\n\\n\\u003Cdetails\\u003E\\n\\u003Csummary\\u003E\\u003Cstrong\\u003EWhat changed in this PR\\u003C/strong\\u003E\\u003C/summary\\u003E\\n\\nThis PR strengthens regression coverage for review-request retries when a pull request\\u2019s head changes after a rate-limit response. It changes tests only; production behavior is unchanged.\\n\\n**Changes:**\\n- Configure the changed-head scenario to return \\u0060RATE_LIMITED\\u0060.\\n- Assert that the rejection reason is preserved while retaining the check that only one POST is sent.\\n\\n| File | Description |\\r\\n| ---- | ----------- |\\r\\n| IntelligentTradingSimulator.Tests/\\u200BOrchestration/\\u200BGitHubReviewIntegrationTests.cs | Update the changed-head retry test to use and verify \\u0060RATE_LIMITED\\u0060. |\\n\\u003C/details\\u003E\\n\\n\\u003Csub\\u003EReview effort: Balanced\\u003C/sub\\u003E\u0022,\u0022state\u0022:\u0022COMMENTED\u0022,\u0022html_url\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/264#pullrequestreview-5899892390\u0022,\u0022pull_request_url\u0022:\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/264\u0022,\u0022author_association\u0022:\u0022NONE\u0022,\u0022is_copilot_code_review\u0022:true,\u0022copilot_code_review_effort\u0022:\u0022balanced\u0022,\u0022_links\u0022:{\u0022html\u0022:{\u0022href\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/264#pullrequestreview-5899892390\u0022},\u0022pull_request\u0022:{\u0022href\u0022:\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/264\u0022}},\u0022submitted_at\u0022:\u00222026-11-14T00:15:39Z\u0022,\u0022commit_id\u0022:\u0022f9bb272692cf6edc6eec9a0c1a581276747c4e91\u0022}],\u0022observedComments\u0022:[]}",
         "OperatorResolution": null
       },
       "FeedbackEventIds": [],
@@ -126,8 +126,20 @@
       "ClosurePending": false,
       "TerminalOutcome": "None",
       "TerminalHistory": [],
-      "CurrentHandoffId": null,
-      "Handoffs": {},
+      "CurrentHandoffId": "handoff:261:1:review-observed:1277929203:1:RequestReview:261:1:task:261:1:1:1:1",
+      "Handoffs": {
+        "handoff:261:1:review-observed:1277929203:1:RequestReview:261:1:task:261:1:1:1:1": {
+          "Id": "handoff:261:1:review-observed:1277929203:1:RequestReview:261:1:task:261:1:1:1:1",
+          "Generation": 1,
+          "ReviewId": "review-request:RequestReview:261:1:task:261:1:1:1:1",
+          "TaskId": "task:261:1:1:1",
+          "Round": 1,
+          "Sha": "f9bb272692cf6edc6eec9a0c1a581276747c4e91",
+          "Reason": "Review requires human classification.",
+          "CreatedAt": "2026-11-14T00:14:19.0126563+00:00",
+          "ClassificationEventId": null
+        }
+      },
       "Feedback": {},
       "PendingFeedbackEventIds": [],
       "Reactivations": {},
@@ -187,6 +199,14 @@
       "ReceivedAt": "2026-11-14T00:14:38.00451+00:00",
       "CompletedAt": "2026-11-14T00:14:38.00451+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022copilot-review-pending:1277929203:1:RequestReview:261:1:task:261:1:1:1:1\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:261,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022copilot-pull-request-reviewer[bot]\u0022,\u0022Kind\u0022:3,\u0022Id\u0022:175728472,\u0022NodeId\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022Type\u0022:\u0022Bot\u0022},\u0022OccurredAt\u0022:\u00222026-11-14T00:14:38.00451\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022review-pending\u0022,\u0022IntentId\u0022:\u0022RequestReview:261:1:task:261:1:1:1:1\u0022,\u0022PullRequest\u0022:264,\u0022Sha\u0022:\u0022f9bb272692cf6edc6eec9a0c1a581276747c4e91\u0022}}"
+    },
+    "review-observed:1277929203:1:RequestReview:261:1:task:261:1:1:1:1": {
+      "Id": "review-observed:1277929203:1:RequestReview:261:1:task:261:1:1:1:1",
+      "Digest": "5F845241CDF305B2A7671BB472C4AC74E8DF6109A52EB0105B9631EEA13F809C",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-14T00:14:19.0126563+00:00",
+      "CompletedAt": "2026-11-14T00:14:19.0126563+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022review-observed:1277929203:1:RequestReview:261:1:task:261:1:1:1:1\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:261,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022copilot-pull-request-reviewer[bot]\u0022,\u0022Kind\u0022:3,\u0022Id\u0022:175728472,\u0022NodeId\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022Type\u0022:\u0022Bot\u0022},\u0022OccurredAt\u0022:\u00222026-11-14T00:14:19.0126563\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022review-result\u0022,\u0022ReviewId\u0022:\u0022review-request:RequestReview:261:1:task:261:1:1:1:1\u0022,\u0022TaskId\u0022:\u0022task:261:1:1:1\u0022,\u0022Round\u0022:1,\u0022PullRequest\u0022:264,\u0022Sha\u0022:\u0022f9bb272692cf6edc6eec9a0c1a581276747c4e91\u0022,\u0022Classification\u0022:2,\u0022Findings\u0022:[],\u0022Responses\u0022:[],\u0022SourceEvidence\u0022:\u0022{\\u0022reason\\u0022:\\u0022REST has no request-to-submission round token; prose is not classified approval or blockers. Human confirmation required.\\u0022,\\u0022request\\u0022:\\u0022review-request:RequestReview:261:1:task:261:1:1:1:1\\u0022,\\u0022observedReviews\\u0022:[{\\u0022id\\u0022:5899892390,\\u0022node_id\\u0022:\\u0022PRR_kwDOTCum888AAAABX6k2pg\\u0022,\\u0022user\\u0022:{\\u0022login\\u0022:\\u0022copilot-pull-request-reviewer[bot]\\u0022,\\u0022id\\u0022:175728472,\\u0022node_id\\u0022:\\u0022BOT_kgDOCnlnWA\\u0022,\\u0022avatar_url\\u0022:\\u0022https://avatars.githubusercontent.com/in/946600?v=4\\u0022,\\u0022gravatar_id\\u0022:\\u0022\\u0022,\\u0022url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D\\u0022,\\u0022html_url\\u0022:\\u0022https://github.com/apps/copilot-pull-request-reviewer\\u0022,\\u0022followers_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/followers\\u0022,\\u0022following_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/following{/other_user}\\u0022,\\u0022gists_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/gists{/gist_id}\\u0022,\\u0022starred_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/starred{/owner}{/repo}\\u0022,\\u0022subscriptions_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/subscriptions\\u0022,\\u0022organizations_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/orgs\\u0022,\\u0022repos_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/repos\\u0022,\\u0022events_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/events{/privacy}\\u0022,\\u0022received_events_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/received_events\\u0022,\\u0022type\\u0022:\\u0022Bot\\u0022,\\u0022user_view_type\\u0022:\\u0022public\\u0022,\\u0022site_admin\\u0022:false},\\u0022body\\u0022:\\u0022\\\\u003C!-- ccr-overview-v2 --\\\\u003E\\\\n\\\\n### \\\\uD83D\\\\uDFE2 Approval recommended\\\\n\\\\nNo active review issues were identified for this test-only update to rate-limited retry coverage when a pull request\\\\u2019s head changes.\\\\n\\\\n**No open issues** \\\\uD83C\\\\uDF89\\\\n\\\\n\\\\u003Cdetails\\\\u003E\\\\n\\\\u003Csummary\\\\u003E\\\\u003Cstrong\\\\u003EWhat changed in this PR\\\\u003C/strong\\\\u003E\\\\u003C/summary\\\\u003E\\\\n\\\\nThis PR strengthens regression coverage for review-request retries when a pull request\\\\u2019s head changes after a rate-limit response. It changes tests only; production behavior is unchanged.\\\\n\\\\n**Changes:**\\\\n- Configure the changed-head scenario to return \\\\u0060RATE_LIMITED\\\\u0060.\\\\n- Assert that the rejection reason is preserved while retaining the check that only one POST is sent.\\\\n\\\\n| File | Description |\\\\r\\\\n| ---- | ----------- |\\\\r\\\\n| IntelligentTradingSimulator.Tests/\\\\u200BOrchestration/\\\\u200BGitHubReviewIntegrationTests.cs | Update the changed-head retry test to use and verify \\\\u0060RATE_LIMITED\\\\u0060. |\\\\n\\\\u003C/details\\\\u003E\\\\n\\\\n\\\\u003Csub\\\\u003EReview effort: Balanced\\\\u003C/sub\\\\u003E\\u0022,\\u0022state\\u0022:\\u0022COMMENTED\\u0022,\\u0022html_url\\u0022:\\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/264#pullrequestreview-5899892390\\u0022,\\u0022pull_request_url\\u0022:\\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/264\\u0022,\\u0022author_association\\u0022:\\u0022NONE\\u0022,\\u0022is_copilot_code_review\\u0022:true,\\u0022copilot_code_review_effort\\u0022:\\u0022balanced\\u0022,\\u0022_links\\u0022:{\\u0022html\\u0022:{\\u0022href\\u0022:\\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/264#pullrequestreview-5899892390\\u0022},\\u0022pull_request\\u0022:{\\u0022href\\u0022:\\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/264\\u0022}},\\u0022submitted_at\\u0022:\\u00222026-11-14T00:15:39Z\\u0022,\\u0022commit_id\\u0022:\\u0022f9bb272692cf6edc6eec9a0c1a581276747c4e91\\u0022}],\\u0022observedComments\\u0022:[]}\u0022}}"
     }
   },
   "Outbox": {
