@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 76,
+  "Version": 77,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": "B379F9FBFEA84422D128A068130B9A6A160C5A276C0002736F78515CE4A3ED17",
   "LastEventId": "ci-observed:1277929203:1:RunCi:268:1:task:268:1:1:2:1",
@@ -22,7 +22,7 @@
       "SchemaVersion": 1,
       "Number": 268,
       "Generation": 1,
-      "Version": 71,
+      "Version": 72,
       "LastEventId": "ci-observed:1277929203:1:RunCi:268:1:task:268:1:1:2:1",
       "Phase": "REVIEW_PENDING",
       "Ready": false,
@@ -135,7 +135,7 @@
         "Round": 1,
         "Sha": "d3d1e29e2044fdd807b3d374ff43127b834d00cb",
         "Classification": null,
-        "LifecycleState": "NotRequested",
+        "LifecycleState": "Requesting",
         "CopilotRequestNodeId": null,
         "ReviewRequestedAt": null,
         "ReviewDeadlineAt": null,
@@ -148,7 +148,20 @@
           }
         ],
         "Responses": [],
-        "RequestBoundary": null,
+        "RequestBoundary": {
+          "ReviewerId": 175728472,
+          "ReviewerNodeId": "BOT_kgDOCnlnWA",
+          "PreparedAt": "2026-11-14T10:40:11.9813448+00:00",
+          "ExistingReviewIds": [
+            5903810632,
+            5903859319
+          ],
+          "Confirmed": false,
+          "RequestNodeId": null,
+          "AcceptedAt": null,
+          "DeadlineAt": null,
+          "AlreadyPending": false
+        },
         "SourceEvidence": null,
         "OperatorResolution": null
       },
