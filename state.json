@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 19,
+  "Version": 20,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": "B379F9FBFEA84422D128A068130B9A6A160C5A276C0002736F78515CE4A3ED17",
   "LastEventId": "task-completed:1277929203:1:c0c74a2e-5bb6-4b3c-99d4-7754a42c0bd3",
@@ -22,7 +22,7 @@
       "SchemaVersion": 1,
       "Number": 268,
       "Generation": 1,
-      "Version": 17,
+      "Version": 18,
       "LastEventId": "task-completed:1277929203:1:c0c74a2e-5bb6-4b3c-99d4-7754a42c0bd3",
       "Phase": "CI_PENDING",
       "Ready": false,
@@ -83,7 +83,15 @@
         "Green": null,
         "TerminalStopReason": null,
         "Blockers": [],
-        "DispatchBoundary": null
+        "DispatchBoundary": {
+          "WorkflowId": 417387039,
+          "WorkflowSha": "b9e711c33d0c0d9a512a4e60b017f89f27418424",
+          "Ref": "refs/heads/master",
+          "Correlation": "managed-ci-71ccee8625763df522fe107e893ad840dbe3875709e3c1a58fa0fc3c9bb90d84",
+          "PreparedAt": "2026-11-14T10:27:26.7065399+00:00",
+          "RunId": null,
+          "WorkflowPath": ".github/workflows/agent-poc-ci.yml"
+        }
       },
       "Review": null,
       "FeedbackEventIds": [],
