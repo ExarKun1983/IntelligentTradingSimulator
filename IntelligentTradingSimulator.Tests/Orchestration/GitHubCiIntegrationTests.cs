@@ -417,7 +417,7 @@ public sealed class GitHubCiIntegrationTests
             directory = directory.Parent;
         var workflow = File.ReadAllText(Path.Combine(directory!.FullName, GitHubCiAdapter.WorkflowPath));
         Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true'", workflow);
-        Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '261'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '265'", workflow);
         Assert.Contains("vars.ORCHESTRATION_RETIRED_TEST_ISSUE == ''", workflow);
         Assert.Contains("vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'", workflow);
         Assert.Contains("github.ref == vars.ORCHESTRATION_CI_REF", workflow);
