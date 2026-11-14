@@ -878,6 +878,106 @@ public sealed class GitHubReviewIntegrationTests
     }
 
     [Theory]
+    [InlineData("valid", true)]
+    [InlineData("valid", false)]
+    [InlineData("CHANGES_REQUESTED", true)]
+    [InlineData("APPROVED", true)]
+    [InlineData("empty-comments", true)]
+    [InlineData("multiple-submissions", true)]
+    [InlineData("missing-marker", true)]
+    [InlineData("DISMISSED", true)]
+    [InlineData("conflict", true)]
+    [InlineData("comment-sha", true)]
+    [InlineData("comment-original-sha", true)]
+    [InlineData("comment-reply", true)]
+    [InlineData("comment-outdated", true)]
+    [InlineData("comment-left", true)]
+    [InlineData("comment-before-request", true)]
+    [InlineData("comment-after-submission", true)]
+    [InlineData("comment-edited", true)]
+    [InlineData("comment-empty", true)]
+    [InlineData("duplicate-comment", true)]
+    [InlineData("timed-out", true)]
+    [InlineData("paused", true)]
+    [InlineData("inactive", true)]
+    [InlineData("hold", true)]
+    [InlineData("feedback", true)]
+    [InlineData("wrong-phase", true)]
+    public async Task OptInClassifiesOnlyUnambiguousFreshExactHeadInlineFindings(string scenario, bool enabled)
+    {
+        var store = new Store(Eligible());
+        var handler = new Api
+        {
+            ReviewPostStatus = scenario == "conflict" ? HttpStatusCode.Conflict : HttpStatusCode.Created,
+            ReviewState = scenario is "DISMISSED" or "CHANGES_REQUESTED" or "APPROVED" ? scenario : "COMMENTED"
+        };
+        using var client = handler.Client();
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(),
+            Approved with { AutoRepairFindings = enabled }, new CandidateValidator());
+        var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
+        if (scenario == "timed-out")
+        {
+            store.State.Issues[7].Review!.LifecycleState = ReviewLifecycleState.TimedOut;
+            store.State.Issues[7].Review!.RequestBoundary = store.State.Issues[7].Review!.RequestBoundary! with
+                { DeadlineAt = Now };
+        }
+        var issue = store.State.Issues[7];
+        switch (scenario)
+        {
+            case "paused": issue.Paused = true; break;
+            case "inactive": issue.ActiveAuthorized = false; break;
+            case "hold": issue.ReactivationRequired = true; break;
+            case "feedback": issue.PendingFeedbackEventIds.Add("pending-human-feedback"); break;
+            case "wrong-phase": issue.Phase = Phase.BLOCKED; break;
+        }
+        handler.HasOutput = true;
+        handler.Corruption = scenario;
+
+        var message = await adapter.ReadEventAsync(store.State, store.State.Issues[7], default);
+        var result = Assert.IsType<ReviewResult>(message!.Data);
+        Assert.Equal((scenario is "valid" or "CHANGES_REQUESTED") && enabled ? ReviewClassification.Blocking :
+            ReviewClassification.NeedsHuman, result.Classification);
+        if (result.Classification == ReviewClassification.Blocking)
+        {
+            var finding = Assert.Single(result.Findings);
+            Assert.Equal("copilot-review-comment:201", finding.Id);
+            Assert.Equal("source.cs:3\nprecise comment evidence", finding.Description);
+            Assert.Equal("https://github.com/owner/repo/pull/17#discussion_r201", finding.Evidence);
+            var reducer = new OrchestrationReducer(new Allow());
+            store.State = reducer.Apply(store.State, message);
+            Assert.Equal(Phase.FIX_PENDING, store.State.Issues[7].Phase);
+            Assert.False(store.State.Issues[7].ReactivationRequired);
+            Assert.Empty(store.State.Issues[7].Classifications);
+            var applied = StateJson.Serialize(store.State);
+            Assert.Equal(applied, StateJson.Serialize(reducer.Apply(store.State, message)));
+        }
+        else Assert.Empty(result.Findings);
+        Assert.Equal(1, handler.Posts);
+    }
+
+    [Fact]
+    public async Task AutomaticFindingsNeverDiscardUnresolvedBlockersFromPreviousReview()
+    {
+        var state = Eligible();
+        state.Issues[7].Review!.Findings.Add(new("previous", "Existing blocker", "Previous review evidence"));
+        var store = new Store(state);
+        var handler = new Api();
+        using var client = handler.Client();
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(),
+            Approved with { AutoRepairFindings = true }, new CandidateValidator());
+        var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
+        handler.HasOutput = true;
+
+        var message = await adapter.ReadEventAsync(store.State, store.State.Issues[7], default);
+        store.State = new OrchestrationReducer(new Allow()).Apply(store.State, message!);
+        Assert.Equal(ReviewClassification.Blocking, store.State.Issues[7].Review!.Classification);
+        Assert.Equal(2, store.State.Issues[7].Review!.Findings.Count);
+        Assert.Contains(store.State.Issues[7].Review!.Findings, finding => finding.Id == "previous");
+    }
+
+    [Theory]
     [InlineData("COMMENTED")]
     [InlineData("APPROVED")]
     [InlineData("CHANGES_REQUESTED")]
@@ -932,16 +1032,21 @@ public sealed class GitHubReviewIntegrationTests
     }
 
     [Theory]
-    [InlineData("review-url")]
-    [InlineData("comment-review")]
-    [InlineData("comment-actor")]
-    [InlineData("comment-url")]
-    public async Task MalformedResultIdentityFailsWithoutPromotingOrRequestingAgain(string corruption)
+    [InlineData("review-url", false)]
+    [InlineData("comment-review", false)]
+    [InlineData("comment-actor", false)]
+    [InlineData("comment-url", false)]
+    [InlineData("review-url", true)]
+    [InlineData("comment-review", true)]
+    [InlineData("comment-actor", true)]
+    [InlineData("comment-url", true)]
+    public async Task MalformedResultIdentityFailsWithoutPromotingOrRequestingAgain(string corruption, bool autoRepair)
     {
         var store = new Store(Eligible());
         var handler = new Api();
         using var client = handler.Client();
-        var adapter = CreateAdapter(client, store);
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(),
+            Approved with { AutoRepairFindings = autoRepair }, new CandidateValidator());
         var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
         store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
         handler.HasOutput = true;
@@ -1388,6 +1493,7 @@ public sealed class GitHubReviewIntegrationTests
         private object Review(bool baseline) => new
         {
             id = baseline || Corruption == "old-review" ? 100 : 101, node_id = "REVIEW_node",
+            is_copilot_code_review = Corruption != "missing-marker",
             user = Actor(Corruption == "other-actor"), body = "Review body preserved without semantic inference",
             state = Corruption is "pending-review" or "PENDING" ? "PENDING" : ReviewState,
             commit_id = Corruption == "stale-review" ? new string('b', 40) : Sha,
@@ -1500,13 +1606,28 @@ public sealed class GitHubReviewIntegrationTests
                 else if (Corruption is "empty-history-identity" or "node-history-identity" or
                     "whitespace-history-identity" or "malformed-history-identity")
                     response = new[] { new { id = 101, state = "COMMENTED", user = AbandonmentActor } };
+                else if (HasOutput && Corruption == "multiple-submissions")
+                    response = new[] { Review(false), Review(false) };
                 else response = Corruption == "no-reviews" ? [] : Paginated ? HasOutput ? new[] { Review(false) } : [] :
                     HasOutput ? new[] { Review(true), Review(false) } : new[] { Review(true) };
             }
             else if (path.EndsWith("/comments"))
-                response = new[] { new { id = 201, pull_request_review_id = Corruption == "comment-review" ? 999 : 101,
-                    user = Actor(Corruption == "comment-actor"), body = "precise comment evidence", path = "source.cs",
-                    pull_request_url = Corruption == "comment-url" ? "https://api.github.com/repos/other/repo/pulls/17" : PullUrl } };
+            {
+                var comment = new { id = 201, pull_request_review_id = Corruption == "comment-review" ? 999 : 101,
+                    user = Actor(Corruption == "comment-actor"),
+                    body = Corruption == "comment-empty" ? "" : "precise comment evidence", path = "source.cs",
+                    commit_id = Corruption == "comment-sha" ? new string('b', 40) : Sha,
+                    original_commit_id = Corruption == "comment-original-sha" ? new string('b', 40) : Sha,
+                    in_reply_to_id = Corruption == "comment-reply" ? (long?)200 : null,
+                    line = Corruption == "comment-outdated" ? (int?)null : 3,
+                    side = Corruption == "comment-left" ? "LEFT" : "RIGHT",
+                    created_at = Corruption == "comment-before-request" ? Now.AddDays(-1) :
+                        Corruption == "comment-after-submission" ? Now.AddSeconds(2) : Now,
+                    updated_at = Corruption == "comment-edited" ? Now.AddSeconds(1) : Now,
+                    pull_request_url = Corruption == "comment-url" ? "https://api.github.com/repos/other/repo/pulls/17" : PullUrl };
+                response = Corruption == "empty-comments" ? [] :
+                    Corruption == "duplicate-comment" ? new[] { comment, comment } : new[] { comment };
+            }
             else throw new InvalidOperationException("Unexpected review fixture route");
             var status = request.Method == HttpMethod.Post && path.EndsWith("/copilot-code-review", StringComparison.Ordinal)
                 ? ReviewPostStatuses.Count >= Posts ? ReviewPostStatuses[Posts - 1] : ReviewPostStatus

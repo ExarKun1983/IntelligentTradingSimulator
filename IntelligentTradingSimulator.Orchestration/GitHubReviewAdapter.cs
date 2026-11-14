@@ -8,13 +8,14 @@ public sealed record GitHubReviewApproval(bool ActivationApproved = false, bool 
     bool NoAdditionalChargesVerified = false, bool AutomaticReviewsDisabledVerified = false)
 {
     public TimeSpan ReviewTimeout { get; init; } = TimeSpan.FromMinutes(15);
+    public bool AutoRepairFindings { get; init; }
 
     public bool AllowsReviews => ActivationApproved && ApiPolicyAndCredentialVerified &&
         NoAdditionalChargesVerified && AutomaticReviewsDisabledVerified &&
         ReviewTimeout >= TimeSpan.FromMinutes(1) && ReviewTimeout <= TimeSpan.FromMinutes(30);
 }
 
-/// <summary>Requests Copilot review; REST observations require human round/classification confirmation.</summary>
+/// <summary>Requests Copilot review; an opt-in exact-head policy can classify fresh inline findings as blocking.</summary>
 public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore store, TimeProvider? clock = null,
     GitHubReviewApproval? approval = null, ICandidateShaValidator? candidateShaValidator = null,
     GitHubReviewRequestDiagnostics? diagnostics = null) : IEffectAdapter
@@ -302,9 +303,14 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
                     throw new InvalidDataException("Review evidence capacity exceeded.");
             }
         }
+        var findings = ReadAutomaticFindings(issue, boundary, observed, comments, number);
+        var classification = findings.Count > 0 ? ReviewClassification.Blocking : ReviewClassification.NeedsHuman;
         var evidence = JsonSerializer.Serialize(new
         {
-            reason = "REST has no request-to-submission round token; prose is not classified approval or blockers. Human confirmation required.",
+            reason = classification == ReviewClassification.Blocking
+                ? "Opt-in exact-head inline findings require repair; provider request-to-submission correlation is not asserted."
+                : "REST has no request-to-submission round token; human classification is required for this output.",
+            policy = approval?.AutoRepairFindings == true ? "exact-head-inline-findings-v1" : "human-classification",
             request = Receipt(intent.Id), observedReviews = observed, observedComments = comments
         });
         if (Encoding.UTF8.GetByteCount(evidence) > 1024 * 1024)
@@ -313,7 +319,55 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
             state.Generation, issue.Generation, new(Reviewer, ActorKind.ReviewService, boundary.ReviewerId,
                 boundary.ReviewerNodeId, "Bot"), boundary.PreparedAt,
             new ReviewResult(Receipt(intent.Id), review.TaskId, review.Round, number, review.Sha,
-                ReviewClassification.NeedsHuman, [], [], evidence));
+                classification, findings, [], evidence));
+    }
+
+    private List<Finding> ReadAutomaticFindings(IssueState issue, ReviewRequestBoundary boundary,
+        List<JsonElement> observed, List<JsonElement> comments, int pullNumber)
+    {
+        if (approval is not { AllowsReviews: true, AutoRepairFindings: true } ||
+            boundary.AlreadyPending || string.IsNullOrWhiteSpace(boundary.RequestNodeId) ||
+            boundary.AcceptedAt is not { } acceptedAt || observed.Count != 1 || comments.Count == 0 ||
+            issue.Phase != Phase.REVIEW_PENDING || !issue.ActiveAuthorized || issue.Paused ||
+            issue.ReactivationRequired || issue.PendingFeedbackEventIds.Count != 0 ||
+            issue.Review!.LifecycleState == ReviewLifecycleState.TimedOut ||
+            boundary.DeadlineAt is not { } deadline || clock.GetUtcNow() >= deadline)
+            return [];
+
+        var submission = observed[0];
+        var submitted = submission.GetProperty("submitted_at").GetDateTimeOffset();
+        if (!submission.TryGetProperty("is_copilot_code_review", out var copilot) ||
+            copilot.ValueKind != JsonValueKind.True ||
+            submission.GetProperty("state").GetString() is not ("COMMENTED" or "CHANGES_REQUESTED") ||
+            submitted < acceptedAt || submitted >= deadline)
+            return [];
+
+        var findings = issue.Review.Findings.ToList();
+        var ids = new HashSet<long>();
+        foreach (var comment in comments)
+        {
+            if (!ids.Add(comment.GetProperty("id").GetInt64()) ||
+                !comment.TryGetProperty("commit_id", out var commit) || commit.GetString() != issue.HeadSha ||
+                !comment.TryGetProperty("original_commit_id", out var original) || original.GetString() != issue.HeadSha ||
+                comment.TryGetProperty("in_reply_to_id", out var reply) && reply.ValueKind != JsonValueKind.Null ||
+                !comment.TryGetProperty("line", out var line) || line.ValueKind != JsonValueKind.Number ||
+                !line.TryGetInt32(out var lineNumber) || lineNumber <= 0 ||
+                !comment.TryGetProperty("side", out var side) || side.GetString() != "RIGHT" ||
+                !comment.TryGetProperty("path", out var path) || string.IsNullOrWhiteSpace(path.GetString()) ||
+                !comment.TryGetProperty("body", out var body) || string.IsNullOrWhiteSpace(body.GetString()) ||
+                !comment.TryGetProperty("created_at", out var created) || created.ValueKind != JsonValueKind.String ||
+                !created.TryGetDateTimeOffset(out var createdAt) ||
+                !comment.TryGetProperty("updated_at", out var updated) || updated.ValueKind != JsonValueKind.String ||
+                !updated.TryGetDateTimeOffset(out var updatedAt) ||
+                createdAt < acceptedAt || createdAt > submitted || updatedAt != createdAt)
+                return [];
+
+            var id = comment.GetProperty("id").GetInt64();
+            if (findings.Any(finding => finding.Id == $"copilot-review-comment:{id}")) return [];
+            findings.Add(new($"copilot-review-comment:{id}", $"{path.GetString()}:{lineNumber}\n{body.GetString()}",
+                $"https://github.com/{api.Repository}/pull/{pullNumber}#discussion_r{id}"));
+        }
+        return findings;
     }
 
     private IssueState ValidateIntent(RepositoryState state, EffectIntent intent)

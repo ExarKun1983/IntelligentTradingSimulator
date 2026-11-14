@@ -79,7 +79,10 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
             new(Identity("ORCHESTRATION_WORKFLOW_ID"), Required("ORCHESTRATION_DEFINITION_SHA")),
             new GitHubReviewApproval(activation, Approved("ORCHESTRATION_REVIEW_POLICY_VERIFIED"), cost,
                 Approved("ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED"))
-                { ReviewTimeout = TimeSpan.FromMinutes(ReviewTimeoutMinutes()) },
+                {
+                    ReviewTimeout = TimeSpan.FromMinutes(ReviewTimeoutMinutes()),
+                    AutoRepairFindings = Approved("ORCHESTRATION_AUTO_REPAIR_REVIEW_FINDINGS")
+                },
             new(activation, credential, Approved("ORCHESTRATION_TRUSTED_CI_VERIFIED"), cost),
             new(Identity("ORCHESTRATION_CI_WORKFLOW_ID"), Required("ORCHESTRATION_CI_REF"),
                 Required("ORCHESTRATION_CI_DEFINITION_SHA")), status, testIssue, testMaxRepairTasks, retiredTestIssue)

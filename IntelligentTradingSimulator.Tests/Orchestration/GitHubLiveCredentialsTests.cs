@@ -289,11 +289,14 @@ public sealed class GitHubLiveCredentialsTests
         var defaults = GitHubLiveSettings.Read(values.GetValueOrDefault);
         Assert.Equal(5, defaults.MaxRepairTasks);
         Assert.Equal(TimeSpan.FromMinutes(15), defaults.Review.ReviewTimeout);
+        Assert.False(defaults.Review.AutoRepairFindings);
+        values["ORCHESTRATION_AUTO_REPAIR_REVIEW_FINDINGS"] = "true";
         values["ORCHESTRATION_MAX_REPAIR_TASKS"] = "2";
         values["ORCHESTRATION_REVIEW_TIMEOUT_MINUTES"] = "20";
         var configured = GitHubLiveSettings.Read(values.GetValueOrDefault);
         Assert.Equal(2, configured.MaxRepairTasks);
         Assert.Equal(TimeSpan.FromMinutes(20), configured.Review.ReviewTimeout);
+        Assert.True(configured.Review.AutoRepairFindings);
         values["ORCHESTRATION_MAX_REPAIR_TASKS"] = "9";
         Assert.Throws<InvalidDataException>(() => GitHubLiveSettings.Read(values.GetValueOrDefault));
         values["ORCHESTRATION_MAX_REPAIR_TASKS"] = "2";

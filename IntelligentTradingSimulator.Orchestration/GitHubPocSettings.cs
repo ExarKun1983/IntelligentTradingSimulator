@@ -53,7 +53,10 @@ public sealed record GitHubPocSettings(string Repository, long RepositoryId, lon
         var ci = new GitHubCiApproval(activation, credential, Approved("TRUSTED_DEFINITION_VERIFIED"), cost);
         var review = new GitHubReviewApproval(activation, Approved("REVIEW_POLICY_VERIFIED"), cost,
             Approved("AUTOMATIC_REVIEWS_DISABLED"))
-            { ReviewTimeout = TimeSpan.FromMinutes(reviewTimeoutMinutes) };
+            {
+                ReviewTimeout = TimeSpan.FromMinutes(reviewTimeoutMinutes),
+                AutoRepairFindings = read("ORCHESTRATION_AUTO_REPAIR_REVIEW_FINDINGS") == "true"
+            };
         if (!tasks.AllowsTasks || !ci.AllowsCi || !review.AllowsReviews)
             throw new InvalidOperationException("PoC execution prerequisites are unverified.");
 
@@ -64,7 +67,7 @@ public sealed record GitHubPocSettings(string Repository, long RepositoryId, lon
             stateRef = StateReference, baseBranch = BaseBranch, definitionRef = DefinitionReference,
             driverPath = DriverWorkflowPath, ciPath = CiWorkflowPath, environment = EnvironmentName,
             expiresAt = expiresAt.ToUniversalTime(), maxRepairTasks = 1, maxCiRuns = 2, maxReviews = 2,
-            reviewTimeoutMinutes
+            reviewTimeoutMinutes, autoRepairFindings = review.AutoRepairFindings
         };
         return new(repository, repositoryId, actorId, driverId, definition,
             new(ciId, DefinitionReference, definition, CiWorkflowPath), tasks, ci, review,
