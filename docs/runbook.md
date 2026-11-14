@@ -1644,56 +1644,53 @@ the number of review/fix cycles. Existing admitted Issues retain their saved
 limit; an older Issue without one is not retroactively capped. The isolated PoC
 remains fixed at one repair task and two reviews.
 
-### Fresh Copilot review E2E test for Issue #261
+### Artifact-only Copilot review E2E test for Issue #265
 
-Issue #261 and its dedicated state ref are isolated from the retired #227/#237
-test state and the #257/#259 PoC. The Issue remains inert until its reviewed
-setup is merged, bootstrap is completed, and activation is separately approved.
-The setup does not add `agent:ready`, change repository variables/secrets, create
-the managed-CI tag, request a review, or merge the generated PR.
+Issue #265 is a fresh, one-shot test profile with state isolated from #261,
+#227/#237 and the #257/#259 PoC. Its task is deliberately mechanical: add only
+`orchestration-e2e-artifacts/issue-265.txt`, containing exactly
+`E2E artifact for Issue #265` and one trailing newline. Do not change
+application, test, workflow or documentation files. Review the generated PR
+diff against that exact contract. Keep the PR unmerged; the file is a disposable
+test artifact, not a product feature.
 
-After merging the setup PR, record its full lowercase commit SHA and configure
-the repository variables `ORCHESTRATION_DEFINITION_SHA` to that SHA,
-`ORCHESTRATION_TEST_ISSUE=261`,
+The Issue is open and unlabelled. The setup does not dispatch the workflow,
+change repository variables/secrets, create the managed-CI tag, request review,
+or merge a PR. After the setup PR is merged, record its full lowercase SHA and
+set `ORCHESTRATION_DEFINITION_SHA` to that SHA,
+`ORCHESTRATION_TEST_ISSUE=265`,
 `ORCHESTRATION_TEST_MAX_REPAIR_TASKS=1`, and leave
 `ORCHESTRATION_RETIRED_TEST_ISSUE` unset. Keep
-`ORCHESTRATION_ACTIVATION_APPROVED=false`. Set
+`ORCHESTRATION_ACTIVATION_APPROVED=false`; set
 `ORCHESTRATION_REVIEW_E2E_BOOTSTRAP_APPROVED=true` only for the one-time setup.
-The configured actor ID must identify the human who will dispatch and operate
-the test. The existing `agent-orchestration` environment's protection rules must
-be reviewed before dispatch.
+The actor ID must identify the human operator. Review the existing
+`agent-orchestration` environment protection rules before dispatch.
 
-From `master`, manually run **Copilot review E2E state bootstrap (opt-in)** with
-Issue `261` and confirmation `BOOTSTRAP-REVIEW-E2E-261`. This workflow has only
-`actions: read`, `issues: read`, and `contents: write`; it uses `GITHUB_TOKEN`,
-does not receive the task credential, and only creates the empty
-`refs/heads/agent-state-review-e2e-261-v1` with a definition-bound manifest.
-It refuses an existing state ref or a non-empty state, is not a task/CI/review
-run, and cannot be repeated as a reset. Inspect its run and bootstrap receipt.
-Then set `ORCHESTRATION_REVIEW_E2E_BOOTSTRAP_APPROVED=false`.
+From `master`, manually run **Copilot review artifact E2E bootstrap (opt-in)**
+with Issue `265` and confirmation `BOOTSTRAP-REVIEW-E2E-265`. The workflow
+grants only `actions: read`, `issues: read`, and `contents: write`; it uses
+`GITHUB_TOKEN`, does not receive the task credential, and creates only the empty
+`refs/heads/agent-state-review-e2e-265-v1` with a definition-bound manifest.
+Bootstrap refuses an existing state ref or a nonempty state and cannot reset
+or retry the profile. Inspect the run and receipt, then set
+`ORCHESTRATION_REVIEW_E2E_BOOTSTRAP_APPROVED=false`.
 
-Before enabling execution, create and protect a new immutable lightweight tag
-`agent-managed-ci-test-261-v1` at the reviewed merge commit; never move it.
-Set `ORCHESTRATION_CI_REF=refs/tags/agent-managed-ci-test-261-v1` and
-`ORCHESTRATION_CI_DEFINITION_SHA` to that exact tag target. Verify workflow IDs,
-the task credential and its access, Copilot review eligibility/policy, CI
-configuration, and every existing review/CI/task/cost gate using the
-read-only gate diagnostics. Do not copy a previous test's attestations without
-revalidating them. Only after these checks, separately approve
-`ORCHESTRATION_ACTIVATION_APPROVED=true`, then add `agent:ready` to #261.
-The older #227/#237 instructions below describe historical state and are not
-the current gate configuration.
+Before enabling execution, create and protect the immutable lightweight tag
+`agent-managed-ci-test-265-v1` at the reviewed merge commit; never move it. Set
+`ORCHESTRATION_CI_REF=refs/tags/agent-managed-ci-test-265-v1` and
+`ORCHESTRATION_CI_DEFINITION_SHA` to its exact target. Reverify existing review,
+CI, task and cost gates with read-only diagnostics; do not blindly copy old
+attestations. Only after all prerequisites pass, separately approve
+`ORCHESTRATION_ACTIVATION_APPROVED=true` and add `agent:ready` to #265.
 
-Observe #261 through coding, exact-head green managed CI, Copilot review request
-and its completed result. `201` means the request was accepted, not that review
-completed. A request result must match the generated PR and current head SHA.
-If review feedback is actionable, the one-repair cap permits at most one
-coding repair and requires fresh CI/review for its new head. Stop on a failed or
-uncertain stage; do not retry an uncertain review POST, label another Issue,
-or merge the test PR. Afterward remove `agent:ready`, set activation and test
-approvals false, unset the bounded-test variables, and retain the isolated
-state and evidence for diagnosis. This is a live test and may consume the
-repository's existing Copilot/Actions quota.
+Observe coding, exact-head managed CI, and the Copilot review result. Check that
+the PR changes exactly the one specified artifact. This profile is single-pass:
+it does not launch a repair task or a second review. Stop on an unexpected file,
+failed/uncertain API stage or actionable review feedback; do not retry an
+uncertain review POST or merge the test PR. After the run, turn activation and
+bootstrap approval off, remove the readiness label if present, unset the
+bounded-test variables, and retain the isolated state/evidence. This live test
+may consume existing Copilot/Actions quota.
 
 The workflow grants `pull-requests: write`; `GITHUB_TOKEN` is a GitHub App
 installation token and the official OpenAPI marks this endpoint as enabled for

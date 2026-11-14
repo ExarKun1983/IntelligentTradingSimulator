@@ -1,15 +1,15 @@
-name: Copilot review E2E state bootstrap (opt-in)
+name: Copilot review artifact E2E bootstrap (opt-in)
 
 on:
   workflow_dispatch:
     inputs:
       issue:
-        description: Dedicated review E2E Issue
+        description: Dedicated artifact-only review E2E Issue
         required: true
-        default: "261"
+        default: "265"
         type: string
       confirmation:
-        description: Type BOOTSTRAP-REVIEW-E2E-261 to authorize one-time empty-state creation
+        description: Type BOOTSTRAP-REVIEW-E2E-265 to authorize one-time empty-state creation
         required: true
         type: string
 
@@ -19,7 +19,7 @@ permissions:
   issues: read
 
 concurrency:
-  group: review-e2e-261-bootstrap
+  group: review-e2e-265-bootstrap
   cancel-in-progress: false
 
 jobs:
@@ -32,11 +32,11 @@ jobs:
         github.actor_id == vars.ORCHESTRATION_ACTOR_ID &&
         github.triggering_actor == github.actor &&
         github.run_attempt == 1 &&
-        inputs.issue == '261' &&
-        inputs.confirmation == 'BOOTSTRAP-REVIEW-E2E-261' &&
+        inputs.issue == '265' &&
+        inputs.confirmation == 'BOOTSTRAP-REVIEW-E2E-265' &&
         vars.ORCHESTRATION_REVIEW_E2E_BOOTSTRAP_APPROVED == 'true' &&
         vars.ORCHESTRATION_ACTIVATION_APPROVED == 'false' &&
-        vars.ORCHESTRATION_TEST_ISSUE == '261' &&
+        vars.ORCHESTRATION_TEST_ISSUE == '265' &&
         vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '' &&
         vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'
       }}
