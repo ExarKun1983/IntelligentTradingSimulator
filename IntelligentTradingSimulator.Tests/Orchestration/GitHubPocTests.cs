@@ -75,10 +75,10 @@ public sealed class GitHubPocTests
     {
         var state = State("manifest");
         var inner = new GitHubTaskIntegrationTests.Store(state);
-        var guarded = new PocStateStore(inner, Repository, 257, "manifest");
+        var guarded = new PocStateStore(inner, Repository, 268, "manifest");
         var snapshot = await guarded.LoadAsync(default);
         var next = StateJson.Clone(snapshot.State);
-        var issue = next.Issues[257];
+        var issue = next.Issues[268];
         switch (corruption)
         {
             case "foreign-issue": next.Issues[237] = new() { Number = 237 }; break;
@@ -99,11 +99,11 @@ public sealed class GitHubPocTests
             case "extra-ci":
             case "extra-review":
                 for (var index = 0; index < 3; index++)
-                    next.Outbox[index.ToString()] = new() { IssueNumber = 257,
+                    next.Outbox[index.ToString()] = new() { IssueNumber = 268,
                         Kind = corruption == "extra-ci" ? EffectKind.RunCi : EffectKind.RequestReview };
                 break;
             case "status":
-                next.Outbox["status"] = new() { IssueNumber = 257, Kind = EffectKind.PublishRequiredStatus };
+                next.Outbox["status"] = new() { IssueNumber = 268, Kind = EffectKind.PublishRequiredStatus };
                 break;
             case "merged": issue.TerminalHistory.Add(new(1, TerminalOutcome.Merged, 17, Definition, Now)); break;
         }
@@ -114,7 +114,7 @@ public sealed class GitHubPocTests
     [Fact]
     public void ManualStartRequiresLiveReadyAndPreservesOneRepairRatherThanSinglePass()
     {
-        var evidence = new IngressEvidence(Repository, 1, 55, "User", "write", 2570, 257, true, true, false, []);
+        var evidence = new IngressEvidence(Repository, 1, 55, "User", "write", 2680, 268, true, true, false, []);
         var payload = Notification("poc-start");
         var message = GitHubActionsIngress.PrepareEvent(payload, "workflow_dispatch", "44", evidence, 1, 1, Now, 1);
         var ready = Assert.IsType<Ready>(message!.Data);
@@ -147,6 +147,7 @@ public sealed class GitHubPocTests
     [InlineData("manifest")]
     [InlineData("second-start")]
     [InlineData("foreign-issue")]
+    [InlineData("previous-poc-issue")]
     [InlineData("foreign-actor")]
     [InlineData("confirmation")]
     [InlineData("reactivation")]
@@ -235,7 +236,7 @@ public sealed class GitHubPocTests
     {
         using var log = new StringWriter();
         var diagnostics = new GitHubReviewRequestDiagnostics(log);
-        diagnostics.Begin(new() { Id = "review", IssueNumber = 257 });
+        diagnostics.Begin(new() { Id = "review", IssueNumber = 268 });
         diagnostics.Stage("post");
         diagnostics.ObserveResponse(new(201, "request:review:123", "RRR_node", "PENDING", null, null), 1);
         diagnostics.Stage("api_response_validation");
@@ -267,7 +268,8 @@ public sealed class GitHubPocTests
             if (corruption == "reactivation") operation = "reactivate";
             if (corruption == "bootstrap-not-approved") operation = "poc-bootstrap";
             await File.WriteAllTextAsync(path, Notification(operation,
-                issue: corruption == "foreign-issue" ? "249" : "257",
+                issue: corruption == "foreign-issue" ? "249" :
+                    corruption == "previous-poc-issue" ? "257" : "268",
                 actor: corruption == "foreign-actor" ? 66 : 55,
                 confirmation: corruption == "confirmation" ? "wrong" : GitHubPocCommand.Confirmation).GetRawText());
             var values = Settings();
@@ -301,7 +303,7 @@ public sealed class GitHubPocTests
             return client;
         });
 
-    private static JsonElement Notification(string operation, string issue = "257", long actor = 55,
+    private static JsonElement Notification(string operation, string issue = "268", long actor = 55,
         string confirmation = GitHubPocCommand.Confirmation) => JsonSerializer.SerializeToElement(new
     {
         repository = new { id = 1, full_name = Repository },
@@ -314,7 +316,7 @@ public sealed class GitHubPocTests
     {
         var state = RepositoryState.Create(Repository);
         state.IsolatedTestManifestDigest = manifest;
-        state.Issues[257] = new() { Number = 257, MaxRepairTasks = 1 };
+        state.Issues[268] = new() { Number = 268, MaxRepairTasks = 1 };
         return state;
     }
 
@@ -353,9 +355,9 @@ public sealed class GitHubPocTests
                 if (corruption.StartsWith("pause-", StringComparison.Ordinal))
                 {
                     state = State(manifest);
-                    state.Issues[257].Paused = true;
+                    state.Issues[268].Paused = true;
                     var evidence = new IngressEvidence(Repository, 1, 55, "User", "write",
-                        2570, 257, true, false, false, []);
+                        2680, 268, true, false, false, []);
                     var message = GitHubActionsIngress.PrepareEvent(Notification("pause"),
                         "workflow_dispatch", "44", evidence, 1, 1, Now)!;
                     state.Inbox[message.Id] = new(message.Id, message.Digest,
@@ -396,8 +398,8 @@ public sealed class GitHubPocTests
             else if (path == "/users/maintainer") response = new { id = 55, type = "User" };
             else if (path == prefix + "/collaborators/maintainer/permission")
                 response = new { user = new { id = 55 }, permission = "write" };
-            else if (path == prefix + "/issues/257")
-                response = new { id = 2570, number = 257, state = "open", labels = Array.Empty<object>() };
+            else if (path == prefix + "/issues/268")
+                response = new { id = 2680, number = 268, state = "open", labels = Array.Empty<object>() };
             else if (path == prefix + "/git/ref/" + GitHubPocSettings.StateReference["refs/".Length..])
             {
                 if (!Exists) return new(HttpStatusCode.NotFound);
