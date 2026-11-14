@@ -1,11 +1,11 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 82,
+  "Version": 83,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": "B379F9FBFEA84422D128A068130B9A6A160C5A276C0002736F78515CE4A3ED17",
-  "LastEventId": "copilot-review-pending:1277929203:1:RequestReview:268:1:task:268:1:1:2:1",
-  "AdmittedIssue": 268,
+  "LastEventId": "review-observed:1277929203:1:RequestReview:268:1:task:268:1:1:2:1",
+  "AdmittedIssue": null,
   "WorkerLease": {
     "Owner": "529545d06f8d473eae785403a3582f5d",
     "ExpiresAt": "2026-11-14T11:05:55.6372957+00:00"
@@ -22,16 +22,16 @@
       "SchemaVersion": 1,
       "Number": 268,
       "Generation": 1,
-      "Version": 77,
-      "LastEventId": "copilot-review-pending:1277929203:1:RequestReview:268:1:task:268:1:1:2:1",
-      "Phase": "REVIEW_PENDING",
+      "Version": 78,
+      "LastEventId": "review-observed:1277929203:1:RequestReview:268:1:task:268:1:1:2:1",
+      "Phase": "BLOCKED",
       "Ready": false,
-      "ActiveAuthorized": true,
+      "ActiveAuthorized": false,
       "ReadyAt": "2026-11-14T10:24:36+00:00",
       "FeedbackSince": "2026-11-14T10:24:36+00:00",
-      "ReactivationRequired": false,
+      "ReactivationRequired": true,
       "Paused": false,
-      "HoldReason": null,
+      "HoldReason": "Review requires human classification.",
       "PullRequest": 270,
       "HeadSha": "d3d1e29e2044fdd807b3d374ff43127b834d00cb",
       "Round": 1,
@@ -134,8 +134,8 @@
         "TaskId": "task:268:1:1:2",
         "Round": 1,
         "Sha": "d3d1e29e2044fdd807b3d374ff43127b834d00cb",
-        "Classification": null,
-        "LifecycleState": "Pending",
+        "Classification": "NeedsHuman",
+        "LifecycleState": "Completed",
         "CopilotRequestNodeId": "RR_kwDOTCum887wRofH",
         "ReviewRequestedAt": "2026-11-14T10:40:19.125845+00:00",
         "ReviewDeadlineAt": "2026-11-14T10:55:19.125845+00:00",
@@ -162,7 +162,7 @@
           "DeadlineAt": "2026-11-14T10:55:19.125845+00:00",
           "AlreadyPending": false
         },
-        "SourceEvidence": null,
+        "SourceEvidence": "{\u0022reason\u0022:\u0022REST has no request-to-submission round token; prose is not classified approval or blockers. Human confirmation required.\u0022,\u0022request\u0022:\u0022review-request:RequestReview:268:1:task:268:1:1:2:1\u0022,\u0022observedReviews\u0022:[{\u0022id\u0022:5903887754,\u0022node_id\u0022:\u0022PRR_kwDOTCum888AAAABX-Ytig\u0022,\u0022user\u0022:{\u0022login\u0022:\u0022copilot-pull-request-reviewer[bot]\u0022,\u0022id\u0022:175728472,\u0022node_id\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022avatar_url\u0022:\u0022https://avatars.githubusercontent.com/in/946600?v=4\u0022,\u0022gravatar_id\u0022:\u0022\u0022,\u0022url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D\u0022,\u0022html_url\u0022:\u0022https://github.com/apps/copilot-pull-request-reviewer\u0022,\u0022followers_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/followers\u0022,\u0022following_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/following{/other_user}\u0022,\u0022gists_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/gists{/gist_id}\u0022,\u0022starred_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/starred{/owner}{/repo}\u0022,\u0022subscriptions_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/subscriptions\u0022,\u0022organizations_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/orgs\u0022,\u0022repos_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/repos\u0022,\u0022events_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/events{/privacy}\u0022,\u0022received_events_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/received_events\u0022,\u0022type\u0022:\u0022Bot\u0022,\u0022user_view_type\u0022:\u0022public\u0022,\u0022site_admin\u0022:false},\u0022body\u0022:\u0022\\u003C!-- ccr-overview-v2 --\\u003E\\n\\n### \\uD83D\\uDFE2 Approval recommended\\n\\nNo active review issues are blocking the disposable text fixture change.\\n\\n**No open issues** \\uD83C\\uDF89\\n\\n\\u003Cdetails\\u003E\\n\\u003Csummary\\u003E\\u003Cstrong\\u003E1 resolved since last review\\u003C/strong\\u003E\\u003C/summary\\u003E\\n\\n- \\u003Cpicture\\u003E\\u003Csource media=\\u0022(prefers-color-scheme: dark)\\u0022 srcset=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\\u0022\\u003E\\u003Csource media=\\u0022(prefers-color-scheme: light)\\u0022 srcset=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\\u0022\\u003E\\u003Cimg src=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\\u0022 alt=\\u0022Medium severity\\u0022 width=\\u002262\\u0022 height=\\u002218\\u0022 align=\\u0022texttop\\u0022\\u003E\\u003C/picture\\u003E [Declared total does not match item sum](https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/270#discussion_r4573080331)\\n\\u003C/details\\u003E\\n\\n\\u003Csub\\u003EReview effort: Balanced\\u003C/sub\\u003E\u0022,\u0022state\u0022:\u0022COMMENTED\u0022,\u0022html_url\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/270#pullrequestreview-5903887754\u0022,\u0022pull_request_url\u0022:\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/270\u0022,\u0022author_association\u0022:\u0022NONE\u0022,\u0022is_copilot_code_review\u0022:true,\u0022copilot_code_review_effort\u0022:\u0022balanced\u0022,\u0022_links\u0022:{\u0022html\u0022:{\u0022href\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/270#pullrequestreview-5903887754\u0022},\u0022pull_request\u0022:{\u0022href\u0022:\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/270\u0022}},\u0022submitted_at\u0022:\u00222026-11-14T10:41:19Z\u0022,\u0022commit_id\u0022:\u0022d3d1e29e2044fdd807b3d374ff43127b834d00cb\u0022}],\u0022observedComments\u0022:[]}",
         "OperatorResolution": null
       },
       "FeedbackEventIds": [],
@@ -170,7 +170,7 @@
       "ClosurePending": false,
       "TerminalOutcome": "None",
       "TerminalHistory": [],
-      "CurrentHandoffId": null,
+      "CurrentHandoffId": "handoff:268:1:review-observed:1277929203:1:RequestReview:268:1:task:268:1:1:2:1",
       "Handoffs": {
         "handoff:268:1:review-observed:1277929203:1:RequestReview:268:1:task:268:1:1:1:1": {
           "Id": "handoff:268:1:review-observed:1277929203:1:RequestReview:268:1:task:268:1:1:1:1",
@@ -182,6 +182,17 @@
           "Reason": "Review requires human classification.",
           "CreatedAt": "2026-11-14T10:29:06.557446+00:00",
           "ClassificationEventId": "actions:1277929203:43585907873"
+        },
+        "handoff:268:1:review-observed:1277929203:1:RequestReview:268:1:task:268:1:1:2:1": {
+          "Id": "handoff:268:1:review-observed:1277929203:1:RequestReview:268:1:task:268:1:1:2:1",
+          "Generation": 1,
+          "ReviewId": "review-request:RequestReview:268:1:task:268:1:1:2:1",
+          "TaskId": "task:268:1:1:2",
+          "Round": 1,
+          "Sha": "d3d1e29e2044fdd807b3d374ff43127b834d00cb",
+          "Reason": "Review requires human classification.",
+          "CreatedAt": "2026-11-14T10:40:11.9813448+00:00",
+          "ClassificationEventId": null
         }
       },
       "Feedback": {},
@@ -316,6 +327,14 @@
       "ReceivedAt": "2026-11-14T10:40:29.3314458+00:00",
       "CompletedAt": "2026-11-14T10:40:29.3314458+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022copilot-review-pending:1277929203:1:RequestReview:268:1:task:268:1:1:2:1\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:268,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022copilot-pull-request-reviewer[bot]\u0022,\u0022Kind\u0022:3,\u0022Id\u0022:175728472,\u0022NodeId\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022Type\u0022:\u0022Bot\u0022},\u0022OccurredAt\u0022:\u00222026-11-14T10:40:29.3314458\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022review-pending\u0022,\u0022IntentId\u0022:\u0022RequestReview:268:1:task:268:1:1:2:1\u0022,\u0022PullRequest\u0022:270,\u0022Sha\u0022:\u0022d3d1e29e2044fdd807b3d374ff43127b834d00cb\u0022}}"
+    },
+    "review-observed:1277929203:1:RequestReview:268:1:task:268:1:1:2:1": {
+      "Id": "review-observed:1277929203:1:RequestReview:268:1:task:268:1:1:2:1",
+      "Digest": "5784E986DC7E80C80B6CC342FF05FA89AA2C0B876B3498065708826BBB80C0CB",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-14T10:40:11.9813448+00:00",
+      "CompletedAt": "2026-11-14T10:40:11.9813448+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022review-observed:1277929203:1:RequestReview:268:1:task:268:1:1:2:1\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:268,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022copilot-pull-request-reviewer[bot]\u0022,\u0022Kind\u0022:3,\u0022Id\u0022:175728472,\u0022NodeId\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022Type\u0022:\u0022Bot\u0022},\u0022OccurredAt\u0022:\u00222026-11-14T10:40:11.9813448\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022review-result\u0022,\u0022ReviewId\u0022:\u0022review-request:RequestReview:268:1:task:268:1:1:2:1\u0022,\u0022TaskId\u0022:\u0022task:268:1:1:2\u0022,\u0022Round\u0022:1,\u0022PullRequest\u0022:270,\u0022Sha\u0022:\u0022d3d1e29e2044fdd807b3d374ff43127b834d00cb\u0022,\u0022Classification\u0022:2,\u0022Findings\u0022:[],\u0022Responses\u0022:[],\u0022SourceEvidence\u0022:\u0022{\\u0022reason\\u0022:\\u0022REST has no request-to-submission round token; prose is not classified approval or blockers. Human confirmation required.\\u0022,\\u0022request\\u0022:\\u0022review-request:RequestReview:268:1:task:268:1:1:2:1\\u0022,\\u0022observedReviews\\u0022:[{\\u0022id\\u0022:5903887754,\\u0022node_id\\u0022:\\u0022PRR_kwDOTCum888AAAABX-Ytig\\u0022,\\u0022user\\u0022:{\\u0022login\\u0022:\\u0022copilot-pull-request-reviewer[bot]\\u0022,\\u0022id\\u0022:175728472,\\u0022node_id\\u0022:\\u0022BOT_kgDOCnlnWA\\u0022,\\u0022avatar_url\\u0022:\\u0022https://avatars.githubusercontent.com/in/946600?v=4\\u0022,\\u0022gravatar_id\\u0022:\\u0022\\u0022,\\u0022url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D\\u0022,\\u0022html_url\\u0022:\\u0022https://github.com/apps/copilot-pull-request-reviewer\\u0022,\\u0022followers_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/followers\\u0022,\\u0022following_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/following{/other_user}\\u0022,\\u0022gists_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/gists{/gist_id}\\u0022,\\u0022starred_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/starred{/owner}{/repo}\\u0022,\\u0022subscriptions_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/subscriptions\\u0022,\\u0022organizations_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/orgs\\u0022,\\u0022repos_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/repos\\u0022,\\u0022events_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/events{/privacy}\\u0022,\\u0022received_events_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/received_events\\u0022,\\u0022type\\u0022:\\u0022Bot\\u0022,\\u0022user_view_type\\u0022:\\u0022public\\u0022,\\u0022site_admin\\u0022:false},\\u0022body\\u0022:\\u0022\\\\u003C!-- ccr-overview-v2 --\\\\u003E\\\\n\\\\n### \\\\uD83D\\\\uDFE2 Approval recommended\\\\n\\\\nNo active review issues are blocking the disposable text fixture change.\\\\n\\\\n**No open issues** \\\\uD83C\\\\uDF89\\\\n\\\\n\\\\u003Cdetails\\\\u003E\\\\n\\\\u003Csummary\\\\u003E\\\\u003Cstrong\\\\u003E1 resolved since last review\\\\u003C/strong\\\\u003E\\\\u003C/summary\\\\u003E\\\\n\\\\n- \\\\u003Cpicture\\\\u003E\\\\u003Csource media=\\\\u0022(prefers-color-scheme: dark)\\\\u0022 srcset=\\\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\\\\u0022\\\\u003E\\\\u003Csource media=\\\\u0022(prefers-color-scheme: light)\\\\u0022 srcset=\\\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\\\\u0022\\\\u003E\\\\u003Cimg src=\\\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\\\\u0022 alt=\\\\u0022Medium severity\\\\u0022 width=\\\\u002262\\\\u0022 height=\\\\u002218\\\\u0022 align=\\\\u0022texttop\\\\u0022\\\\u003E\\\\u003C/picture\\\\u003E [Declared total does not match item sum](https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/270#discussion_r4573080331)\\\\n\\\\u003C/details\\\\u003E\\\\n\\\\n\\\\u003Csub\\\\u003EReview effort: Balanced\\\\u003C/sub\\\\u003E\\u0022,\\u0022state\\u0022:\\u0022COMMENTED\\u0022,\\u0022html_url\\u0022:\\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/270#pullrequestreview-5903887754\\u0022,\\u0022pull_request_url\\u0022:\\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/270\\u0022,\\u0022author_association\\u0022:\\u0022NONE\\u0022,\\u0022is_copilot_code_review\\u0022:true,\\u0022copilot_code_review_effort\\u0022:\\u0022balanced\\u0022,\\u0022_links\\u0022:{\\u0022html\\u0022:{\\u0022href\\u0022:\\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/270#pullrequestreview-5903887754\\u0022},\\u0022pull_request\\u0022:{\\u0022href\\u0022:\\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/270\\u0022}},\\u0022submitted_at\\u0022:\\u00222026-11-14T10:41:19Z\\u0022,\\u0022commit_id\\u0022:\\u0022d3d1e29e2044fdd807b3d374ff43127b834d00cb\\u0022}],\\u0022observedComments\\u0022:[]}\u0022}}"
     }
   },
   "Outbox": {
