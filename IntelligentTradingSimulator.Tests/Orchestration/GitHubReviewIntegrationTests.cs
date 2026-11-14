@@ -221,7 +221,11 @@ public sealed class GitHubReviewIntegrationTests
     public async Task HeadChangeDuringRateLimitRetryPersistsRejectionWithoutAnotherPost()
     {
         var store = new Store(Eligible());
-        var handler = new Api { ReviewPostStatuses = [HttpStatusCode.TooManyRequests, HttpStatusCode.Created] };
+        var handler = new Api
+        {
+            ReviewPostStatuses = [HttpStatusCode.TooManyRequests, HttpStatusCode.Created],
+            ApiFailureReason = "RATE_LIMITED"
+        };
         handler.BeforePost = () => handler.Corruption = "live-sha";
         using var client = handler.Client();
         var adapter = CreateAdapter(client, store);
@@ -233,7 +237,7 @@ public sealed class GitHubReviewIntegrationTests
         Assert.Equal(1, handler.Posts);
         Assert.Equal(DeliveryStatus.Failed, store.State.Outbox["review"].Status);
         Assert.Equal(EffectFailureCode.ReviewRequestRejected, store.State.Outbox["review"].FailureCode);
-        Assert.Equal("HTTP_429", store.State.Issues[7].Review!.RequestFailureReason);
+        Assert.Equal("RATE_LIMITED", store.State.Issues[7].Review!.RequestFailureReason);
         Assert.Equal(ReviewLifecycleState.Failed, store.State.Issues[7].Review!.LifecycleState);
         Assert.Null(store.State.AdmittedIssue);
     }
