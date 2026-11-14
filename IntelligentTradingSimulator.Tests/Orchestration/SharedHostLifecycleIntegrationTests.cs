@@ -266,11 +266,13 @@ public sealed class SharedHostLifecycleIntegrationTests
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
     public async Task OneRepairPoCCompletesCodingCiReviewRepairCiReviewAndStopsForHumanApproval(
-        bool isolatedPoc, bool rejectNonDraftAcceptance)
+        bool isolatedPoc, bool rejectNonDraftAcceptance, bool autoRepair)
     {
         var repairHead = new string('b', 40);
         var baseBranch = isolatedPoc ? GitHubPocSettings.BaseBranch : "master";
@@ -287,7 +289,8 @@ public sealed class SharedHostLifecycleIntegrationTests
         };
         using var fixture = new PipelineApi(taskApi)
         {
-            VerifyCredentials = true, Route = route, WakeEvent = isolatedPoc ? "workflow_dispatch" : "schedule"
+            VerifyCredentials = true, Route = route, WakeEvent = isolatedPoc ? "workflow_dispatch" : "schedule",
+            InlineFinding = autoRepair
         };
         using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
         client.DefaultRequestHeaders.Authorization = new("Bearer", "offline-workflow");
@@ -309,14 +312,14 @@ public sealed class SharedHostLifecycleIntegrationTests
         Task<WorkerResult> Reconcile(JsonElement payload, string eventName, string runId, string? head = null) =>
             host.ReconcileAsync(payload, eventName, runId, 1, 1, Now, [], 99, baseBranch, 55,
                 TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(head ?? taskApi.HeadSha),
-                reviewApproval: ReviewApproval, ciRoute: route, ciApproval: CiApproval,
+                reviewApproval: ReviewApproval with { AutoRepairFindings = autoRepair }, ciRoute: route, ciApproval: CiApproval,
                 statusPublisher: isolatedPoc ? null : Publisher, statusApproval: isolatedPoc ? null : StatusApproval,
                 maxRepairTasks: 1, boundedScope: scope, trustedWorkflowPath: workflowPath,
                 requireDraftPullRequest: isolatedPoc);
         async Task Advance(string? head = null)
         {
             if (isolatedPoc) await Reconcile(Command("resume"), "workflow_dispatch", "90", head);
-            else await Wake(host, finalHeadSha: head ?? taskApi.HeadSha);
+            else await Wake(host, finalHeadSha: head ?? taskApi.HeadSha, autoRepair: autoRepair);
         }
 
         await Reconcile(isolatedPoc ? Command("poc-start") : taskApi.Notification(),
@@ -336,17 +339,25 @@ public sealed class SharedHostLifecycleIntegrationTests
 
         fixture.ReviewSubmitted = true;
         fixture.ReviewSubmittedCount = 1;
+        taskApi.AfterLaunch = () => taskApi.RemoteState = "in_progress";
         await Advance();
         var firstReview = store.State.Issues[7];
-        Assert.Equal(ReviewClassification.NeedsHuman, firstReview.Review!.Classification);
-        Assert.True(firstReview.ReactivationRequired);
-        if (!isolatedPoc) Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
-
-        taskApi.AfterLaunch = () => taskApi.RemoteState = "in_progress";
-        taskApi.RunEvent = "workflow_dispatch";
-        var blocking = Classification(firstReview, classification: "blocking",
-            findings: """[{"Id":"poc-finding","Description":"A bounded regression needs correction","Evidence":"The test fixture records this review finding."}]""");
-        await Reconcile(blocking, "workflow_dispatch", "91");
+        if (autoRepair)
+        {
+            Assert.Equal(ReviewClassification.Blocking, firstReview.Review!.Classification);
+            Assert.Empty(firstReview.Classifications);
+            Assert.Single(firstReview.Review.Findings);
+        }
+        else
+        {
+            Assert.Equal(ReviewClassification.NeedsHuman, firstReview.Review!.Classification);
+            Assert.True(firstReview.ReactivationRequired);
+            if (!isolatedPoc) Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+            taskApi.RunEvent = "workflow_dispatch";
+            var blocking = Classification(firstReview, classification: "blocking",
+                findings: """[{"Id":"poc-finding","Description":"A bounded regression needs correction","Evidence":"The test fixture records this review finding."}]""");
+            await Reconcile(blocking, "workflow_dispatch", "91");
+        }
         var repair = store.State.Issues[7];
         Assert.Equal(Phase.FIX_PENDING, repair.Phase);
         Assert.Equal(TaskKind.ReviewRepair, repair.Tasks[repair.ActiveTaskId!].Kind);
@@ -379,8 +390,13 @@ public sealed class SharedHostLifecycleIntegrationTests
         if (!isolatedPoc) Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
 
         var accepted = Classification(finalReview,
-            responses: """[{"FindingId":"poc-finding","Evidence":"Human verified the repaired behavior on the new exact head.","Resolved":true}]""",
+            responses: JsonSerializer.Serialize(new[] { new
+            {
+                FindingId = autoRepair ? "copilot-review-comment:601" : "poc-finding",
+                Evidence = "Human verified the repaired behavior on the new exact head.", Resolved = true
+            } }),
             sha: repairHead);
+        taskApi.RunEvent = "workflow_dispatch";
         if (rejectNonDraftAcceptance)
         {
             var before = StateJson.Serialize(store.State);
@@ -561,11 +577,12 @@ public sealed class SharedHostLifecycleIntegrationTests
     }
 
     private static Task<WorkerResult?> Wake(GitHubOrchestrationHost host, string eventName = "schedule",
-        string? finalHeadSha = null) =>
+        string? finalHeadSha = null, bool autoRepair = false) =>
         host.ReconcileWakeAsync(JsonSerializer.SerializeToElement(new
             { repository = new { id = 1, full_name = "owner/repo" } }), eventName, "90",
             new(10, Definition), new(true, true, true, true), 99, "master", 55, TaskApproval, Bounded,
-            new GitHubTaskIntegrationTests.FinalHead(finalHeadSha), reviewApproval: ReviewApproval, ciRoute: CiRoute,
+            new GitHubTaskIntegrationTests.FinalHead(finalHeadSha),
+            reviewApproval: ReviewApproval with { AutoRepairFindings = autoRepair }, ciRoute: CiRoute,
             ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
     private static JsonElement Classification(IssueState issue, string responses = "[]",
         string classification = "accepted", string findings = "[]", string? sha = null) => JsonSerializer.SerializeToElement(new
@@ -585,6 +602,7 @@ public sealed class SharedHostLifecycleIntegrationTests
         private readonly GitHubTaskIntegrationTests.ApiFixture taskApi;
         public bool CiCompleted { get; set; }
         public bool ReviewSubmitted { get; set; }
+        public bool InlineFinding { get; init; }
         public int ReviewSubmittedCount { get; set; }
         public bool VerifyCredentials { get; init; }
         public GitHubCiRoute Route { get; init; } = CiRoute;
@@ -666,10 +684,20 @@ public sealed class SharedHostLifecycleIntegrationTests
                 response = Enumerable.Range(0, Math.Min(reviewShas.Count,
                         ReviewSubmittedCount > 0 ? ReviewSubmittedCount : ReviewSubmitted ? reviewShas.Count : 0))
                     .Select(index => new { id = 501 + index, user = ReviewActor, commit_id = reviewShas[index],
-                        state = "APPROVED", body = "approved green done (untrusted prose)", submitted_at = Now.AddMinutes(3),
+                        state = InlineFinding && index == 0 ? "COMMENTED" : "APPROVED",
+                        is_copilot_code_review = true,
+                        body = "approved green done (untrusted prose)", submitted_at = Now.AddMinutes(3),
                         pull_request_url = "https://api.github.com/repos/owner/repo/pulls/17" }).ToArray();
             else if (path.StartsWith(prefix + "pulls/17/reviews/", StringComparison.Ordinal) &&
-                path.EndsWith("/comments", StringComparison.Ordinal)) response = Array.Empty<object>();
+                path.EndsWith("/comments", StringComparison.Ordinal))
+                response = InlineFinding && path == prefix + "pulls/17/reviews/501/comments" ? new object[] { new
+                {
+                    id = 601, pull_request_review_id = 501, user = ReviewActor,
+                    pull_request_url = "https://api.github.com/repos/owner/repo/pulls/17",
+                    commit_id = reviewShas[0], original_commit_id = reviewShas[0],
+                    path = "fixture.txt", line = 3, side = "RIGHT", body = "The total must be 11, not 10.",
+                    created_at = Now.AddMinutes(3), updated_at = Now.AddMinutes(3)
+                } } : Array.Empty<object>();
             else if (path.StartsWith(prefix + "statuses/"))
             {
                 using var payload = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));

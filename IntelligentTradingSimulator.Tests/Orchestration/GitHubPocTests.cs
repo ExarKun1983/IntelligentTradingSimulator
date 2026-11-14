@@ -56,6 +56,12 @@ public sealed class GitHubPocTests
         values["ORCHESTRATION_POC_REVIEW_TIMEOUT_MINUTES"] = "20";
         Assert.NotEqual(original.ManifestDigest, GitHubPocSettings.Read(values.GetValueOrDefault, Now).ManifestDigest);
         Assert.Equal(TimeSpan.FromMinutes(20), GitHubPocSettings.Read(values.GetValueOrDefault, Now).Review.ReviewTimeout);
+        var manual = GitHubPocSettings.Read(values.GetValueOrDefault, Now);
+        Assert.False(manual.Review.AutoRepairFindings);
+        values["ORCHESTRATION_AUTO_REPAIR_REVIEW_FINDINGS"] = "true";
+        var automatic = GitHubPocSettings.Read(values.GetValueOrDefault, Now);
+        Assert.True(automatic.Review.AutoRepairFindings);
+        Assert.NotEqual(manual.ManifestDigest, automatic.ManifestDigest);
     }
 
     [Theory]

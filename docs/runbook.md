@@ -1606,13 +1606,31 @@ review. Nothing merges automatically. The isolated status-revocation experiment
 is a separate, currently stopped test, not the main workflow or its activation
 procedure.
 
-The implementation is not yet a proven automatic review loop: the current
-Copilot review API adapter records submitted output as `NeedsHuman`. It cannot
-infer acceptance from "no issues", `COMMENTED`, or the absence of inline comments.
-Automatic review classification requires a verified request-round/outcome
-contract; custom instructions alone do not provide that API guarantee. Until
-that gap is resolved, a bounded test must explicitly include a human
-`classify-review` step and must not be reported as a fully automatic happy path.
+By default, the Copilot review API adapter records submitted output as
+`NeedsHuman`. It never infers acceptance from "no issues", `COMMENTED`, or the
+absence of inline comments. Final acceptance still requires `classify-review`.
+
+The repository variable `ORCHESTRATION_AUTO_REPAIR_REVIEW_FINDINGS=true` opts
+into the narrower `exact-head-inline-findings-v1` policy. A confirmed fresh
+request (not a `409` already-pending response), exactly one new submitted Copilot
+code review on the task's current SHA, and fresh, unedited top-level inline
+comments on right-side current lines can produce `Blocking` automatically.
+Reviewer identity, review/comment ownership, PR URL, current/original commit,
+timestamps, completed coding and green CI are checked. Every eligible inline
+comment is treated as a repair obligation, including suggestions; this is an
+operator-selected policy, not semantic severity detection or proof of provider
+request-round correlation. The stable finding ID is
+`copilot-review-comment:<comment-id>` and its evidence links to that comment.
+Existing unresolved findings are retained. The usual task budgets, single-pass
+limits, human holds and no-merge boundary still apply.
+
+Missing metadata, replies, outdated/left-side comments, edited comments,
+multiple submissions, timeout or a no-finding result remain human-gated.
+Malformed identities stop observation rather than authorizing work. Never use
+this policy to infer acceptance, issue another uncertain review POST, or
+silently resolve previous findings. A repair-capable profile can launch the
+next coding task without a human `blocking` command, but the complete lifecycle
+is not fully automatic: final acceptance and merge remain human decisions.
 
 After exact-head green CI, the adapter uses `GITHUB_TOKEN` and REST API version
 `2026-03-10` to call
@@ -1623,7 +1641,8 @@ not review completion. `409` means an existing review is pending on the PR;
 it does not identify that review's commit or prove this workflow requested it.
 The adapter records that distinction and does not issue another request.
 The result must independently match the mapped PR, exact head SHA and pinned
-Copilot author, be newer than the saved baseline, and await human classification.
+Copilot author, and be newer than the saved baseline. Unless it meets the opt-in
+inline-findings policy, it awaits human classification.
 The REST review list does not expose a proven request-to-submission round token.
 An earlier executing, uncertain or successful request in canonical state for
 the same PR and commit prevents a new POST; a definitive rejection can be
@@ -1754,8 +1773,12 @@ Issue #268 uses only `orchestration-e2e-artifacts/issue-repair-e2e.txt`. Its
 first version deliberately records `total=10` for items `4` and `7`, contrary
 to the rule in the same file. The intended repair changes only the total to 11.
 The seed is explicit in the Issue: if Copilot does not report the inconsistency,
-stop without inventing a finding or claiming a review-driven repair. A human
-classifies an actual Copilot finding and later verifies its resolution.
+stop without inventing a finding or claiming a review-driven repair. By default,
+a human classifies an actual Copilot finding and later verifies its resolution.
+With the opt-in inline-findings policy, eligible findings launch the repair
+without that first classification command; final acceptance still needs a human.
+Do not resume or re-bootstrap the completed #268 attempt to test this policy.
+Use a fresh reviewed profile, Issue and state for another live attempt.
 
 Unlike the old bounded profile, this profile does not set `SinglePassTest`.
 It does require the mapped PR to stay draft and based on `master`.
@@ -1799,6 +1822,11 @@ Do not use the resources or state of #227, #237 or the status experiment.
 | `ORCHESTRATION_POC_REVIEW_POLICY_VERIFIED` | `true` only after verifying Copilot review access/policy |
 | `ORCHESTRATION_POC_AUTOMATIC_REVIEWS_DISABLED` | `true` only after verifying native automatic reviews will not duplicate managed requests |
 | `ORCHESTRATION_POC_REVIEW_TIMEOUT_MINUTES` | Optional integer 1–30; defaults to 15 and is part of the PoC manifest |
+| `ORCHESTRATION_AUTO_REPAIR_REVIEW_FINDINGS` | Optional repository-wide opt-in to the inline-findings policy; defaults to false and is pinned in the PoC manifest |
+
+Set this policy before bootstrapping a fresh attempt. Changing it, like changing
+the definition or expiry, invalidates the PoC manifest; never edit state to
+adopt it in an existing attempt.
 
 Use the shared environment's approval rules for each driver invocation. This
 does not imply an independent second-person approval if the maintainer may
@@ -1840,7 +1868,7 @@ and set `ORCHESTRATION_POC_APPROVED=true`. All dispatches select `master` and su
    `operation=resume` invocation for observation/continuation, not another
    `poc-start` and not GitHub's "Re-run jobs". There is no schedule or event
    wake for this profile. Do not resume uncertain writes speculatively.
-4. Copilot review output produces `NeedsHuman`. Read the review on the captured
+4. By default, Copilot review output produces `NeedsHuman`. Read the review on the captured
    SHA and take `CurrentHandoffId`, `Round`, PR and SHA from canonical state
    or the artifact. Dispatch `operation=classify-review` with those exact
    `handoff`, `round`, `pull`, `sha` values, an audit `reason`, and
@@ -1848,12 +1876,16 @@ and set `ORCHESTRATION_POC_APPROVED=true`. All dispatches select `master` and su
    in `findings`, e.g.
    `[{"Id":"review-finding-1","Description":"Actual review finding","Evidence":"Exact review comment URL"}]`.
    Do not infer acceptance from the absence of comments or manufacture a finding
-   to force a repair.
+   to force a repair. With the opt-in inline-findings policy, an eligible
+   `Blocking` result automatically proceeds to the one review repair; do not
+   also send a manual classification for that same result.
 5. A blocking classification can launch the one repair on the same PR branch.
    The resulting completed-task head must pass fresh CI and review. For final
    acceptance of previously recorded blockers, provide finding-specific
    `responses`, e.g.
    `[{"FindingId":"review-finding-1","Evidence":"Verification on the repaired SHA","Resolved":true}]`.
+   For an automatically recorded finding, use its canonical
+   `copilot-review-comment:<comment-id>` ID, not an invented replacement ID.
    A second required repair stops on the persisted budget; it never creates
    a third task. Verify that only the requested file changed, and that its final
    content contains `total=11` with all other lines and the final newline intact.
@@ -2538,13 +2570,16 @@ caller-intent idempotency/search contract.
 #### Explicit review classification
 
 `classify-review` uses the same authorized ingress and live open-head checks.
+It remains the acceptance path even when inline findings are classified
+automatically under the opt-in policy.
 The operator supplies the exact handoff, PR, round, SHA, reason and explicit
 `accepted`/`blocking`/`needs-human` decision, plus bounded JSON arrays of stable
 findings and finding-specific responses where needed. The reducer validates
 current-round obligations; empty prose, old responses or a manual stage-label edit
 cannot clear a blocker. A committed command can replay without reclassifying or
-launching another repair. REST output stays human-gated; this command is not an
-automated classifier and does not assert provider request-round correlation.
+launching another repair. REST output outside the opt-in inline-findings policy
+stays human-gated; this command is not an automated classifier and does not
+assert provider request-round correlation.
 
 #### Required tested-head status and managed push routing
 
