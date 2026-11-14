@@ -6,7 +6,7 @@ on:
       issue:
         description: Dedicated PoC Issue
         required: true
-        default: "257"
+        default: "268"
         type: string
       operation:
         description: Bootstrap once, start once, observe, classify review, or pause
@@ -14,7 +14,7 @@ on:
         type: choice
         options: [poc-bootstrap, poc-start, resume, classify-review, pause]
       confirmation:
-        description: Type POC-257-ONE-REPAIR-NO-MERGE to authorize this invocation
+        description: Type POC-268-ONE-REPAIR-NO-MERGE to authorize this invocation
         required: true
         type: string
       repository_generation:
@@ -68,7 +68,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: agent-poc-257-v1
+  group: agent-poc-268-v1
   cancel-in-progress: false
 
 jobs:
@@ -81,8 +81,8 @@ jobs:
         github.actor_id == vars.ORCHESTRATION_POC_ACTOR_ID &&
         github.triggering_actor == github.actor &&
         github.run_attempt == 1 &&
-        inputs.issue == '257' &&
-        inputs.confirmation == 'POC-257-ONE-REPAIR-NO-MERGE' &&
+        inputs.issue == '268' &&
+        inputs.confirmation == 'POC-268-ONE-REPAIR-NO-MERGE' &&
         vars.ORCHESTRATION_POC_APPROVED == 'true' &&
         (inputs.operation != 'poc-bootstrap' || vars.ORCHESTRATION_POC_BOOTSTRAP_APPROVED == 'true')
       }}

@@ -6,7 +6,7 @@ namespace IntelligentTradingSimulator.Orchestration;
 
 public static class GitHubPocCommand
 {
-    public const string Confirmation = "POC-257-ONE-REPAIR-NO-MERGE";
+    public const string Confirmation = "POC-268-ONE-REPAIR-NO-MERGE";
 
     public static Task<int> RunAsync(string[] args, TextWriter output, TextWriter error) =>
         RunAsync(args, output, error, Environment.GetEnvironmentVariable, CreateClient);
