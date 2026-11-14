@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 52,
+  "Version": 53,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": "B379F9FBFEA84422D128A068130B9A6A160C5A276C0002736F78515CE4A3ED17",
   "LastEventId": "actions:1277929203:43585907873",
@@ -22,7 +22,7 @@
       "SchemaVersion": 1,
       "Number": 268,
       "Generation": 1,
-      "Version": 48,
+      "Version": 49,
       "LastEventId": "actions:1277929203:43585907873",
       "Phase": "FIX_PENDING",
       "Ready": false,
@@ -201,7 +201,7 @@
         }
       },
       "ProjectionDigest": "845CD333380895E1961B0074627A3E89BCD360FA28E3D5A7F90C54ED2B85CE4B",
-      "ObservedProjectionDigest": "8203B301F09AC7583DA51D14E940735B73C51348D271625A3D376838F8345823",
+      "ObservedProjectionDigest": "845CD333380895E1961B0074627A3E89BCD360FA28E3D5A7F90C54ED2B85CE4B",
       "StatusProjectionDigest": "047BF940E119ED4C7043B27FFC00A1CFE0696C4E61647C59D5F74095868C08EE",
       "RequiredStatusSequence": 0,
       "RequiredStatusIntentId": null
