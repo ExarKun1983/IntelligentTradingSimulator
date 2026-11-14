@@ -1,10 +1,10 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 70,
+  "Version": 71,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": "B379F9FBFEA84422D128A068130B9A6A160C5A276C0002736F78515CE4A3ED17",
-  "LastEventId": "task-completed:1277929203:1:793c2456-c80e-4226-baab-dc146cfb8972",
+  "LastEventId": "ci-observed:1277929203:1:RunCi:268:1:task:268:1:1:2:1",
   "AdmittedIssue": 268,
   "WorkerLease": {
     "Owner": "529545d06f8d473eae785403a3582f5d",
@@ -22,9 +22,9 @@
       "SchemaVersion": 1,
       "Number": 268,
       "Generation": 1,
-      "Version": 65,
-      "LastEventId": "task-completed:1277929203:1:793c2456-c80e-4226-baab-dc146cfb8972",
-      "Phase": "CI_PENDING",
+      "Version": 66,
+      "LastEventId": "ci-observed:1277929203:1:RunCi:268:1:task:268:1:1:2:1",
+      "Phase": "REVIEW_PENDING",
       "Ready": false,
       "ActiveAuthorized": true,
       "ReadyAt": "2026-11-14T10:24:36+00:00",
@@ -115,7 +115,7 @@
         "TaskId": "task:268:1:1:2",
         "Round": 1,
         "Sha": "d3d1e29e2044fdd807b3d374ff43127b834d00cb",
-        "Green": null,
+        "Green": true,
         "TerminalStopReason": null,
         "Blockers": [],
         "DispatchBoundary": {
@@ -297,6 +297,14 @@
       "ReceivedAt": "2026-11-14T10:37:30.8257709+00:00",
       "CompletedAt": "2026-11-14T10:37:30.8257709+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022task-completed:1277929203:1:793c2456-c80e-4226-baab-dc146cfb8972\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:268,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022github-task-api\u0022,\u0022Kind\u0022:1,\u0022Id\u0022:null,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-14T10:37:30.8257709\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022task-completed\u0022,\u0022TaskId\u0022:\u0022task:268:1:1:2\u0022,\u0022PullRequest\u0022:270,\u0022Sha\u0022:\u0022d3d1e29e2044fdd807b3d374ff43127b834d00cb\u0022,\u0022Evidence\u0022:{\u0022Version\u0022:1,\u0022Policy\u0022:\u0022bounded-candidate-sha-v1\u0022,\u0022TaskId\u0022:\u0022task:268:1:1:2\u0022,\u0022ExternalTaskId\u0022:\u0022793c2456-c80e-4226-baab-dc146cfb8972\u0022,\u0022SessionIds\u0022:[\u00222ad12c90-817c-4e8c-9a68-1925b546f4a1\u0022],\u0022PullRequest\u0022:270,\u0022ObservedHeadSha\u0022:\u0022d3d1e29e2044fdd807b3d374ff43127b834d00cb\u0022}}}"
+    },
+    "ci-observed:1277929203:1:RunCi:268:1:task:268:1:1:2:1": {
+      "Id": "ci-observed:1277929203:1:RunCi:268:1:task:268:1:1:2:1",
+      "Digest": "F79E1625DC3738FAD961623ED83FF3FD8D349D2D38EE9C2C2DA14CED1AC5AF6F",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-14T10:39:15+00:00",
+      "CompletedAt": "2026-11-14T10:39:15+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022ci-observed:1277929203:1:RunCi:268:1:task:268:1:1:2:1\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:268,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022github-actions\u0022,\u0022Kind\u0022:2,\u0022Id\u0022:null,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-14T10:39:15\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022ci-result\u0022,\u0022RunId\u0022:\u002243586218807\u0022,\u0022TaskId\u0022:\u0022task:268:1:1:2\u0022,\u0022Round\u0022:1,\u0022PullRequest\u0022:270,\u0022Sha\u0022:\u0022d3d1e29e2044fdd807b3d374ff43127b834d00cb\u0022,\u0022Green\u0022:true,\u0022Blockers\u0022:[]}}"
     }
   },
   "Outbox": {
