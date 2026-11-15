@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 66,
+  "Version": 67,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "actions:1277929203:43753882114",
@@ -130,16 +130,16 @@
       "SchemaVersion": 1,
       "Number": 237,
       "Generation": 1,
-      "Version": 36,
+      "Version": 37,
       "LastEventId": "actions:1277929203:43753882114",
-      "Phase": "BLOCKED",
+      "Phase": "CLOSED",
       "Ready": false,
       "ActiveAuthorized": false,
       "ReadyAt": "2026-11-10T12:01:51+00:00",
       "FeedbackSince": "2026-11-10T12:01:51+00:00",
       "ReactivationRequired": true,
       "Paused": false,
-      "HoldReason": "Effect outcome is ambiguous.",
+      "HoldReason": "Closed.",
       "PullRequest": 240,
       "HeadSha": "f52d2a10b237dff7c29cfcac3151a387a40b0396",
       "Round": 1,
@@ -250,6 +250,13 @@
           "PullRequest": 240,
           "Sha": "f52d2a10b237dff7c29cfcac3151a387a40b0396",
           "ObservedAt": "2026-11-15T19:43:04.2079603+00:00"
+        },
+        {
+          "Generation": 1,
+          "Outcome": "Unmerged",
+          "PullRequest": 240,
+          "Sha": "f52d2a10b237dff7c29cfcac3151a387a40b0396",
+          "ObservedAt": "2026-11-15T19:43:57.6112524+00:00"
         }
       ],
       "CurrentHandoffId": null,
