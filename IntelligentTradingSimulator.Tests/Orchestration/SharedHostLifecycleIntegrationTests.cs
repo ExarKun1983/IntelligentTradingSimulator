@@ -10,6 +10,7 @@ public sealed class SharedHostLifecycleIntegrationTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
     private static readonly string Head = new('a', 40);
+    private static readonly string ChangedHead = new('b', 40);
     private static readonly string Definition = new('d', 40);
     private static readonly GitHubExecutionApproval TaskApproval = new(true, true, true, true);
     private static readonly GitHubCiApproval CiApproval = new(true, true, true, true);
@@ -170,7 +171,7 @@ public sealed class SharedHostLifecycleIntegrationTests
             else
             {
                 Assert.Equal(Phase.BLOCKED, final.Phase);
-                Assert.Equal(new string('b', 40), final.HeadSha);
+                Assert.Equal(ChangedHead, final.HeadSha);
                 Assert.Equal(final.HeadSha, fixture.Statuses.Last().GetProperty("sha").GetString());
                 Assert.Equal(Head, Assert.Single(final.Tasks.Values).FinalSha);
                 Assert.Equal(Head, final.Ci!.Sha);
@@ -579,8 +580,13 @@ public sealed class SharedHostLifecycleIntegrationTests
     private static Task<WorkerResult?> Wake(GitHubOrchestrationHost host, string eventName = "schedule",
         string? finalHeadSha = null, bool autoRepair = false) =>
         host.ReconcileWakeAsync(JsonSerializer.SerializeToElement(new
-            { repository = new { id = 1, full_name = "owner/repo" } }), eventName, "90",
-            new(10, Definition), new(true, true, true, true), 99, "master", 55, TaskApproval, Bounded,
+            { repository = new { id = 1, full_name = "owner/repo" },
+                pull_request = new { head = new { sha = ChangedHead } } }), eventName, "90",
+            new(10, Definition)
+            {
+                WorkflowExecutionRef = "owner/repo/.github/workflows/agent-state-machine.yml@refs/heads/master",
+                WorkflowExecutionSha = Definition
+            }, new(true, true, true, true), 99, "master", 55, TaskApproval, Bounded,
             new GitHubTaskIntegrationTests.FinalHead(finalHeadSha),
             reviewApproval: ReviewApproval with { AutoRepairFindings = autoRepair }, ciRoute: CiRoute,
             ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
@@ -631,7 +637,8 @@ public sealed class SharedHostLifecycleIntegrationTests
             object response;
             if (path == prefix + "actions/runs/90")
                 response = new { id = 90, workflow_id = 10, path = taskApi.WorkflowPath,
-                    head_sha = Definition, @event = WakeEvent, repository = new { id = 1 }, actor = new { id = 55 } };
+                    head_sha = WakeEvent == "pull_request_target" ? ChangedHead : Definition,
+                    @event = WakeEvent, repository = new { id = 1 }, actor = new { id = 55 } };
             else if (path == prefix + "actions/runs/91" || path == prefix + "actions/runs/92" ||
                      path == prefix + "actions/runs/93")
                 response = new { @event = "workflow_dispatch", path = taskApi.WorkflowPath,

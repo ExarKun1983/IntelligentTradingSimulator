@@ -85,7 +85,6 @@ public sealed class ContinuationIntegrationTests
     [Theory]
     [InlineData("schedule")]
     [InlineData("issue_comment")]
-    [InlineData("pull_request_target")]
     public async Task SupportedWakeUsesTrustedRunNotPayloadProseHeadOrActor(string eventName)
     {
         using var client = new HttpClient(new Handler("", eventName)) { BaseAddress = new("https://api.github.com/") };
@@ -96,6 +95,98 @@ public sealed class ContinuationIntegrationTests
         Assert.Empty(state.Issues);
         Assert.Empty(state.Inbox);
         Assert.Empty(state.Outbox);
+    }
+
+    [Fact]
+    public async Task PullRequestWakeUsesTrustedWorkflowShaInsteadOfPullRequestHead()
+    {
+        var head = new string('b', 40);
+        using var client = new HttpClient(new Handler("", "pull_request_target", head))
+            { BaseAddress = new("https://api.github.com/") };
+        var route = new GitHubWakeRoute(10, Definition)
+        {
+            WorkflowExecutionRef = "owner/repo/.github/workflows/agent-state-machine.yml@refs/heads/master",
+            WorkflowExecutionSha = Definition
+        };
+        var source = new GitHubWakeSource(new(client, "owner/repo", 1), route);
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            pull_request = new { head = new { sha = head } }
+        });
+        var state = RepositoryState.Create("owner/repo");
+
+        Assert.True(await source.VerifyAsync(payload, "pull_request_target", "90", state, default));
+        Assert.Empty(state.Inbox);
+        Assert.Empty(state.Outbox);
+    }
+
+    [Theory]
+    [InlineData("missing-workflow-sha")]
+    [InlineData("wrong-workflow-sha")]
+    [InlineData("wrong-workflow-ref")]
+    [InlineData("missing-workflow-ref")]
+    [InlineData("wrong-pull-head")]
+    [InlineData("invalid-pull-head")]
+    public async Task PullRequestWakeRejectsUntrustedDefinitionOrMismatchedRunHead(string corruption)
+    {
+        var head = new string('b', 40);
+        using var client = new HttpClient(new Handler("", "pull_request_target", head))
+            { BaseAddress = new("https://api.github.com/") };
+        var route = new GitHubWakeRoute(10, Definition)
+        {
+            WorkflowExecutionRef = corruption switch
+            {
+                "missing-workflow-ref" => null,
+                "wrong-workflow-ref" => "owner/repo/.github/workflows/agent-state-machine.yml@refs/heads/other",
+                _ => "owner/repo/.github/workflows/agent-state-machine.yml@refs/heads/master"
+            },
+            WorkflowExecutionSha = corruption switch
+            {
+                "missing-workflow-sha" => null,
+                "wrong-workflow-sha" => head,
+                _ => Definition
+            }
+        };
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            pull_request = new
+            {
+                head = new { sha = corruption == "wrong-pull-head" ? Definition : corruption == "invalid-pull-head" ? "bad" : head }
+            }
+        });
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            new GitHubWakeSource(new(client, "owner/repo", 1), route)
+                .VerifyAsync(payload, "pull_request_target", "90", RepositoryState.Create("owner/repo"), default));
+    }
+
+    [Theory]
+    [InlineData("id")]
+    [InlineData("workflow")]
+    [InlineData("repository")]
+    [InlineData("path")]
+    [InlineData("event")]
+    public async Task PullRequestWakeStillRejectsForgedRunIdentity(string corruption)
+    {
+        var head = new string('b', 40);
+        using var client = new HttpClient(new Handler(corruption, "pull_request_target", head))
+            { BaseAddress = new("https://api.github.com/") };
+        var route = new GitHubWakeRoute(10, Definition)
+        {
+            WorkflowExecutionRef = "owner/repo/.github/workflows/agent-state-machine.yml@refs/heads/master",
+            WorkflowExecutionSha = Definition
+        };
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            pull_request = new { head = new { sha = head } }
+        });
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            new GitHubWakeSource(new(client, "owner/repo", 1), route)
+                .VerifyAsync(payload, "pull_request_target", "90", RepositoryState.Create("owner/repo"), default));
     }
 
     [Fact]
@@ -192,7 +283,7 @@ public sealed class ContinuationIntegrationTests
             return Task.FromResult(true);
         }
     }
-    private sealed class Handler(string corruption = "", string eventName = "schedule") : HttpMessageHandler
+    private sealed class Handler(string corruption = "", string eventName = "schedule", string? headSha = null) : HttpMessageHandler
     {
         public int Requests { get; private set; }
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
@@ -200,7 +291,7 @@ public sealed class ContinuationIntegrationTests
             Requests++;
             object response = request.RequestUri!.AbsolutePath == "/repos/owner/repo" ? new { id = 1, full_name = "owner/repo" } :
                 new { id = corruption == "id" ? 91 : 90, workflow_id = corruption == "workflow" ? 11 : 10,
-                    head_sha = corruption == "sha" ? new string('b', 40) : Definition,
+                    head_sha = corruption == "sha" ? new string('b', 40) : headSha ?? Definition,
                     path = corruption == "path" ? "other.yml" : ".github/workflows/agent-state-machine.yml",
                     @event = corruption == "event" ? "push" : eventName, repository = new { id = corruption == "repository" ? 2 : 1 } };
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)

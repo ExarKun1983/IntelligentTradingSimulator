@@ -79,7 +79,11 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
             throw new InvalidOperationException("Required-status publication prerequisites are unverified.");
         return new(Required("GITHUB_REPOSITORY"), Identity("GITHUB_REPOSITORY_ID"), Identity("ORCHESTRATION_ACTOR_ID"),
             Required("ORCHESTRATION_BASE_BRANCH"), tasks, wake,
-            new(Identity("ORCHESTRATION_WORKFLOW_ID"), Required("ORCHESTRATION_DEFINITION_SHA")),
+            new(Identity("ORCHESTRATION_WORKFLOW_ID"), Required("ORCHESTRATION_DEFINITION_SHA"))
+            {
+                WorkflowExecutionRef = read("GITHUB_WORKFLOW_REF"),
+                WorkflowExecutionSha = read("GITHUB_WORKFLOW_SHA")
+            },
             new GitHubReviewApproval(activation, Approved("ORCHESTRATION_REVIEW_POLICY_VERIFIED"), cost,
                 Approved("ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED"))
                 {

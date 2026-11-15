@@ -316,6 +316,19 @@ public sealed class GitHubLiveCredentialsTests
     }
 
     [Fact]
+    public void LiveSettingsPassActionsWorkflowIdentityToWakeVerification()
+    {
+        var values = LiveSettingsValues();
+        values["GITHUB_WORKFLOW_REF"] = "owner/repo/.github/workflows/agent-state-machine.yml@refs/heads/master";
+        values["GITHUB_WORKFLOW_SHA"] = new string('a', 40);
+
+        var route = GitHubLiveSettings.Read(values.GetValueOrDefault).WakeRoute;
+
+        Assert.Equal(values["GITHUB_WORKFLOW_REF"], route.WorkflowExecutionRef);
+        Assert.Equal(values["GITHUB_WORKFLOW_SHA"], route.WorkflowExecutionSha);
+    }
+
+    [Fact]
     public void SinglePassTestCanRunWithoutRequiredStatusContextAndDoesNotEnableStatusPublication()
     {
         var values = LiveSettingsValues();
