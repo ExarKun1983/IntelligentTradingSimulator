@@ -892,7 +892,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         var issue = state.Issues[effect.IssueNumber];
         if (outcome is null && effect.Kind != EffectKind.PublishRequiredStatus)
         {
-            if (state.AdmittedIssue is { } owner && owner != issue.Number)
+            if (state.AdmittedIssue is { } owner && owner != issue.Number && !IsCurrentSettledProjection(issue, effect))
                 throw new InvalidOperationException("Another issue owns the repository admission.");
             state.AdmittedIssue ??= issue.Number;
         }
@@ -943,6 +943,12 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         ReleaseIfSafe(state, issue);
         return state;
     }
+
+    internal static bool IsCurrentSettledProjection(IssueState issue, EffectIntent effect) =>
+        issue.Phase is Phase.HUMAN_REVIEW or Phase.BLOCKED or Phase.CLOSED &&
+        effect.Generation == issue.Generation &&
+        (effect.Kind == EffectKind.ProjectLabels && effect.Labels.SequenceEqual(ProjectLabels(issue)) ||
+         effect.Kind == EffectKind.ProjectStatus && effect.StatusBody == StatusProjection.Render(issue));
 
     private static bool ValidReviewProgressActor(OrchestrationEvent message, IssueState issue) =>
         message.Actor.Kind == ActorKind.ReviewService && message.Actor.Type == "Bot" &&

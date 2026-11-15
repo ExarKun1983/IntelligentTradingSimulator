@@ -39,6 +39,30 @@ public sealed class OrchestrationWorkerTests
     }
 
     [Fact]
+    public async Task SettledIssueHandoffIsPublishedWhileNextIssueKeepsAdmission()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { ReadyIssues = [7, 8], TrackProjectedLabels = true };
+        api.AfterExecute = () =>
+        {
+            if (api.LaunchedIssues.Contains(8)) api.CompleteTasks = false;
+        };
+
+        await Worker().RunAsync(store, api, api, api, Simulation, Fast);
+
+        var first = store.Current.Issues[7];
+        Assert.Equal(Phase.HUMAN_REVIEW, first.Phase);
+        Assert.Equal(8, store.Current.AdmittedIssue);
+        Assert.Contains("human:review", api.ProjectedLabels[7]);
+        Assert.Contains(api.Deliveries, delivery => delivery.Issue == 7 &&
+            delivery.Kind == EffectKind.ProjectLabels && delivery.Admission == 8);
+        Assert.Contains(api.Deliveries, delivery => delivery.Issue == 7 &&
+            delivery.Kind == EffectKind.ProjectStatus && delivery.Admission == 8 &&
+            delivery.StatusBody == StatusProjection.Render(first));
+        Assert.Single(store.Current.Issues[8].Tasks);
+    }
+
+    [Fact]
     public async Task UnmappedIssueLaunchesOnceAndWaitsForCompletionAndVerifiedFinalMapping()
     {
         var store = new Store();
@@ -671,6 +695,8 @@ public sealed class OrchestrationWorkerTests
         private readonly System.Collections.Concurrent.ConcurrentDictionary<int, string> heads = new();
         private readonly System.Collections.Concurrent.ConcurrentDictionary<string, OrchestrationEvent> messages = new();
         public List<EffectKind> Executions { get; } = [];
+        public List<(int Issue, EffectKind Kind, int? Admission, string? StatusBody)> Deliveries { get; } = [];
+        public Dictionary<int, List<string>> ProjectedLabels { get; } = [];
         public List<int> LaunchedIssues { get; } = [];
         public int Recoveries { get; private set; }
         public int CiFailures { get; init; }
@@ -687,6 +713,7 @@ public sealed class OrchestrationWorkerTests
         public bool IncludeUnpublishedResults { get; init; }
         public bool FailObservation { get; set; }
         public bool AmbiguousFirstReview { get; init; }
+        public bool TrackProjectedLabels { get; init; }
         public bool ClassifyBlocking { get; set; }
         public Queue<WorkerEventBatch> Backlog { get; } = [];
         public Action? AfterExecute { get; set; }
@@ -778,7 +805,8 @@ public sealed class OrchestrationWorkerTests
                         PullRequest = unmapped ? null : number + (CompletionMismatch == "pr" ? 11 : 10),
                         HeadSha = unmapped ? null : CompletionMismatch == "head" ? new string('f', 40) : Head(number),
                         CompletedTaskId = CompletionMismatch == "task" ? null : issue?.ActiveTaskId,
-                        Labels = issue is null ? [] : OrchestrationReducer.ProjectLabels(issue).ToList()
+                        Labels = TrackProjectedLabels ? ProjectedLabels.GetValueOrDefault(number, []) :
+                            issue is null ? [] : OrchestrationReducer.ProjectLabels(issue).ToList()
                     };
                 })
             });
@@ -787,8 +815,13 @@ public sealed class OrchestrationWorkerTests
         public async Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken cancellationToken)
         {
             Assert.Equal(DeliveryStatus.Executing, store.Current.Outbox[intent.Id].Status);
-            Assert.Equal(intent.IssueNumber, store.Current.AdmittedIssue);
+            if (intent.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus) ||
+                store.Current.Issues[intent.IssueNumber].Phase is not (Phase.HUMAN_REVIEW or Phase.BLOCKED or Phase.CLOSED))
+                Assert.Equal(intent.IssueNumber, store.Current.AdmittedIssue);
             Executions.Add(intent.Kind);
+            Deliveries.Add((intent.IssueNumber, intent.Kind, store.Current.AdmittedIssue, intent.StatusBody));
+            if (TrackProjectedLabels && intent.Kind == EffectKind.ProjectLabels)
+                ProjectedLabels[intent.IssueNumber] = intent.Labels.ToList();
             if (intent.Kind == EffectKind.LaunchTask)
             {
                 LaunchedIssues.Add(intent.IssueNumber);
