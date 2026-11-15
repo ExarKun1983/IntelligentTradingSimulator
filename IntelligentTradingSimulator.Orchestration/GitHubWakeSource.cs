@@ -3,7 +3,11 @@ using System.Text.Json;
 namespace IntelligentTradingSimulator.Orchestration;
 
 public sealed record GitHubWakeRoute(long WorkflowId, string DefinitionSha,
-    string WorkflowPath = ".github/workflows/agent-state-machine.yml");
+    string WorkflowPath = ".github/workflows/agent-state-machine.yml")
+{
+    public string? WorkflowExecutionRef { get; init; }
+    public string? WorkflowExecutionSha { get; init; }
+}
 public sealed record GitHubWakeApproval(bool ActivationApproved = false, bool ApiCredentialVerified = false,
     bool TrustedWorkflowVerified = false, bool NoAdditionalChargesVerified = false)
 {
@@ -22,12 +26,25 @@ public sealed class GitHubWakeSource(GitHubRepositoryApi api, GitHubWakeRoute ro
             payload.GetProperty("repository").GetProperty("id").GetInt64() != api.RepositoryId ||
             payload.GetProperty("repository").GetProperty("full_name").GetString() != api.Repository)
             throw new InvalidDataException("Invalid automatic wake scope or trusted definition.");
+        var expectedRunSha = route.DefinitionSha;
+        if (eventName == "pull_request_target")
+        {
+            if (route.WorkflowExecutionSha != route.DefinitionSha ||
+                route.WorkflowExecutionRef != $"{api.Repository}/{route.WorkflowPath}@refs/heads/master" ||
+                !payload.TryGetProperty("pull_request", out var pull) ||
+                !pull.TryGetProperty("head", out var head) ||
+                !head.TryGetProperty("sha", out var sha) ||
+                sha.ValueKind != JsonValueKind.String ||
+                sha.GetString() is not { Length: 40 } pullHead || !pullHead.All(Uri.IsHexDigit))
+                throw new InvalidDataException("Pull request wake lacks the trusted workflow or PR head identity.");
+            expectedRunSha = pullHead;
+        }
         await api.VerifyRepositoryAsync(token);
         using var response = await api.GetAsync($"actions/runs/{id}", token);
         var run = response.RootElement;
         if (run.GetProperty("id").GetInt64() != id || run.GetProperty("workflow_id").GetInt64() != route.WorkflowId ||
             run.GetProperty("path").GetString() != ".github/workflows/agent-state-machine.yml" ||
-            run.GetProperty("head_sha").GetString() != route.DefinitionSha ||
+            run.GetProperty("head_sha").GetString() != expectedRunSha ||
             run.GetProperty("event").GetString() != eventName ||
             run.GetProperty("repository").GetProperty("id").GetInt64() != api.RepositoryId)
             throw new InvalidDataException("Wake does not match the trusted Actions definition/run.");

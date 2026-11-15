@@ -2589,6 +2589,13 @@ unbounded wake-up storm. Monitor the oldest pending ticket, worker lease expiry,
 workflow drift and disabled schedules. Exceptional authorized Resume remains the
 recovery path when GitHub cannot deliver wakes; it cannot clear holds.
 
+For `pull_request_target`, GitHub's run `head_sha` identifies the PR head, not
+the trusted workflow definition. The wake verifier requires the runner-provided
+`GITHUB_WORKFLOW_REF` to name this workflow on `master` and
+`GITHUB_WORKFLOW_SHA` to match the pinned definition; it also checks the run's
+head against the event's PR head. The PR head only identifies the wake and is
+never executed or treated as lifecycle evidence.
+
 #### Authorized lookup-only terminal task recovery
 
 `resolve-task` requires the canonical local task ID, reason and expected
