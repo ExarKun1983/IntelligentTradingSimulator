@@ -73,7 +73,8 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
         if (recoveryOnly ? !recovery.AllowsRecovery : !tasks.AllowsTasks || !wake.AllowsWake)
             throw new InvalidOperationException("Live execution is disabled or its prerequisites are unverified.");
         var status = new GitHubRequiredStatusApproval(activation, credential, Approved("ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED"),
-            Approved("ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED"), cost);
+            Approved("ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED"), cost)
+            { ManualMergeGateApproved = Approved("ORCHESTRATION_MANUAL_MERGE_GATE_APPROVED") };
         if (!recoveryOnly && !status.AllowsPublication && testIssue is null)
             throw new InvalidOperationException("Required-status publication prerequisites are unverified.");
         return new(Required("GITHUB_REPOSITORY"), Identity("GITHUB_REPOSITORY_ID"), Identity("ORCHESTRATION_ACTOR_ID"),
