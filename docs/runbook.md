@@ -1744,7 +1744,7 @@ is a code-path PoC only: it does not verify live credentials, repository
 protection, workflow pins, or deployed Actions configuration. The existing
 bounded Issue #237 profile remains single-pass and cannot run this repair cycle.
 
-### Bounded live coding/CI/review PoC for Issue #276
+### Bounded live coding/CI/review PoC for Issue #279
 
 The opt-in `agent-poc.yml` driver reuses `GitHubOrchestrationHost`, the existing
 task/CI/review adapters and reducer. It is not a second orchestrator and does
@@ -1752,8 +1752,8 @@ not activate the main workflow or the status-revocation experiment. Its CLI mode
 is `--github-live --github-poc --execute`. These source changes alone do not
 provision resources or authorize a live run.
 
-The current profile is fixed to Issue #276, PR base `master`, and separate state
-`refs/heads/agent-state-poc-276-v1`. Both driver and CI execute from `master`
+The current profile is fixed to Issue #279, PR base `master`, and separate state
+`refs/heads/agent-state-poc-279-v1`. Both driver and CI execute from `master`
 at the configured reviewed definition SHA; CI checks out the agent's exact task
 head separately. The task creates a draft PR against `master`. If `master`
 advances during the attempt, the profile stops rather than executing an
@@ -1769,22 +1769,31 @@ human feedback requiring a separate repair also stops the attempt. Changing conf
 cannot silently reuse bootstrapped state. Missing state is an error, not a new
 attempt. Do not delete state or re-bootstrap to retry.
 
-The #249 v1 and v2 state refs, the #257, #268 and #272 state refs, and their PRs are retained
-as history. This profile neither resumes nor resolves those attempts. The #276
+The #249 v1 and v2 state refs, the #257, #268, #272 and #276 state refs, and their PRs are retained
+as history. This profile neither resumes nor resolves those attempts. The #279
 attempt bootstraps its own v1 ref with a new manifest and current
 definition/expiry. Never reuse an earlier attempt's state.
 
-Issue #276 uses only `orchestration-e2e-artifacts/auto-review-repair-metadata-e2e.txt`. Its
-first version deliberately records `total=10` for items `4` and `7`, contrary
-to the rule in the same file. The intended repair changes only the total to 11.
-The seed is explicit in the Issue: if Copilot does not report the inconsistency,
-stop without inventing a finding or claiming a review-driven repair. This test
-requires the opt-in inline-findings policy so an eligible finding launches the
-repair without the first classification command. Final acceptance still needs
-a human. The #272 attempt recorded `NeedsHuman` because the review-scoped
-comment list omitted current line/side metadata. PR #275 added verified detail
-reads; this fresh profile exercises that fix without changing #272's saved
-decision. Do not resume or re-bootstrap either earlier attempt.
+Issue #279 uses only two compiled test-only files under
+`IntelligentTradingSimulator.Tests/Orchestration/E2EFixtures/`:
+`WholeSharePositionSizer.cs` and `WholeSharePositionSizerTests.cs`.
+The imported calculation uses `decimal.Ceiling(budget / unitPrice)` despite
+the business invariant that whole-share cost must not exceed the budget.
+The initial tests cover exact division, zero budget and argument validation;
+the intended review repair rounds down and adds regression cases for budgets
+100 and 20 with unit price 30, asserting quantities 3 and 0 and affordable cost.
+No production code, project files or packages may change in the generated PR.
+If Copilot does not report a real qualifying inline finding, stop without
+inventing one or claiming a review-driven repair. This test requires the opt-in
+inline-findings policy so a finding launches repair without manual blocking
+classification. Final acceptance still needs a human.
+
+The #272 attempt recorded `NeedsHuman` because the review-scoped comment list
+omitted current line/side metadata; PR #275 added verified detail reads.
+The subsequent #276/#278 attempt had green CI but no inline findings, so no
+repair ran. Its canonical state remains `BLOCKED`/`NeedsHuman`. The compiled
+C# scenario improves the review signal but cannot guarantee a finding.
+Do not resume or re-bootstrap either earlier attempt.
 
 Unlike the old bounded profile, this profile does not set `SinglePassTest`.
 It does require the mapped PR to stay draft and based on `master`.
@@ -1846,28 +1855,30 @@ is enforced by the reviewed driver/adapters/store.
 
 After separate authorization, enable only the two new PoC workflows if needed
 and set `ORCHESTRATION_POC_APPROVED=true`. All dispatches select `master` and supply
-`confirmation=POC-276-ONE-REPAIR-NO-MERGE`.
+`confirmation=POC-279-ONE-REPAIR-NO-MERGE`.
 
 1. Temporarily set `ORCHESTRATION_POC_BOOTSTRAP_APPROVED=true`. Dispatch the
-   driver with `operation=poc-bootstrap` and `issue=276`. This creates only the
+   driver with `operation=poc-bootstrap` and `issue=279`. This creates only the
    separate empty canonical state and its manifest. Verify the artifact and
    state ref, then set bootstrap approval back to `false` before starting.
-2. Check the coding requirements in Issue #276. Add `agent:ready` only when
-   ready to authorize its coding task, then start the driver once:
+2. Check the coding requirements in Issue #279. Add `agent:ready` only when
+   ready to authorize its coding task, then start the driver once. The label
+   alone does not wake this manually dispatched PoC:
 
    ```powershell
    gh workflow run agent-poc.yml `
      --repo ExarKun1983/IntelligentTradingSimulator `
      --ref master `
-     -f issue=276 -f operation=poc-start `
-     -f confirmation=POC-276-ONE-REPAIR-NO-MERGE `
+     -f issue=279 -f operation=poc-start `
+     -f confirmation=POC-279-ONE-REPAIR-NO-MERGE `
      -f repository_generation=1 -f issue_generation=1
    ```
 
 3. The worker observes task completion, captures/verifies its candidate head,
    dispatches exact-head CI, then requests Copilot review after green CI.
-   Verify that the initial PR diff contains only the requested file and exact
-   seeded content. Do not edit the PR head manually: an untracked head change
+   Verify that the initial PR diff contains only the two allowed test-only files,
+   the exact imported calculation and the specified passing tests. Do not edit
+   the PR head manually: an untracked head change
    causes a safety hold rather than a review of the completed task head.
    A driver invocation is bounded to 30 minutes. `TimeLimit`/`IterationLimit`
    is not completion: inspect canonical state and use a **new** manual
@@ -1895,8 +1906,10 @@ and set `ORCHESTRATION_POC_APPROVED=true`. All dispatches select `master` and su
    For an automatically recorded finding, use its canonical
    `copilot-review-comment:<comment-id>` ID, not an invented replacement ID.
    A second required repair stops on the persisted budget; it never creates
-   a third task. Verify that only the requested file changed, and that its final
-   content contains `total=11` with all other lines and the final newline intact.
+   a third task. Verify that only the two allowed files changed, the corrected
+   calculation rounds down and both new non-divisible-budget regression cases
+   pass. Confirm that these cases fail against the imported calculation without
+   editing or pushing to the generated branch.
 6. Ask the operator before submitting final `accepted`. Completion means phase
    `HUMAN_REVIEW`, explicitly accepted review, current
    exact-head green CI and an unmerged draft PR. The artifact reports
