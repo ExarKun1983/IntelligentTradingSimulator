@@ -105,6 +105,9 @@ public class GitHubActionsIngressTests
     [InlineData("agent:ai-review")]
     [InlineData("agent:review")]
     [InlineData("agent:blocked")]
+    [InlineData("human:classify-review")]
+    [InlineData("human:review")]
+    [InlineData("human:action-required")]
     public void HumanStageEditsAreProjectionNotificationsNotTransitions(string label)
     {
         Assert.Equal(NotificationKind.Projection,
@@ -115,6 +118,9 @@ public class GitHubActionsIngressTests
     [InlineData("agent:ready")]
     [InlineData("agent:review")]
     [InlineData("agent:blocked")]
+    [InlineData("human:classify-review")]
+    [InlineData("human:review")]
+    [InlineData("human:action-required")]
     public void TrustedProjectionActorDoesNotCreateCommandLoop(string label)
     {
         Assert.Equal(NotificationKind.Ignore,
@@ -320,6 +326,9 @@ public class GitHubActionsIngressTests
     [InlineData("agent:review")]
     [InlineData("agent:ci")]
     [InlineData("agent:blocked")]
+    [InlineData("human:classify-review")]
+    [InlineData("human:review")]
+    [InlineData("human:action-required")]
     public void StageTamperingCannotAdvanceCanonicalCoding(string label)
     {
         var first = OfflineNotificationReplay.Run(Issue(), "issues", Context());
@@ -329,6 +338,21 @@ public class GitHubActionsIngressTests
         Assert.Null(result.State.Issues[7].Ci);
         Assert.Null(result.State.Issues[7].Review);
         Assert.Single(result.State.Issues[7].Tasks);
+    }
+
+    [Theory]
+    [InlineData("human:classify-review")]
+    [InlineData("human:review")]
+    [InlineData("human:action-required")]
+    public void RemovingHumanActionLabelsCannotAuthorizeWork(string label)
+    {
+        var first = OfflineNotificationReplay.Run(Issue(), "issues", Context());
+        var result = OfflineNotificationReplay.Run(Issue(action: "unlabeled", label: label), "issues",
+            Context() with { State = first.State, RunId = "124" });
+
+        Assert.Equal(Phase.CODING, result.State.Issues[7].Phase);
+        Assert.Single(result.State.Issues[7].Tasks);
+        Assert.Single(result.State.Outbox.Values, effect => effect.Kind == EffectKind.LaunchTask);
     }
 
     [Fact]

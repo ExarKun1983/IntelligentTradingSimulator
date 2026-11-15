@@ -963,11 +963,19 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             _ => null
         };
         if (stage is not null) labels.Add(stage);
+        if (issue.Phase == Phase.HUMAN_REVIEW)
+            labels.Add("human:review");
+        else if (issue.Phase == Phase.BLOCKED)
+            labels.Add(issue.HoldReason == "Review requires human classification." &&
+                issue.Review?.Classification == ReviewClassification.NeedsHuman
+                    ? "human:classify-review"
+                    : "human:action-required");
         return labels.OrderBy(l => l, StringComparer.Ordinal).ToList();
     }
 
     public static bool IsProjectionLabel(string label) =>
-        label is "agent:ready" or "agent:working" or "agent:ci" or "agent:ai-review" or "agent:review" or "agent:blocked";
+        label is "agent:ready" or "agent:working" or "agent:ci" or "agent:ai-review" or "agent:review" or "agent:blocked" or
+            "human:classify-review" or "human:review" or "human:action-required";
 
     public static bool RequiresInitialReadiness(IssueState issue) => issue.ActiveAuthorized &&
         !issue.Tasks.Values.Any(task => task.Round == issue.Round &&

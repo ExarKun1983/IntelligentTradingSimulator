@@ -827,6 +827,82 @@ public sealed class OrchestrationCoreTests
     }
 
     [Fact]
+    public void HumanActionLabelsFollowTheCanonicalHandoffAndNeverReplaceAgentLabels()
+    {
+        var reducer = Reducer();
+        var state = FinishReview(FinishCi(CompleteTask(Admitted(), 2), true, "green"),
+            ReviewClassification.NeedsHuman, "ambiguous");
+        Assert.Equal(new[] { "agent:blocked", "human:classify-review" },
+            OrchestrationReducer.ProjectLabels(state.Issues[7]));
+
+        var handoff = state.Issues[7].CurrentHandoffId!;
+        state = reducer.Apply(state, Event(new HumanClassification(handoff, 1, 11, Sha(2),
+            ReviewClassification.Accepted, "Reviewed the exact handoff."), "classify"));
+        Assert.Equal(new[] { "agent:review", "human:review" },
+            OrchestrationReducer.ProjectLabels(state.Issues[7]));
+
+        state = reducer.Apply(state, Event(new Pause("Operator intervention is required."), "pause"));
+        Assert.Equal(new[] { "agent:blocked", "human:action-required" },
+            OrchestrationReducer.ProjectLabels(state.Issues[7]));
+    }
+
+    [Fact]
+    public void StaleNeedsHumanClassificationDoesNotMaskAnotherHold()
+    {
+        var issue = new IssueState
+        {
+            Phase = Phase.BLOCKED,
+            HoldReason = "Effect outcome is ambiguous.",
+            Review = new ReviewIdentity { Classification = ReviewClassification.NeedsHuman }
+        };
+        Assert.Equal(new[] { "agent:blocked", "human:action-required" },
+            OrchestrationReducer.ProjectLabels(issue));
+    }
+
+    [Fact]
+    public void ReconciliationReplacesPendingOldLabelProjectionWithoutChangingTheHold()
+    {
+        var reducer = Reducer();
+        var state = FinishReview(FinishCi(CompleteTask(Admitted(), 2), true, "green"),
+            ReviewClassification.NeedsHuman, "ambiguous");
+        state.Outbox["old-labels"] = new EffectIntent
+        {
+            Id = "old-labels", IssueNumber = 7, Generation = 1, Kind = EffectKind.ProjectLabels,
+            Status = DeliveryStatus.Pending, Labels = ["agent:blocked"]
+        };
+        var live = Live(state);
+        live.Issues[7].Labels = ["agent:blocked", "bug"];
+
+        var reconciled = reducer.Reconcile(state, live).State;
+
+        Assert.Equal(DeliveryStatus.Cancelled, reconciled.Outbox["old-labels"].Status);
+        Assert.Contains(reconciled.Outbox.Values, effect => effect.Kind == EffectKind.ProjectLabels &&
+            effect.Status == DeliveryStatus.Pending &&
+            effect.Labels.SequenceEqual(new[] { "agent:blocked", "human:classify-review" }));
+        Assert.Equal(Phase.BLOCKED, reconciled.Issues[7].Phase);
+        Assert.Equal(ReviewClassification.NeedsHuman, reconciled.Issues[7].Review!.Classification);
+    }
+
+    [Fact]
+    public void HistoricalUnknownReviewRetainsAdmissionWhenAnotherIssueBecomesReady()
+    {
+        var reducer = Reducer();
+        var state = FinishCi(CompleteTask(Admitted(), 2), true, "green");
+        state = reducer.Reconcile(state, Live(state)).State;
+        var review = state.Outbox.Values.Single(effect => effect.Kind == EffectKind.RequestReview);
+        state = reducer.MarkExecuting(state, review.Id, Now);
+        state = reducer.RecordOutcome(state, review.Id, new(DeliveryStatus.Unknown), Now);
+        state = reducer.Apply(state, Event(new Ready(), "new-issue", issue: 8));
+
+        state = reducer.Reconcile(state, Live(state)).State;
+
+        Assert.Equal(7, state.AdmittedIssue);
+        Assert.Equal(DeliveryStatus.Unknown, state.Outbox[review.Id].Status);
+        Assert.Equal(Phase.READY, state.Issues[8].Phase);
+        Assert.Empty(state.Issues[8].Tasks);
+    }
+
+    [Fact]
     public void BlockingRequiresNonemptyTypedFindingsAndAcceptedCannotHideFindings()
     {
         var state = FinishCi(CompleteTask(Admitted(), 2), true, "green");

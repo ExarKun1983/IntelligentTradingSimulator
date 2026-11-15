@@ -243,6 +243,7 @@ public sealed class GitHubHostIntegrationTests
         var fixture = new ApiFixture { LoseWriteResponse = true };
         fixture.Labels.Clear();
         fixture.Labels.Add("agent:blocked");
+        fixture.Labels.Add("human:action-required");
         fixture.State.Issues[7] = new IssueState { Number = 7, Phase = Phase.BLOCKED, ReactivationRequired = true };
         using var client = fixture.Client();
         var api = new GitHubRepositoryApi(client, "owner/repo", 1);
@@ -335,6 +336,8 @@ public sealed class GitHubHostIntegrationTests
         var fixture = new ApiFixture();
         fixture.Labels.Add("bug");
         fixture.Labels.Add("agent:review");
+        fixture.Labels.Add("human:review");
+        fixture.Labels.Add("human:personal-note");
         fixture.AddConcurrentLabel = true;
         using var client = fixture.Client();
         var adapter = new GitHubProjectionAdapter(new(client, "owner/repo", 1), 99, true);
@@ -345,9 +348,11 @@ public sealed class GitHubHostIntegrationTests
         var result = await adapter.ExecuteAsync(intent, default);
         Assert.Equal(DeliveryStatus.Succeeded, result.Status);
         Assert.Contains("bug", fixture.Labels);
+        Assert.Contains("human:personal-note", fixture.Labels);
         Assert.Contains("human-added-during-write", fixture.Labels);
         Assert.Contains("agent:working", fixture.Labels);
         Assert.DoesNotContain("agent:review", fixture.Labels);
+        Assert.DoesNotContain("human:review", fixture.Labels);
         Assert.DoesNotContain(fixture.Requests, request => request.Method == "PUT");
     }
 

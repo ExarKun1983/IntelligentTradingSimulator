@@ -60,6 +60,8 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
             (retiredTestIssue is not null && (testIssue != 237 || retiredTestIssue != 227)) ||
             (testIssue == 237 && retiredTestIssue != 227))
             throw new InvalidDataException("Bounded test mode requires one Issue and a repair-task cap of exactly one.");
+        if (testIssue is null && !Approved("ORCHESTRATION_MULTI_ISSUE_APPROVED"))
+            throw new InvalidOperationException("Multi-Issue orchestration has not been separately approved.");
         var activation = Approved("ORCHESTRATION_ACTIVATION_APPROVED");
         var credential = Approved("ORCHESTRATION_USER_TOKEN_VERIFIED") &&
             Approved("ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED");

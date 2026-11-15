@@ -2086,12 +2086,12 @@ contract uses **label-controlled initiation**, not a mandatory Start button.
 Implementation/testing approval is not activation approval. The legacy workflow
 remains disabled in GitHub; never restart it for comparison, shadow mode, or rollback.
 The replacement jobs are **conditionally gated, not unconditionally disabled**.
-The current main-workflow test guard is scoped to
-`ORCHESTRATION_TEST_ISSUE=237`, `ORCHESTRATION_RETIRED_TEST_ISSUE=227`, and
-`ORCHESTRATION_TEST_MAX_REPAIR_TASKS=1`. Issue #227 is retained historical
-state, not an active recovery target. This bounded fixture is additionally
-single-pass and does not authorize repair tasks; it is not the final multi-Issue
-production configuration.
+The workflow retains its bounded #265 guard. A separate multi-Issue route requires
+`ORCHESTRATION_MULTI_ISSUE_APPROVED=true` and all three bounded-test variables
+unset; normal execution also requires `ORCHESTRATION_ACTIVATION_APPROVED=true`.
+The live settings reader independently checks multi-Issue approval. Neither route
+is approval to enable a workflow or to change repository protection. Bounded
+test state and historical Issues are not fresh production state.
 The reconciler additionally requires its workflow definition to come from
 `refs/heads/master`; it does not use the event ref, which is not a branch ref
 for Issue events. Managed CI requires the configured `refs/tags/` ref.
@@ -2126,6 +2126,20 @@ The canonical phase projects the following labels:
 | `HUMAN_REVIEW` | `agent:review` | Human approval; never automatic merge |
 | `BLOCKED` | `agent:blocked` | Authorized decision; Resume cannot clear the hold |
 | `CLOSED` | No automatic-work label | Preserve terminal record |
+
+The bot also projects one informational human-action label alongside the stage:
+
+| Canonical state | Informational label |
+| --- | --- |
+| `BLOCKED`, current review `NeedsHuman` and classification hold | `human:classify-review` |
+| `HUMAN_REVIEW` | `human:review` |
+| Any other `BLOCKED` hold | `human:action-required` |
+
+These are not commands: adding or removing them cannot classify a review, clear
+a hold or start work. The bot repairs human edits to managed labels and preserves
+unrelated labels. Before enabling any profile that uses these projections,
+provision all three repository labels under a separately reviewed cutover;
+missing labels cause projection failure, not an inferred human decision.
 
 At `HUMAN_REVIEW`, ordinary comments are retained as feedback but do not grant
 permission to launch work. To send changes back, an authorized human uses
@@ -2481,11 +2495,11 @@ coding SHA.** The isolated workflow receives the completed task's final SHA as
 input, checks out exactly it with `persist-credentials: false`, verifies HEAD,
 then runs the repository-required restore/Release build/test commands. It grants
 only `contents: read`; it has no state writes, orchestration credentials or secret
-inputs. Its only trigger is `workflow_dispatch`. The original CI gate was limited
-to test Issue `227`; after the separately reviewed retest-gate change it must
-require Issue `237`, cap `1`, and the protected
-`refs/tags/agent-managed-ci-test-237-v1` equal to `ORCHESTRATION_CI_REF`.
-These are configuration-dependent gates, not a literal-false safety guarantee.
+inputs. Its only trigger is `workflow_dispatch`. Earlier bounded tests used
+Issue `227` and then Issue `237` with cap `1` and a dedicated protected CI tag.
+Those are historical examples; the current bounded workflow guard targets
+#265, and the separately approved multi-Issue route uses the configured protected
+CI tag. These are configuration-dependent gates, not a literal-false guarantee.
 
 Result correlation checks provider run/workflow/repository/path/event/revision,
 intent-derived display title and first attempt, plus the exact run's unique job
@@ -2714,7 +2728,59 @@ Bot-generated label/comment events normally do not retrigger Actions under the
 other ingress paths. **`workflow_dispatch` is an explicit exception**, so managed
 CI dispatch with `GITHUB_TOKEN` is supported without restoring PAT projections.
 
-#### Solo-maintainer activation guide (not performed)
+#### Multi-Issue preparation and separate cutover
+
+The multi-Issue route is opt-in, not an activation. Keep the main and managed-CI
+workflows disabled and `ORCHESTRATION_ACTIVATION_APPROVED=false` while reviewing
+and testing this change. Do not enable the legacy orchestrator. Before any
+separately approved cutover:
+
+1. Inspect the existing `agent-state` ref, its admission, continuation, leases,
+   pending effects and historical Issues. Do not bootstrap it again or replace
+   it. On 2026-11-15 it contained admitted #237 with an unknown
+   `RequestReview:237:1:task:237:1:1:1:1`; this exclusive uncertain effect blocks
+   new effects across Issues. Re-read state and GitHub before taking any action.
+   The audited `abandon-uncertain-review` procedure above requires a separate
+   human risk acknowledgement and fresh evidence. It does not assert that a
+   prior request was never sent, and never retries the POST. Keep the hold if
+   its guards fail. The old #227 and #237 records remain preserved.
+2. Review and merge the workflow changes, then provision the three `human:*`
+   labels above and verify all existing `agent:*` labels. Provisioning is a
+   separate repository operation; this change does not create labels.
+3. Verify task entitlement, enforced cost controls, the protected credential
+   environment, state-ref protection, trusted status publisher, required branch
+   context and independent final human approval. The prior PoC did not validate
+   the production required-status or branch-protection setup. Do not assert
+   verification merely to pass a guard.
+4. Pin `ORCHESTRATION_DEFINITION_SHA` to the reviewed master commit and use a
+   separately protected, immutable tag and matching SHA for managed CI. The
+   read-only diagnostic reports whether the configured lightweight tag resolves
+   to the configured CI SHA; independently verify its protection. Refresh the
+   definition pin after each reviewed master change, not per Issue.
+5. Set `ORCHESTRATION_MULTI_ISSUE_APPROVED=true` only with separate approval and
+   leave `ORCHESTRATION_TEST_ISSUE`, `ORCHESTRATION_RETIRED_TEST_ISSUE` and
+   `ORCHESTRATION_TEST_MAX_REPAIR_TASKS` unset. Do not mix the bounded and
+   multi-Issue routes. For an explicitly authorized abandonment recovery on
+   main state, these scope settings permit the operator-dispatched recovery-only
+   command while activation remains false; runtime recovery gates still apply.
+   Dispatch also requires the main workflow to be enabled temporarily, with
+   separate approval; disable it again afterward. This is not authorization to
+   abandon an uncertain request.
+6. Only after the unknown operation and every prerequisite are resolved, obtain
+   explicit activation approval, enable the reviewed workflows and set
+   `ORCHESTRATION_ACTIVATION_APPROVED=true` last. The authorized human adds
+   `agent:ready` to a new open Issue. Verify durable admission and the worker's
+   real task/CI/review evidence, not just a successful Actions job. Scheduled
+   wakes observe tracked work; they do not prove a missed initial label event
+   was delivered. Clean review still needs explicit classification, and merge
+   is always a separate human action.
+
+On rollback, set activation and managed routing false and disable the main and
+managed-CI workflows. Preserve state and remote operation identities; disabling
+the workflow does not cancel already launched tasks or resolve unknown effects.
+Do not reuse the PoC state or its task PRs as production state.
+
+#### Solo-maintainer activation guide (historical bounded examples)
 
 After the environment secret and canonical state are prepared, run **Agent credentials
 preflight (no live effects)** from Actions on `master`, supplying the numeric PAT-owner
@@ -2842,6 +2908,7 @@ entitlement, cost controls or repository protection must leave activation blocke
    | `ORCHESTRATION_TEST_ISSUE` | The single bounded test Issue. For the existing cleanup operation this remains `227`; only after its verified resolution and the reviewed retest-gate change set this to `237`. |
    | `ORCHESTRATION_RETIRED_TEST_ISSUE` | Leave unset for the #227 cleanup operation. Set to `227` only with retest Issue `237`; runtime verifies the exact durable retired-state evidence. |
    | `ORCHESTRATION_ACTIVATION_APPROVED` | Keep `false`; set `true` **last**, only at separately approved cutover after all prerequisites. |
+   | `ORCHESTRATION_MULTI_ISSUE_APPROVED` | Keep unset/false until the separately reviewed multi-Issue cutover or explicitly authorized main-state recovery; requires all bounded-test variables unset. |
    | `ORCHESTRATION_MANAGED_ROUTING_APPROVED` | Keep `false` until managed status/protection and unmanaged/manual-CI compatibility are verified; then separately approve `true` for ordinary CI's read-only router. |
 
    All booleans require the exact lowercase string `true`; missing/other values do
@@ -2946,10 +3013,10 @@ entitlement, cost controls or repository protection must leave activation blocke
    protect this new #237 tag.
 
    The reconciler must run from `master`, and its definition SHA must match the
-   reviewed merge commit. Removing test variables disables these jobs, rather
-   than activating production. These bounded-scope variables alone are not a
-   complete live configuration: all prerequisites, approvals, and definition
-   pins listed above remain mandatory.
+   reviewed merge commit. Removing test variables does not activate production
+   unless the separate multi-Issue approval and activation gates are also true.
+   These bounded-scope variables alone are not a complete live configuration:
+   all prerequisites, approvals, and definition pins listed above remain mandatory.
 7. **Approve cutover, then command work as yourself.** After the separate guard
    change/review, protected environment/state/tag, all attestations, and explicit
    approval, enable activation last. Add `agent:ready` to an open Issue as the
@@ -2962,8 +3029,8 @@ entitlement, cost controls or repository protection must leave activation blocke
    tickets, lease expiry and delayed/dropped/disabled schedules; guarded Resume
    is exceptional recovery, not a lifecycle override.
 8. **Rollback without forgetting operations.** Set activation and managed routing
-   false, disable the replacement and managed-CI workflows, and restore both
-   literal-false guards in a reviewed change; never enable legacy orchestration.
+   false, disable the replacement and managed-CI workflows, and revoke the
+   multi-Issue approval; never enable legacy orchestration.
    Cancel in-flight reconciler runs and remove/revoke the environment PAT if
    isolation is in doubt (changing a variable does not retract a running token).
    Inspect already-dispatched tasks/reviews/CI independently: cancellation or PAT

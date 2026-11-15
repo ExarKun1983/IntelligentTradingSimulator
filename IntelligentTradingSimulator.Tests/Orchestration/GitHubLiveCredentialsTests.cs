@@ -67,13 +67,17 @@ public sealed class GitHubLiveCredentialsTests
     public void TestWorkflowExposesSeparateCredentialsAndOnlyRequiredPermissions()
     {
         var root = FindRoot();
-        var workflow = File.ReadAllText(Path.Combine(root, ".github/workflows/agent-state-machine.yml"));
+        var workflow = File.ReadAllText(Path.Combine(root, ".github/workflows/agent-state-machine.yml")).Replace("\r\n", "\n");
         Assert.Contains("github.workflow_ref == format('{0}/.github/workflows/agent-state-machine.yml@refs/heads/master', github.repository)", workflow);
         Assert.DoesNotContain("github.ref == 'refs/heads/master'", workflow);
         Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_MULTI_ISSUE_APPROVED == 'true'", workflow);
         Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '265'", workflow);
         Assert.Contains("vars.ORCHESTRATION_RETIRED_TEST_ISSUE == ''", workflow);
         Assert.Contains("vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_MULTI_ISSUE_APPROVED == 'true' && vars.ORCHESTRATION_TEST_ISSUE == ''", workflow);
+        Assert.Contains("vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '' && vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == ''", workflow);
+        Assert.Contains("ORCHESTRATION_MULTI_ISSUE_APPROVED: ${{ vars.ORCHESTRATION_MULTI_ISSUE_APPROVED }}", workflow);
         Assert.Contains("GITHUB_TOKEN: ${{ github.token }}", workflow);
         Assert.Contains("ORCHESTRATION_USER_TOKEN: ${{ secrets.ORCHESTRATION_USER_TOKEN }}", workflow);
         Assert.Contains("ORCHESTRATION_TEST_ISSUE: ${{ vars.ORCHESTRATION_TEST_ISSUE }}", workflow);
@@ -83,19 +87,21 @@ public sealed class GitHubLiveCredentialsTests
         Assert.Contains("persist-credentials: false", workflow);
         var permissions = workflow.Split("permissions:\n")[1].Split("\njobs:")[0].Trim();
         Assert.Equal("contents: write\n  issues: write\n  pull-requests: write\n  actions: write\n  statuses: write", permissions);
-        var ci = File.ReadAllText(Path.Combine(root, ".github/workflows/agent-managed-ci.yml"));
+        var ci = File.ReadAllText(Path.Combine(root, ".github/workflows/agent-managed-ci.yml")).Replace("\r\n", "\n");
         Assert.Contains("github.ref == vars.ORCHESTRATION_CI_REF", ci);
         Assert.Contains("startsWith(github.ref, 'refs/tags/')", ci);
         Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true'", ci);
         Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '265'", ci);
         Assert.Contains("vars.ORCHESTRATION_RETIRED_TEST_ISSUE == ''", ci);
         Assert.Contains("vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'", ci);
+        Assert.Contains("vars.ORCHESTRATION_MULTI_ISSUE_APPROVED == 'true' && vars.ORCHESTRATION_TEST_ISSUE == ''", ci);
+        Assert.Contains("vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '' && vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == ''", ci);
     }
 
     [Fact]
     public void RecoveryWorkflowRequiresExplicitAcknowledgementForUncertainReviewAbandonment()
     {
-        var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-state-machine.yml"));
+        var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-state-machine.yml")).Replace("\r\n", "\n");
         Assert.Contains("abandon-uncertain-review", workflow);
         Assert.Contains("review_intent:", workflow);
         Assert.Contains("type: boolean", workflow);
@@ -148,12 +154,14 @@ public sealed class GitHubLiveCredentialsTests
     [Fact]
     public void GateDiagnosticsAreManualAndDoNotExposeLiveCapabilities()
     {
-        var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-gate-diagnostics.yml"));
+        var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-gate-diagnostics.yml")).Replace("\r\n", "\n");
         Assert.Contains("on:\n  workflow_dispatch:\n", workflow);
         Assert.Contains("permissions:\n  contents: read", workflow);
         Assert.Contains("timeout-minutes: 2", workflow);
         Assert.Contains("github.workflow_ref == format('{0}/.github/workflows/agent-gate-diagnostics.yml@refs/heads/master', github.repository)", workflow);
         Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_MULTI_ISSUE_APPROVED == 'true'", workflow);
+        Assert.Contains("MULTI_ISSUE_SCOPE_CLEAR", workflow);
         Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '265'", workflow);
         Assert.Contains("vars.ORCHESTRATION_RETIRED_TEST_ISSUE == ''", workflow);
         Assert.Contains("vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'", workflow);
@@ -164,6 +172,7 @@ public sealed class GitHubLiveCredentialsTests
         Assert.Contains("agent-managed-ci-test-265-v1", workflow);
         Assert.Contains("GH_TOKEN: ${{ github.token }}", workflow);
         Assert.Contains("CI_DEFINITION_SHA matches the new tag target", workflow);
+        Assert.Contains("Configured CI tag resolves directly to the configured CI definition", workflow);
         Assert.Contains("GITHUB_STEP_SUMMARY", workflow);
         Assert.DoesNotContain("if:", workflow);
         Assert.DoesNotContain("environment:", workflow);
@@ -353,6 +362,23 @@ public sealed class GitHubLiveCredentialsTests
     }
 
     [Theory]
+    [InlineData(null)]
+    [InlineData("false")]
+    public void MultiIssueExecutionAndRecoveryRequireSeparateApproval(string? approval)
+    {
+        var values = LiveSettingsValues();
+        if (approval is null) values.Remove("ORCHESTRATION_MULTI_ISSUE_APPROVED");
+        else values["ORCHESTRATION_MULTI_ISSUE_APPROVED"] = approval;
+
+        Assert.Throws<InvalidOperationException>(() => GitHubLiveSettings.Read(values.GetValueOrDefault));
+        Assert.Throws<InvalidOperationException>(() => GitHubLiveSettings.Read(values.GetValueOrDefault, recoveryOnly: true));
+
+        values["ORCHESTRATION_TEST_ISSUE"] = "265";
+        values["ORCHESTRATION_TEST_MAX_REPAIR_TASKS"] = "1";
+        Assert.Equal(265, GitHubLiveSettings.Read(values.GetValueOrDefault).TestIssue);
+    }
+
+    [Theory]
     [InlineData("abandon-uncertain-review", true)]
     [InlineData("pause", true)]
     [InlineData("resolve-task", true)]
@@ -487,7 +513,7 @@ public sealed class GitHubLiveCredentialsTests
         };
         foreach (var name in new[]
         {
-            "ORCHESTRATION_ACTIVATION_APPROVED", "ORCHESTRATION_USER_TOKEN_VERIFIED",
+            "ORCHESTRATION_ACTIVATION_APPROVED", "ORCHESTRATION_MULTI_ISSUE_APPROVED", "ORCHESTRATION_USER_TOKEN_VERIFIED",
             "ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED",
             "ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED", "ORCHESTRATION_TASK_ENTITLEMENT_VERIFIED",
             "ORCHESTRATION_TRUSTED_DEFINITION_VERIFIED", "ORCHESTRATION_REVIEW_POLICY_VERIFIED",

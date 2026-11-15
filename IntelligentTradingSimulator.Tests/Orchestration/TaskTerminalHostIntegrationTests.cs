@@ -333,9 +333,9 @@ public sealed class TaskTerminalHostIntegrationTests
                 case "/repos/owner/repo/collaborators/maintainer/permission":
                     response = new { permission = Permission, user = new { id = 55 } }; break;
                 case "/repos/owner/repo/issues/7":
-                    response = new { id = 70, number = 7, state = "open", labels = new[] { new { name = "agent:blocked" } } }; break;
+                    response = new { id = 70, number = 7, state = "open", labels = new[] { new { name = "agent:blocked" }, new { name = "human:action-required" } } }; break;
                 case "/repos/owner/repo/issues/7/labels":
-                    response = new[] { new { name = "agent:blocked" } }; break;
+                    response = new[] { new { name = "agent:blocked" }, new { name = "human:action-required" } }; break;
                 case "/repos/owner/repo/issues/7/comments":
                     response = new[] { new { id = 101, body = StatusProjection.Render(store.State.Issues[7]),
                         updated_at = Now, user = new { id = 99, type = "Bot", login = "projection" } } }; break;
