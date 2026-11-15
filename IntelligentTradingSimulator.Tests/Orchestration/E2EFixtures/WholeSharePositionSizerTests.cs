@@ -8,6 +8,17 @@ public class WholeSharePositionSizerTests
         Assert.Equal(4m, WholeSharePositionSizer.Calculate(100m, 25m));
     }
 
+    [Theory]
+    [InlineData(100, 30, 3)]
+    [InlineData(20, 30, 0)]
+    public void CalculateReturnsAffordableWholeQuantity(decimal budget, decimal unitPrice, decimal expected)
+    {
+        var quantity = WholeSharePositionSizer.Calculate(budget, unitPrice);
+
+        Assert.Equal(expected, quantity);
+        Assert.True(quantity * unitPrice <= budget);
+    }
+
     [Fact]
     public void CalculateReturnsZeroForZeroBudget()
     {
