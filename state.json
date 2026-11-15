@@ -1,0 +1,14 @@
+{
+  "SchemaVersion": 1,
+  "Generation": 1,
+  "Version": 0,
+  "Repository": "ExarKun1983/IntelligentTradingSimulator",
+  "IsolatedTestManifestDigest": "5C9C636B7336EE3E01480A38256D206046545E0FC71D7ABDE9C09F1018021549",
+  "LastEventId": null,
+  "AdmittedIssue": null,
+  "WorkerLease": null,
+  "Continuation": null,
+  "Issues": {},
+  "Inbox": {},
+  "Outbox": {}
+}
