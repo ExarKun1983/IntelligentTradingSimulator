@@ -1,4 +1,4 @@
-name: Agent state machine (not activated)
+name: Agent state machine (opt-in)
 
 on:
   issues:
@@ -92,9 +92,14 @@ permissions:
 
 jobs:
   reconcile:
-    # Temporary opt-in for the single reviewed test Issue; not production cutover.
-    # Audited abandonment is recovery-only and separately operator-dispatched; it never enables task execution.
-    if: ${{ github.workflow_ref == format('{0}/.github/workflows/agent-state-machine.yml@refs/heads/master', github.repository) && (vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.operation == 'abandon-uncertain-review')) && vars.ORCHESTRATION_TEST_ISSUE == '265' && vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '' && vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1' }}
+    # Multi-Issue execution requires a separate cutover approval and no bounded-test variables.
+    # Abandonment remains an explicit recovery-only command; it never enables task execution.
+    if: >-
+      ${{ github.workflow_ref == format('{0}/.github/workflows/agent-state-machine.yml@refs/heads/master', github.repository) &&
+          (vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.operation == 'abandon-uncertain-review')) &&
+          ((vars.ORCHESTRATION_TEST_ISSUE == '265' && vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '' && vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1') ||
+           (vars.ORCHESTRATION_MULTI_ISSUE_APPROVED == 'true' && vars.ORCHESTRATION_TEST_ISSUE == '' &&
+            vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '' && vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     environment: agent-orchestration
@@ -116,6 +121,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           ORCHESTRATION_USER_TOKEN: ${{ secrets.ORCHESTRATION_USER_TOKEN }}
           ORCHESTRATION_ACTIVATION_APPROVED: ${{ vars.ORCHESTRATION_ACTIVATION_APPROVED }}
+          ORCHESTRATION_MULTI_ISSUE_APPROVED: ${{ vars.ORCHESTRATION_MULTI_ISSUE_APPROVED }}
           ORCHESTRATION_USER_TOKEN_VERIFIED: ${{ vars.ORCHESTRATION_USER_TOKEN_VERIFIED }}
           ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED: ${{ vars.ORCHESTRATION_PROTECTED_CREDENTIAL_ENVIRONMENT_VERIFIED }}
           ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED: ${{ vars.ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED }}

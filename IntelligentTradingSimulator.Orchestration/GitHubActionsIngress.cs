@@ -17,7 +17,8 @@ public sealed record IngressEvidence(
 public static class GitHubActionsIngress
 {
     private static readonly HashSet<string> StageLabels =
-        ["agent:working", "agent:ci", "agent:ai-review", "agent:review", "agent:blocked"];
+        ["agent:working", "agent:ci", "agent:ai-review", "agent:review", "agent:blocked",
+         "human:classify-review", "human:review", "human:action-required"];
 
     public static OrchestrationEvent? PrepareEvent(
         JsonElement payload, string eventName, string runId, IngressEvidence evidence,

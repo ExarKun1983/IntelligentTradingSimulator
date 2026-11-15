@@ -420,6 +420,8 @@ public sealed class GitHubCiIntegrationTests
         Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '265'", workflow);
         Assert.Contains("vars.ORCHESTRATION_RETIRED_TEST_ISSUE == ''", workflow);
         Assert.Contains("vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_MULTI_ISSUE_APPROVED == 'true' && vars.ORCHESTRATION_TEST_ISSUE == ''", workflow);
+        Assert.Contains("vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '' && vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == ''", workflow);
         Assert.Contains("github.ref == vars.ORCHESTRATION_CI_REF", workflow);
         Assert.Contains("startsWith(github.ref, 'refs/tags/')", workflow);
         Assert.Contains("ref: ${{ inputs.sha }}", workflow);
