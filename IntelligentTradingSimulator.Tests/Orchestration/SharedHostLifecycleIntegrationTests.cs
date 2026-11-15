@@ -695,9 +695,18 @@ public sealed class SharedHostLifecycleIntegrationTests
                     id = 601, pull_request_review_id = 501, user = ReviewActor,
                     pull_request_url = "https://api.github.com/repos/owner/repo/pulls/17",
                     commit_id = reviewShas[0], original_commit_id = reviewShas[0],
-                    path = "fixture.txt", line = 3, side = "RIGHT", body = "The total must be 11, not 10.",
+                    path = "fixture.txt", body = "The total must be 11, not 10.",
                     created_at = Now.AddMinutes(3), updated_at = Now.AddMinutes(3)
                 } } : Array.Empty<object>();
+            else if (path == prefix + "pulls/comments/601")
+                response = new
+                {
+                    id = 601, pull_request_review_id = 501, user = ReviewActor,
+                    pull_request_url = "https://api.github.com/repos/owner/repo/pulls/17",
+                    commit_id = reviewShas[0], original_commit_id = reviewShas[0],
+                    path = "fixture.txt", line = 3, side = "RIGHT", body = "The total must be 11, not 10.",
+                    created_at = Now.AddMinutes(3), updated_at = Now.AddMinutes(3)
+                };
             else if (path.StartsWith(prefix + "statuses/"))
             {
                 using var payload = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));

@@ -944,6 +944,9 @@ public sealed class GitHubReviewIntegrationTests
             Assert.Equal("copilot-review-comment:201", finding.Id);
             Assert.Equal("source.cs:3\nprecise comment evidence", finding.Description);
             Assert.Equal("https://github.com/owner/repo/pull/17#discussion_r201", finding.Evidence);
+            Assert.Contains(handler.Requests, request => request == "GET /repos/owner/repo/pulls/comments/201");
+            using var evidence = JsonDocument.Parse(result.SourceEvidence);
+            Assert.Equal(3, evidence.RootElement.GetProperty("observedComments")[0].GetProperty("line").GetInt32());
             var reducer = new OrchestrationReducer(new Allow());
             store.State = reducer.Apply(store.State, message);
             Assert.Equal(Phase.FIX_PENDING, store.State.Issues[7].Phase);
@@ -953,6 +956,27 @@ public sealed class GitHubReviewIntegrationTests
             Assert.Equal(applied, StateJson.Serialize(reducer.Apply(store.State, message)));
         }
         else Assert.Empty(result.Findings);
+        Assert.Equal(1, handler.Posts);
+    }
+
+    [Fact]
+    public async Task FailedCommentDetailReadCannotClassifyOrRequestAnotherReview()
+    {
+        var store = new Store(Eligible());
+        var handler = new Api();
+        using var client = handler.Client();
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(),
+            Approved with { AutoRepairFindings = true }, new CandidateValidator());
+        var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
+        handler.HasOutput = true;
+        handler.Corruption = "detail-read";
+        var original = StateJson.Serialize(store.State);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            adapter.ReadEventAsync(store.State, store.State.Issues[7], default));
+
+        Assert.Equal(original, StateJson.Serialize(store.State));
         Assert.Equal(1, handler.Posts);
     }
 
@@ -1040,6 +1064,10 @@ public sealed class GitHubReviewIntegrationTests
     [InlineData("comment-review", true)]
     [InlineData("comment-actor", true)]
     [InlineData("comment-url", true)]
+    [InlineData("detail-id", true)]
+    [InlineData("detail-review", true)]
+    [InlineData("detail-actor", true)]
+    [InlineData("detail-url", true)]
     public async Task MalformedResultIdentityFailsWithoutPromotingOrRequestingAgain(string corruption, bool autoRepair)
     {
         var store = new Store(Eligible());
@@ -1611,10 +1639,14 @@ public sealed class GitHubReviewIntegrationTests
                 else response = Corruption == "no-reviews" ? [] : Paginated ? HasOutput ? new[] { Review(false) } : [] :
                     HasOutput ? new[] { Review(true), Review(false) } : new[] { Review(true) };
             }
-            else if (path.EndsWith("/comments"))
+            else if (path.EndsWith("/comments") || path == "/repos/owner/repo/pulls/comments/201")
             {
-                var comment = new { id = 201, pull_request_review_id = Corruption == "comment-review" ? 999 : 101,
-                    user = Actor(Corruption == "comment-actor"),
+                var detail = path == "/repos/owner/repo/pulls/comments/201";
+                if (detail && Corruption == "detail-read")
+                    throw new HttpRequestException("Injected comment detail read failure.");
+                var comment = new { id = detail && Corruption == "detail-id" ? 202 : 201,
+                    pull_request_review_id = Corruption == "comment-review" || detail && Corruption == "detail-review" ? 999 : 101,
+                    user = Actor(Corruption == "comment-actor" || detail && Corruption == "detail-actor"),
                     body = Corruption == "comment-empty" ? "" : "precise comment evidence", path = "source.cs",
                     commit_id = Corruption == "comment-sha" ? new string('b', 40) : Sha,
                     original_commit_id = Corruption == "comment-original-sha" ? new string('b', 40) : Sha,
@@ -1624,9 +1656,13 @@ public sealed class GitHubReviewIntegrationTests
                     created_at = Corruption == "comment-before-request" ? Now.AddDays(-1) :
                         Corruption == "comment-after-submission" ? Now.AddSeconds(2) : Now,
                     updated_at = Corruption == "comment-edited" ? Now.AddSeconds(1) : Now,
-                    pull_request_url = Corruption == "comment-url" ? "https://api.github.com/repos/other/repo/pulls/17" : PullUrl };
-                response = Corruption == "empty-comments" ? [] :
-                    Corruption == "duplicate-comment" ? new[] { comment, comment } : new[] { comment };
+                    pull_request_url = Corruption == "comment-url" || detail && Corruption == "detail-url"
+                        ? "https://api.github.com/repos/other/repo/pulls/17" : PullUrl };
+                var listed = JsonSerializer.SerializeToElement(comment).EnumerateObject()
+                    .Where(property => property.Name is not ("line" or "side"))
+                    .ToDictionary(property => property.Name, property => property.Value.Clone());
+                response = detail ? comment : Corruption == "empty-comments" ? Array.Empty<object>() :
+                    Corruption == "duplicate-comment" ? new[] { listed, listed } : new[] { listed };
             }
             else throw new InvalidOperationException("Unexpected review fixture route");
             var status = request.Method == HttpMethod.Post && path.EndsWith("/copilot-code-review", StringComparison.Ordinal)

@@ -1616,7 +1616,12 @@ request (not a `409` already-pending response), exactly one new submitted Copilo
 code review on the task's current SHA, and fresh, unedited top-level inline
 comments on right-side current lines can produce `Blocking` automatically.
 Reviewer identity, review/comment ownership, PR URL, current/original commit,
-timestamps, completed coding and green CI are checked. Every eligible inline
+timestamps, completed coding and green CI are checked. The review-scoped comment
+list can omit current `line`/`side`, so the opt-in adapter retrieves each comment
+via `GET /repos/{owner}/{repo}/pulls/comments/{comment_id}` and revalidates its
+ID, parent review, PR and author before classifying the detailed evidence.
+Missing or outdated detail metadata remains human-gated; a failed detail read
+or mismatched identity cannot authorize repair. Every eligible inline
 comment is treated as a repair obligation, including suggestions; this is an
 operator-selected policy, not semantic severity detection or proof of provider
 request-round correlation. The stable finding ID is

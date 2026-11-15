@@ -294,13 +294,20 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
             var entries = await api.ListAsync($"pulls/{number}/reviews/{id}/comments", token);
             foreach (var entry in entries)
             {
-                if (entry.GetProperty("id").GetInt64() <= 0 || entry.GetProperty("pull_request_review_id").GetInt64() != id ||
-                    entry.GetProperty("pull_request_url").GetString() != $"https://api.github.com/repos/{api.Repository}/pulls/{number}" ||
-                    !ActorMatches(entry.GetProperty("user"), boundary))
-                    throw new InvalidDataException("Review comment identity mismatch.");
-                comments.Add(entry);
-                if (comments.Count > OrchestrationReducer.MaximumIndexEntries)
+                ValidateCommentIdentity(entry, id, number, boundary);
+                if (comments.Count >= OrchestrationReducer.MaximumIndexEntries)
                     throw new InvalidDataException("Review evidence capacity exceeded.");
+                if (approval is { AllowsReviews: true, AutoRepairFindings: true })
+                {
+                    // The review-scoped list can omit current line/side metadata.
+                    var commentId = entry.GetProperty("id").GetInt64();
+                    using var detail = await api.GetAsync($"pulls/comments/{commentId}", token);
+                    ValidateCommentIdentity(detail.RootElement, id, number, boundary);
+                    if (detail.RootElement.GetProperty("id").GetInt64() != commentId)
+                        throw new InvalidDataException("Review comment detail identity mismatch.");
+                    comments.Add(detail.RootElement.Clone());
+                }
+                else comments.Add(entry);
             }
         }
         var findings = ReadAutomaticFindings(issue, boundary, observed, comments, number);
@@ -320,6 +327,16 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
                 boundary.ReviewerNodeId, "Bot"), boundary.PreparedAt,
             new ReviewResult(Receipt(intent.Id), review.TaskId, review.Round, number, review.Sha,
                 classification, findings, [], evidence));
+    }
+
+    private void ValidateCommentIdentity(JsonElement comment, long reviewId, int pullNumber,
+        ReviewRequestBoundary boundary)
+    {
+        if (comment.GetProperty("id").GetInt64() <= 0 ||
+            comment.GetProperty("pull_request_review_id").GetInt64() != reviewId ||
+            comment.GetProperty("pull_request_url").GetString() != $"https://api.github.com/repos/{api.Repository}/pulls/{pullNumber}" ||
+            !ActorMatches(comment.GetProperty("user"), boundary))
+            throw new InvalidDataException("Review comment identity mismatch.");
     }
 
     private List<Finding> ReadAutomaticFindings(IssueState issue, ReviewRequestBoundary boundary,
