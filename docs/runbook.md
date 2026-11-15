@@ -2140,6 +2140,9 @@ a hold or start work. The bot repairs human edits to managed labels and preserve
 unrelated labels. Before enabling any profile that uses these projections,
 provision all three repository labels under a separately reviewed cutover;
 missing labels cause projection failure, not an inferred human decision.
+Current label and status projections for settled Issues can be delivered while
+another Issue holds admission; stale projections are not executed. An uncertain
+projection still blocks new effects until lookup-only recovery resolves it.
 
 At `HUMAN_REVIEW`, ordinary comments are retained as feedback but do not grant
 permission to launch work. To send changes back, an authorized human uses

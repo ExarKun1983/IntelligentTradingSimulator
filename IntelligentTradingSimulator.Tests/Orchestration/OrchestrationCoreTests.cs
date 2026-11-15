@@ -902,6 +902,58 @@ public sealed class OrchestrationCoreTests
         Assert.Empty(state.Issues[8].Tasks);
     }
 
+    [Theory]
+    [InlineData("active")]
+    [InlineData("generation")]
+    [InlineData("labels")]
+    [InlineData("status")]
+    public void OtherAdmissionRejectsNonSettledOrStaleProjections(string mismatch)
+    {
+        var state = RepositoryState.Create("owner/repo");
+        var issue = new IssueState { Number = 7, Phase = Phase.HUMAN_REVIEW };
+        state.Issues[7] = issue;
+        state.Issues[8] = new IssueState { Number = 8, Phase = Phase.CODING };
+        state.AdmittedIssue = 8;
+        var effect = new EffectIntent
+        {
+            Id = "projection", IssueNumber = 7, Generation = 1, Status = DeliveryStatus.Pending,
+            Kind = mismatch == "status" ? EffectKind.ProjectStatus : EffectKind.ProjectLabels,
+            Labels = OrchestrationReducer.ProjectLabels(issue).ToList(),
+            StatusBody = StatusProjection.Render(issue)
+        };
+        if (mismatch == "active") issue.Phase = Phase.CODING;
+        if (mismatch == "generation") effect.Generation++;
+        if (mismatch == "labels") effect.Labels = ["agent:blocked"];
+        if (mismatch == "status") effect.StatusBody = "stale";
+        state.Outbox[effect.Id] = effect;
+
+        Assert.Throws<InvalidOperationException>(() => Reducer().MarkExecuting(state, effect.Id, Now));
+        Assert.Equal(8, state.AdmittedIssue);
+    }
+
+    [Fact]
+    public void UnknownSettledProjectionDoesNotTransferAnotherIssueAdmission()
+    {
+        var state = RepositoryState.Create("owner/repo");
+        var issue = new IssueState { Number = 7, Phase = Phase.HUMAN_REVIEW };
+        state.Issues[7] = issue;
+        state.Issues[8] = new IssueState { Number = 8, Phase = Phase.CODING };
+        state.AdmittedIssue = 8;
+        state.Outbox["projection"] = new EffectIntent
+        {
+            Id = "projection", IssueNumber = 7, Generation = 1, Status = DeliveryStatus.Pending,
+            Kind = EffectKind.ProjectLabels, Labels = OrchestrationReducer.ProjectLabels(issue).ToList()
+        };
+
+        var reducer = Reducer();
+        state = reducer.MarkExecuting(state, "projection", Now);
+        state = reducer.RecordOutcome(state, "projection", new(DeliveryStatus.Unknown), Now);
+
+        Assert.Equal(8, state.AdmittedIssue);
+        Assert.True(OrchestrationReconciler.IsExclusiveUncertain(state.Outbox["projection"]));
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+    }
+
     [Fact]
     public void BlockingRequiresNonemptyTypedFindingsAndAcceptedCannotHideFindings()
     {

@@ -245,8 +245,8 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                 issue.HeadSha == live.HeadSha &&
                 (intent.RequiredStatus?.State != "success" || !live.Closed);
         if (intent.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus)
-            return (state.AdmittedIssue == issue.Number || state.AdmittedIssue is null &&
-                    issue.Phase is Phase.HUMAN_REVIEW or Phase.BLOCKED or Phase.CLOSED) &&
+            return (state.AdmittedIssue == issue.Number ||
+                    OrchestrationReducer.IsCurrentSettledProjection(issue, intent)) &&
                 (intent.Kind == EffectKind.ProjectLabels
                     ? intent.Labels.SequenceEqual(OrchestrationReducer.ProjectLabels(issue))
                     : intent.StatusBody == StatusProjection.Render(issue));
