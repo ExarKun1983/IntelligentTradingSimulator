@@ -465,6 +465,26 @@ public sealed class GitHubRequiredStatusTests
     }
 
     [Fact]
+    public async Task ManualMergeGateStillRequiresTrustedPublisherAndPublishesOnlyCanonicalStatus()
+    {
+        var approval = Approved with { RequiredContextVerified = false, ManualMergeGateApproved = true };
+        var store = new Store(Planned());
+        var api = new Api();
+        using var client = api.Client();
+        var adapter = new GitHubRequiredStatusAdapter(new(client, "owner/repo", 1), store, Publisher, approval, new Clock());
+
+        var result = await adapter.ExecuteAsync(Intent(store.Value), default);
+
+        Assert.Equal(DeliveryStatus.Succeeded, result.Status);
+        Assert.Equal(1, api.Posts);
+        Assert.Equal("success", JsonDocument.Parse(api.Body!).RootElement.GetProperty("state").GetString());
+        Assert.False((approval with { TrustedPublisherVerified = false }).AllowsPublication);
+        Assert.False((approval with { CredentialActorVerified = false }).AllowsPublication);
+        Assert.False((approval with { ActivationApproved = false }).AllowsPublication);
+        Assert.False((approval with { NoAdditionalChargesVerified = false }).AllowsPublication);
+    }
+
+    [Fact]
     public async Task ConcurrentPublishersCannotCreateTwice()
     {
         var store = new Store(Planned());

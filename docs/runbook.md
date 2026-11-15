@@ -2461,8 +2461,9 @@ polling without preventing shared closure/head reconciliation. Full automatic
 approval/repair remains blocked pending either a supported trustworthy round and
 classification contract or authorized human classification. CLI and workflow
 execution require explicit runtime approvals; this library wiring cannot resolve the separate
-task-final-SHA blocker. Required-status publication, guarded push routing and
-cross-invocation wake-up wiring are implemented below, still default-disabled.
+task-final-SHA blocker. Required-status publication, the read-only push-routing
+command and cross-invocation wake-up wiring are implemented below. The ordinary
+CI workflow does not use the routing command in the interim mode.
 
 #### Managed exact-SHA CI implementation (conditionally gated)
 
@@ -2658,23 +2659,72 @@ An unresolvable status create or conflicting writer requires human inspection/
 correction of the GitHub context before reactivation; canonical state never promotes
 from a remote status. No exactly-once or atomic branch-protection guarantee is claimed.
 
-At cutover the maintainer must require `Agent managed CI` independently of the
-ordinary Actions `Build and test` check, retain human review approval, and verify
-trusted publisher permissions/provenance. A context name alone does not enforce
-the expected REST creator; other permitted writers must not spoof it. These
-repository/credential settings remain unmodified and unverified.
+**Branch-protection blocker:** `Agent managed CI` is currently published only for
+tracked Issues. Requiring it on the target branch would also require it for ordinary
+PRs, which have no publisher for this context. Do not configure this branch-wide
+requirement until a separately reviewed solution proves ordinary-PR compatibility
+without weakening the managed exact-head gate. A context name alone does not
+enforce the expected REST creator; other permitted writers must not spoof it.
 
-The ordinary CI workflow's new read-only route is disabled unless explicitly
-approved. It checks out only the reviewed orchestration revision, not PR code,
-before reading canonical state with a read-only Actions token. The command verifies
-numeric repository/PR identities and independently fetches the live head; labels
-and webhook head alone never establish ownership. Verified owned intermediate
-pushes and completed-head drift defer ordinary full CI to the managed completion
-gate/reconciliation; canonical head lag does not cause intermediate full CI.
-Unmanaged PRs, forks and manual/default-branch runs preserve ordinary CI. Missing
-canonical state or failed approved routing must stop rather than guess ownership.
-Skipped ordinary build jobs are not managed green proof; only the exact saved
-managed run can authorize lifecycle progress.
+An ordinary CI success or a `run_full_ci=true` routing decision is **not** proof
+that a PR or SHA is unmanaged. Agent-created PRs can exist before their canonical
+mapping is saved, and tracked Issues can retain a PR after admission is released.
+Commit statuses are scoped to a SHA rather than a PR; a previous success on a
+reused SHA and concurrent or late status writes must also be considered. A safe
+design must fail closed on ambiguous ownership, independently verify the live
+PR/head and CI evidence, and address races between classification, status
+publication and managed ownership. It must not execute untrusted PR code with
+status-write credentials. Waiting while ownership is ambiguous is acceptable;
+publishing ordinary success as a fallback is not.
+
+The ordinary `CI` workflow runs `Build and test` for every PR targeting `master`,
+including managed PRs, and does not publish managed statuses. The previous
+read-only routing command remains available for diagnostics but is not connected
+to that workflow; `ORCHESTRATION_MANAGED_ROUTING_APPROVED` cannot skip ordinary CI.
+This intentionally increases Actions usage. A successful ordinary CI run is not
+managed green proof; only the exact saved managed run can authorize lifecycle
+progress.
+
+##### Interim human merge gate
+
+The separately opt-in `ORCHESTRATION_MANUAL_MERGE_GATE_APPROVED=true` permits
+the existing managed-status publisher without claiming that the context is
+required by branch protection. It does not activate the system, verify other
+prerequisites, grant merge permission, or replace `Agent managed CI` with an
+ordinary-CI result. Keep it unset/false unless the human owner has accepted this
+interim process and separately approved activation. Cost controls must still be
+verified for both ordinary and managed runs.
+
+For **every managed PR**, immediately before human approval and merge:
+
+1. Verify the open PR's live head SHA and successful ordinary `Build and test`;
+   retain independent human review and do not enable automatic merge.
+2. Read the current canonical Issue state and verify its PR and head match the
+   live PR, phase is `HUMAN_REVIEW`, the review is explicitly `Accepted`, and
+   the active completed task, green managed CI run and review all refer to the
+   same task, round and head. Check the managed CI run and resolved review
+   findings, not just a label, comment or a green ordinary CI.
+3. Check that the latest `Agent managed CI` status on that SHA is success from
+   the trusted publisher, and that there is no hold other than the expected
+   final-approval hold, pending feedback or uncertain status effect. If evidence
+   is missing, changed or ambiguous, do not merge. Re-read the live head and
+   canonical state immediately before merging; any change requires a fresh review.
+
+The following read-only commands show the live PR and the canonical Issue record.
+Set `REPO`, `ISSUE`, `PR`, and `SHA` to the verified repository, Issue number,
+PR number, and current live PR head. Inspect the corresponding managed CI run,
+outbox intent and review evidence as well; these commands alone do not approve a PR.
+
+```bash
+gh pr view "$PR" --repo "$REPO" --json state,baseRefName,headRefOid,reviewDecision,statusCheckRollup
+gh api "repos/$REPO/contents/state.json?ref=agent-state" --jq .content |
+  base64 --decode | jq --arg issue "$ISSUE" '{Repository, Version, Issue: .Issues[$issue]}'
+gh api "repos/$REPO/commits/$SHA/status" --jq '{sha, statuses: [.statuses[] | select(.context == "Agent managed CI")]}'
+```
+
+This is a manual operational control, **not an atomic or branch-enforced
+managed gate**. A push, feedback, or late status write can race a human check.
+Only the human decides whether to merge; the orchestrator never merges.
 
 #### Split-credential contracts and permissions
 
@@ -2754,7 +2804,11 @@ separately approved cutover:
    environment, state-ref protection, trusted status publisher, required branch
    context and independent final human approval. The prior PoC did not validate
    the production required-status or branch-protection setup. Do not assert
-   verification merely to pass a guard.
+   verification merely to pass a guard. Resolve the ordinary-PR compatibility
+   blocker above before making the managed context a branch-wide requirement;
+   the separately approved interim manual gate is not such a resolution.
+   Independently verify that ordinary CI is enabled; enabling any workflow or
+   changing branch protection still requires separate approval.
 4. Pin `ORCHESTRATION_DEFINITION_SHA` to the reviewed master commit and use a
    separately protected, immutable tag and matching SHA for managed CI. The
    read-only diagnostic reports whether the configured lightweight tag resolves
@@ -2877,8 +2931,8 @@ entitlement, cost controls or repository protection must leave activation blocke
    updates/deletion/bypass; verify the resolved commit, not only an annotated tag
    object's ID. Never retag to repair drift: review a new tag/revision.
 6. **Set every variable below, initially leaving activation/routing false.**
-   Put shared values in repository Actions variables (ordinary CI routing also
-   reads them); avoid conflicting environment overrides. Obtain numeric IDs with
+   Put shared values in repository Actions variables; avoid conflicting
+   environment overrides. Obtain numeric IDs with
    an operator's read-only API session:
 
    ```bash
@@ -2907,12 +2961,13 @@ entitlement, cost controls or repository protection must leave activation blocke
    | `ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED` | `true` only after automatic Copilot reviews/new-push re-reviews are disabled to prevent duplicate untracked reviews. |
    | `ORCHESTRATION_TRUSTED_CI_VERIFIED` | `true` only after exact-SHA checkout/test steps and immutable executable CI tag are verified. |
    | `ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED` | `true` only after workflow-token bot publisher permissions/provenance are checked; runtime verifies its authenticated ID. |
-   | `ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED` | Production: `true` only after branch protection requires `Agent managed CI` and independent human final approval. For this single-pass test, leave unset/false; status publication is disabled and the test PR must remain unmerged. |
+   | `ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED` | `true` only after branch protection requires `Agent managed CI` and independent human final approval. Leave false for the interim manual gate; never claim protection exists merely to enable publication. |
+   | `ORCHESTRATION_MANUAL_MERGE_GATE_APPROVED` | Keep unset/false unless the human owner separately approves the interim human merge gate above. It permits managed-status publication without claiming branch protection, but requires all other publication and activation prerequisites. |
    | `ORCHESTRATION_TEST_ISSUE` | The single bounded test Issue. For the existing cleanup operation this remains `227`; only after its verified resolution and the reviewed retest-gate change set this to `237`. |
    | `ORCHESTRATION_RETIRED_TEST_ISSUE` | Leave unset for the #227 cleanup operation. Set to `227` only with retest Issue `237`; runtime verifies the exact durable retired-state evidence. |
    | `ORCHESTRATION_ACTIVATION_APPROVED` | Keep `false`; set `true` **last**, only at separately approved cutover after all prerequisites. |
    | `ORCHESTRATION_MULTI_ISSUE_APPROVED` | Keep unset/false until the separately reviewed multi-Issue cutover or explicitly authorized main-state recovery; requires all bounded-test variables unset. |
-   | `ORCHESTRATION_MANAGED_ROUTING_APPROVED` | Keep `false` until managed status/protection and unmanaged/manual-CI compatibility are verified; then separately approve `true` for ordinary CI's read-only router. |
+   | `ORCHESTRATION_MANAGED_ROUTING_APPROVED` | Keep `false`; the ordinary CI workflow no longer uses the router in the interim mode. |
 
    All booleans require the exact lowercase string `true`; missing/other values do
    not attest approval. `GITHUB_REPOSITORY`, `GITHUB_REPOSITORY_ID`, event path/name
@@ -2972,10 +3027,11 @@ entitlement, cost controls or repository protection must leave activation blocke
    CI. A failing CI stops immediately; feedback or review findings requiring repair
    also stop instead of creating any repair task. Reactivation is rejected.
    The single-pass limits survive replay, Resume, and removal of test variables.
-   If `ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED` is unset/false in this bounded
+   If both `ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED` and
+   `ORCHESTRATION_MANUAL_MERGE_GATE_APPROVED` are unset/false in this bounded
    test mode, required-status publication is disabled. This is acceptable only
-   because the test PR must not be merged; production still requires the verified
-   protected status context before activation.
+   because the test PR must not be merged. Production requires either verified
+   protected status or the separately approved interim manual gate.
    The cap variable remains `1` for configuration compatibility, but single-pass
    mode is stricter and permits no repairs. Remove both variables immediately
    after the test and leave activation false.
@@ -3040,8 +3096,8 @@ entitlement, cost controls or repository protection must leave activation blocke
    revocation does not prove remote termination. Preserve `agent-state`, receipts,
    generations, leases, uncertain effects and human holds; never reset/force-push
    state to retry. Check the exact-SHA required status for stale success and require
-   authorized correction/human review before any merge. Ordinary CI resumes with
-   routing disabled. Reconcile saved remote identities lookup-only, verify
+   authorized correction/human review before any merge. Ordinary CI runs when its
+   workflow is enabled, independently of managed routing. Reconcile saved remote identities lookup-only, verify
    quiescence, then obtain fresh approval before reactivation.
 
 #### Verified API contracts versus activation prerequisites
@@ -3057,7 +3113,7 @@ this account's access, credentials, entitlements, policy or spending configurati
 | Review request | [Requested reviewers REST](https://docs.github.com/en/rest/pulls/review-requests#request-reviewers-for-a-pull-request) and [Copilot review guide](https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/copilot-code-review) document `copilot-pull-request-reviewer[bot]`. Gated request/boundary/receipt and lookup-only recovery are implemented. | Response is a PR, not a review-job ID. Verify repository policy/auth, automatic-review settings and account billing. Missing confirmed receipts remain uncertain; no speculative retry. |
 | Review result | [PR reviews/comments](https://docs.github.com/en/rest/pulls/reviews) expose actor, `commit_id`, review ID and comments; bounded validated raw capture is implemented. | No request-round token or dependable prose classifier; captured output is `needs-human`, never guessed promotion/repair. Authorized classification or independently verified provider evidence is required. |
 | Lost mutation response | Neither task launch nor review request documents a caller-supplied idempotency key or exactly-once creation. | Persist intent before call; retain returned identity; if no unique operation can be established, hold for human reconciliation, never repeat a speculative create. |
-| CI/status | [Workflow dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event), [runs](https://docs.github.com/en/rest/actions/workflow-runs), [jobs](https://docs.github.com/en/rest/actions/workflow-jobs) and [commit statuses](https://docs.github.com/en/rest/commits/statuses) contracts; gated adapters, exact persisted candidate-SHA testing/status, conditionally gated exact-SHA workflow and default-disabled managed push routing. | Verify credential/publisher/context policy, immutable trusted tag/revision and no-added-charge enforcement. The bounded candidate SHA is only the terminal-task-time observed PR head, not an authoritative task-produced commit. Workflow execution depends on configuration; branch protection must be checked independently. |
+| CI/status | [Workflow dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event), [runs](https://docs.github.com/en/rest/actions/workflow-runs), [jobs](https://docs.github.com/en/rest/actions/workflow-jobs) and [commit statuses](https://docs.github.com/en/rest/commits/statuses) contracts; gated adapters, exact persisted candidate-SHA testing/status, and ordinary CI for all PRs. | Verify credential/publisher/context policy, immutable trusted tag/revision and no-added-charge enforcement. The bounded candidate SHA is only the terminal-task-time observed PR head, not an authoritative task-produced commit. Workflow execution depends on configuration; branch protection must be checked independently. |
 | Continuation | Documented default-branch schedule/workflow-run/comment/PR wakes; durable canonical ticket and leased shared host, conditionally gated workflow wiring. | GitHub may drop/delay schedules or disable inactive public schedules; monitor and use exceptional guarded Resume. Trusted definition/default-branch placement and account cost controls require maintainer verification. No lossless SLA. |
 | Operator recovery | Saved task GET/session snapshot plus authorized `resolve-task`; local tracking ends Failed, with durable evidence and replay. `classify-review` references exact current handoff/head/round. | Task API does not promise irreversible remote termination. Verify quiescence before Reactivate; missing saved launch ID remains unresolved without an authoritative operation identity/design decision. No completion-SHA inference. |
 | Charges | [Organization billing](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing), [budgets](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/budgets), and [review pricing](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing) describe paid usage and review attribution. | Maintainer/admin must verify existing entitlement, attribution, disable paid overages, and enforce stop-usage controls for AI and Actions. Alerts alone are not caps; public Actions compute does not establish free AI use. No per-operation included-only billing field was established. |
@@ -3076,7 +3132,7 @@ refer to `IntelligentTradingSimulator.Tests/Orchestration`.
 | 4 Exact counts/preserved holds | Single-create/concurrent/recovery tests; duplicate wakes keep one launch; operator replay never looks up/relaunches committed resolution | Unknown projection writes require context inspection; no speculative retries. |
 | 5 Coding before exact-SHA CI | Completed task/session and unique PR mapping; versioned bounded candidate-SHA evidence; revalidation at CI dispatch/result and review-result acceptance; exact persisted-SHA checkout/verification; offline head/task/mapping/replay/crash tests | The preview task API cannot attest that the observed candidate commit was produced by the task. Mismatches fail closed or require re-observation; this fallback does not establish final-commit provenance. |
 | 6 Green/review and two repair cycles | Worker multi-repair loops; actual Host task→CI→review→classification→status and repair coverage | Autonomous review correlation/classification unavailable; explicit human classification supported. |
-| 7 Stale heads/checks/unmanaged compatibility | Exact tested-head status and run/step tests; head/feedback revocation; `ManagedPushRoutingTests`; default-disabled trusted CI router | Publisher/required-context/human-approval policy must be verified at cutover; no settings changed. |
+| 7 Stale heads/checks/unmanaged compatibility | Exact tested-head status and run/step tests; head/feedback revocation; ordinary CI for all PRs; opt-in interim human merge gate | The interim gate is not branch-enforced; publisher, protection, human approval and cost policy require separate cutover verification. |
 | 8 Feedback priority/distinct identical events | Paged worker, authorized distinct/edit feedback tests; HumanReview feedback ingestion and current-status revocation | No recovery of revisions deleted before observation; API/capture uncertainty escalates. |
 | 9 Productive rounds/no-progress stop | Finding-specific/reintroduced-blocker core tests; Host classification cannot erase unresolved evidence | Provider request-round proof unavailable; humans classify exact handoff, never guessed prose. |
 | 10 Closure/reopen/reactivation | Core/REST closure checks; verified ended-session/operator evidence with release/no-release/replay tests; human holds remain | Snapshot is not irreversible task termination; missing launch ID requires external identity/design decision. |

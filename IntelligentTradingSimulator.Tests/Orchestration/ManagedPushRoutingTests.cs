@@ -18,34 +18,18 @@ public sealed class ManagedPushRoutingTests
     }
 
     [Fact]
-    public void WorkflowRouterUsesTrustedReadOnlyCodeDefaultsOffAndFailsClosedWhenEnabled()
+    public void WorkflowRunsOrdinaryCiForEveryPullRequestWithoutPublishingStatuses()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "IntelligentTradingSimulator.sln")))
             directory = directory.Parent;
-        var workflow = File.ReadAllText(Path.Combine(directory!.FullName, ".github/workflows/ci.yml"));
-        var router = workflow[workflow.IndexOf("  managed-route:", StringComparison.Ordinal)..
-            workflow.IndexOf("  build-and-test:", StringComparison.Ordinal)];
-        Assert.Contains("ORCHESTRATION_MANAGED_ROUTING_APPROVED == 'true'", router);
-        Assert.Contains("ORCHESTRATION_ACTIVATION_APPROVED == 'true'", router);
-        Assert.Contains("ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED == 'true'", router);
-        Assert.Contains("ORCHESTRATION_NO_ADDED_CHARGES_VERIFIED == 'true'", router);
-        Assert.Contains("github.event_name == 'pull_request'", router);
-        Assert.Contains("repository: ${{ github.repository }}", router);
-        Assert.Contains("ref: ${{ vars.ORCHESTRATION_DEFINITION_SHA }}", router);
-        Assert.Contains("persist-credentials: false", router);
-        Assert.Contains("contents: read", router);
-        Assert.Contains("pull-requests: read", router);
-        Assert.Contains("actions: read", router);
-        Assert.Contains("--github-route --dry-run", router);
-        Assert.DoesNotContain("secrets.", router);
-        Assert.DoesNotContain("head.sha", router);
-        Assert.DoesNotContain("pull_request.head", router);
-        Assert.DoesNotContain(": write", router);
-        Assert.Contains("needs.managed-route.result == 'skipped'", workflow);
-        Assert.Contains("needs.managed-route.result == 'success'", workflow);
-        Assert.Contains("needs.managed-route.outputs.run_full_ci == 'true'", workflow);
-        Assert.DoesNotContain("needs.managed-route.result != 'success'", workflow);
+        var workflow = File.ReadAllText(Path.Combine(directory!.FullName, ".github/workflows/ci.yml")).Replace("\r\n", "\n");
+        Assert.Contains("  pull_request:\n    branches:\n      - master", workflow);
+        Assert.Contains("jobs:\n  build-and-test:\n    name: Build and test\n    runs-on:", workflow);
+        Assert.DoesNotContain("managed-route:", workflow);
+        Assert.DoesNotContain("ORCHESTRATION_MANAGED_ROUTING_APPROVED", workflow);
+        Assert.DoesNotContain("statuses: write", workflow);
+        Assert.DoesNotContain("secrets.", workflow);
         Assert.Contains("Test agent orchestrator scripts", workflow);
         Assert.Contains("Run tests", workflow);
     }

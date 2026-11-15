@@ -6,8 +6,9 @@ namespace IntelligentTradingSimulator.Orchestration;
 public sealed record GitHubRequiredStatusApproval(bool ActivationApproved = false, bool CredentialActorVerified = false,
     bool TrustedPublisherVerified = false, bool RequiredContextVerified = false, bool NoAdditionalChargesVerified = false)
 {
+    public bool ManualMergeGateApproved { get; init; }
     public bool AllowsPublication => ActivationApproved && CredentialActorVerified && TrustedPublisherVerified &&
-        RequiredContextVerified && NoAdditionalChargesVerified;
+        (RequiredContextVerified || ManualMergeGateApproved) && NoAdditionalChargesVerified;
 }
 
 public sealed record GitHubStatusPublisher(long ActorId, string Login, string NodeId, string Type);

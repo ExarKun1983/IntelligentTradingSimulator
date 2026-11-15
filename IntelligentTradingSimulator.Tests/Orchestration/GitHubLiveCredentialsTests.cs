@@ -72,6 +72,7 @@ public sealed class GitHubLiveCredentialsTests
         Assert.DoesNotContain("github.ref == 'refs/heads/master'", workflow);
         Assert.Contains("vars.ORCHESTRATION_ACTIVATION_APPROVED == 'true'", workflow);
         Assert.Contains("vars.ORCHESTRATION_MULTI_ISSUE_APPROVED == 'true'", workflow);
+        Assert.Contains("ORCHESTRATION_MANUAL_MERGE_GATE_APPROVED: ${{ vars.ORCHESTRATION_MANUAL_MERGE_GATE_APPROVED }}", workflow);
         Assert.Contains("vars.ORCHESTRATION_TEST_ISSUE == '265'", workflow);
         Assert.Contains("vars.ORCHESTRATION_RETIRED_TEST_ISSUE == ''", workflow);
         Assert.Contains("vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '1'", workflow);
@@ -169,6 +170,7 @@ public sealed class GitHubLiveCredentialsTests
         Assert.Contains("vars.ORCHESTRATION_REVIEW_POLICY_VERIFIED == 'true'", workflow);
         Assert.Contains("vars.ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED == 'true'", workflow);
         Assert.Contains("vars.ORCHESTRATION_TRUSTED_CI_VERIFIED == 'true'", workflow);
+        Assert.Contains("vars.ORCHESTRATION_MANUAL_MERGE_GATE_APPROVED == 'true'", workflow);
         Assert.Contains("agent-managed-ci-test-265-v1", workflow);
         Assert.Contains("GH_TOKEN: ${{ github.token }}", workflow);
         Assert.Contains("CI_DEFINITION_SHA matches the new tag target", workflow);
@@ -359,6 +361,38 @@ public sealed class GitHubLiveCredentialsTests
 
         Assert.Throws<InvalidOperationException>(() =>
             GitHubLiveSettings.Read(name => values.GetValueOrDefault(name)));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("false")]
+    [InlineData("TRUE")]
+    public void ManualMergeGateRequiresExplicitApproval(string? approval)
+    {
+        var values = LiveSettingsValues();
+        values.Remove("ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED");
+        if (approval is not null) values["ORCHESTRATION_MANUAL_MERGE_GATE_APPROVED"] = approval;
+
+        Assert.Throws<InvalidOperationException>(() => GitHubLiveSettings.Read(values.GetValueOrDefault));
+    }
+
+    [Fact]
+    public void ManualMergeGatePublishesStatusWithoutClaimingBranchProtection()
+    {
+        var values = LiveSettingsValues();
+        values["ORCHESTRATION_REQUIRED_CONTEXT_VERIFIED"] = "false";
+        values["ORCHESTRATION_MANUAL_MERGE_GATE_APPROVED"] = "true";
+
+        var settings = GitHubLiveSettings.Read(values.GetValueOrDefault);
+
+        Assert.False(settings.Status.RequiredContextVerified);
+        Assert.True(settings.Status.ManualMergeGateApproved);
+        Assert.True(settings.Status.AllowsPublication);
+        values["ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED"] = "false";
+        Assert.Throws<InvalidOperationException>(() => GitHubLiveSettings.Read(values.GetValueOrDefault));
+        values["ORCHESTRATION_TRUSTED_STATUS_PUBLISHER_VERIFIED"] = "true";
+        values["ORCHESTRATION_ACTIVATION_APPROVED"] = "false";
+        Assert.Throws<InvalidOperationException>(() => GitHubLiveSettings.Read(values.GetValueOrDefault));
     }
 
     [Theory]
