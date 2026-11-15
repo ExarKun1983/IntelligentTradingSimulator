@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 95,
+  "Version": 96,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "actions:1277929203:43756225399",
@@ -130,8 +130,8 @@
       "SchemaVersion": 1,
       "Number": 237,
       "Generation": 1,
-      "Version": 42,
-      "LastEventId": "actions:1277929203:43753882114",
+      "Version": 43,
+      "LastEventId": "actions:1277929203:43756225399",
       "Phase": "CLOSED",
       "Ready": false,
       "ActiveAuthorized": false,
@@ -901,16 +901,16 @@
       "IssueNumber": 237,
       "Generation": 1,
       "Kind": "PublishRequiredStatus",
-      "Status": "Unknown",
+      "Status": "Succeeded",
       "TaskId": "task:237:1:1:1",
       "Round": 1,
       "Sha": "f52d2a10b237dff7c29cfcac3151a387a40b0396",
-      "ExternalId": null,
+      "ExternalId": "58975050524",
       "Labels": [],
       "FeedbackEventIds": [],
       "CreatedAt": "2026-11-15T19:43:04.2079603+00:00",
       "StartedAt": "2026-11-15T19:43:33.9771559+00:00",
-      "CompletedAt": "2026-11-15T19:43:49.7459355+00:00",
+      "CompletedAt": "2026-11-15T20:07:50.1679276+00:00",
       "StatusBody": null,
       "TaskPrompt": null,
       "RequiredStatus": {
@@ -929,8 +929,7 @@
         "PreparedAt": "2026-11-15T19:43:40.3320812+00:00",
         "ExistingStatusIds": [],
         "StatusId": null
-      },
-      "FailureCode": "RecoveryException"
+      }
     },
     "labels:237:1:E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855": {
       "Id": "labels:237:1:E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
