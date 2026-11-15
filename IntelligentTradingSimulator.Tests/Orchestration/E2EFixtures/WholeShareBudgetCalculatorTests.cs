@@ -13,6 +13,22 @@ public class WholeShareBudgetCalculatorTests
         Assert.Equal(expected, WholeShareBudgetCalculator.Calculate(budget, unitPrice));
     }
 
+    [Theory]
+    [InlineData(125, 40, 3)]
+    [InlineData(15, 40, 0)]
+    [InlineData(100, 40, 2)]
+    [InlineData(20, 40, 0)]
+    public void CalculateReturnsAffordableWholeShares(
+        decimal budget,
+        decimal unitPrice,
+        decimal expected)
+    {
+        var quantity = WholeShareBudgetCalculator.Calculate(budget, unitPrice);
+
+        Assert.Equal(expected, quantity);
+        Assert.True(quantity * unitPrice <= budget);
+    }
+
     [Fact]
     public void CalculateThrowsWhenBudgetIsNegative()
     {

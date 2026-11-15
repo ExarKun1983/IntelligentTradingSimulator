@@ -7,6 +7,6 @@ internal static class WholeShareBudgetCalculator
         ArgumentOutOfRangeException.ThrowIfNegative(budget);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(unitPrice);
 
-        return decimal.Ceiling(budget / unitPrice);
+        return decimal.Floor(budget / unitPrice);
     }
 }
