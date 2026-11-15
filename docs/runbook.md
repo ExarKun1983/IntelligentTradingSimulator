@@ -1744,7 +1744,7 @@ is a code-path PoC only: it does not verify live credentials, repository
 protection, workflow pins, or deployed Actions configuration. The existing
 bounded Issue #237 profile remains single-pass and cannot run this repair cycle.
 
-### Bounded live coding/CI/review PoC for Issue #279
+### Bounded live coding/CI/review PoC for Issue #282
 
 The opt-in `agent-poc.yml` driver reuses `GitHubOrchestrationHost`, the existing
 task/CI/review adapters and reducer. It is not a second orchestrator and does
@@ -1752,8 +1752,8 @@ not activate the main workflow or the status-revocation experiment. Its CLI mode
 is `--github-live --github-poc --execute`. These source changes alone do not
 provision resources or authorize a live run.
 
-The current profile is fixed to Issue #279, PR base `master`, and separate state
-`refs/heads/agent-state-poc-279-v1`. Both driver and CI execute from `master`
+The current profile is fixed to Issue #282, PR base `master`, and separate state
+`refs/heads/agent-state-poc-282-v1`. Both driver and CI execute from `master`
 at the configured reviewed definition SHA; CI checks out the agent's exact task
 head separately. The task creates a draft PR against `master`. If `master`
 advances during the attempt, the profile stops rather than executing an
@@ -1769,19 +1769,21 @@ human feedback requiring a separate repair also stops the attempt. Changing conf
 cannot silently reuse bootstrapped state. Missing state is an error, not a new
 attempt. Do not delete state or re-bootstrap to retry.
 
-The #249 v1 and v2 state refs, the #257, #268, #272 and #276 state refs, and their PRs are retained
-as history. This profile neither resumes nor resolves those attempts. The #279
+The #249 v1 and v2 state refs, the #257, #268, #272, #276 and #279 state refs,
+and their PRs are retained as history. This profile neither resumes nor resolves
+those attempts. The #282
 attempt bootstraps its own v1 ref with a new manifest and current
 definition/expiry. Never reuse an earlier attempt's state.
 
-Issue #279 uses only two compiled test-only files under
+Issue #282 uses only two compiled test-only files under
 `IntelligentTradingSimulator.Tests/Orchestration/E2EFixtures/`:
-`WholeSharePositionSizer.cs` and `WholeSharePositionSizerTests.cs`.
+`WholeShareBudgetCalculator.cs` and `WholeShareBudgetCalculatorTests.cs`.
 The imported calculation uses `decimal.Ceiling(budget / unitPrice)` despite
 the business invariant that whole-share cost must not exceed the budget.
 The initial tests cover exact division, zero budget and argument validation;
-the intended review repair rounds down and adds regression cases for budgets
-100 and 20 with unit price 30, asserting quantities 3 and 0 and affordable cost.
+the exact-division case is budget 120 with unit price 40. The intended review
+repair rounds down and adds regression cases for budgets 125 and 15 with unit
+price 40, asserting quantities 3 and 0 and affordable cost.
 No production code, project files or packages may change in the generated PR.
 If Copilot does not report a real qualifying inline finding, stop without
 inventing one or claiming a review-driven repair. This test requires the opt-in
@@ -1791,9 +1793,14 @@ classification. Final acceptance still needs a human.
 The #272 attempt recorded `NeedsHuman` because the review-scoped comment list
 omitted current line/side metadata; PR #275 added verified detail reads.
 The subsequent #276/#278 attempt had green CI but no inline findings, so no
-repair ran. Its canonical state remains `BLOCKED`/`NeedsHuman`. The compiled
-C# scenario improves the review signal but cannot guarantee a finding.
-Do not resume or re-bootstrap either earlier attempt.
+repair ran. Its canonical state remains `BLOCKED`/`NeedsHuman`.
+The #279/#281 C# attempt completed one automatic review repair, two green CI
+runs and two managed reviews, then explicit human acceptance with
+finding-specific resolution reached `HUMAN_REVIEW`/`Accepted` and
+`Completed=true` at state version 93. Its generated PR remains draft and
+unmerged. The #282 profile repeats that scenario with distinct fixture names
+and inputs; a real first-review finding is still not guaranteed.
+Do not resume or re-bootstrap any earlier attempt.
 
 Unlike the old bounded profile, this profile does not set `SinglePassTest`.
 It does require the mapped PR to stay draft and based on `master`.
@@ -1855,13 +1862,13 @@ is enforced by the reviewed driver/adapters/store.
 
 After separate authorization, enable only the two new PoC workflows if needed
 and set `ORCHESTRATION_POC_APPROVED=true`. All dispatches select `master` and supply
-`confirmation=POC-279-ONE-REPAIR-NO-MERGE`.
+`confirmation=POC-282-ONE-REPAIR-NO-MERGE`.
 
 1. Temporarily set `ORCHESTRATION_POC_BOOTSTRAP_APPROVED=true`. Dispatch the
-   driver with `operation=poc-bootstrap` and `issue=279`. This creates only the
+   driver with `operation=poc-bootstrap` and `issue=282`. This creates only the
    separate empty canonical state and its manifest. Verify the artifact and
    state ref, then set bootstrap approval back to `false` before starting.
-2. Check the coding requirements in Issue #279. Add `agent:ready` only when
+2. Check the coding requirements in Issue #282. Add `agent:ready` only when
    ready to authorize its coding task, then start the driver once. The label
    alone does not wake this manually dispatched PoC:
 
@@ -1869,8 +1876,8 @@ and set `ORCHESTRATION_POC_APPROVED=true`. All dispatches select `master` and su
    gh workflow run agent-poc.yml `
      --repo ExarKun1983/IntelligentTradingSimulator `
      --ref master `
-     -f issue=279 -f operation=poc-start `
-     -f confirmation=POC-279-ONE-REPAIR-NO-MERGE `
+     -f issue=282 -f operation=poc-start `
+     -f confirmation=POC-282-ONE-REPAIR-NO-MERGE `
      -f repository_generation=1 -f issue_generation=1
    ```
 
@@ -1910,7 +1917,9 @@ and set `ORCHESTRATION_POC_APPROVED=true`. All dispatches select `master` and su
    calculation rounds down and both new non-divisible-budget regression cases
    pass. Confirm that these cases fail against the imported calculation without
    editing or pushing to the generated branch.
-6. Ask the operator before submitting final `accepted`. Completion means phase
+6. A clean second review still produces `BLOCKED`/`NeedsHuman`: automation does
+   not infer acceptance or resolve earlier findings merely from absent comments.
+   Ask the operator before submitting final `accepted`. Completion means phase
    `HUMAN_REVIEW`, explicitly accepted review, current
    exact-head green CI and an unmerged draft PR. The artifact reports
    `Completed=true` only after revalidating the task and live PR head, draft
