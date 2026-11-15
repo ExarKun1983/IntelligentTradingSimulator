@@ -1,0 +1,4 @@
+item_a=4
+item_b=7
+total=10
+rule=total must equal item_a + item_b
