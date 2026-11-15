@@ -371,6 +371,8 @@ public sealed class GitHubRequiredStatusTests
     [InlineData("node")]
     [InlineData("actor-type")]
     [InlineData("repository")]
+    [InlineData("status-sha")]
+    [InlineData("status-id-url")]
     [InlineData("context")]
     [InlineData("target")]
     [InlineData("description")]
@@ -935,7 +937,7 @@ public sealed class GitHubRequiredStatusTests
         public Action? AfterPullRead { get; set; }
         public Func<Task>? OnPullRead { get; set; }
         private object? created;
-        private readonly List<string> createdBodies = [];
+        private readonly List<(string Body, string Sha)> createdStatuses = [];
         private readonly TaskCompletionSource preparation = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int preparationReads;
         public HttpClient Client() => new(this, false) { BaseAddress = new("https://api.github.com/") };
@@ -950,9 +952,10 @@ public sealed class GitHubRequiredStatusTests
                 BeforePost?.Invoke();
                 Posts++;
                 Body = await request.Content!.ReadAsStringAsync(token);
-                createdBodies.Add(Body);
+                var sha = path[(path.LastIndexOf('/') + 1)..];
+                createdStatuses.Add((Body, sha));
                 using var body = JsonDocument.Parse(Body);
-                created = Status(body.RootElement, 99 + Posts);
+                created = Status(body.RootElement, sha, 99 + Posts);
                 if (LostResponse) throw new HttpRequestException("offline lost response");
                 if (CancelAfterPost) throw new OperationCanceledException("offline cancellation after create");
                 value = created;
@@ -1007,12 +1010,12 @@ public sealed class GitHubRequiredStatusTests
                 else
                 {
                     var statuses = new List<object>();
-                    for (var index = createdBodies.Count - 1; index >= 0; index--)
+                    for (var index = createdStatuses.Count - 1; index >= 0; index--)
                     {
-                        if (HideFirstStatus && index == 0) continue;
-                        using var body = JsonDocument.Parse(createdBodies[index]);
-                        statuses.Add(Status(body.RootElement, 100 + index));
-                        if (Corruption == "duplicate") statuses.Add(Status(body.RootElement, 1000 + index));
+                        if (createdStatuses[index].Sha != path.Split('/')[5] || HideFirstStatus && index == 0) continue;
+                        using var body = JsonDocument.Parse(createdStatuses[index].Body);
+                        statuses.Add(Status(body.RootElement, createdStatuses[index].Sha, 100 + index));
+                        if (Corruption == "duplicate") statuses.Add(Status(body.RootElement, createdStatuses[index].Sha, 1000 + index));
                     }
                     value = statuses;
                 }
@@ -1023,8 +1026,8 @@ public sealed class GitHubRequiredStatusTests
         }
         private object Actor() => new { id = Corruption == "actor" ? 10 : 9, login = "trusted[bot]",
             node_id = Corruption == "node" ? "BOT_10" : "BOT_9", type = Corruption == "actor-type" ? "User" : "Bot" };
-        private object Status(JsonElement body, int id = 100) => new { id,
-            url = $"https://api.github.com/repos/{(Corruption == "repository" ? "other/repo" : "owner/repo")}/statuses/{id}",
+        private object Status(JsonElement body, string sha, int id = 100) => new { id,
+            url = $"https://api.github.com/repos/{(Corruption == "repository" ? "other/repo" : "owner/repo")}/statuses/{(Corruption == "status-id-url" ? id.ToString() : Corruption == "status-sha" ? (sha == Sha ? Definition : Sha) : sha)}",
             creator = Actor(), context = Corruption == "context" ? "untrusted" : body.GetProperty("context").GetString(),
             state = Corruption == "state" ? "failure" : body.GetProperty("state").GetString(),
             target_url = Corruption == "target" ? "https://example.invalid/" : body.GetProperty("target_url").GetString(),

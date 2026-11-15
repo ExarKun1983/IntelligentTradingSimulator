@@ -714,7 +714,7 @@ public sealed class SharedHostLifecycleIntegrationTests
                 StatusWrites.Add(path);
                 var status = JsonSerializer.SerializeToElement(new
                 {
-                    id = 1000 + Statuses.Count, url = $"https://api.github.com/repos/owner/repo/statuses/{1000 + Statuses.Count}",
+                    id = 1000 + Statuses.Count, url = $"https://api.github.com/repos/owner/repo/statuses/{sha}",
                     state = payload.RootElement.GetProperty("state").GetString(),
                     context = payload.RootElement.GetProperty("context").GetString(),
                     description = payload.RootElement.GetProperty("description").GetString(),

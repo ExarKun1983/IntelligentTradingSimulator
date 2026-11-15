@@ -1541,7 +1541,7 @@ public sealed class GitHubReviewIntegrationTests
                 var body = content.RootElement;
                 response = createdStatus = new
                 {
-                    id = 100, url = "https://api.github.com/repos/owner/repo/statuses/100",
+                    id = 100, url = $"https://api.github.com/repos/owner/repo/statuses/{Sha}",
                     creator = new { id = 99, login = "status-publisher", node_id = "publisher-node", type = "Bot" },
                     state = body.GetProperty("state").GetString(), context = body.GetProperty("context").GetString(),
                     description = body.GetProperty("description").GetString(),

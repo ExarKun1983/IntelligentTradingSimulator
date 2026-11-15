@@ -2638,8 +2638,10 @@ contracts. Its immutable outbox intent binds Issue generation, task, round, head
 CI intent/run and payload. A CAS boundary records verified publisher identity and
 pre-existing status IDs before POST; the response is saved before outcome publication.
 Read-back checks the exact commit/repository, creator, context, payload, time and
-intent-correlated target URL. Lost acknowledgement recovery is lookup-only against
-that boundary/receipt; ambiguous or absent evidence never repeats a success create.
+intent-correlated target URL. GitHub's status response `url` identifies the
+repository and commit SHA; its separate numeric `id` identifies the status
+receipt. Lost acknowledgement recovery is lookup-only against that boundary/receipt;
+ambiguous or absent evidence never repeats a success create.
 
 Green reflects eligible exact-head CI in `REVIEW_PENDING`, or the same eligible
 head after explicit accepted review in `HUMAN_REVIEW`. Before task completion/CI it
