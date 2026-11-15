@@ -1,10 +1,11 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 53,
+  "Version": 54,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
-  "LastEventId": "ci-observed:1277929203:1:RunCi:237:1:task:237:1:1:1:1",
-  "AdmittedIssue": 237,
+  "IsolatedTestManifestDigest": null,
+  "LastEventId": "actions:1277929203:43748514173",
+  "AdmittedIssue": null,
   "WorkerLease": null,
   "Continuation": {
     "Id": "continue:1:23",
@@ -88,6 +89,7 @@
             "Reason": "Retire the stopped single-pass mapping attempt before separately approved retest #237; no successful coding or irreversible remote termination is asserted.",
             "OccurredAt": "2026-11-10T10:24:52.7218476+00:00"
           },
+          "UncertainLaunchResolution": null,
           "CandidateShaEvidence": null,
           "ReviewBlockers": [],
           "CiBlockers": [],
@@ -117,8 +119,8 @@
       "SchemaVersion": 1,
       "Number": 237,
       "Generation": 1,
-      "Version": 29,
-      "LastEventId": "ci-observed:1277929203:1:RunCi:237:1:task:237:1:1:1:1",
+      "Version": 30,
+      "LastEventId": "actions:1277929203:43748514173",
       "Phase": "BLOCKED",
       "Ready": false,
       "ActiveAuthorized": false,
@@ -126,7 +128,7 @@
       "FeedbackSince": "2026-11-10T12:01:51+00:00",
       "ReactivationRequired": true,
       "Paused": false,
-      "HoldReason": "Effect outcome is ambiguous.",
+      "HoldReason": "Uncertain review request explicitly abandoned by operator; reactivation requires a separate decision.",
       "PullRequest": 240,
       "HeadSha": "f52d2a10b237dff7c29cfcac3151a387a40b0396",
       "Round": 1,
@@ -152,6 +154,7 @@
           "ExternalId": "ee2c7e33-d2af-4b16-8082-fb9b0c7f3538",
           "TerminalEvidence": null,
           "OperatorResolution": null,
+          "UncertainLaunchResolution": null,
           "CandidateShaEvidence": {
             "Version": 1,
             "Policy": "bounded-candidate-sha-v1",
@@ -183,7 +186,8 @@
           "Ref": "refs/tags/agent-managed-ci-test-237-v1",
           "Correlation": "managed-ci-1a802b073ba5041f29d454965b37ad5f0904d5c0951765a7cca1ff0b56ac7db9",
           "PreparedAt": "2026-11-10T12:05:14.7845407+00:00",
-          "RunId": 42812787861
+          "RunId": 42812787861,
+          "WorkflowPath": ".github/workflows/agent-managed-ci.yml"
         }
       },
       "Review": {
@@ -193,10 +197,36 @@
         "Round": 1,
         "Sha": "f52d2a10b237dff7c29cfcac3151a387a40b0396",
         "Classification": null,
+        "LifecycleState": "NotRequested",
+        "CopilotRequestNodeId": null,
+        "ReviewRequestedAt": null,
+        "ReviewDeadlineAt": null,
+        "RequestFailureReason": null,
         "Findings": [],
         "Responses": [],
         "RequestBoundary": null,
-        "SourceEvidence": null
+        "SourceEvidence": null,
+        "OperatorResolution": {
+          "EventId": "actions:1277929203:43748514173",
+          "IntentId": "RequestReview:237:1:task:237:1:1:1:1",
+          "Author": {
+            "Login": "6195946",
+            "Kind": "Human",
+            "Id": 6195946,
+            "NodeId": null,
+            "Type": "User"
+          },
+          "Reason": "Operator authorized abandonment of this test request, acknowledging that an earlier Copilot review request may have been submitted.",
+          "Evidence": {
+            "IntentId": "RequestReview:237:1:task:237:1:1:1:1",
+            "PullRequest": 240,
+            "HeadSha": "f52d2a10b237dff7c29cfcac3151a387a40b0396",
+            "ObservedAt": "2026-11-15T18:45:56.17022+00:00",
+            "ReviewerRequestPending": false,
+            "ReviewerReviewIds": []
+          },
+          "AcknowledgedPossiblePriorSubmission": true
+        }
       },
       "FeedbackEventIds": [],
       "LastFeedbackText": null,
@@ -296,6 +326,14 @@
       "ReceivedAt": "2026-11-10T12:06:13+00:00",
       "CompletedAt": "2026-11-10T12:06:13+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022ci-observed:1277929203:1:RunCi:237:1:task:237:1:1:1:1\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:237,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022github-actions\u0022,\u0022Kind\u0022:2,\u0022Id\u0022:null,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-10T12:06:13\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022ci-result\u0022,\u0022RunId\u0022:\u002242812787861\u0022,\u0022TaskId\u0022:\u0022task:237:1:1:1\u0022,\u0022Round\u0022:1,\u0022PullRequest\u0022:240,\u0022Sha\u0022:\u0022f52d2a10b237dff7c29cfcac3151a387a40b0396\u0022,\u0022Green\u0022:true,\u0022Blockers\u0022:[]}}"
+    },
+    "actions:1277929203:43748514173": {
+      "Id": "actions:1277929203:43748514173",
+      "Digest": "6C0D93480BD5C070F7689508FCA4A3696153EB433E2F98672B9BAA1F3357E376",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-15T18:45:56.17022+00:00",
+      "CompletedAt": "2026-11-15T18:45:56.17022+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022actions:1277929203:43748514173\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:237,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u00226195946\u0022,\u0022Kind\u0022:0,\u0022Id\u0022:6195946,\u0022NodeId\u0022:null,\u0022Type\u0022:\u0022User\u0022},\u0022OccurredAt\u0022:\u00222026-11-15T18:45:56.17022\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022abandon-uncertain-review\u0022,\u0022IntentId\u0022:\u0022RequestReview:237:1:task:237:1:1:1:1\u0022,\u0022PullRequest\u0022:240,\u0022Sha\u0022:\u0022f52d2a10b237dff7c29cfcac3151a387a40b0396\u0022,\u0022Reason\u0022:\u0022Operator authorized abandonment of this test request, acknowledging that an earlier Copilot review request may have been submitted.\u0022,\u0022AcknowledgePossiblePriorSubmission\u0022:true,\u0022Evidence\u0022:{\u0022IntentId\u0022:\u0022RequestReview:237:1:task:237:1:1:1:1\u0022,\u0022PullRequest\u0022:240,\u0022HeadSha\u0022:\u0022f52d2a10b237dff7c29cfcac3151a387a40b0396\u0022,\u0022ObservedAt\u0022:\u00222026-11-15T18:45:56.17022\u002B00:00\u0022,\u0022ReviewerRequestPending\u0022:false,\u0022ReviewerReviewIds\u0022:[]}}}"
     }
   },
   "Outbox": {
@@ -632,7 +670,7 @@
       "IssueNumber": 237,
       "Generation": 1,
       "Kind": "RequestReview",
-      "Status": "Unknown",
+      "Status": "Failed",
       "TaskId": "task:237:1:1:1",
       "Round": 1,
       "Sha": "f52d2a10b237dff7c29cfcac3151a387a40b0396",
@@ -641,11 +679,12 @@
       "FeedbackEventIds": [],
       "CreatedAt": "2026-11-10T12:06:57.3265602+00:00",
       "StartedAt": "2026-11-10T12:06:57.3265602+00:00",
-      "CompletedAt": "2026-11-10T12:06:57.3265602+00:00",
+      "CompletedAt": "2026-11-15T18:45:56.17022+00:00",
       "StatusBody": null,
       "TaskPrompt": null,
       "RequiredStatus": null,
-      "RequiredStatusBoundary": null
+      "RequiredStatusBoundary": null,
+      "FailureCode": "OperatorAbandonedUnknownReview"
     },
     "labels:237:1:E69BE9AD2A065B6850878EBD5AE6A93EBE2F91537056F1EA79A23278D419D58C": {
       "Id": "labels:237:1:E69BE9AD2A065B6850878EBD5AE6A93EBE2F91537056F1EA79A23278D419D58C",
