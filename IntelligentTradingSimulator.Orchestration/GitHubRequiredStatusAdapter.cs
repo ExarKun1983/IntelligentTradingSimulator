@@ -184,7 +184,7 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
     {
         var id = status.GetProperty("id").GetInt64();
         var payload = intent.RequiredStatus!;
-        if (id <= 0 || status.GetProperty("url").GetString() != $"https://api.github.com/repos/{api.Repository}/statuses/{id}" ||
+        if (id <= 0 || status.GetProperty("url").GetString() != $"https://api.github.com/repos/{api.Repository}/statuses/{intent.Sha}" ||
             status.GetProperty("context").GetString() != payload.Context || status.GetProperty("state").GetString() != payload.State ||
             status.GetProperty("target_url").GetString() != payload.TargetUrl || status.GetProperty("description").GetString() != payload.Description ||
             status.GetProperty("created_at").GetDateTimeOffset().ToUnixTimeSeconds() < boundary.PreparedAt.ToUnixTimeSeconds() ||
