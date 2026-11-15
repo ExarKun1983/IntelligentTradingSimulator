@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 65,
+  "Version": 66,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "actions:1277929203:43753882114",
@@ -130,7 +130,7 @@
       "SchemaVersion": 1,
       "Number": 237,
       "Generation": 1,
-      "Version": 35,
+      "Version": 36,
       "LastEventId": "actions:1277929203:43753882114",
       "Phase": "BLOCKED",
       "Ready": false,
@@ -814,7 +814,7 @@
       "FeedbackEventIds": [],
       "CreatedAt": "2026-11-15T19:43:04.2079603+00:00",
       "StartedAt": "2026-11-15T19:43:33.9771559+00:00",
-      "CompletedAt": "2026-11-15T19:43:33.9771559+00:00",
+      "CompletedAt": "2026-11-15T19:43:49.7459355+00:00",
       "StatusBody": null,
       "TaskPrompt": null,
       "RequiredStatus": {
@@ -834,7 +834,7 @@
         "ExistingStatusIds": [],
         "StatusId": null
       },
-      "FailureCode": "ExecutionException"
+      "FailureCode": "RecoveryException"
     },
     "labels:237:1:E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855": {
       "Id": "labels:237:1:E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
