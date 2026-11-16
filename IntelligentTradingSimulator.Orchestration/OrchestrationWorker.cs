@@ -20,7 +20,10 @@ public sealed record WorkerOptions
 
 public enum WorkerStopReason { DryRun, EventBacklog, LeaseHeld, EffectsDisabled, Settled, Blocked, IterationLimit, TimeLimit, EffectLimit, ContinuationLimit }
 
-public sealed record WorkerResult(WorkerStopReason Reason, int Iterations, ReconcileResult? LastReconciliation);
+public sealed record WorkerResult(WorkerStopReason Reason, int Iterations, ReconcileResult? LastReconciliation)
+{
+    internal int? LeaseAdmittedIssue { get; init; }
+}
 
 /// <summary>Bounded host loop; all decisions and effect recovery still use the shared reconciler.</summary>
 public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, TimeProvider? timeProvider = null)
@@ -39,6 +42,7 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
     {
         var owner = Guid.NewGuid().ToString("N");
         var started = timeProvider.GetTimestamp();
+        var retries = 0;
         while (true)
         {
             var acquired = await AcquireLeaseAsync(store, owner, timeProvider.GetUtcNow() + TimeSpan.FromMinutes(31),
@@ -46,9 +50,10 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
             if (acquired.Acquired) break;
             if (!waitForLease)
                 throw new InvalidOperationException("Worker lease is occupied; retry recovery after the active invocation finishes.");
-            if (timeProvider.GetElapsedTime(started) >= TimeSpan.FromMinutes(150))
+            var elapsed = timeProvider.GetElapsedTime(started);
+            if (elapsed >= LeaseWait.Limit)
                 throw new InvalidOperationException("Worker lease remained occupied; status revocation needs operator attention.");
-            await Task.Delay(TimeSpan.FromSeconds(1), timeProvider, cancellationToken);
+            await Task.Delay(LeaseWait.NextDelay(retries++, LeaseWait.Limit - elapsed), timeProvider, cancellationToken);
         }
         try
         {
@@ -86,12 +91,13 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
         var executedEffects = 0;
         var owner = Guid.NewGuid().ToString("N");
         var ownsLease = false;
+        int? leaseAdmittedIssue = null;
         var yielded = false;
         var interrupted = false;
         WorkerResult Yield(WorkerStopReason reason)
         {
             yielded = true;
-            return new(reason, iterations, last);
+            return new(reason, iterations, last) { LeaseAdmittedIssue = leaseAdmittedIssue };
         }
         try
         {
@@ -102,6 +108,7 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                     timeProvider.GetUtcNow() + options.MaximumDuration + TimeSpan.FromMinutes(1),
                     reconcileOptions.MaximumConflicts, options.TrackAutomaticContinuations, false, token);
                 ownsLease = acquisition.Acquired;
+                leaseAdmittedIssue = acquisition.AdmittedIssue;
                 if (!ownsLease) return new(WorkerStopReason.LeaseHeld, 0, null);
                 if (acquisition.ContinuationLimitReached)
                     return new(WorkerStopReason.ContinuationLimit, 0, null);
@@ -204,7 +211,7 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
         }
     }
 
-    private async Task<(bool Acquired, bool ContinuationLimitReached)> AcquireLeaseAsync(
+    private async Task<(bool Acquired, bool ContinuationLimitReached, int? AdmittedIssue)> AcquireLeaseAsync(
         IStateStore store, string owner, DateTimeOffset expiresAt,
         int maximumConflicts, bool trackAutomaticContinuations, bool markInterruptedLease,
         CancellationToken cancellationToken)
@@ -217,7 +224,7 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
             {
                 if (string.IsNullOrWhiteSpace(lease.Owner) || lease.ExpiresAt == default)
                     throw new InvalidDataException("Invalid persisted worker lease; reconciliation is required.");
-                if (lease.ExpiresAt > timeProvider.GetUtcNow()) return (false, false);
+                if (lease.ExpiresAt > timeProvider.GetUtcNow()) return (false, false, null);
             }
             // Commit recovery responsibility before observations or external effects can begin.
             var state = OrchestrationContinuation.Prepare(snapshot.State, timeProvider.GetUtcNow(), "Invocation in flight.", true);
@@ -240,7 +247,8 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                     task.ContinuationPending = true;
             }
             state.WorkerLease = new(owner, expiresAt);
-            if (await store.TrySaveAsync(snapshot, state, cancellationToken)) return (true, limitReached);
+            if (await store.TrySaveAsync(snapshot, state, cancellationToken))
+                return (true, limitReached, snapshot.State.AdmittedIssue);
         }
         throw new InvalidOperationException("Worker lease publication conflict limit exceeded.");
     }

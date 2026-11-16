@@ -331,13 +331,71 @@ public sealed class OrchestrationWorkerTests
     {
         var clock = new Clock();
         var calls = 0;
-        var continuation = new AutomaticWorkerContinuation(new Store(), clock).RunAsync(_ =>
+        var store = new Store();
+        var continuation = new AutomaticWorkerContinuation(store, clock).RunAsync(_ =>
             Task.FromResult(new WorkerResult(++calls == 1 ? WorkerStopReason.LeaseHeld : WorkerStopReason.Settled, 0, null)));
         Assert.False(continuation.IsCompleted);
         await clock.TimerCreated.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(0, store.Reads);
         clock.Advance(TimeSpan.FromSeconds(10));
         Assert.Equal(WorkerStopReason.Settled, (await continuation).Reason);
         Assert.Equal(2, calls);
+        Assert.Equal(0, store.Reads);
+    }
+
+    [Fact]
+    public void LeasePollingUsesBoundedJitteredBackoffAndRespectsRemainingTime()
+    {
+        var elapsed = TimeSpan.Zero;
+        var retries = 0;
+        while (elapsed < TimeSpan.FromMinutes(30))
+        {
+            var delay = LeaseWait.NextDelay(retries++, LeaseWait.Limit - elapsed);
+            Assert.InRange(delay, TimeSpan.FromSeconds(4), TimeSpan.FromMinutes(2));
+            elapsed += delay;
+        }
+        Assert.InRange(retries, 1, 25);
+        Assert.Equal(TimeSpan.FromMilliseconds(1), LeaseWait.NextDelay(20, TimeSpan.FromMilliseconds(1)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LeaseWaitLoopsStayBoundedOverThirtyMinutesAndRemainCancellable(bool exclusive)
+    {
+        var clock = new Clock();
+        var store = new Store();
+        var attempts = 0;
+        using var cancellation = new CancellationTokenSource();
+        Task wait;
+        if (exclusive)
+        {
+            var snapshot = await store.LoadAsync(default);
+            snapshot.State.WorkerLease = new("other", Now.AddMinutes(45));
+            Assert.True(await store.TrySaveAsync(snapshot, snapshot.State, default));
+            var initialReads = store.Reads;
+            wait = Worker(clock).RunExclusiveWhenAvailableAsync(store, _ => Task.FromResult(true), cancellation.Token);
+            attempts = -initialReads;
+        }
+        else
+        {
+            wait = new AutomaticWorkerContinuation(store, clock).RunAsync(_ =>
+            {
+                attempts++;
+                return Task.FromResult(new WorkerResult(WorkerStopReason.LeaseHeld, 0, null));
+            }, cancellation.Token);
+        }
+        while (clock.GetUtcNow() < Now.AddMinutes(30))
+        {
+            await clock.TimerSignal.WaitAsync(TimeSpan.FromSeconds(10));
+            clock.Advance(clock.LastDueTime);
+        }
+        await clock.TimerSignal.WaitAsync(TimeSpan.FromSeconds(10));
+        if (exclusive) attempts += store.Reads;
+        Assert.InRange(attempts, 1, 25);
+        if (!exclusive) Assert.Equal(0, store.Reads);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => wait);
     }
 
     [Fact]
@@ -988,6 +1046,8 @@ public sealed class OrchestrationWorkerTests
         private long ticks;
         private readonly List<Timer> timers = [];
         public TaskCompletionSource TimerCreated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public SemaphoreSlim TimerSignal { get; } = new(0);
+        public TimeSpan LastDueTime { get; private set; }
         public override long TimestampFrequency => TimeSpan.TicksPerSecond;
         public override long GetTimestamp() => ticks;
         public override DateTimeOffset GetUtcNow() => Now.AddTicks(ticks);
@@ -996,6 +1056,8 @@ public sealed class OrchestrationWorkerTests
             var timer = new Timer(this, callback, state);
             timer.Change(dueTime, period);
             timers.Add(timer);
+            LastDueTime = dueTime;
+            TimerSignal.Release();
             TimerCreated.TrySetResult();
             return timer;
         }

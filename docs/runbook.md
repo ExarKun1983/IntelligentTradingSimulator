@@ -2559,7 +2559,11 @@ GitHub could replace a pending run. Verified commands are committed before worke
 lease acquisition; a wake that finds the lease held waits and retries for up to
 150 minutes, then fails explicitly. Recovery commands that resolve a task or
 abandon an uncertain review instead require the exclusive lease and fail fast
-if it is occupied.
+if it is occupied. Lease waiters use jittered exponential backoff from 4–5
+seconds to 96–120 seconds. Unchanged state requires only a fresh ref lookup;
+validated immutable commit content is cached per store, never the ref itself.
+With many concurrent wakes or frequently changing state, API limits may still
+be reached; a released lease may take up to two minutes to be noticed.
 
 An active admitted task that reaches a 30-minute or iteration bound records a
 pending continuation atomically with lease release. The next lease acquisition

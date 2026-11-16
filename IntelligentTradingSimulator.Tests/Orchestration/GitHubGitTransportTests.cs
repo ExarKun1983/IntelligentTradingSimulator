@@ -47,6 +47,46 @@ public class GitHubGitTransportTests
     }
 
     [Fact]
+    public async Task StateStoreCachesImmutableCommitButAlwaysReadsRefAndReturnsIndependentState()
+    {
+        string? tip = Parent;
+        var handler = new StubHandler((request, _) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.EndsWith("/git/ref/heads/agent-state", StringComparison.Ordinal))
+                return tip is null ? new(HttpStatusCode.NotFound) : Json(new { @object = new { sha = tip } });
+            if (path.Contains("/git/commits/", StringComparison.Ordinal))
+                return Json(new { tree = new { sha = path.EndsWith(Parent, StringComparison.Ordinal) ? Parent : Child } });
+            if (path.Contains("/git/trees/", StringComparison.Ordinal))
+                return Json(new { truncated = false, tree = new[] { new { path = "state.json", type = "blob",
+                    mode = "100644", sha = path.EndsWith(Parent, StringComparison.Ordinal) ? Parent : Child } } });
+            if (path.Contains("/git/blobs/", StringComparison.Ordinal))
+            {
+                var state = RepositoryState.Create("owner/repo");
+                state.Version = path.EndsWith(Parent, StringComparison.Ordinal) ? 1 : 2;
+                var bytes = Encoding.UTF8.GetBytes(StateJson.Serialize(state));
+                return Json(new { encoding = "base64", size = bytes.Length, content = Convert.ToBase64String(bytes) });
+            }
+            throw new InvalidOperationException("Unexpected HTTP");
+        });
+        using var client = Client(handler);
+        var store = new GitStateStore(new GitHubGitTransport(client, "owner/repo"), "owner/repo");
+
+        var first = await store.LoadAsync(default);
+        first.State.Version = 99;
+        Assert.Equal(1, (await store.LoadAsync(default)).State.Version);
+        Assert.Equal(5, handler.Calls);
+        tip = Child;
+        Assert.Equal(2, (await store.LoadAsync(default)).State.Version);
+        Assert.Equal(9, handler.Calls);
+        Assert.Equal(2, (await store.LoadAsync(default)).State.Version);
+        Assert.Equal(10, handler.Calls);
+        tip = null;
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.LoadAsync(default));
+        Assert.Equal(11, handler.Calls);
+    }
+
+    [Fact]
     public async Task PublicationNeverUsesForceAndVerifiesSingleParent()
     {
         var handler = new StubHandler((request, body) => request.Method.Method switch
