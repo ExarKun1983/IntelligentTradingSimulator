@@ -33,6 +33,51 @@ public sealed class PortfolioRecommendationServiceTests
     }
 
     [Fact]
+    public void BuildCandidates_DeduplicatesEligibleSymbolsBeforeCalculatingAllocations()
+    {
+        var service = new PortfolioRecommendationService(maxPositions: 2);
+        var results = new List<ObservationResult>
+        {
+            new() { Symbol = "aaa", Score = 10m, MomentumPercent = 5m, IsAboveSma5 = true },
+            new() { Symbol = "AAA", Score = 30m, MomentumPercent = 5m, IsAboveSma5 = true },
+            new() { Symbol = "AaA", Score = 100m, MomentumPercent = -1m, IsAboveSma5 = true },
+            new() { Symbol = "BBB", Score = 20m, MomentumPercent = 4m, IsAboveSma5 = true },
+            new() { Symbol = "CCC", Score = 10m, MomentumPercent = 3m, IsAboveSma5 = true }
+        };
+
+        var candidates = service.BuildCandidates(results);
+
+        Assert.Equal(["AAA", "BBB", "CCC"], candidates.Select(x => x.Symbol).ToArray());
+        Assert.Equal([30m, 20m, 10m], candidates.Select(x => x.Score).ToArray());
+        Assert.Equal([50m, 33.33m, 16.67m], candidates.Select(x => x.AllocationPercent).ToArray());
+
+        var recommendations = service.Build(results);
+
+        Assert.Equal(["AAA", "BBB"], recommendations.Select(x => x.Symbol).ToArray());
+        Assert.Equal([60m, 40m], recommendations.Select(x => x.AllocationPercent).ToArray());
+    }
+
+    [Fact]
+    public void BuildCandidates_UsesOrdinalSymbolTieBreakerRegardlessOfInputOrder()
+    {
+        var results = new List<ObservationResult>
+        {
+            new() { Symbol = "aaa", Score = 20m, MomentumPercent = 5m, IsAboveSma5 = true },
+            new() { Symbol = "AAA", Score = 20m, MomentumPercent = 5m, IsAboveSma5 = true },
+            new() { Symbol = "BBB", Score = 20m, MomentumPercent = 4m, IsAboveSma5 = true },
+            new() { Symbol = "ccc", Score = 10m, MomentumPercent = 3m, IsAboveSma5 = true }
+        };
+
+        var candidates = _service.BuildCandidates(results);
+        var reversedCandidates = _service.BuildCandidates(results.AsEnumerable().Reverse().ToArray());
+
+        Assert.Equal(["AAA", "BBB", "ccc"], candidates.Select(x => x.Symbol).ToArray());
+        Assert.Equal(
+            candidates.Select(x => (x.Symbol, x.Score, x.AllocationPercent)),
+            reversedCandidates.Select(x => (x.Symbol, x.Score, x.AllocationPercent)));
+    }
+
+    [Fact]
     public void Build_ReturnsEmpty_WhenNoResultsQualify()
     {
         var results = new List<ObservationResult>
