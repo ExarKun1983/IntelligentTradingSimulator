@@ -1,10 +1,10 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 211,
+  "Version": 212,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
-  "LastEventId": "actions:1277929203:43872318856",
+  "LastEventId": "task-pr-mapped:1277929203:1:41521da7-84c7-4d50-b9bb-68f7adc8f0c9:296:af416c7f7e7a2622268e81cde428109e4d777437:2026-11-16T13:54:15.0873407\u002B00:00",
   "AdmittedIssue": 295,
   "WorkerLease": {
     "Owner": "b1400651bb8a492b8690c9b4865ac5d3",
@@ -490,8 +490,8 @@
       "SchemaVersion": 1,
       "Number": 295,
       "Generation": 1,
-      "Version": 4,
-      "LastEventId": "actions:1277929203:43872318856",
+      "Version": 5,
+      "LastEventId": "task-pr-mapped:1277929203:1:41521da7-84c7-4d50-b9bb-68f7adc8f0c9:296:af416c7f7e7a2622268e81cde428109e4d777437:2026-11-16T13:54:15.0873407\u002B00:00",
       "Phase": "CODING",
       "Ready": false,
       "ActiveAuthorized": true,
@@ -500,8 +500,8 @@
       "ReactivationRequired": false,
       "Paused": false,
       "HoldReason": null,
-      "PullRequest": null,
-      "HeadSha": null,
+      "PullRequest": 296,
+      "HeadSha": "af416c7f7e7a2622268e81cde428109e4d777437",
       "Round": 1,
       "ConsecutiveCiFailures": 0,
       "ConsecutiveReviewFailures": 0,
@@ -754,6 +754,14 @@
       "ReceivedAt": "2026-11-16T13:04:31+00:00",
       "CompletedAt": "2026-11-16T13:04:31+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022actions:1277929203:43872318856\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:295,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u00226195946\u0022,\u0022Kind\u0022:0,\u0022Id\u0022:6195946,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-16T13:04:31\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022ready\u0022,\u0022MaxRepairTasks\u0022:5}}"
+    },
+    "task-pr-mapped:1277929203:1:41521da7-84c7-4d50-b9bb-68f7adc8f0c9:296:af416c7f7e7a2622268e81cde428109e4d777437:2026-11-16T13:54:15.0873407\u002B00:00": {
+      "Id": "task-pr-mapped:1277929203:1:41521da7-84c7-4d50-b9bb-68f7adc8f0c9:296:af416c7f7e7a2622268e81cde428109e4d777437:2026-11-16T13:54:15.0873407\u002B00:00",
+      "Digest": "65A0B82393A45EEBEBF6398CE341537487DC68A20BD2A822AAE414762FF1E94C",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-16T13:54:15.0873407+00:00",
+      "CompletedAt": "2026-11-16T13:54:15.0873407+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022task-pr-mapped:1277929203:1:41521da7-84c7-4d50-b9bb-68f7adc8f0c9:296:af416c7f7e7a2622268e81cde428109e4d777437:2026-11-16T13:54:15.0873407\\u002B00:00\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:295,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022github-task-api\u0022,\u0022Kind\u0022:1,\u0022Id\u0022:null,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-16T13:54:15.0873407\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022task-pr-mapped\u0022,\u0022TaskId\u0022:\u0022task:295:1:1:1\u0022,\u0022PullRequest\u0022:296,\u0022ObservedHead\u0022:\u0022af416c7f7e7a2622268e81cde428109e4d777437\u0022}}"
     }
   },
   "Outbox": {
