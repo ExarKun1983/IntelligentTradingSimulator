@@ -2648,6 +2648,10 @@ where execution stopped, not the precise cause; successful later reads do not
 reconstruct the earlier response. Successful candidate validation restores its
 caller stage; a failure within validation retains the more specific stage. It
 does not diagnose a missing GitHub event and does not authorize retries or recovery.
+Exclusive command operations report lease acquisition and release stages. If an
+action and lease release both fail, the diagnostic retains the action failure;
+the release failure is signaled separately and preserved in the exception, and
+the lease may remain held.
 
 For `pull_request_target`, GitHub's run `head_sha` identifies the PR head, not
 the trusted workflow definition. The wake verifier requires the runner-provided

@@ -45,6 +45,8 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
         var owner = Guid.NewGuid().ToString("N");
         var started = timeProvider.GetTimestamp();
         var retries = 0;
+        var callerStage = diagnostics?.Stage;
+        diagnostics?.Mark(GitHubLiveStage.WorkerLease);
         while (true)
         {
             var acquired = await AcquireLeaseAsync(store, owner, timeProvider.GetUtcNow() + TimeSpan.FromMinutes(31),
@@ -57,16 +59,34 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                 throw new InvalidOperationException($"Worker lease remained occupied for {elapsed:c} (limit {LeaseWait.Limit:c}); exclusive operation needs operator attention.");
             await Task.Delay(LeaseWait.NextDelay(retries++, LeaseWait.Limit - elapsed), timeProvider, cancellationToken);
         }
+        if (callerStage is { } previousStage) diagnostics?.Mark(previousStage);
+        Exception? actionFailure = null;
         try
         {
             using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(30), timeProvider);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
             return await action(linked.Token);
         }
+        catch (Exception exception)
+        {
+            diagnostics?.Capture(exception);
+            actionFailure = exception;
+            throw;
+        }
         finally
         {
             using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(5), timeProvider);
-            await ReleaseLeaseAsync(store, owner, new ReconcileOptions(), false, cleanup.Token);
+            diagnostics?.Mark(GitHubLiveStage.WorkerLeaseRelease);
+            try
+            {
+                await ReleaseLeaseAsync(store, owner, new ReconcileOptions(), false, cleanup.Token);
+            }
+            catch (Exception cleanupFailure) when (actionFailure is not null)
+            {
+                diagnostics?.MarkLeaseReleaseFailure();
+                throw new InvalidOperationException("Exclusive action and worker lease release both failed.",
+                    new AggregateException(actionFailure, cleanupFailure));
+            }
         }
     }
 

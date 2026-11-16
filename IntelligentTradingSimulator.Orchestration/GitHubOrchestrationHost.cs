@@ -101,7 +101,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                 boundedScope?.RetiredIssueNumber, commandOnly, isolatedStatusTest, trustedWorkflowPath,
                 requireDraftPullRequest, beforeEffect, automaticContinuations);
         if (commandOnly && message?.Data is AbandonUncertainReview or ResolveTaskTerminal)
-            return await new OrchestrationWorker(timeProvider: clock).RunExclusiveAsync(scopedStore, RunVerified, token);
+            return await new OrchestrationWorker(timeProvider: clock, diagnostics: liveDiagnostics)
+                .RunExclusiveAsync(scopedStore, RunVerified, token);
         return await RunVerified(token);
     }
 
@@ -227,7 +228,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                 return new(WorkerStopReason.EffectsDisabled, 0, new(state, [], true));
             }
             return message?.Data is Pause && statusPublisher is not null && statusApproval?.AllowsPublication == true
-                ? await new OrchestrationWorker(timeProvider: clock).RunExclusiveWhenAvailableAsync(stateStore, Revoke, token)
+                ? await new OrchestrationWorker(timeProvider: clock, diagnostics: liveDiagnostics)
+                    .RunExclusiveWhenAvailableAsync(stateStore, Revoke, token)
                 : await Revoke(token);
         }
         var ci = ciRoute is null ? null : new GitHubCiAdapter(api, stateStore, ciRoute, clock, ciApproval, tasks, liveDiagnostics);

@@ -17,9 +17,11 @@ public sealed class GitHubLiveDiagnostics
 {
     private GitHubLiveStage stage = GitHubLiveStage.Invocation;
     private (GitHubLiveStage Stage, string ErrorType, int? HttpStatus)? failure;
+    private bool leaseReleaseAlsoFailed;
 
     internal GitHubLiveStage Stage => stage;
     internal void Mark(GitHubLiveStage value) => stage = value;
+    internal void MarkLeaseReleaseFailure() => leaseReleaseAlsoFailed = true;
 
     internal void Capture(Exception exception)
     {
@@ -48,5 +50,7 @@ public sealed class GitHubLiveDiagnostics
         {
             LiveDiagnostic = new { Stage = saved.Stage.ToString(), saved.ErrorType, saved.HttpStatus }
         }));
+        if (leaseReleaseAlsoFailed)
+            error.WriteLine("Worker lease release also failed; the lease may remain held.");
     }
 }
