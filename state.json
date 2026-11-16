@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 186,
+  "Version": 187,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "review-observed:1277929203:1:RequestReview:291:1:task:291:1:1:1:1",
@@ -350,7 +350,7 @@
       "SchemaVersion": 1,
       "Number": 291,
       "Generation": 1,
-      "Version": 65,
+      "Version": 66,
       "LastEventId": "review-observed:1277929203:1:RequestReview:291:1:task:291:1:1:1:1",
       "Phase": "BLOCKED",
       "Ready": false,
@@ -475,8 +475,8 @@
       "ProjectionDigest": "20889BFD9052DBEF2DEF2E37B5DBEC21613732B134722417FBEB164FFB7FBD35",
       "ObservedProjectionDigest": "20889BFD9052DBEF2DEF2E37B5DBEC21613732B134722417FBEB164FFB7FBD35",
       "StatusProjectionDigest": "DB2E783A427438E0E7A3638F855FEEB79C5DD63C3654D72D52889A17789B3EEB",
-      "RequiredStatusSequence": 6,
-      "RequiredStatusIntentId": "required-status:291:1:6"
+      "RequiredStatusSequence": 7,
+      "RequiredStatusIntentId": "required-status:291:1:7"
     }
   },
   "Inbox": {
@@ -1994,6 +1994,34 @@
       "StatusBody": "\u003C!-- its-agent-state:291:1 --\u003E\nAgent workflow: **BLOCKED**\n\nGeneration: 1; round: 1.\nPR: #292; head: \u00609be01a31feedd98ed2dee7c3db75ba0a94847aec\u0060.\nTask: Completed.\nConsecutive CI failures: 0/3; review failures: 0/5.\nAutomation held: True; terminal outcome: None.\n\nHandoff: \u0060handoff:291:1:review-observed:1277929203:1:RequestReview:291:1:task:291:1:1:1:1\u0060.\n\nCanonical Git state is authoritative. Human approval is required; no automatic merge.",
       "TaskPrompt": null,
       "RequiredStatus": null,
+      "RequiredStatusBoundary": null
+    },
+    "required-status:291:1:7": {
+      "Id": "required-status:291:1:7",
+      "Digest": "F5A1F45D964536AFD790050FD2B3BC6BBAAD56ABF2E58E3E82B87F0235346FF3",
+      "IssueNumber": 291,
+      "Generation": 1,
+      "Kind": "PublishRequiredStatus",
+      "Status": "Pending",
+      "TaskId": "task:291:1:1:1",
+      "Round": 1,
+      "Sha": "9be01a31feedd98ed2dee7c3db75ba0a94847aec",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-16T01:07:54.5057664+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": {
+        "Context": "Agent managed CI",
+        "State": "pending",
+        "Description": "Exact tested head CI passed; review classification required.",
+        "TargetUrl": "https://github.com/ExarKun1983/IntelligentTradingSimulator/actions/runs/43778324486#agent-status-0754acda529cc80a51ec2734a97c7bc94b964dd1026bfd9d904b38b8c2b8332e",
+        "CiIntentId": "RunCi:291:1:task:291:1:1:1:1",
+        "CiRunId": "43778324486"
+      },
       "RequiredStatusBoundary": null
     }
   }
