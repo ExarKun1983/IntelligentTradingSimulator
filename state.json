@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 301,
+  "Version": 302,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "actions:1277929203:43894593305",
@@ -490,7 +490,7 @@
       "SchemaVersion": 1,
       "Number": 295,
       "Generation": 1,
-      "Version": 88,
+      "Version": 89,
       "LastEventId": "actions:1277929203:43894593305",
       "Phase": "CLOSED",
       "Ready": false,
@@ -593,7 +593,7 @@
       },
       "FeedbackEventIds": [],
       "LastFeedbackText": null,
-      "ClosurePending": true,
+      "ClosurePending": false,
       "TerminalOutcome": "Merged",
       "TerminalHistory": [
         {
