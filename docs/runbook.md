@@ -2547,8 +2547,14 @@ managed `workflow_run` completion, PR synchronization/closure and ordinary
 feedback wakes. Review results use API polling while a worker is active. Direct `pull_request_review`
 wakes are deliberately excluded: their PR merge revision is not the approved
 default-branch workflow definition and must not receive orchestration credentials.
-`GitHubWakeSource` checks repository/run/workflow/event and the
-approved immutable code revision; an upstream CI wake must refer to a saved run.
+`GitHubWakeSource` checks repository, run, workflow, event and the execution
+revision. It compares the regular workflow file at that revision with the
+file in the approved immutable code revision; an upstream CI wake must refer
+to a saved run. Human commands use the same workflow check. Unrelated commits
+on `master` do not require a new code pin, but a changed or unverifiable workflow
+fails closed. The job still checks out and executes the pinned code revision.
+This comparison runs inside the workflow and cannot protect credentials from a
+malicious workflow change on `master`; protecting that branch remains essential.
 These wakes only request fresh API observations. Payload heads, status conclusions,
 review text, actor labels and comment content never become synthetic completion
 or approval events. The leased shared host re-fetches feedback before downstream

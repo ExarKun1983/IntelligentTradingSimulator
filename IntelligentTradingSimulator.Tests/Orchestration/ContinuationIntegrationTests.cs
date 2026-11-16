@@ -10,6 +10,12 @@ public sealed class ContinuationIntegrationTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-11-03T22:00:00Z");
     private const string Definition = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    private const string Execution = "cccccccccccccccccccccccccccccccccccccccc";
+    private static GitHubWakeRoute TrustedRoute => new(10, Definition)
+    {
+        WorkflowExecutionRef = "owner/repo/.github/workflows/agent-state-machine.yml@refs/heads/master",
+        WorkflowExecutionSha = Definition
+    };
 
     [Fact]
     public async Task YieldPersistsTicketAndAnotherInvocationConsumesCanonicalWorkWithoutNewStart()
@@ -76,7 +82,7 @@ public sealed class ContinuationIntegrationTests
     public async Task ForgedWakeRunCannotAuthorizeObservation(string corruption)
     {
         using var client = new HttpClient(new Handler(corruption)) { BaseAddress = new("https://api.github.com/") };
-        var source = new GitHubWakeSource(new(client, "owner/repo", 1), new(10, Definition));
+        var source = new GitHubWakeSource(new(client, "owner/repo", 1), TrustedRoute);
         using var payload = JsonDocument.Parse("""{"repository":{"id":1,"full_name":"owner/repo"}}""");
         await Assert.ThrowsAsync<InvalidDataException>(() =>
             source.VerifyAsync(payload.RootElement, "schedule", "90", RepositoryState.Create("owner/repo"), default));
@@ -88,7 +94,7 @@ public sealed class ContinuationIntegrationTests
     public async Task SupportedWakeUsesTrustedRunNotPayloadProseHeadOrActor(string eventName)
     {
         using var client = new HttpClient(new Handler("", eventName)) { BaseAddress = new("https://api.github.com/") };
-        var source = new GitHubWakeSource(new(client, "owner/repo", 1), new(10, Definition));
+        var source = new GitHubWakeSource(new(client, "owner/repo", 1), TrustedRoute);
         using var payload = JsonDocument.Parse("""{"repository":{"id":1,"full_name":"owner/repo"},"comment":{"body":"ready complete green approved"},"pull_request":{"head":{"sha":"fake"}}}""");
         var state = RepositoryState.Create("owner/repo");
         Assert.True(await source.VerifyAsync(payload.RootElement, eventName, "90", state, default));
@@ -144,7 +150,7 @@ public sealed class ContinuationIntegrationTests
             WorkflowExecutionSha = corruption switch
             {
                 "missing-workflow-sha" => null,
-                "wrong-workflow-sha" => head,
+                "wrong-workflow-sha" => "invalid",
                 _ => Definition
             }
         };
@@ -187,6 +193,122 @@ public sealed class ContinuationIntegrationTests
         await Assert.ThrowsAsync<InvalidDataException>(() =>
             new GitHubWakeSource(new(client, "owner/repo", 1), route)
                 .VerifyAsync(payload, "pull_request_target", "90", RepositoryState.Create("owner/repo"), default));
+    }
+
+    [Theory]
+    [InlineData("issue_comment")]
+    [InlineData("pull_request_target")]
+    public async Task WakeAcceptsNewMasterCommitWhenWorkflowFileIsUnchanged(string eventName)
+    {
+        var head = new string('b', 40);
+        var runSha = eventName == "pull_request_target" ? head : Execution;
+        using var client = new HttpClient(new Handler("", eventName, runSha))
+            { BaseAddress = new("https://api.github.com/") };
+        var route = TrustedRoute with { WorkflowExecutionSha = Execution };
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            pull_request = new { head = new { sha = head } }
+        });
+
+        Assert.True(await new GitHubWakeSource(new(client, "owner/repo", 1), route)
+            .VerifyAsync(payload, eventName, "90", RepositoryState.Create("owner/repo"), default));
+    }
+
+    [Fact]
+    public async Task ManagedCiWakeStillRequiresTheSavedUpstreamRunAfterMasterChanges()
+    {
+        using var client = new HttpClient(new Handler("", "workflow_run", Execution))
+            { BaseAddress = new("https://api.github.com/") };
+        var state = RepositoryState.Create("owner/repo");
+        state.Issues[7] = new IssueState
+        {
+            Number = 7,
+            Ci = new CiIdentity
+            {
+                DispatchBoundary = new CiDispatchBoundary(20, Definition, "refs/tags/ci", "correlation", Now, 91)
+            }
+        };
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            action = "completed",
+            workflow_run = new { id = 91 }
+        });
+
+        Assert.True(await new GitHubWakeSource(new(client, "owner/repo", 1),
+            TrustedRoute with { WorkflowExecutionSha = Execution })
+            .VerifyAsync(payload, "workflow_run", "90", state, default));
+    }
+
+    [Theory]
+    [InlineData("different")]
+    [InlineData("missing")]
+    [InlineData("symlink")]
+    [InlineData("truncated")]
+    [InlineData("wrong-tree")]
+    [InlineData("wrong-commit")]
+    public async Task WakeRejectsUntrustedOrIncompleteWorkflowDefinition(string problem)
+    {
+        var head = new string('b', 40);
+        using var client = new HttpClient(new Handler("", "pull_request_target", head, problem))
+            { BaseAddress = new("https://api.github.com/") };
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            pull_request = new { head = new { sha = head } }
+        });
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            new GitHubWakeSource(new(client, "owner/repo", 1), TrustedRoute with { WorkflowExecutionSha = Execution })
+                .VerifyAsync(payload, "pull_request_target", "90", RepositoryState.Create("owner/repo"), default));
+    }
+
+    [Theory]
+    [InlineData("issues")]
+    [InlineData("workflow_dispatch")]
+    public async Task LiveCommandAcceptsNewMasterCommitOnlyForUnchangedWorkflow(string eventName)
+    {
+        using var client = new HttpClient(new Handler("", eventName, Execution))
+            { BaseAddress = new("https://api.github.com/") };
+        var route = TrustedRoute with { WorkflowExecutionSha = Execution };
+
+        Assert.Equal(Now, await GitHubLiveCommand.VerifyLiveCommandDefinitionAsync(
+            new(client, "owner/repo", 1), route, "90", eventName));
+    }
+
+    [Fact]
+    public async Task LiveCommandRejectsRunFromAnotherCommitEvenWhenWorkflowIsUnchanged()
+    {
+        using var client = new HttpClient(new Handler("", "issues", Definition))
+            { BaseAddress = new("https://api.github.com/") };
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            GitHubLiveCommand.VerifyLiveCommandDefinitionAsync(new(client, "owner/repo", 1),
+                TrustedRoute with { WorkflowExecutionSha = Execution }, "90", "issues"));
+    }
+
+    [Fact]
+    public async Task LiveCommandRejectsChangedWorkflowFile()
+    {
+        using var client = new HttpClient(new Handler("", "issues", Execution, "different"))
+            { BaseAddress = new("https://api.github.com/") };
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            GitHubLiveCommand.VerifyLiveCommandDefinitionAsync(new(client, "owner/repo", 1),
+                TrustedRoute with { WorkflowExecutionSha = Execution }, "90", "issues"));
+    }
+
+    [Fact]
+    public async Task WakeFailsClosedWhenWorkflowTreeIsUnavailable()
+    {
+        using var client = new HttpClient(new Handler("", "issue_comment", Execution, "unavailable"))
+            { BaseAddress = new("https://api.github.com/") };
+        using var payload = JsonDocument.Parse("""{"repository":{"id":1,"full_name":"owner/repo"}}""");
+
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            new GitHubWakeSource(new(client, "owner/repo", 1), TrustedRoute with { WorkflowExecutionSha = Execution })
+                .VerifyAsync(payload.RootElement, "issue_comment", "90", RepositoryState.Create("owner/repo"), default));
     }
 
     [Fact]
@@ -293,17 +415,43 @@ public sealed class ContinuationIntegrationTests
             return Task.FromResult(true);
         }
     }
-    private sealed class Handler(string corruption = "", string eventName = "schedule", string? headSha = null) : HttpMessageHandler
+    private sealed class Handler(string corruption = "", string eventName = "schedule", string? headSha = null,
+        string? workflowProblem = null) : HttpMessageHandler
     {
         public int Requests { get; private set; }
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             Requests++;
-            object response = request.RequestUri!.AbsolutePath == "/repos/owner/repo" ? new { id = 1, full_name = "owner/repo" } :
-                new { id = corruption == "id" ? 91 : 90, workflow_id = corruption == "workflow" ? 11 : 10,
+            var path = request.RequestUri!.AbsolutePath;
+            object response;
+            if (path == "/repos/owner/repo") response = new { id = 1, full_name = "owner/repo" };
+            else if (path.EndsWith("/actions/runs/91", StringComparison.Ordinal))
+                response = new { id = 91, workflow_id = 20, head_sha = Definition,
+                    path = GitHubCiAdapter.WorkflowPath, @event = "workflow_dispatch", repository = new { id = 1 } };
+            else if (path.Contains("/git/commits/"))
+            {
+                var sha = path.Split('/')[^1];
+                var tree = sha == Definition ? new string('d', 40) : new string('e', 40);
+                response = new { sha = workflowProblem == "wrong-commit" ? Execution : sha, tree = new { sha = tree } };
+            }
+            else if (path.Contains("/git/trees/"))
+            {
+                if (workflowProblem == "unavailable")
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+                var sha = path.Split('/')[^1];
+                var blob = workflowProblem == "different" && sha == new string('e', 40)
+                    ? new string('f', 40) : new string('1', 40);
+                var entries = workflowProblem == "missing" ? Array.Empty<object>() :
+                    [new { path = ".github/workflows/agent-state-machine.yml", type = "blob",
+                        mode = workflowProblem == "symlink" ? "120000" : "100644", sha = blob }];
+                response = new { sha = workflowProblem == "wrong-tree" ? new string('f', 40) : sha,
+                    truncated = workflowProblem == "truncated", tree = entries };
+            }
+            else response = new { id = corruption == "id" ? 91 : 90, workflow_id = corruption == "workflow" ? 11 : 10,
                     head_sha = corruption == "sha" ? new string('b', 40) : headSha ?? Definition,
                     path = corruption == "path" ? "other.yml" : ".github/workflows/agent-state-machine.yml",
-                    @event = corruption == "event" ? "push" : eventName, repository = new { id = corruption == "repository" ? 2 : 1 } };
+                    @event = corruption == "event" ? "push" : eventName, repository = new { id = corruption == "repository" ? 2 : 1 },
+                    created_at = Now };
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                 { Content = new StringContent(JsonSerializer.Serialize(response), Encoding.UTF8, "application/json") });
         }

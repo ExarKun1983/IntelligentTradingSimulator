@@ -478,7 +478,7 @@ public sealed class SharedHostLifecycleIntegrationTests
         taskApi.RemoteState = "completed";
         await host.ReconcileWakeAsync(JsonSerializer.SerializeToElement(new
             { repository = new { id = 1, full_name = "owner/repo" } }), "schedule", "90",
-            new(10, Definition), new(true, true, true, true), 99, "master", 55, TaskApproval, Bounded,
+            TrustedWakeRoute, new(true, true, true, true), 99, "master", 55, TaskApproval, Bounded,
             reviewApproval: ReviewApproval, ciRoute: CiRoute, ciApproval: CiApproval,
             statusPublisher: Publisher, statusApproval: StatusApproval);
         var issue = store.State.Issues[7];
@@ -523,7 +523,7 @@ public sealed class SharedHostLifecycleIntegrationTests
         if (!feedbackDuringMapping) taskApi.PrComments.Add(comment);
         await host.ReconcileWakeAsync(JsonSerializer.SerializeToElement(new
             { repository = new { id = 1, full_name = "owner/repo" } }), "schedule", "90",
-            new(10, Definition), new(true, true, true, true), 99, "master", 55, TaskApproval, Bounded,
+            TrustedWakeRoute, new(true, true, true, true), 99, "master", 55, TaskApproval, Bounded,
             reviewApproval: ReviewApproval, ciRoute: CiRoute, ciApproval: CiApproval,
             statusPublisher: Publisher, statusApproval: StatusApproval);
         issue = store.State.Issues[7];
@@ -579,16 +579,18 @@ public sealed class SharedHostLifecycleIntegrationTests
         Assert.Equal("success", fixture.Statuses.Last().GetProperty("state").GetString());
     }
 
+    private static GitHubWakeRoute TrustedWakeRoute => new(10, Definition)
+    {
+        WorkflowExecutionRef = "owner/repo/.github/workflows/agent-state-machine.yml@refs/heads/master",
+        WorkflowExecutionSha = Definition
+    };
+
     private static Task<WorkerResult?> Wake(GitHubOrchestrationHost host, string eventName = "schedule",
         string? finalHeadSha = null, bool autoRepair = false) =>
         host.ReconcileWakeAsync(JsonSerializer.SerializeToElement(new
             { repository = new { id = 1, full_name = "owner/repo" },
                 pull_request = new { head = new { sha = ChangedHead } } }), eventName, "90",
-            new(10, Definition)
-            {
-                WorkflowExecutionRef = "owner/repo/.github/workflows/agent-state-machine.yml@refs/heads/master",
-                WorkflowExecutionSha = Definition
-            }, new(true, true, true, true), 99, "master", 55, TaskApproval, Bounded,
+            TrustedWakeRoute, new(true, true, true, true), 99, "master", 55, TaskApproval, Bounded,
             new GitHubTaskIntegrationTests.FinalHead(finalHeadSha),
             reviewApproval: ReviewApproval with { AutoRepairFindings = autoRepair }, ciRoute: CiRoute,
             ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);

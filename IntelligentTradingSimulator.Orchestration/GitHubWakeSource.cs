@@ -26,12 +26,11 @@ public sealed class GitHubWakeSource(GitHubRepositoryApi api, GitHubWakeRoute ro
             payload.GetProperty("repository").GetProperty("id").GetInt64() != api.RepositoryId ||
             payload.GetProperty("repository").GetProperty("full_name").GetString() != api.Repository)
             throw new InvalidDataException("Invalid automatic wake scope or trusted definition.");
-        var expectedRunSha = route.DefinitionSha;
+        var executionSha = GitHubWorkflowIdentity.ValidateContext(api, route);
+        var expectedRunSha = executionSha;
         if (eventName == "pull_request_target")
         {
-            if (route.WorkflowExecutionSha != route.DefinitionSha ||
-                route.WorkflowExecutionRef != $"{api.Repository}/{route.WorkflowPath}@refs/heads/master" ||
-                !payload.TryGetProperty("pull_request", out var pull) ||
+            if (!payload.TryGetProperty("pull_request", out var pull) ||
                 !pull.TryGetProperty("head", out var head) ||
                 !head.TryGetProperty("sha", out var sha) ||
                 sha.ValueKind != JsonValueKind.String ||
@@ -48,6 +47,7 @@ public sealed class GitHubWakeSource(GitHubRepositoryApi api, GitHubWakeRoute ro
             run.GetProperty("event").GetString() != eventName ||
             run.GetProperty("repository").GetProperty("id").GetInt64() != api.RepositoryId)
             throw new InvalidDataException("Wake does not match the trusted Actions definition/run.");
+        await GitHubWorkflowIdentity.VerifyDefinitionAsync(api, route, executionSha, token);
 
         if (eventName == "workflow_run")
         {

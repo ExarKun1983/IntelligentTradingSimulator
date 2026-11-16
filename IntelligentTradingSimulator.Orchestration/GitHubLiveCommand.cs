@@ -165,7 +165,7 @@ public static class GitHubLiveCommand
                     int.Parse(payload.RootElement.GetProperty("inputs").GetProperty("issue").GetString()!, CultureInfo.InvariantCulture);
                 ValidateTestScope(state, settings, issue);
                 // The run definition is verified independently of command authorization.
-                var occurredAt = await VerifyCommandDefinitionAsync(api, settings.WakeRoute, runId, eventName);
+                var occurredAt = await VerifyLiveCommandDefinitionAsync(api, settings.WakeRoute, runId, eventName);
                 var repositoryGeneration = state.Generation;
                 var issueGeneration = state.Issues.GetValueOrDefault(issue)?.Generation ?? 1;
                 if (eventName == "workflow_dispatch")
@@ -241,14 +241,27 @@ public static class GitHubLiveCommand
                 settings.RetiredTestIssue) : null;
 
     internal static async Task<DateTimeOffset> VerifyCommandDefinitionAsync(GitHubRepositoryApi api, GitHubWakeRoute route,
+        string runId, string eventName) =>
+        await VerifyCommandDefinitionAsync(api, route, runId, eventName, route.DefinitionSha);
+
+    internal static async Task<DateTimeOffset> VerifyLiveCommandDefinitionAsync(GitHubRepositoryApi api, GitHubWakeRoute route,
         string runId, string eventName)
+    {
+        var executionSha = GitHubWorkflowIdentity.ValidateContext(api, route);
+        var occurredAt = await VerifyCommandDefinitionAsync(api, route, runId, eventName, executionSha);
+        await GitHubWorkflowIdentity.VerifyDefinitionAsync(api, route, executionSha, default);
+        return occurredAt;
+    }
+
+    private static async Task<DateTimeOffset> VerifyCommandDefinitionAsync(GitHubRepositoryApi api, GitHubWakeRoute route,
+        string runId, string eventName, string expectedRunSha)
     {
         using var run = await api.GetAsync($"actions/runs/{runId}", default);
         if (run.RootElement.GetProperty("id").ToString() != runId ||
             run.RootElement.GetProperty("workflow_id").GetInt64() != route.WorkflowId ||
             run.RootElement.GetProperty("path").GetString() != route.WorkflowPath ||
             run.RootElement.GetProperty("event").GetString() != eventName ||
-            run.RootElement.GetProperty("head_sha").GetString() != route.DefinitionSha ||
+            run.RootElement.GetProperty("head_sha").GetString() != expectedRunSha ||
             run.RootElement.GetProperty("repository").GetProperty("id").GetInt64() != api.RepositoryId)
             throw new InvalidDataException("Command definition identity mismatch.");
         return run.RootElement.GetProperty("created_at").GetDateTimeOffset();
