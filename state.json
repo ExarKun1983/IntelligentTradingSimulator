@@ -1,18 +1,21 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 401,
+  "Version": 402,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "actions:1277929203:43966492247",
   "AdmittedIssue": null,
-  "WorkerLease": null,
+  "WorkerLease": {
+    "Owner": "8a91343462674c6dbe5dcf648c122416",
+    "ExpiresAt": "2026-11-16T22:36:31.8841247+00:00"
+  },
   "Continuation": {
-    "Id": "continue:1:399",
+    "Id": "continue:1:402",
     "RepositoryGeneration": 1,
-    "DueAt": "2026-11-16T15:45:32.5167347+00:00",
-    "Reason": "Invocation settled or human-held.",
-    "Pending": false
+    "DueAt": "2026-11-16T22:10:32.3467096+00:00",
+    "Reason": "Invocation in flight.",
+    "Pending": true
   },
   "Issues": {
     "227": {
