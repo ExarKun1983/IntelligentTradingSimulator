@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 491,
+  "Version": 492,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "task-pr-mapped:1277929203:1:a7abb8b9-9757-43cb-994c-1abea3c08338:305:00f64e80ffe42e88cbc4f10bc5badcf5078e9076:2026-11-16T23:43:53.1271199\u002B00:00",
@@ -976,16 +976,16 @@
       "SchemaVersion": 1,
       "Number": 304,
       "Generation": 1,
-      "Version": 7,
+      "Version": 8,
       "LastEventId": "task-pr-mapped:1277929203:1:a7abb8b9-9757-43cb-994c-1abea3c08338:305:00f64e80ffe42e88cbc4f10bc5badcf5078e9076:2026-11-16T23:43:53.1271199\u002B00:00",
-      "Phase": "CODING",
+      "Phase": "BLOCKED",
       "Ready": false,
-      "ActiveAuthorized": true,
+      "ActiveAuthorized": false,
       "ReadyAt": "2026-11-16T23:19:03+00:00",
       "FeedbackSince": "2026-11-16T23:19:03+00:00",
-      "ReactivationRequired": false,
+      "ReactivationRequired": true,
       "Paused": false,
-      "HoldReason": null,
+      "HoldReason": "Effect outcome is ambiguous.",
       "PullRequest": 305,
       "HeadSha": "00f64e80ffe42e88cbc4f10bc5badcf5078e9076",
       "Round": 1,
@@ -4966,7 +4966,7 @@
       "IssueNumber": 304,
       "Generation": 1,
       "Kind": "PublishRequiredStatus",
-      "Status": "Executing",
+      "Status": "Unknown",
       "TaskId": "task:304:1:1:1",
       "Round": 1,
       "Sha": "00f64e80ffe42e88cbc4f10bc5badcf5078e9076",
@@ -4975,7 +4975,7 @@
       "FeedbackEventIds": [],
       "CreatedAt": "2026-11-16T23:44:05.6391151+00:00",
       "StartedAt": "2026-11-16T23:44:56.6726369+00:00",
-      "CompletedAt": null,
+      "CompletedAt": "2026-11-16T23:44:56.6726369+00:00",
       "StatusBody": null,
       "TaskPrompt": null,
       "RequiredStatus": {
@@ -4986,7 +4986,8 @@
         "CiIntentId": null,
         "CiRunId": null
       },
-      "RequiredStatusBoundary": null
+      "RequiredStatusBoundary": null,
+      "FailureCode": "ExecutionException"
     },
     "labels:304:1:845CD333380895E1961B0074627A3E89BCD360FA28E3D5A7F90C54ED2B85CE4B": {
       "Id": "labels:304:1:845CD333380895E1961B0074627A3E89BCD360FA28E3D5A7F90C54ED2B85CE4B",
