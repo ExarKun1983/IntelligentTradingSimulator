@@ -52,7 +52,7 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                 throw new InvalidOperationException("Worker lease is occupied; retry recovery after the active invocation finishes.");
             var elapsed = timeProvider.GetElapsedTime(started);
             if (elapsed >= LeaseWait.Limit)
-                throw new InvalidOperationException("Worker lease remained occupied; status revocation needs operator attention.");
+                throw new InvalidOperationException($"Worker lease remained occupied for {elapsed:c} (limit {LeaseWait.Limit:c}); exclusive operation needs operator attention.");
             await Task.Delay(LeaseWait.NextDelay(retries++, LeaseWait.Limit - elapsed), timeProvider, cancellationToken);
         }
         try
@@ -233,7 +233,7 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                 (trackAutomaticContinuations && task.ContinuationPending ||
                  (trackAutomaticContinuations || markInterruptedLease) && snapshot.State.WorkerLease is not null))
             {
-                if (task.AutomaticContinuations == 3)
+                if (task.AutomaticContinuations == OrchestrationContinuation.MaxAutomaticContinuations)
                 {
                     state = reducer.HoldForContinuationLimit(state, state.AdmittedIssue!.Value, task.Id);
                     limitReached = true;
@@ -264,10 +264,10 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
             if (yielded && ActiveTask(input) is { } task)
             {
                 var issue = input.Issues[input.AdmittedIssue!.Value];
-                input = task.AutomaticContinuations == 3
+                input = task.AutomaticContinuations == OrchestrationContinuation.MaxAutomaticContinuations
                     ? reducer.HoldForContinuationLimit(input, issue.Number, task.Id)
                     : StateJson.Clone(input);
-                if (task.AutomaticContinuations < 3)
+                if (task.AutomaticContinuations < OrchestrationContinuation.MaxAutomaticContinuations)
                     input.Issues[issue.Number].Tasks[task.Id].ContinuationPending = true;
             }
             var state = OrchestrationContinuation.Prepare(input, timeProvider.GetUtcNow(),

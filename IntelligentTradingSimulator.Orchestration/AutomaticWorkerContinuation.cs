@@ -8,22 +8,11 @@ public sealed class AutomaticWorkerContinuation(IStateStore store, TimeProvider?
     public async Task<WorkerResult> RunAsync(Func<CancellationToken, Task<WorkerResult>> run,
         CancellationToken token = default, Func<CancellationToken, Task<WorkerResult>>? publishHold = null)
     {
-        var waitStarted = clock.GetTimestamp();
-        var retries = 0;
         var limitReached = false;
         while (true)
         {
-            var result = await run(token);
-            if (result.Reason == WorkerStopReason.LeaseHeld)
-            {
-                var elapsed = clock.GetElapsedTime(waitStarted);
-                if (elapsed >= LeaseWait.Limit)
-                    throw new InvalidOperationException("Worker lease remained occupied; this wake needs operator attention.");
-                await Task.Delay(LeaseWait.NextDelay(retries++, LeaseWait.Limit - elapsed), clock, token);
-                continue;
-            }
-            waitStarted = clock.GetTimestamp();
-            retries = 0;
+            var result = await LeaseWait.RunWorkerAsync(run, clock,
+                "this wake needs operator attention", token);
             if (result.Reason == WorkerStopReason.ContinuationLimit)
             {
                 limitReached = true;
@@ -54,7 +43,8 @@ public sealed class AutomaticWorkerContinuation(IStateStore store, TimeProvider?
         Func<CancellationToken, Task<WorkerResult>>? publishHold, CancellationToken token)
     {
         if (publishHold is null) return false;
-        await publishHold(token);
+        await LeaseWait.RunWorkerAsync(publishHold, clock,
+            "hold publication needs operator attention", token);
         var state = (await store.LoadAsync(token)).State;
         return state.AdmittedIssue is null && state.Issues.Values.Any(issue =>
             (issue.Ready || issue.ActiveAuthorized) && !issue.Paused && !issue.ReactivationRequired &&
@@ -65,6 +55,22 @@ public sealed class AutomaticWorkerContinuation(IStateStore store, TimeProvider?
 internal static class LeaseWait
 {
     internal static readonly TimeSpan Limit = TimeSpan.FromMinutes(150);
+
+    internal static async Task<WorkerResult> RunWorkerAsync(Func<CancellationToken, Task<WorkerResult>> run,
+        TimeProvider clock, string timeoutContext, CancellationToken token)
+    {
+        var started = clock.GetTimestamp();
+        var retries = 0;
+        while (true)
+        {
+            var result = await run(token);
+            if (result.Reason != WorkerStopReason.LeaseHeld) return result;
+            var elapsed = clock.GetElapsedTime(started);
+            if (elapsed >= Limit)
+                throw new InvalidOperationException($"Worker lease remained occupied for {elapsed:c} (limit {Limit:c}); {timeoutContext}.");
+            await Task.Delay(NextDelay(retries++, Limit - elapsed), clock, token);
+        }
+    }
 
     internal static TimeSpan NextDelay(int retries, TimeSpan remaining)
     {

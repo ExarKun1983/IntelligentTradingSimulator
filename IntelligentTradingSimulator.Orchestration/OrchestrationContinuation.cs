@@ -6,6 +6,8 @@ public sealed record ContinuationTicket(string Id, long RepositoryGeneration, Da
 /// <summary>A scheduled wake consumes canonical work, not a synthetic lifecycle command.</summary>
 public static class OrchestrationContinuation
 {
+    internal const int MaxAutomaticContinuations = 3;
+
     public static void Validate(RepositoryState state)
     {
         if (state.Continuation is { } ticket && (string.IsNullOrWhiteSpace(ticket.Id) || ticket.Id.Length > 256 ||
@@ -14,8 +16,8 @@ public static class OrchestrationContinuation
             state.WorkerLease is { } lease && (string.IsNullOrWhiteSpace(lease.Owner) || lease.Owner.Length > 256 ||
                 lease.ExpiresAt == default) ||
             state.Issues.Values.SelectMany(issue => issue.Tasks.Values)
-                .Any(task => task.AutomaticContinuations is < 0 or > 3 ||
-                    task.ContinuationPending && task.AutomaticContinuations == 3))
+                .Any(task => task.AutomaticContinuations is < 0 or > MaxAutomaticContinuations ||
+                    task.ContinuationPending && task.AutomaticContinuations == MaxAutomaticContinuations))
             throw new InvalidDataException("Invalid durable continuation or worker lease; operator reconciliation is required.");
     }
 

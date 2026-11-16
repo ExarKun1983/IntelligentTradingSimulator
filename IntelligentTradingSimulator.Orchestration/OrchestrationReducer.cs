@@ -15,7 +15,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         if (state.AdmittedIssue != issueNumber || issue.ActiveTaskId != taskId ||
             !issue.ActiveAuthorized || issue.Paused || issue.ReactivationRequired ||
             issue.Phase is not (Phase.CODING or Phase.CI_PENDING or Phase.REVIEW_PENDING or Phase.FIX_PENDING) ||
-            !issue.Tasks.TryGetValue(taskId, out var task) || task.AutomaticContinuations != 3)
+            !issue.Tasks.TryGetValue(taskId, out var task) ||
+            task.AutomaticContinuations != OrchestrationContinuation.MaxAutomaticContinuations)
             throw new InvalidOperationException("Continuation limit no longer matches the active task.");
         Hold(issue, ContinuationLimitReason);
         CancelPendingWork(state, issue);
