@@ -259,10 +259,10 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                 (intent.RequiredStatus?.State != "success" || !live.Closed);
         if (intent.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus)
             return (state.AdmittedIssue == issue.Number ||
-                    OrchestrationReducer.IsCurrentSettledProjection(issue, intent)) &&
+                    OrchestrationReducer.IsCurrentSettledProjection(state, issue, intent)) &&
                 (intent.Kind == EffectKind.ProjectLabels
                     ? intent.Labels.SequenceEqual(OrchestrationReducer.ProjectLabels(issue))
-                    : intent.StatusBody == StatusProjection.Render(issue));
+                    : intent.StatusBody == StatusProjection.Render(issue, state.IsolatedTestManifestDigest is not null));
         var matchesCompletedTask = intent.TaskId is { } taskId && issue.ActiveTaskId == taskId &&
             issue.Tasks.TryGetValue(taskId, out var task) && task.LaunchConfirmed && task.Status == TaskStatus.Completed &&
             task.FinalSha == intent.Sha && task.Round == intent.Round &&

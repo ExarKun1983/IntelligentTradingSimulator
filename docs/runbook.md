@@ -2696,14 +2696,16 @@ the current repository generation before submitting the single explicit decision
 Missing or mismatched evidence must not be interpreted as approval. A classification
 does not authorize a merge, which remains a separate human decision.
 
-When the recorded handoff, task, CI and review identities agree, the comment
-also includes a Bash dispatch template with that exact handoff, Issue generation,
+For the production profile, when the recorded handoff, task, CI and review
+identities agree, the comment also includes a Bash dispatch template with that exact handoff, Issue generation,
 round, PR and SHA. Set the repository, current repository generation, explicit
 classification and reason yourself after checking the live PR and canonical
 state; provide findings/responses where required. No command is emitted for
 incomplete or inconsistent recorded identities. The template is not a live
 validation or authorization and cannot run while the workflow is disabled.
 The existing ingress, generation, live-head and reducer checks still apply.
+Isolated profiles do not receive a dispatch template; use the corresponding
+profile's documented workflow and state reference instead.
 
 #### Required tested-head status and managed push routing
 

@@ -219,6 +219,11 @@ public sealed class GitHubHostIntegrationTests
         Assert.Contains("\"${REASON:?Set REASON}\" && \\", body);
         Assert.DoesNotContain("-f classification=accepted", body);
 
+        var isolatedBody = StatusProjection.Render(issue, isolatedProfile: true);
+        Assert.Contains("No dispatch template is provided for an isolated profile", isolatedBody);
+        Assert.Contains("Review: Completed; classification: NeedsHuman", isolatedBody);
+        Assert.DoesNotContain("gh workflow run", isolatedBody);
+
         issue.PendingFeedbackEventIds.Add("feedback");
         Assert.DoesNotContain("gh workflow run", StatusProjection.Render(issue));
         issue.PendingFeedbackEventIds.Clear();

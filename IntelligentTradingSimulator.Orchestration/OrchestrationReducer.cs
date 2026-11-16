@@ -696,7 +696,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 issue.ProjectionDigest = digest;
             }
             issue.ObservedProjectionDigest = observedDigest;
-            var statusBody = StatusProjection.Render(issue);
+            var statusBody = StatusProjection.Render(issue, state.IsolatedTestManifestDigest is not null);
             var projectStatus = issue.Phase != Phase.READY || state.AdmittedIssue == issue.Number;
             foreach (var stale in state.Outbox.Values.Where(effect => effect.IssueNumber == issue.Number &&
                          effect.Kind == EffectKind.ProjectStatus && effect.Status == DeliveryStatus.Pending &&
@@ -932,7 +932,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         var issue = state.Issues[effect.IssueNumber];
         if (outcome is null && effect.Kind != EffectKind.PublishRequiredStatus)
         {
-            if (state.AdmittedIssue is { } owner && owner != issue.Number && !IsCurrentSettledProjection(issue, effect))
+            if (state.AdmittedIssue is { } owner && owner != issue.Number && !IsCurrentSettledProjection(state, issue, effect))
                 throw new InvalidOperationException("Another issue owns the repository admission.");
             state.AdmittedIssue ??= issue.Number;
         }
@@ -984,11 +984,12 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         return state;
     }
 
-    internal static bool IsCurrentSettledProjection(IssueState issue, EffectIntent effect) =>
+    internal static bool IsCurrentSettledProjection(RepositoryState state, IssueState issue, EffectIntent effect) =>
         issue.Phase is Phase.HUMAN_REVIEW or Phase.BLOCKED or Phase.CLOSED &&
         effect.Generation == issue.Generation &&
         (effect.Kind == EffectKind.ProjectLabels && effect.Labels.SequenceEqual(ProjectLabels(issue)) ||
-         effect.Kind == EffectKind.ProjectStatus && effect.StatusBody == StatusProjection.Render(issue));
+         effect.Kind == EffectKind.ProjectStatus &&
+         effect.StatusBody == StatusProjection.Render(issue, state.IsolatedTestManifestDigest is not null));
 
     private static bool ValidReviewProgressActor(OrchestrationEvent message, IssueState issue) =>
         message.Actor.Kind == ActorKind.ReviewService && message.Actor.Type == "Bot" &&

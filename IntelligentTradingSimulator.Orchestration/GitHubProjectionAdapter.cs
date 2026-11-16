@@ -6,7 +6,7 @@ public static class StatusProjection
 {
     public static string Marker(int issue, long generation) => $"<!-- its-agent-state:{issue}:{generation} -->";
 
-    public static string Render(IssueState issue) =>
+    public static string Render(IssueState issue, bool isolatedProfile = false) =>
         $"{Marker(issue.Number, issue.Generation)}\n" +
         $"Agent workflow: **{issue.Phase}**\n\n" +
         $"Generation: {issue.Generation}; round: {issue.Round}.\n" +
@@ -16,7 +16,7 @@ public static class StatusProjection
         $"review failures: {issue.ConsecutiveReviewFailures}/{issue.ReviewBudget}.\n" +
         $"Automation held: {issue.ReactivationRequired || issue.Paused}; terminal outcome: {issue.TerminalOutcome}.\n\n" +
         $"Handoff: {Value(issue.CurrentHandoffId)}.\n\n" +
-        ClassificationSummary(issue) +
+        ClassificationSummary(issue, isolatedProfile) +
         ClosingLinkGuidance(issue) +
         "Canonical Git state is authoritative. Human approval is required; no automatic merge.";
 
@@ -29,7 +29,7 @@ public static class StatusProjection
               "Inspect existing links first; this snapshot does not verify them or edit the PR.\n\n"
             : "";
 
-    private static string ClassificationSummary(IssueState issue)
+    private static string ClassificationSummary(IssueState issue, bool isolatedProfile)
     {
         if (issue.Phase != Phase.BLOCKED || issue.HoldReason != "Review requires human classification." ||
             issue.Review is not { Classification: ReviewClassification.NeedsHuman } review)
@@ -59,11 +59,16 @@ public static class StatusProjection
             "round, PR, SHA, issue generation, current repository generation and a reason. " +
             "Supply findings and responses where required; an empty review is not automatic acceptance. " +
             "Classification and the final merge decision are separate.\n\n" +
-            ClassificationCommand(issue, review, handoff);
+            ClassificationCommand(issue, review, handoff, isolatedProfile);
     }
 
-    private static string ClassificationCommand(IssueState issue, ReviewIdentity review, HumanHandoff? handoff)
+    private static string ClassificationCommand(IssueState issue, ReviewIdentity review, HumanHandoff? handoff,
+        bool isolatedProfile)
     {
+        if (isolatedProfile)
+            return "No dispatch template is provided for an isolated profile. Follow that profile's " +
+                "documented classification procedure and verify its state reference and workflow.\n\n";
+
         var sha = issue.HeadSha;
         var id = issue.CurrentHandoffId;
         if (issue.Paused || issue.ClosurePending || issue.PendingFeedbackEventIds.Count != 0 ||

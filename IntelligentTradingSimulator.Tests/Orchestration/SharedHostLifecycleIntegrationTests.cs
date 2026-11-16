@@ -434,6 +434,16 @@ public sealed class SharedHostLifecycleIntegrationTests
         var finalReview = store.State.Issues[7];
         Assert.Equal(ReviewClassification.NeedsHuman, finalReview.Review!.Classification);
         Assert.Equal(repairHead, finalReview.Review.Sha);
+        var projectedHandoff = store.State.Outbox.Values.Single(effect =>
+            effect.Kind == EffectKind.ProjectStatus && effect.Status == DeliveryStatus.Succeeded &&
+            effect.StatusBody == StatusProjection.Render(finalReview, isolatedPoc));
+        if (isolatedPoc)
+        {
+            Assert.Contains("No dispatch template is provided for an isolated profile", projectedHandoff.StatusBody);
+            Assert.DoesNotContain("gh workflow run", projectedHandoff.StatusBody);
+        }
+        else
+            Assert.Contains("gh workflow run agent-state-machine.yml", projectedHandoff.StatusBody);
         if (!isolatedPoc) Assert.Equal("pending", fixture.Statuses.Last().GetProperty("state").GetString());
 
         var accepted = Classification(finalReview,
