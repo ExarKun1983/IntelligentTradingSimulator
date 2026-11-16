@@ -28,7 +28,7 @@ public sealed class GitHubTaskAdapter(
     GitHubRepositoryApi api, IStateStore store, string baseBranch, long taskCreatorId,
     GitHubExecutionApproval? approval = null, ITaskFinalHeadSource? finalHeadSource = null,
     GitHubRepositoryApi? taskApi = null, bool requireDraftPullRequest = false,
-    GitHubTaskLaunchDiagnostics? launchDiagnostics = null) :
+    GitHubTaskLaunchDiagnostics? launchDiagnostics = null, GitHubLiveDiagnostics? liveDiagnostics = null) :
     IVerifiedAgentEffectAdapter, ICandidateShaValidator
 {
     public bool AgentEffectsAuthorized => approval?.AllowsTasks == true;
@@ -292,6 +292,7 @@ public sealed class GitHubTaskAdapter(
 
     public async Task ValidateCandidateShaAsync(RepositoryState state, IssueState issue, CancellationToken token)
     {
+        var callerStage = liveDiagnostics?.Stage;
         if (state.Repository != api.Repository || !state.Issues.TryGetValue(issue.Number, out var canonical) ||
             canonical.Generation != issue.Generation || canonical.ActiveTaskId is not { } taskId ||
             !canonical.Tasks.TryGetValue(taskId, out var task) || task.Status != TaskStatus.Completed ||
@@ -306,10 +307,13 @@ public sealed class GitHubTaskAdapter(
             launches[0].ExternalId != evidence!.ExternalTaskId || task.ExternalId != evidence.ExternalTaskId)
             throw new InvalidDataException("Candidate SHA has no exact completed task launch receipt.");
 
+        liveDiagnostics?.Mark(GitHubLiveStage.CandidateRepository);
         await api.VerifyRepositoryAsync(token);
+        liveDiagnostics?.Mark(GitHubLiveStage.CandidateTask);
         using var remote = await taskApi.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(evidence.ExternalTaskId), token);
         var root = remote.RootElement;
         ValidateTask(root, evidence.ExternalTaskId);
+        liveDiagnostics?.Mark(GitHubLiveStage.CandidateSessions);
         var sessions = root.GetProperty("sessions").EnumerateArray().ToList();
         var sessionIds = sessions.Select(session =>
         {
@@ -323,10 +327,12 @@ public sealed class GitHubTaskAdapter(
             root.GetProperty("session_count").GetInt32() != sessions.Count ||
             !sessionIds.SequenceEqual(evidence.SessionIds.OrderBy(id => id, StringComparer.Ordinal)))
             throw new InvalidDataException("Candidate task/session identity changed after its snapshot.");
+        liveDiagnostics?.Mark(GitHubLiveStage.CandidateMapping);
         var (mappedPullRequest, liveSha) = await ReadTaskPullMappingAsync(root, canonical, token);
         if (mappedPullRequest != evidence.PullRequest || liveSha != evidence.ObservedHeadSha ||
             canonical.HeadSha != evidence.ObservedHeadSha)
             throw new InvalidDataException("Candidate task mapping or PR head changed after its snapshot.");
+        if (callerStage is { } previousStage) liveDiagnostics?.Mark(previousStage);
     }
 
     private async Task<(int PullRequest, string Sha)> ReadTaskPullMappingAsync(JsonElement root, IssueState issue,

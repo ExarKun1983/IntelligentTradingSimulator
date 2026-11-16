@@ -27,7 +27,8 @@ public sealed record WorkerResult(WorkerStopReason Reason, int Iterations, Recon
 }
 
 /// <summary>Bounded host loop; all decisions and effect recovery still use the shared reconciler.</summary>
-public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, TimeProvider? timeProvider = null)
+public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, TimeProvider? timeProvider = null,
+    GitHubLiveDiagnostics? diagnostics = null)
 {
     private readonly OrchestrationReducer reducer = reducer ?? new OrchestrationReducer();
     private readonly TimeProvider timeProvider = timeProvider ?? TimeProvider.System;
@@ -44,6 +45,8 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
         var owner = Guid.NewGuid().ToString("N");
         var started = timeProvider.GetTimestamp();
         var retries = 0;
+        var callerStage = diagnostics?.Stage;
+        diagnostics?.Mark(GitHubLiveStage.WorkerLease);
         while (true)
         {
             var acquired = await AcquireLeaseAsync(store, owner, timeProvider.GetUtcNow() + TimeSpan.FromMinutes(31),
@@ -56,16 +59,34 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                 throw new InvalidOperationException($"Worker lease remained occupied for {elapsed:c} (limit {LeaseWait.Limit:c}); exclusive operation needs operator attention.");
             await Task.Delay(LeaseWait.NextDelay(retries++, LeaseWait.Limit - elapsed), timeProvider, cancellationToken);
         }
+        if (callerStage is { } previousStage) diagnostics?.Mark(previousStage);
+        Exception? actionFailure = null;
         try
         {
             using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(30), timeProvider);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
             return await action(linked.Token);
         }
+        catch (Exception exception)
+        {
+            diagnostics?.Capture(exception);
+            actionFailure = exception;
+            throw;
+        }
         finally
         {
             using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(5), timeProvider);
-            await ReleaseLeaseAsync(store, owner, new ReconcileOptions(), false, cleanup.Token);
+            diagnostics?.Mark(GitHubLiveStage.WorkerLeaseRelease);
+            try
+            {
+                await ReleaseLeaseAsync(store, owner, new ReconcileOptions(), false, cleanup.Token);
+            }
+            catch (Exception cleanupFailure) when (actionFailure is not null)
+            {
+                diagnostics?.MarkLeaseReleaseFailure();
+                throw new InvalidOperationException("Exclusive action and worker lease release both failed.",
+                    new AggregateException(actionFailure, cleanupFailure));
+            }
         }
     }
 
@@ -84,7 +105,7 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
         if (reconcileOptions.MaximumConflicts < 1 || reconcileOptions.MaximumEffectExecutions is < 1)
             throw new ArgumentOutOfRangeException(nameof(reconcileOptions));
 
-        var reconciler = new OrchestrationReconciler(reducer);
+        var reconciler = new OrchestrationReconciler(reducer, diagnostics);
         var started = timeProvider.GetTimestamp();
         using var deadline = new CancellationTokenSource(options.MaximumDuration, timeProvider);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
@@ -109,6 +130,7 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
             cancellationToken.ThrowIfCancellationRequested();
             if (!reconcileOptions.DryRun)
             {
+                diagnostics?.Mark(GitHubLiveStage.WorkerLease);
                 var acquisition = await AcquireLeaseAsync(store, owner,
                     timeProvider.GetUtcNow() + options.MaximumDuration + TimeSpan.FromMinutes(1),
                     reconcileOptions.MaximumConflicts, options.TrackAutomaticContinuations, false, token);
@@ -127,9 +149,12 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                 iterations++;
                 // A completion can arrive before the launch/run result was saved.
                 // Restore only recorded identities here; never execute new effects ahead of commands.
+                diagnostics?.Mark(GitHubLiveStage.InFlightRecovery);
                 var recovered = await reconciler.RecoverInFlightAsync(store, effects,
                     timeProvider.GetUtcNow(), reconcileOptions, token);
+                diagnostics?.Mark(GitHubLiveStage.WorkerStateLoad);
                 var snapshot = await store.LoadAsync(token);
+                diagnostics?.Mark(GitHubLiveStage.WorkerEventRead);
                 var batch = await events.ReadAsync(snapshot.State, token);
                 var messages = batch?.Events;
                 if (messages is null || messages.Count > options.MaximumEventsPerIteration)
@@ -153,6 +178,7 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
 
                 // Dispatch individually: committed events survive a later event/API/publication failure.
                 var current = snapshot.State;
+                diagnostics?.Mark(GitHubLiveStage.EventPublication);
                 foreach (var message in messages)
                 {
                     if (AwaitingOperationIdentity(current, message)) continue;
@@ -205,8 +231,9 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
             // In-flight intents remain executing for lookup-only recovery; cancellation never rolls them back.
             return Yield(WorkerStopReason.TimeLimit);
         }
-        catch
+        catch (Exception exception)
         {
+            diagnostics?.Capture(exception);
             interrupted = true;
             throw;
         }
@@ -217,6 +244,7 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                 // Cleanup is separately bounded even when the invocation was cancelled. A failed
                 // release leaves a durable lease to expire, never a cleared admission/task intent.
                 using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(5), timeProvider);
+                diagnostics?.Mark(GitHubLiveStage.WorkerLeaseRelease);
                 await ReleaseLeaseAsync(store, owner, reconcileOptions,
                     options.TrackAutomaticContinuations && (yielded || interrupted), cleanup.Token);
             }

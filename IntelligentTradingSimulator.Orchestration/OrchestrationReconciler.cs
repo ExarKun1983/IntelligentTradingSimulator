@@ -62,7 +62,7 @@ public sealed record ReconcileOptions(
 public sealed record ReconcileResult(RepositoryState State, IReadOnlyList<EffectIntent> Decisions, bool EffectsDisabled,
     EffectIntent? ExecutedEffect = null);
 
-public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null)
+public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null, GitHubLiveDiagnostics? diagnostics = null)
 {
     private readonly OrchestrationReducer reducer = reducer ?? new OrchestrationReducer();
 
@@ -151,12 +151,16 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
         var enabled = EffectsEnabled(options);
         for (var attempt = 0; attempt < options.MaximumConflicts; attempt++)
         {
+            diagnostics?.Mark(GitHubLiveStage.WorkerStateLoad);
             var snapshot = await store.LoadAsync(cancellationToken);
+            diagnostics?.Mark(GitHubLiveStage.LiveObservation);
             var live = await observations.ObserveAsync(snapshot.State, cancellationToken);
+            diagnostics?.Mark(GitHubLiveStage.ReconcileDecision);
             var decision = reducer.Reconcile(snapshot.State, live, options.ProjectionOnly);
             if (options.DryRun) return new(decision.State, decision.PendingEffects, true);
             if (StateJson.Serialize(snapshot.State) != StateJson.Serialize(decision.State))
             {
+                diagnostics?.Mark(GitHubLiveStage.ReconcileStateSave);
                 if (!await store.TrySaveAsync(snapshot, decision.State, cancellationToken)) continue;
                 snapshot = await store.LoadAsync(cancellationToken);
             }
@@ -166,12 +170,14 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             if (executing is not null)
             {
                 // Both in-flight and uncertain intents are lookup-only; neither can be executed again.
+                diagnostics?.Mark(GitHubLiveStage.EffectRecovery);
                 var resolved = await RecoverIntentAsync(store, effects, executing, live.ObservedAt,
                     options.MaximumConflicts, cancellationToken);
                 return new(resolved, decision.PendingEffects, false);
             }
             var simulateAgents = options.AllowOfflineAgentSimulation && effects is IOfflineEffectAdapter ||
                 effects is IVerifiedAgentEffectAdapter { AgentEffectsAuthorized: true };
+            diagnostics?.Mark(GitHubLiveStage.EffectSelection);
             var pending = snapshot.State.Outbox.Values
                 .OrderBy(e => options.PrioritizeAdmittedWork && e.IssueNumber == snapshot.State.AdmittedIssue &&
                     e.Kind is EffectKind.LaunchTask or EffectKind.RunCi or EffectKind.RequestReview ? 0 : 1)
@@ -182,10 +188,12 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                 IsSafeToExecute(snapshot.State, e, live));
             if (pending is null) return new(snapshot.State, decision.PendingEffects, false);
             var marked = reducer.MarkExecuting(snapshot.State, pending.Id, live.ObservedAt);
+            diagnostics?.Mark(GitHubLiveStage.ReconcileStateSave);
             if (!await store.TrySaveAsync(snapshot, marked, cancellationToken)) continue;
             EffectOutcome outcome;
             try
             {
+                diagnostics?.Mark(GitHubLiveStage.EffectExecution);
                 outcome = await effects.ExecuteAsync(marked.Outbox[pending.Id], cancellationToken);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
@@ -193,6 +201,7 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                 outcome = new(DeliveryStatus.Unknown, FailureCode: EffectFailureCode.ExecutionException);
             }
             // Once execution started, a lost result must never cause another Execute call.
+            diagnostics?.Mark(GitHubLiveStage.EffectOutcomeSave);
             var final = await PublishOutcomeAsync(store, pending.Id, pending.Digest, outcome,
                 live.ObservedAt, options.MaximumConflicts, cancellationToken);
             return new(final, decision.PendingEffects, false, pending);

@@ -205,13 +205,18 @@ public sealed class GitHubRequiredStatusTests
         });
         await acquired.Task.WaitAsync(TimeSpan.FromSeconds(10));
         using var cancellation = new CancellationTokenSource();
+        var diagnostics = new GitHubLiveDiagnostics();
         try
         {
-            var pause = PauseCommandOnlyAsync(client, store, Approved, token: cancellation.Token);
+            var pause = PauseCommandOnlyAsync(client, store, Approved, token: cancellation.Token,
+                diagnostics: diagnostics);
             Assert.True(store.Value.Issues[7].Paused);
             Assert.False(pause.IsCompleted);
             cancellation.Cancel();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pause);
+            var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pause);
+            using var output = new StringWriter();
+            diagnostics.WriteFailure(output, exception);
+            Assert.Contains("\"Stage\":\"WorkerLease\"", output.ToString());
             Assert.True(store.Value.Issues[7].Paused);
             Assert.Equal(0, api.Posts);
         }
@@ -347,7 +352,8 @@ public sealed class GitHubRequiredStatusTests
     }
 
     private static Task<WorkerResult> PauseCommandOnlyAsync(HttpClient client, Store store,
-        GitHubRequiredStatusApproval approval, bool missingPublisher = false, CancellationToken token = default)
+        GitHubRequiredStatusApproval approval, bool missingPublisher = false, CancellationToken token = default,
+        GitHubLiveDiagnostics? diagnostics = null)
     {
         var payload = JsonSerializer.SerializeToElement(new
         {
@@ -355,7 +361,7 @@ public sealed class GitHubRequiredStatusTests
             sender = new { id = 55, login = "maintainer", type = "User" },
             inputs = new { issue = "7", operation = "pause", reason = "Operator pause after published success." }
         });
-        return new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock())
+        return new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock(), liveDiagnostics: diagnostics)
             .ReconcileAsync(payload, "workflow_dispatch", "44", 1, 1, Now, [], 9, "master", 55,
                 new(true, true, true, true), token: token, reviewApproval: new(), ciApproval: new(),
                 statusPublisher: missingPublisher ? null : Publisher, statusApproval: approval, commandOnly: true);

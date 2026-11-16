@@ -110,6 +110,7 @@ public static class GitHubLiveCommand
             return await GitHubPocCommand.RunAsync(args, output, error);
         if (args.Contains("--github-isolated-status-test", StringComparer.Ordinal))
             return await GitHubIsolatedStatusTestCommand.RunAsync(args, output, error);
+        var diagnostics = new GitHubLiveDiagnostics();
         try
         {
             if (!args.Contains("--execute", StringComparer.Ordinal) || args.Contains("--dry-run", StringComparer.Ordinal) ||
@@ -121,6 +122,7 @@ public static class GitHubLiveCommand
             using var payload = JsonDocument.Parse(await File.ReadAllTextAsync(path));
             var eventName = Environment.GetEnvironmentVariable("GITHUB_EVENT_NAME") ?? throw new InvalidDataException("Missing event.");
             var recoveryOnly = IsRecoveryOnlyCommand(eventName, payload.RootElement);
+            diagnostics.Mark(GitHubLiveStage.Settings);
             var settings = GitHubLiveSettings.Read(Environment.GetEnvironmentVariable, recoveryOnly);
             if (!recoveryOnly)
             {
@@ -134,6 +136,7 @@ public static class GitHubLiveCommand
                     return 1;
                 }
             }
+            diagnostics.Mark(GitHubLiveStage.Credentials);
             var credential = Environment.GetEnvironmentVariable("ORCHESTRATION_USER_TOKEN");
             if (string.IsNullOrWhiteSpace(credential)) throw new InvalidOperationException("Verified user credential unavailable.");
             var workflowCredential = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
@@ -154,17 +157,19 @@ public static class GitHubLiveCommand
             var publisher = await GitHubLiveCredentials.VerifyAsync(api, taskApi, settings.ActorId);
             var store = new GitStateStore(new GitHubGitTransport(client, settings.Repository, allowMutations: true,
                 stateReference: settings.StateReference), settings.Repository, settings.StateReference);
-            var host = new GitHubOrchestrationHost(api, store, taskApi: taskApi);
+            var host = new GitHubOrchestrationHost(api, store, taskApi: taskApi, liveDiagnostics: diagnostics);
             var runId = Environment.GetEnvironmentVariable("GITHUB_RUN_ID") ?? throw new InvalidDataException("Missing run ID.");
             WorkerResult? result;
             if (eventName is "issues" or "workflow_dispatch")
             {
+                diagnostics.Mark(GitHubLiveStage.StateLoad);
                 var state = (await store.LoadAsync(default)).State;
                 ValidateReviewTestManifest(state, settings);
                 var issue = eventName == "issues" ? payload.RootElement.GetProperty("issue").GetProperty("number").GetInt32() :
                     int.Parse(payload.RootElement.GetProperty("inputs").GetProperty("issue").GetString()!, CultureInfo.InvariantCulture);
                 ValidateTestScope(state, settings, issue);
                 // The run definition is verified independently of command authorization.
+                diagnostics.Mark(GitHubLiveStage.CommandVerification);
                 var occurredAt = await VerifyLiveCommandDefinitionAsync(api, settings.WakeRoute, runId, eventName);
                 var repositoryGeneration = state.Generation;
                 var issueGeneration = state.Issues.GetValueOrDefault(issue)?.Generation ?? 1;
@@ -191,12 +196,14 @@ public static class GitHubLiveCommand
             }
             else
             {
+                diagnostics.Mark(GitHubLiveStage.StateLoad);
                 if (settings.TestIssue is not null)
                 {
                     var state = (await store.LoadAsync(default)).State;
                     ValidateReviewTestManifest(state, settings);
                     ValidateTestScope(state, settings, null);
                 }
+                diagnostics.Mark(GitHubLiveStage.WakeVerification);
                 result = await host.ReconcileWakeAsync(payload.RootElement, eventName, runId, settings.WakeRoute,
                     settings.Wake, publisher.ActorId, settings.BaseBranch, settings.ActorId, settings.Tasks,
                     ciRoute: settings.CiRoute, ciApproval: settings.Ci, reviewApproval: settings.Review,
@@ -210,6 +217,7 @@ public static class GitHubLiveCommand
             ArgumentException or UnauthorizedAccessException or KeyNotFoundException or HttpRequestException or
             OperationCanceledException or FormatException or OverflowException)
         {
+            diagnostics.WriteFailure(error, exception);
             error.WriteLine($"Live orchestration stopped ({exception.GetType().Name}); reconcile persisted state before retrying.");
             return 1;
         }

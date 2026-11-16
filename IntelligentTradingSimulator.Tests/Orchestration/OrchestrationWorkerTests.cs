@@ -1366,6 +1366,103 @@ public sealed class OrchestrationWorkerTests
     }
 
     [Fact]
+    public async Task FailureDiagnosticPreservesFailingStageAcrossLeaseCleanupAndRedactsMessage()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store);
+        var diagnostics = new GitHubLiveDiagnostics();
+        var worker = new OrchestrationWorker(new(new Authorized()), new Clock(), diagnostics);
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            worker.RunAsync(store, new FailingDiagnosticSource(diagnostics), api, api, Simulation, Fast));
+        using var output = new StringWriter();
+        diagnostics.WriteFailure(output, exception);
+
+        Assert.Contains("\"Stage\":\"CiRunIdentity\"", output.ToString());
+        Assert.Contains("\"ErrorType\":\"InvalidDataException\"", output.ToString());
+        Assert.DoesNotContain("private diagnostic input", output.ToString());
+        Assert.Null(store.Current.WorkerLease);
+        Assert.Empty(api.Executions);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExclusiveDiagnosticsReportLeaseAcquisitionAndReleaseFailures(bool waitForLease)
+    {
+        var store = new Store { FailWrites = true };
+        var diagnostics = new GitHubLiveDiagnostics();
+        var worker = new OrchestrationWorker(timeProvider: new Clock(), diagnostics: diagnostics);
+        Task<bool> Run(Func<CancellationToken, Task<bool>> action) => waitForLease
+            ? worker.RunExclusiveWhenAvailableAsync(store, action)
+            : worker.RunExclusiveAsync(store, action);
+        diagnostics.Mark(GitHubLiveStage.CommandVerification);
+        var ran = false;
+        var acquisitionError = await Assert.ThrowsAsync<IOException>(() =>
+            Run(_ => { ran = true; return Task.FromResult(true); }));
+        using var acquisitionOutput = new StringWriter();
+        diagnostics.WriteFailure(acquisitionOutput, acquisitionError);
+        Assert.False(ran);
+        Assert.Contains("\"Stage\":\"WorkerLease\"", acquisitionOutput.ToString());
+        Assert.Null(store.Current.WorkerLease);
+
+        diagnostics = new GitHubLiveDiagnostics();
+        worker = new OrchestrationWorker(timeProvider: new Clock(), diagnostics: diagnostics);
+        diagnostics.Mark(GitHubLiveStage.CommandPublication);
+        store.FailWrites = false;
+        var releaseError = await Assert.ThrowsAsync<IOException>(() => Run(_ =>
+        {
+            Assert.Equal(GitHubLiveStage.CommandPublication, diagnostics.Stage);
+            store.FailWrites = true;
+            return Task.FromResult(true);
+        }));
+        using var releaseOutput = new StringWriter();
+        diagnostics.WriteFailure(releaseOutput, releaseError);
+        Assert.Contains("\"Stage\":\"WorkerLeaseRelease\"", releaseOutput.ToString());
+        Assert.NotNull(store.Current.WorkerLease);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExclusiveDiagnosticsPreserveActionFailureEvenWhenLeaseReleaseFails(bool failRelease)
+    {
+        var store = new Store();
+        var diagnostics = new GitHubLiveDiagnostics();
+        var worker = new OrchestrationWorker(timeProvider: new Clock(), diagnostics: diagnostics);
+        var original = new InvalidDataException("private action input");
+        diagnostics.Mark(GitHubLiveStage.CommandVerification);
+        Task<bool> Run() => worker.RunExclusiveAsync<bool>(store, _ =>
+        {
+            diagnostics.Mark(GitHubLiveStage.TaskCompletion);
+            store.FailWrites = failRelease;
+            throw original;
+        });
+        Exception error;
+        if (failRelease)
+        {
+            var combined = await Assert.ThrowsAsync<InvalidOperationException>(Run);
+            var failures = Assert.IsType<AggregateException>(combined.InnerException);
+            Assert.Same(original, failures.InnerExceptions[0]);
+            Assert.IsType<IOException>(failures.InnerExceptions[1]);
+            error = combined;
+            Assert.NotNull(store.Current.WorkerLease);
+        }
+        else
+        {
+            error = await Assert.ThrowsAsync<InvalidDataException>(Run);
+            Assert.Same(original, error);
+            Assert.Null(store.Current.WorkerLease);
+        }
+        using var output = new StringWriter();
+        diagnostics.WriteFailure(output, error);
+        Assert.Contains("\"Stage\":\"TaskCompletion\"", output.ToString());
+        Assert.Contains("\"ErrorType\":\"InvalidDataException\"", output.ToString());
+        Assert.DoesNotContain("private action input", output.ToString());
+        if (failRelease) Assert.Contains("Worker lease release also failed", output.ToString());
+        else Assert.DoesNotContain("Worker lease release also failed", output.ToString());
+    }
+
+    [Fact]
     public async Task DurationLimitYieldsAfterCommittedEventsBeforeStartingAnEffect()
     {
         var clock = new Clock();
@@ -1532,6 +1629,15 @@ public sealed class OrchestrationWorkerTests
     private sealed class Authorized : IAuthorizationPolicy
     {
         public bool IsAuthorized(OrchestrationEvent message) => true;
+    }
+
+    private sealed class FailingDiagnosticSource(GitHubLiveDiagnostics diagnostics) : IWorkerEventSource
+    {
+        public Task<WorkerEventBatch> ReadAsync(RepositoryState state, CancellationToken token)
+        {
+            diagnostics.Mark(GitHubLiveStage.CiRunIdentity);
+            throw new InvalidDataException("private diagnostic input");
+        }
     }
 
     private sealed class BlockingSource : IWorkerEventSource

@@ -211,6 +211,24 @@ public sealed class TaskTerminalHostIntegrationTests
         Assert.Equal(7, store.State.AdmittedIssue);
     }
 
+    [Fact]
+    public async Task CommandOnlyTerminalResolutionReportsOccupiedLeaseStage()
+    {
+        var store = new Store();
+        store.State.WorkerLease = new("other", Now.AddMinutes(31));
+        using var fixture = new Fixture(store);
+        using var client = fixture.Client();
+        var diagnostics = new GitHubLiveDiagnostics();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Run(client, store, commandOnly: true, diagnostics: diagnostics));
+        using var output = new StringWriter();
+        diagnostics.WriteFailure(output, exception);
+        Assert.Contains("\"Stage\":\"WorkerLease\"", output.ToString());
+        Assert.Equal("other", store.State.WorkerLease!.Owner);
+        Assert.Equal(0, fixture.TaskReads);
+    }
+
     private static void AssertResolved(RepositoryState state)
     {
         var issue = state.Issues[7];
@@ -238,7 +256,7 @@ public sealed class TaskTerminalHostIntegrationTests
     private static Task<WorkerResult> Run(HttpClient client, Store store, string reason = "End verified task tracking",
         string task = "task", DateTimeOffset? occurredAt = null, string actorType = "User",
         long repositoryGeneration = 1, long issueGeneration = 1, string runId = "44", DateTimeOffset? observedAt = null,
-        bool commandOnly = false)
+        bool commandOnly = false, GitHubLiveDiagnostics? diagnostics = null)
     {
         var payload = JsonSerializer.SerializeToElement(new
         {
@@ -246,7 +264,8 @@ public sealed class TaskTerminalHostIntegrationTests
             sender = new { id = 55, login = "maintainer", type = actorType },
             inputs = new { issue = "7", operation = "resolve-task", task, reason }
         });
-        return new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock(observedAt ?? Now))
+        return new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock(observedAt ?? Now),
+                liveDiagnostics: diagnostics)
             .ReconcileAsync(payload, "workflow_dispatch", runId, repositoryGeneration, issueGeneration,
                 occurredAt ?? Now.AddDays(-1), [], 99, "master", 55, Approval,
                 new() { MaximumIterations = 2, PollInterval = TimeSpan.Zero }, commandOnly: commandOnly);

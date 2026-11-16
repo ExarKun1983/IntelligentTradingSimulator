@@ -132,7 +132,9 @@ public sealed class GitHubCiIntegrationTests
         var api = new Api();
         using var client = api.Client();
         var validator = new CandidateValidator { Reject = true };
-        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved, validator);
+        var diagnostics = new GitHubLiveDiagnostics();
+        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved, validator,
+            diagnostics);
         await Assert.ThrowsAsync<InvalidDataException>(() =>
             adapter.ExecuteAsync(store.Value.Outbox["ci"], default));
         Assert.Equal(0, api.Posts);
@@ -142,7 +144,11 @@ public sealed class GitHubCiIntegrationTests
         issue.Ci.DispatchBoundary = new(10, Definition, Route.Ref, "correlation", Now, 90);
         store.Value.Outbox["ci"].Status = DeliveryStatus.Succeeded;
         store.Value.Outbox["ci"].ExternalId = "90";
-        await Assert.ThrowsAsync<InvalidDataException>(() => adapter.ReadEventAsync(store.Value, issue, default));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => adapter.ReadEventAsync(store.Value, issue, default));
+        using var diagnosticOutput = new StringWriter();
+        diagnostics.WriteFailure(diagnosticOutput, error);
+        Assert.Contains("\"Stage\":\"CiCandidateValidation\"", diagnosticOutput.ToString());
+        Assert.DoesNotContain(error.Message, diagnosticOutput.ToString());
         Assert.Null(issue.Ci.Green);
     }
 
@@ -326,11 +332,17 @@ public sealed class GitHubCiIntegrationTests
         var store = new Store(State());
         var api = new Api();
         using var client = api.Client();
-        var adapter = CreateAdapter(client, store);
+        var diagnostics = new GitHubLiveDiagnostics();
+        var adapter = new GitHubCiAdapter(new(client, "owner/repo", 1), store, Route, new Clock(), Approved,
+            new CandidateValidator(), diagnostics);
         var outcome = await adapter.ExecuteAsync(store.Value.Outbox["ci"], default);
         store.Value = new OrchestrationReducer().RecordOutcome(store.Value, "ci", outcome, Now);
         api.Corruption = corruption;
-        await Assert.ThrowsAsync<InvalidDataException>(() => adapter.ReadEventAsync(store.Value, store.Value.Issues[7], default));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            adapter.ReadEventAsync(store.Value, store.Value.Issues[7], default));
+        using var diagnosticOutput = new StringWriter();
+        diagnostics.WriteFailure(diagnosticOutput, error);
+        Assert.Contains("\"Stage\":\"CiRunIdentity\"", diagnosticOutput.ToString());
         Assert.Null(store.Value.Issues[7].Ci!.Green);
         Assert.Equal(1, api.Posts);
     }
