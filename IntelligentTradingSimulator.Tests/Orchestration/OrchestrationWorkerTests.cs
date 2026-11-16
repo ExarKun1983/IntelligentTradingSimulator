@@ -1366,6 +1366,25 @@ public sealed class OrchestrationWorkerTests
     }
 
     [Fact]
+    public async Task FailureDiagnosticPreservesFailingStageAcrossLeaseCleanupAndRedactsMessage()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store);
+        var diagnostics = new GitHubLiveDiagnostics();
+        var worker = new OrchestrationWorker(new(new Authorized()), new Clock(), diagnostics);
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            worker.RunAsync(store, new FailingDiagnosticSource(diagnostics), api, api, Simulation, Fast));
+        using var output = new StringWriter();
+        diagnostics.WriteFailure(output, exception);
+
+        Assert.Contains("\"Stage\":\"CiRunIdentity\"", output.ToString());
+        Assert.Contains("\"ErrorType\":\"InvalidDataException\"", output.ToString());
+        Assert.DoesNotContain("private diagnostic input", output.ToString());
+        Assert.Null(store.Current.WorkerLease);
+        Assert.Empty(api.Executions);
+    }
+
+    [Fact]
     public async Task DurationLimitYieldsAfterCommittedEventsBeforeStartingAnEffect()
     {
         var clock = new Clock();
@@ -1532,6 +1551,15 @@ public sealed class OrchestrationWorkerTests
     private sealed class Authorized : IAuthorizationPolicy
     {
         public bool IsAuthorized(OrchestrationEvent message) => true;
+    }
+
+    private sealed class FailingDiagnosticSource(GitHubLiveDiagnostics diagnostics) : IWorkerEventSource
+    {
+        public Task<WorkerEventBatch> ReadAsync(RepositoryState state, CancellationToken token)
+        {
+            diagnostics.Mark(GitHubLiveStage.CiRunIdentity);
+            throw new InvalidDataException("private diagnostic input");
+        }
     }
 
     private sealed class BlockingSource : IWorkerEventSource

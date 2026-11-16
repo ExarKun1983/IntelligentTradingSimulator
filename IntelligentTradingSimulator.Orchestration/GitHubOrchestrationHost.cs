@@ -5,7 +5,7 @@ namespace IntelligentTradingSimulator.Orchestration;
 /// <summary>Production composition with explicit prerequisite gates; ordinary CLI defaults remain read-only.</summary>
 public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore store, TimeProvider? clock = null,
     GitHubRepositoryApi? taskApi = null, GitHubTaskLaunchDiagnostics? taskLaunchDiagnostics = null,
-    GitHubReviewRequestDiagnostics? reviewRequestDiagnostics = null)
+    GitHubReviewRequestDiagnostics? reviewRequestDiagnostics = null, GitHubLiveDiagnostics? liveDiagnostics = null)
 {
     private readonly TimeProvider clock = clock ?? TimeProvider.System;
 
@@ -20,7 +20,9 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         if (!wakeApproval.AllowsWake || approval?.AllowsTasks != true)
             throw new InvalidOperationException("Automatic live execution prerequisites are not verified.");
         var scopedStore = ScopeStore(store, boundedScope);
+        liveDiagnostics?.Mark(GitHubLiveStage.StateLoad);
         var state = (await scopedStore.LoadAsync(token)).State;
+        liveDiagnostics?.Mark(GitHubLiveStage.WakeVerification);
         if (!await new GitHubWakeSource(api, wakeRoute).VerifyAsync(trustedActionsPayload, eventName, runId, state, token))
             return null;
         if (eventName == "schedule" && !OrchestrationContinuation.IsDue(state, clock.GetUtcNow()) &&
@@ -56,10 +58,12 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
              boundedScope is not { SinglePassTest: false, MaxRepairTasks: 1 } || !requireDraftPullRequest))
             throw new InvalidDataException("PoC start requires its bounded draft-PR driver profile.");
         var scopedStore = ScopeStore(store, boundedScope);
+        liveDiagnostics?.Mark(GitHubLiveStage.StateLoad);
         var snapshot = await scopedStore.LoadAsync(token);
         var issueNumber = IssueNumber(trustedActionsPayload, eventName);
         if (boundedScope is { } scope && issueNumber != scope.IssueNumber)
             throw new InvalidDataException("Bounded scope rejected a command for another Issue.");
+        liveDiagnostics?.Mark(GitHubLiveStage.CommandVerification);
         var evidence = await api.ReadIngressEvidenceAsync(trustedActionsPayload, eventName, runId, projectionActorIds,
             token, trustedWorkflowPath);
         var message = GitHubActionsIngress.PrepareEvent(trustedActionsPayload, eventName, runId, evidence,
@@ -114,7 +118,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         var authorization = new VerifiedEvents();
         var tasks = new GitHubTaskAdapter(api, stateStore, baseBranch, taskCreatorId, approval, finalHeadSource,
             taskApi, requireDraftPullRequest: isolatedStatusTest || requireDraftPullRequest,
-            launchDiagnostics: taskLaunchDiagnostics);
+            launchDiagnostics: taskLaunchDiagnostics, liveDiagnostics: liveDiagnostics);
         var reviews = new GitHubReviewAdapter(api, stateStore, clock, reviewApproval, tasks, reviewRequestDiagnostics);
         if (message?.Data is HumanClassification classification)
         {
@@ -196,6 +200,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         {
             authorization.Grant(message);
             // Persist a verified command before unrelated service reads can fail or the invocation yields.
+            liveDiagnostics?.Mark(GitHubLiveStage.CommandPublication);
             await new OrchestrationReconciler(new(authorization)).DispatchAsync(stateStore, message, token);
         }
         if (commandOnly)
@@ -225,9 +230,9 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                 ? await new OrchestrationWorker(timeProvider: clock).RunExclusiveWhenAvailableAsync(stateStore, Revoke, token)
                 : await Revoke(token);
         }
-        var ci = ciRoute is null ? null : new GitHubCiAdapter(api, stateStore, ciRoute, clock, ciApproval, tasks);
+        var ci = ciRoute is null ? null : new GitHubCiAdapter(api, stateStore, ciRoute, clock, ciApproval, tasks, liveDiagnostics);
         var events = new ProductionEvents(message, api, tasks, reviews, ci, authorization, projectionActorId,
-            excludedIssueNumber, !isolatedStatusTest);
+            excludedIssueNumber, !isolatedStatusTest, liveDiagnostics);
         var statuses = statusPublisher is null ? null : new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher, statusApproval, clock);
         IVerifiedAgentEffectAdapter effects = new ProductionEffects(tasks, reviews, ci, statuses,
             new GitHubProjectionAdapter(api, projectionActorId, true));
@@ -242,7 +247,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             AllowedEffectKinds: allowedEffects,
             AllowedRequiredStatusStates: isolatedStatusTest ? new HashSet<string>(["success"], StringComparer.Ordinal) : null,
             MaximumEffectExecutions: isolatedStatusTest ? 3 : null);
-        var worker = new OrchestrationWorker(reducer, clock);
+        var worker = new OrchestrationWorker(reducer, clock, liveDiagnostics);
         var observations = new TaskObservations(tasks, clock, excludedIssueNumber);
         var workerOptions = isolatedStatusTest
             ? new WorkerOptions { MaximumIterations = 256, MaximumDuration = TimeSpan.FromMinutes(30),
@@ -453,7 +458,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
     private sealed class ProductionEvents(OrchestrationEvent? command, GitHubRepositoryApi api,
         GitHubTaskAdapter tasks, GitHubReviewAdapter reviews, GitHubCiAdapter? ci,
         VerifiedEvents authorization, long projectionActorId, int? excludedIssueNumber,
-        bool readReviewEvents = true) : IWorkerEventSource
+        bool readReviewEvents = true, GitHubLiveDiagnostics? diagnostics = null) : IWorkerEventSource
     {
         private readonly Dictionary<string, OrchestrationEvent> acceptedObservations = [];
         private bool reactivationBoundaryPending = command?.Data is Reactivate;
@@ -479,10 +484,12 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             foreach (var issue in state.Issues.Values)
             {
                 if (issue.Number == excludedIssueNumber) continue;
+                diagnostics?.Mark(GitHubLiveStage.TaskMapping);
                 var mapping = await tasks.ReadMappingEventAsync(state, issue, token);
                 if (mapping?.Data is TaskPrMapped mapped)
                     feedbackState.Issues[issue.Number].PullRequest = mapped.PullRequest;
                 if (mapping is not null && !state.Inbox.ContainsKey(mapping.Id)) mappings.Add(mapping);
+                diagnostics?.Mark(GitHubLiveStage.TaskCompletion);
                 var completion = await tasks.ReadEventAsync(state, issue, token);
                 if (completion?.Data is TaskCompleted completed)
                     feedbackState.Issues[issue.Number].PullRequest = completed.PullRequest;
@@ -490,6 +497,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             }
             // Fetch newly verified PR feedback before applying completion or authorizing downstream effects.
             messages.AddRange(mappings);
+            diagnostics?.Mark(GitHubLiveStage.Feedback);
             messages.AddRange(await new GitHubFeedbackSource(api, projectionActorId)
                 .ReadAsync(feedbackState, token, excludedIssueNumber));
             messages.AddRange(completions);
@@ -497,6 +505,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                 foreach (var issue in state.Issues.Values)
                 {
                     if (issue.Number == excludedIssueNumber) continue;
+                    diagnostics?.Mark(GitHubLiveStage.CiObservation);
                     var result = await ci.ReadEventAsync(state, issue, token);
                     if (result is not null && !state.Inbox.ContainsKey(result.Id)) messages.Add(result);
                 }
@@ -504,6 +513,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                 foreach (var issue in state.Issues.Values)
                 {
                     if (issue.Number == excludedIssueNumber) continue;
+                    diagnostics?.Mark(GitHubLiveStage.ReviewObservation);
                     var result = await reviews.ReadEventAsync(state, issue, token);
                     if (result is not null && !state.Inbox.ContainsKey(result.Id)) messages.Add(result);
                 }

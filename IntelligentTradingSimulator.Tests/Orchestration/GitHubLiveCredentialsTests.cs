@@ -9,6 +9,20 @@ namespace IntelligentTradingSimulator.Tests.Orchestration;
 public sealed class GitHubLiveCredentialsTests
 {
     [Fact]
+    public async Task LiveCommandReportsAllowlistedStageWhenInvocationFails()
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var result = await GitHubLiveCommand.RunAsync(["--github-live"], output, error);
+
+        Assert.Equal(1, result);
+        Assert.Contains("\"Stage\":\"Invocation\"", error.ToString());
+        Assert.Contains("\"ErrorType\":\"InvalidDataException\"", error.ToString());
+        Assert.DoesNotContain("Live mode requires explicit execution", error.ToString());
+    }
+
+    [Fact]
     public async Task BothCredentialsAreVerifiedBeforeStateAndOnlyWorkflowCredentialWritesState()
     {
         using var handler = new IdentityApi();

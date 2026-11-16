@@ -2640,6 +2640,14 @@ after lease expiry; it cannot clear a hold or replay an uncertain effect. Do not
 assume late PR changes will be observed without a delivered event. This is not a
 lossless delivery or automatic crash-recovery guarantee.
 
+On an unhandled live-command failure, `LiveDiagnostic` reports an allowlisted
+execution stage, exception category and optional HTTP status. It captures the
+failure before worker lease cleanup and never includes exception messages,
+response bodies, identifiers, credentials or input data. The stage identifies
+where execution stopped, not the precise cause; successful later reads do not
+reconstruct the earlier response. It does not diagnose a missing GitHub event
+and does not authorize retries or recovery.
+
 For `pull_request_target`, GitHub's run `head_sha` identifies the PR head, not
 the trusted workflow definition. The wake verifier requires the runner-provided
 `GITHUB_WORKFLOW_REF` to name this workflow on `master` and

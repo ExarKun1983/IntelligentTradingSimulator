@@ -15,7 +15,7 @@ public sealed record GitHubCiRoute(long WorkflowId, string Ref, string WorkflowS
 /// <summary>Dispatches the trusted workflow, never a workflow definition from the coding branch.</summary>
 public sealed class GitHubCiAdapter(GitHubRepositoryApi api, IStateStore store, GitHubCiRoute route,
     TimeProvider? clock = null, GitHubCiApproval? approval = null,
-    ICandidateShaValidator? candidateShaValidator = null) : IEffectAdapter
+    ICandidateShaValidator? candidateShaValidator = null, GitHubLiveDiagnostics? liveDiagnostics = null) : IEffectAdapter
 {
     public const string WorkflowPath = ".github/workflows/agent-managed-ci.yml";
     private readonly TimeProvider clock = clock ?? TimeProvider.System;
@@ -72,8 +72,11 @@ public sealed class GitHubCiAdapter(GitHubRepositoryApi api, IStateStore store, 
             !state.Outbox.TryGetValue(ci.IntentId, out var intent) || intent.Status != DeliveryStatus.Succeeded)
             return null;
         await api.VerifyRepositoryAsync(token);
+        liveDiagnostics?.Mark(GitHubLiveStage.CiCandidateValidation);
         await ValidateCandidateShaAsync(state, issue, token);
+        liveDiagnostics?.Mark(GitHubLiveStage.CiLiveEligibility);
         var eligibleHead = await LiveEligibleAsync(issue, token) && issue.HeadSha == ci.Sha;
+        liveDiagnostics?.Mark(GitHubLiveStage.CiRunIdentity);
         using var run = await api.GetAsync($"actions/runs/{runId}", token);
         var root = run.RootElement;
         ValidateRun(root, runId, boundary);
@@ -81,6 +84,7 @@ public sealed class GitHubCiAdapter(GitHubRepositoryApi api, IStateStore store, 
         if (!eligibleHead) return Stopped("Managed CI reached a terminal outcome after its live head or open mapping changed.");
         var conclusion = root.GetProperty("conclusion").GetString();
         if (conclusion is not ("success" or "failure")) return Stopped("Managed CI did not complete with build/test evidence.");
+        liveDiagnostics?.Mark(GitHubLiveStage.CiJobEvidence);
         var jobs = new List<JsonElement>();
         for (var page = 1; page <= 21; page++)
         {
