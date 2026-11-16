@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 431,
+  "Version": 432,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "task-pr-mapped:1277929203:1:58c8550a-67d4-4c94-901f-8f44787ce047:302:1594728340588b1368654a542db0528c4532c359:2026-11-16T22:06:29.8785083\u002B00:00",
@@ -834,7 +834,7 @@
       "SchemaVersion": 1,
       "Number": 301,
       "Generation": 1,
-      "Version": 18,
+      "Version": 19,
       "LastEventId": "task-pr-mapped:1277929203:1:58c8550a-67d4-4c94-901f-8f44787ce047:302:1594728340588b1368654a542db0528c4532c359:2026-11-16T22:06:29.8785083\u002B00:00",
       "Phase": "CODING",
       "Ready": false,
@@ -4300,7 +4300,15 @@
         "CiIntentId": null,
         "CiRunId": null
       },
-      "RequiredStatusBoundary": null
+      "RequiredStatusBoundary": {
+        "ActorId": 41898282,
+        "ActorLogin": "github-actions[bot]",
+        "ActorNodeId": "MDM6Qm90NDE4OTgyODI=",
+        "ActorType": "Bot",
+        "PreparedAt": "2026-11-16T22:09:26.5653722+00:00",
+        "ExistingStatusIds": [],
+        "StatusId": null
+      }
     },
     "status:301:1:66C056FF3906FBE0D169F78900F9561B1F1789ABC2D09B6AD8BB9B109566098D": {
       "Id": "status:301:1:66C056FF3906FBE0D169F78900F9561B1F1789ABC2D09B6AD8BB9B109566098D",
