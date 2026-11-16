@@ -8,6 +8,10 @@ public static class OrchestrationContinuation
 {
     internal const int MaxAutomaticContinuations = 3;
 
+    internal static bool IsPublishableHold(IssueState issue) => issue.ReactivationRequired &&
+        (issue.Phase == Phase.BLOCKED ||
+         issue.Phase == Phase.CLOSED && issue.TerminalOutcome is TerminalOutcome.Merged or TerminalOutcome.Unmerged);
+
     internal static bool HoldProjectionConfirmed(RepositoryState state, IssueState issue, bool requiredStatusEnabled)
     {
         var labels = OrchestrationReducer.ProjectLabels(issue);

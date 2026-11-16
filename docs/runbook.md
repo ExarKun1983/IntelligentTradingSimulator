@@ -2587,7 +2587,10 @@ a persisted hold-publication barrier also blocks later wakes from admitting or
 executing other tasks until the current projections are confirmed. If required-status
 publication was enabled (or previously used), the barrier cannot be bypassed by a
 later wake without a confirmed required status. An unfinished task continues to occupy admission;
-the barrier remains until it finishes and its final mapped head is confirmed.
+the barrier remains until it finishes and its final mapped head is confirmed. A confirmed
+terminal closure can clear the barrier under the same checks; an unknown terminal
+outcome cannot. Automatic wakes prioritize the admitted Issue's work after recovery.
+This remains a proof of concept, not production-ready: Issues are processed sequentially.
 
 The production job checks out only `ORCHESTRATION_DEFINITION_SHA`, never PR code,
 and exposes the user credential only to the trusted reconciler step in the

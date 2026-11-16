@@ -74,6 +74,8 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
     {
         options ??= new();
         reconcileOptions ??= new();
+        if (options.TrackAutomaticContinuations && !reconcileOptions.ProjectionOnly)
+            reconcileOptions = reconcileOptions with { PrioritizeAdmittedWork = true };
         if (options.MaximumIterations < 1 || options.MaximumEventsPerIteration is < 1 or > OrchestrationReducer.MaximumIndexEntries ||
             options.MaximumDuration <= TimeSpan.Zero || options.MaximumDuration > TimeSpan.FromMinutes(30) ||
             options.PollInterval < TimeSpan.Zero || options.PollInterval > options.MaximumDuration)

@@ -714,7 +714,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 else status.Status = DeliveryStatus.Pending;
             }
             if (issue.ContinuationHoldBarrier is { } barrier && !HasUnfinishedWork(state, issue) &&
-                issue.Phase == Phase.BLOCKED && issue.ReactivationRequired &&
+                OrchestrationContinuation.IsPublishableHold(issue) &&
+                (!live.Closed || issue.Phase == Phase.CLOSED) &&
                 !state.Outbox.Values.Any(effect => effect.Status == DeliveryStatus.Executing ||
                     OrchestrationReconciler.IsExclusiveUncertain(effect)) &&
                 OrchestrationContinuation.HoldProjectionConfirmed(state, issue,

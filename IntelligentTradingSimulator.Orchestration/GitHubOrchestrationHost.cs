@@ -249,10 +249,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                 PollInterval = TimeSpan.FromSeconds(15) } : options;
         if (automaticContinuations)
             workerOptions = (workerOptions ?? new WorkerOptions()) with { TrackAutomaticContinuations = true };
-        var prioritizeHandoff = false;
         Task<WorkerResult> RunWorker(CancellationToken cancellationToken) =>
-            worker.RunAsync(stateStore, events, observations, effects,
-                reconcile with { PrioritizeAdmittedWork = prioritizeHandoff }, workerOptions, cancellationToken);
+            worker.RunAsync(stateStore, events, observations, effects, reconcile, workerOptions, cancellationToken);
         async Task<WorkerResult> PublishHold(int issueNumber, CancellationToken cancellationToken)
         {
             var result = await worker.RunAsync(stateStore, events, observations, effects,
@@ -263,7 +261,6 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             if (result.Reason != WorkerStopReason.LeaseHeld)
             {
                 VerifyHoldProjection(result, issueNumber, statuses is not null && statusApproval?.AllowsPublication == true);
-                prioritizeHandoff = true;
             }
             return result;
         }
@@ -278,8 +275,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         if (result.Reason is not (WorkerStopReason.Settled or WorkerStopReason.Blocked) ||
             state is null || state.Outbox.Values.Any(effect => effect.Status == DeliveryStatus.Executing ||
                 OrchestrationReconciler.IsExclusiveUncertain(effect)) ||
-            !state.Issues.TryGetValue(issueNumber, out var issue) || issue.Phase != Phase.BLOCKED ||
-            !issue.ReactivationRequired)
+            !state.Issues.TryGetValue(issueNumber, out var issue) ||
+            !OrchestrationContinuation.IsPublishableHold(issue))
             throw new InvalidOperationException("Continuation-limit hold projection was not confirmed; operator attention is required.");
         if (!OrchestrationContinuation.HoldProjectionConfirmed(state, issue,
                 requiredStatusEnabled || issue.ContinuationHoldBarrier?.RequireRequiredStatus == true))
