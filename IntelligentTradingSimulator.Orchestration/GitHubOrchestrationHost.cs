@@ -249,17 +249,56 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                 PollInterval = TimeSpan.FromSeconds(15) } : options;
         if (automaticContinuations)
             workerOptions = (workerOptions ?? new WorkerOptions()) with { TrackAutomaticContinuations = true };
+        var prioritizeHandoff = false;
         Task<WorkerResult> RunWorker(CancellationToken cancellationToken) =>
-            worker.RunAsync(stateStore, events, observations, effects, reconcile, workerOptions, cancellationToken);
-        Task<WorkerResult> PublishHold(CancellationToken cancellationToken) =>
             worker.RunAsync(stateStore, events, observations, effects,
-                reconcile with { ProjectionOnly = true, AllowedEffectKinds = new HashSet<EffectKind>
+                reconcile with { PrioritizeAdmittedWork = prioritizeHandoff }, workerOptions, cancellationToken);
+        async Task<WorkerResult> PublishHold(int issueNumber, CancellationToken cancellationToken)
+        {
+            var result = await worker.RunAsync(stateStore, events, observations, effects,
+                reconcile with { ProjectionOnly = true, ProjectionIssueNumber = issueNumber, AllowedEffectKinds = new HashSet<EffectKind>
                     { EffectKind.ProjectLabels, EffectKind.ProjectStatus, EffectKind.PublishRequiredStatus } },
                 new WorkerOptions { MaximumIterations = 8, MaximumDuration = TimeSpan.FromMinutes(1),
                     PollInterval = TimeSpan.Zero }, cancellationToken);
+            if (result.Reason != WorkerStopReason.LeaseHeld)
+            {
+                VerifyHoldProjection(result, issueNumber, statuses is not null && statusApproval?.AllowsPublication == true);
+                prioritizeHandoff = true;
+            }
+            return result;
+        }
         return automaticContinuations
-            ? await new AutomaticWorkerContinuation(stateStore, clock).RunAsync(RunWorker, token, PublishHold)
+            ? await new AutomaticWorkerContinuation(stateStore, clock).RunForIssueAsync(RunWorker, PublishHold, token)
             : await RunWorker(token);
+    }
+
+    internal static void VerifyHoldProjection(WorkerResult result, int issueNumber, bool requiredStatusEnabled)
+    {
+        var state = result.LastReconciliation?.State;
+        if (result.Reason is not (WorkerStopReason.Settled or WorkerStopReason.Blocked) ||
+            state is null || state.Outbox.Values.Any(effect => effect.Status == DeliveryStatus.Executing ||
+                OrchestrationReconciler.IsExclusiveUncertain(effect)) ||
+            !state.Issues.TryGetValue(issueNumber, out var issue) || issue.Phase != Phase.BLOCKED ||
+            !issue.ReactivationRequired)
+            throw new InvalidOperationException("Continuation-limit hold projection was not confirmed; operator attention is required.");
+        var labels = OrchestrationReducer.ProjectLabels(issue);
+        var labelsConfirmed = issue.ObservedProjectionDigest == StateJson.Digest(string.Join("\n", labels)) ||
+            state.Outbox.Values.Any(effect => effect.IssueNumber == issueNumber &&
+                effect.Generation == issue.Generation && effect.Kind == EffectKind.ProjectLabels &&
+                effect.Status == DeliveryStatus.Succeeded && effect.Labels.SequenceEqual(labels));
+        var body = StatusProjection.Render(issue);
+        var statusConfirmed = issue.StatusProjectionDigest == StateJson.Digest(body) &&
+            state.Outbox.Values.Any(effect => effect.IssueNumber == issueNumber &&
+                effect.Generation == issue.Generation && effect.Kind == EffectKind.ProjectStatus &&
+                effect.Status == DeliveryStatus.Succeeded && effect.StatusBody == body);
+        var requiredStatusConfirmed = !requiredStatusEnabled || issue.PullRequest is not > 0 ||
+            issue.HeadSha is not { Length: 40 or 64 } ||
+            issue.RequiredStatusIntentId is { } id && state.Outbox.TryGetValue(id, out var status) &&
+            status.Status == DeliveryStatus.Succeeded && status.RequiredStatus?.State == "error" &&
+            RequiredStatusPolicy.Matches(state, issue, status);
+        if (!labelsConfirmed || !statusConfirmed || !requiredStatusConfirmed)
+            throw new InvalidOperationException(
+                $"Continuation-limit hold projection was not confirmed (labels: {labelsConfirmed}, comment: {statusConfirmed}, required status: {requiredStatusConfirmed}); operator attention is required.");
     }
 
     private static bool stateHasOutOfScopeData(RepositoryState state, int issueNumber) =>

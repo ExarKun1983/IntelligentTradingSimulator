@@ -111,7 +111,7 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                 leaseAdmittedIssue = acquisition.AdmittedIssue;
                 if (!ownsLease) return new(WorkerStopReason.LeaseHeld, 0, null);
                 if (acquisition.ContinuationLimitReached)
-                    return new(WorkerStopReason.ContinuationLimit, 0, null);
+                    return new(WorkerStopReason.ContinuationLimit, 0, null) { LeaseAdmittedIssue = leaseAdmittedIssue };
             }
             for (; iterations < options.MaximumIterations;)
             {

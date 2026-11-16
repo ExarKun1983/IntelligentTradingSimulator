@@ -570,6 +570,134 @@ public sealed class OrchestrationWorkerTests
         Assert.Single(store.Current.Issues[8].Tasks);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task HoldProjectionTargetsHeldIssueBeforeUnrelatedBacklogAndPreservesAdmission(
+        bool completeTask, bool requiredStatusEnabled)
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { ReadyIssues = [7, 8], CompleteTasks = false, TrackProjectedLabels = true };
+        var worker = new OrchestrationWorker(new OrchestrationReducer(new Authorized(), requiredStatusEnabled));
+        var calls = 0;
+        var prioritizeHandoff = false;
+        var options = Fast with { MaximumIterations = 3, TrackAutomaticContinuations = true };
+        async Task<WorkerResult> Publish(int issueNumber, CancellationToken token)
+        {
+            if (++calls == 1)
+            {
+                Assert.Equal(7, issueNumber);
+                var snapshot = await store.LoadAsync(token);
+                foreach (var number in Enumerable.Range(100, 10))
+                    snapshot.State.Issues.Add(number, new IssueState
+                    {
+                        Number = number, Phase = Phase.BLOCKED, ReactivationRequired = true, HoldReason = "Existing hold."
+                    });
+                api.AdditionalObservedIssues = Enumerable.Range(100, 10).ToArray();
+                var observation = await api.ObserveAsync(snapshot.State, token);
+                observation.Issues.Remove(7);
+                observation.Issues.Remove(8);
+                var planned = new OrchestrationReducer(new Authorized(), requiredStatusEnabled)
+                    .Reconcile(snapshot.State, observation, projectionOnly: true).State;
+                Assert.True(await store.TrySaveAsync(snapshot, planned, token));
+                Assert.True(store.Current.Outbox.Values.Count(effect => effect.IssueNumber >= 100 &&
+                    effect.Status == DeliveryStatus.Pending) > 8);
+                api.CompleteTasks = completeTask;
+            }
+            var before = api.Executions.Count;
+            var result = await worker.RunAsync(store, api, api, api,
+                Simulation with { ProjectionOnly = true, ProjectionIssueNumber = issueNumber },
+                Fast with { MaximumIterations = 8 }, token);
+            GitHubOrchestrationHost.VerifyHoldProjection(result, issueNumber, requiredStatusEnabled);
+            prioritizeHandoff = true;
+            Assert.All(api.Deliveries.Skip(before), delivery =>
+            {
+                Assert.Equal(issueNumber, delivery.Issue);
+                Assert.Contains(delivery.Kind, new[] { EffectKind.ProjectLabels, EffectKind.ProjectStatus, EffectKind.PublishRequiredStatus });
+            });
+            if (calls == 1)
+            {
+                Assert.Empty(store.Current.Issues[8].Tasks);
+                Assert.Equal(completeTask ? null : 7, store.Current.AdmittedIssue);
+                Assert.Contains("agent:blocked", api.ProjectedLabels[7]);
+                Assert.Contains(api.Deliveries, delivery => delivery.Issue == 7 &&
+                    delivery.Kind == EffectKind.ProjectStatus && delivery.StatusBody!.Contains("Agent workflow: **BLOCKED**"));
+                if (requiredStatusEnabled && store.Current.Issues[7].PullRequest is not null)
+                    Assert.Contains(store.Current.Outbox.Values, effect => effect.IssueNumber == 7 &&
+                        effect.Kind == EffectKind.PublishRequiredStatus && effect.Status == DeliveryStatus.Succeeded &&
+                        effect.RequiredStatus?.State == "error");
+            }
+            return result;
+        }
+
+        var result = await new AutomaticWorkerContinuation(store).RunForIssueAsync(
+            token => worker.RunAsync(store, api, api, api,
+                Simulation with { PrioritizeAdmittedWork = prioritizeHandoff }, options, token), Publish);
+
+        Assert.Equal(WorkerStopReason.ContinuationLimit, result.Reason);
+        Assert.Equal(completeTask ? new[] { 7, 8 } : new[] { 7 }, api.LaunchedIssues);
+        Assert.Equal(completeTask ? 1 : 0, store.Current.Issues[8].Tasks.Count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnconfirmedHoldProjectionFailsWithoutStartingQueuedWork(bool uncertain)
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { ReadyIssues = [7, 8], CompleteTasks = false, TrackProjectedLabels = true };
+        var worker = Worker();
+        var options = Fast with { MaximumIterations = 3, TrackAutomaticContinuations = true };
+        async Task<WorkerResult> Publish(int issueNumber, CancellationToken token)
+        {
+            if (uncertain) api.UnknownProjection = EffectKind.ProjectStatus;
+            var projection = await worker.RunAsync(store, api, api, api,
+                Simulation with { ProjectionOnly = true, ProjectionIssueNumber = issueNumber },
+                Fast with { MaximumIterations = uncertain ? 8 : 1 }, token);
+            GitHubOrchestrationHost.VerifyHoldProjection(projection, issueNumber, false);
+            return projection;
+        }
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new AutomaticWorkerContinuation(store).RunForIssueAsync(
+                token => worker.RunAsync(store, api, api, api, Simulation, options, token), Publish));
+        Assert.Contains("not confirmed", error.Message);
+        Assert.Equal(7, store.Current.AdmittedIssue);
+        Assert.Empty(store.Current.Issues[8].Tasks);
+        Assert.Equal(new[] { 7 }, api.LaunchedIssues);
+        if (uncertain)
+            Assert.Single(store.Current.Outbox.Values, effect => effect.IssueNumber == 7 &&
+                effect.Kind == EffectKind.ProjectStatus && effect.Status == DeliveryStatus.Unknown);
+    }
+
+    [Fact]
+    public async Task UncertainRequiredStatusDoesNotAuthorizeQueueHandoff()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { ReadyIssues = [7, 8], CompleteTasks = false, RecoveryUnknown = true };
+        var worker = new OrchestrationWorker(new OrchestrationReducer(new Authorized(), requiredStatusEnabled: true));
+        var options = Fast with { MaximumIterations = 3, TrackAutomaticContinuations = true };
+        async Task<WorkerResult> Publish(int issueNumber, CancellationToken token)
+        {
+            api.CompleteTasks = true;
+            api.UnknownProjection = EffectKind.PublishRequiredStatus;
+            var projection = await worker.RunAsync(store, api, api, api,
+                Simulation with { ProjectionOnly = true, ProjectionIssueNumber = issueNumber },
+                Fast with { MaximumIterations = 8 }, token);
+            GitHubOrchestrationHost.VerifyHoldProjection(projection, issueNumber, true);
+            return projection;
+        }
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new AutomaticWorkerContinuation(store).RunForIssueAsync(
+                token => worker.RunAsync(store, api, api, api, Simulation, options, token), Publish));
+        Assert.Single(store.Current.Outbox.Values, effect => effect.IssueNumber == 7 &&
+            effect.Kind == EffectKind.PublishRequiredStatus && effect.Status == DeliveryStatus.Unknown);
+        Assert.Empty(store.Current.Issues[8].Tasks);
+        Assert.Equal(new[] { 7 }, api.LaunchedIssues);
+    }
+
     [Fact]
     public async Task HoldProjectionLeaseTimeoutFailsWithoutInspectingOrStartingQueue()
     {
@@ -580,7 +708,7 @@ public sealed class OrchestrationWorkerTests
         var continuation = new AutomaticWorkerContinuation(store, clock).RunAsync(_ =>
         {
             runs++;
-            return Task.FromResult(new WorkerResult(WorkerStopReason.ContinuationLimit, 0, null));
+            return Task.FromResult(new WorkerResult(WorkerStopReason.ContinuationLimit, 0, null) { LeaseAdmittedIssue = 7 });
         }, publishHold: _ =>
         {
             projections++;
@@ -1235,6 +1363,8 @@ public sealed class OrchestrationWorkerTests
         public bool FailObservation { get; set; }
         public bool AmbiguousFirstReview { get; init; }
         public bool TrackProjectedLabels { get; init; }
+        public int[] AdditionalObservedIssues { get; set; } = [];
+        public EffectKind? UnknownProjection { get; set; }
         public bool ClassifyBlocking { get; set; }
         public Queue<WorkerEventBatch> Backlog { get; } = [];
         public Action? AfterExecute { get; set; }
@@ -1316,7 +1446,7 @@ public sealed class OrchestrationWorkerTests
             return Task.FromResult(new LiveObservation
             {
                 ObservedAt = Now,
-                Issues = ReadyIssues.ToDictionary(number => number, number =>
+                Issues = ReadyIssues.Concat(AdditionalObservedIssues).ToDictionary(number => number, number =>
                 {
                     state.Issues.TryGetValue(number, out var issue);
                     var unmapped = NoInitialPullRequest && !heads.ContainsKey(number);
@@ -1336,7 +1466,7 @@ public sealed class OrchestrationWorkerTests
         public async Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken cancellationToken)
         {
             Assert.Equal(DeliveryStatus.Executing, store.Current.Outbox[intent.Id].Status);
-            if (intent.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus) ||
+            if (intent.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus or EffectKind.PublishRequiredStatus) ||
                 store.Current.Issues[intent.IssueNumber].Phase is not (Phase.HUMAN_REVIEW or Phase.BLOCKED or Phase.CLOSED))
                 Assert.Equal(intent.IssueNumber, store.Current.AdmittedIssue);
             Executions.Add(intent.Kind);
@@ -1372,7 +1502,7 @@ public sealed class OrchestrationWorkerTests
                 intent.Kind == EffectKind.RunCi && ConfirmCiDispatch ? "777" : $"external:{intent.Id}");
             outcomes[intent.Id] = outcome;
             AfterExecute?.Invoke();
-            return UnknownLaunch && intent.Kind == EffectKind.LaunchTask
+            return UnknownLaunch && intent.Kind == EffectKind.LaunchTask || intent.Kind == UnknownProjection
                 ? new EffectOutcome(DeliveryStatus.Unknown) : outcome;
         }
 

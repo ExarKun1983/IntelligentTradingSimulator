@@ -5,8 +5,16 @@ public sealed class AutomaticWorkerContinuation(IStateStore store, TimeProvider?
 {
     private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
 
-    public async Task<WorkerResult> RunAsync(Func<CancellationToken, Task<WorkerResult>> run,
+    public Task<WorkerResult> RunAsync(Func<CancellationToken, Task<WorkerResult>> run,
         CancellationToken token = default, Func<CancellationToken, Task<WorkerResult>>? publishHold = null)
+        => RunCoreAsync(run, token, publishHold is null ? null : (_, cancellationToken) => publishHold(cancellationToken));
+
+    internal Task<WorkerResult> RunForIssueAsync(Func<CancellationToken, Task<WorkerResult>> run,
+        Func<int, CancellationToken, Task<WorkerResult>> publishHold, CancellationToken token = default)
+        => RunCoreAsync(run, token, publishHold);
+
+    private async Task<WorkerResult> RunCoreAsync(Func<CancellationToken, Task<WorkerResult>> run,
+        CancellationToken token, Func<int, CancellationToken, Task<WorkerResult>>? publishHold)
     {
         var limitReached = false;
         while (true)
@@ -16,7 +24,8 @@ public sealed class AutomaticWorkerContinuation(IStateStore store, TimeProvider?
             if (result.Reason == WorkerStopReason.ContinuationLimit)
             {
                 limitReached = true;
-                if (await PublishAndHasQueuedWorkAsync(publishHold, token)) continue;
+                var heldIssue = result.LastReconciliation?.State.AdmittedIssue ?? result.LeaseAdmittedIssue;
+                if (await PublishAndHasQueuedWorkAsync(publishHold, heldIssue, token)) continue;
                 return result;
             }
             if (result.Reason is not (WorkerStopReason.TimeLimit or WorkerStopReason.IterationLimit))
@@ -29,7 +38,7 @@ public sealed class AutomaticWorkerContinuation(IStateStore store, TimeProvider?
                 issue.HoldReason == OrchestrationReducer.ContinuationLimitReason && issue.ReactivationRequired)
             {
                 limitReached = true;
-                if (await PublishAndHasQueuedWorkAsync(publishHold, token)) continue;
+                if (await PublishAndHasQueuedWorkAsync(publishHold, number, token)) continue;
                 return result with { Reason = WorkerStopReason.ContinuationLimit };
             }
 
@@ -40,10 +49,12 @@ public sealed class AutomaticWorkerContinuation(IStateStore store, TimeProvider?
     }
 
     private async Task<bool> PublishAndHasQueuedWorkAsync(
-        Func<CancellationToken, Task<WorkerResult>>? publishHold, CancellationToken token)
+        Func<int, CancellationToken, Task<WorkerResult>>? publishHold, int? issueNumber, CancellationToken token)
     {
         if (publishHold is null) return false;
-        await LeaseWait.RunWorkerAsync(publishHold, clock,
+        if (issueNumber is not > 0)
+            throw new InvalidOperationException("Continuation-limit hold has no identified Issue.");
+        await LeaseWait.RunWorkerAsync(cancellationToken => publishHold(issueNumber.Value, cancellationToken), clock,
             "hold publication needs operator attention", token);
         var state = (await store.LoadAsync(token)).State;
         return state.AdmittedIssue is null && state.Issues.Values.Any(issue =>

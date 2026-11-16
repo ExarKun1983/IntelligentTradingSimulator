@@ -48,8 +48,12 @@ public sealed record ReconcileOptions(
     int? MaximumEffectExecutions = null,
     bool ProjectionOnly = false)
 {
+    internal int? ProjectionIssueNumber { get; init; }
+    internal bool PrioritizeAdmittedWork { get; init; }
+
     public bool AllowsEffect(EffectIntent effect) =>
         (!ProjectionOnly || effect.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus or EffectKind.PublishRequiredStatus) &&
+        (ProjectionIssueNumber is null || effect.IssueNumber == ProjectionIssueNumber) &&
         (AllowedEffectKinds is null || AllowedEffectKinds.Contains(effect.Kind)) &&
         (effect.Kind != EffectKind.PublishRequiredStatus || AllowedRequiredStatusStates is null ||
             AllowedRequiredStatusStates.Contains(effect.RequiredStatus?.State ?? ""));
@@ -168,7 +172,10 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             }
             var simulateAgents = options.AllowOfflineAgentSimulation && effects is IOfflineEffectAdapter ||
                 effects is IVerifiedAgentEffectAdapter { AgentEffectsAuthorized: true };
-            var pending = snapshot.State.Outbox.Values.FirstOrDefault(e => e.Status == DeliveryStatus.Pending &&
+            var pending = snapshot.State.Outbox.Values
+                .OrderBy(e => options.PrioritizeAdmittedWork && e.IssueNumber == snapshot.State.AdmittedIssue &&
+                    e.Kind is EffectKind.LaunchTask or EffectKind.RunCi or EffectKind.RequestReview ? 0 : 1)
+                .FirstOrDefault(e => e.Status == DeliveryStatus.Pending &&
                 options.AllowsEffect(e) &&
                 (e.Kind is not (EffectKind.LaunchTask or EffectKind.RequestReview) || simulateAgents) &&
                 !snapshot.State.Outbox.Values.Any(IsExclusiveUncertain) &&

@@ -2579,6 +2579,11 @@ limit; a single waiter can use up to 150 minutes, in addition to the worker inte
 The live command reports an exhausted continuation limit as a failed Actions job
 even if other queued work progressed, so the human-action hold remains visible
 to operators. The persisted hold and projected status identify the affected Issue.
+The bounded hold-publication pass targets that Issue's projections before unrelated
+backlog. It proceeds to queued work only after confirming the current hold labels,
+status comment, and, when configured for a mapped head, required status. An
+incomplete or uncertain projection fails explicitly and requires operator attention;
+an unfinished task continues to occupy admission.
 
 The production job checks out only `ORCHESTRATION_DEFINITION_SHA`, never PR code,
 and exposes the user credential only to the trusted reconciler step in the
