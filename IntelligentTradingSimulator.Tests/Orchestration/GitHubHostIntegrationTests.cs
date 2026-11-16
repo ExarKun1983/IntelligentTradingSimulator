@@ -180,6 +180,96 @@ public sealed class GitHubHostIntegrationTests
     }
 
     [Fact]
+    public void ClassificationProjectionShowsDistinctRecordedEvidenceAndExplicitDecision()
+    {
+        var oldSha = new string('b', 40);
+        var issue = new IssueState
+        {
+            Number = 7, Generation = 3, Round = 2, Phase = Phase.BLOCKED,
+            HoldReason = "Review requires human classification.", ReactivationRequired = true,
+            PullRequest = 8, HeadSha = Sha, ActiveTaskId = "task-1", CurrentHandoffId = "handoff-1",
+            Ci = new CiIdentity { RunId = "123", TaskId = "task-1", Round = 2, Sha = Sha, Green = true },
+            Review = new ReviewIdentity { ReviewId = "456", TaskId = "task-1", Round = 2, Sha = Sha,
+                LifecycleState = ReviewLifecycleState.Completed, Classification = ReviewClassification.NeedsHuman }
+        };
+        issue.Tasks.Add("task-1", new TaskIdentity
+        {
+            Id = "task-1", Round = 2, Status = TaskStatus.Completed, FinalSha = Sha
+        });
+        issue.Handoffs.Add("handoff-1", new HumanHandoff("handoff-1", 3, "456", "task-1", 1,
+            oldSha, "untrusted hold details", Now));
+
+        var body = StatusProjection.Render(issue);
+
+        Assert.Contains("not a live check or merge approval", body);
+        Assert.Contains("Managed CI (recorded): passed; run: <code>123</code>", body);
+        Assert.Contains("Review: Completed; classification: NeedsHuman; ID: <code>456</code>", body);
+        Assert.Contains($"round: 1; SHA: <code>{oldSha}</code>", body);
+        Assert.Contains("current repository generation and a reason", body);
+        Assert.Contains("an empty review is not automatic acceptance", body);
+        Assert.DoesNotContain("untrusted hold details", body);
+        Assert.DoesNotContain("gh workflow run", body);
+
+        issue.Handoffs["handoff-1"] = issue.Handoffs["handoff-1"] with { Round = 2, Sha = Sha };
+        body = StatusProjection.Render(issue);
+        Assert.Contains("gh workflow run agent-state-machine.yml", body);
+        Assert.Contains($"-f handoff=handoff-1 -f round=2 -f pull=8 -f sha={Sha}", body);
+        Assert.Contains("classification=$CLASSIFICATION", body);
+        Assert.Contains("repository_generation=$REPOSITORY_GENERATION", body);
+        Assert.Contains("\"${REASON:?Set REASON}\" && \\", body);
+        Assert.DoesNotContain("-f classification=accepted", body);
+
+        var isolatedBody = StatusProjection.Render(issue, isolatedProfile: true);
+        Assert.Contains("No dispatch template is provided for an isolated profile", isolatedBody);
+        Assert.Contains("Review: Completed; classification: NeedsHuman", isolatedBody);
+        Assert.DoesNotContain("gh workflow run", isolatedBody);
+
+        issue.PendingFeedbackEventIds.Add("feedback");
+        Assert.DoesNotContain("gh workflow run", StatusProjection.Render(issue));
+        issue.PendingFeedbackEventIds.Clear();
+        issue.CurrentHandoffId = "unsafe;touch-file";
+        issue.Handoffs[issue.CurrentHandoffId] = issue.Handoffs["handoff-1"] with { Id = issue.CurrentHandoffId };
+        Assert.DoesNotContain("gh workflow run", StatusProjection.Render(issue));
+    }
+
+    [Fact]
+    public void ClassificationProjectionTreatsMissingEvidenceAsUnknownAndEscapesIdentifiers()
+    {
+        var issue = new IssueState
+        {
+            Number = 7, Phase = Phase.BLOCKED, HoldReason = "Review requires human classification.",
+            HeadSha = "<script>", CurrentHandoffId = "<script>",
+            Review = new ReviewIdentity { Classification = ReviewClassification.NeedsHuman }
+        };
+
+        var body = StatusProjection.Render(issue);
+
+        Assert.Contains("Managed CI (recorded): not available; run: not captured", body);
+        Assert.Contains("recorded generation: not captured", body);
+        Assert.Contains("<code>&lt;script&gt;</code>", body);
+        Assert.DoesNotContain("<script>", body);
+        issue.HoldReason = "A different hold";
+        Assert.DoesNotContain("### Review classification required", StatusProjection.Render(issue));
+    }
+
+    [Fact]
+    public void FinalHandoffSuggestsManualClosingLinkWithoutClaimingVerification()
+    {
+        var issue = new IssueState { Number = 7, PullRequest = 17, Phase = Phase.HUMAN_REVIEW };
+        var body = StatusProjection.Render(issue);
+        Assert.Contains("live PR #17 uniquely addresses Issue #7", body);
+        Assert.Contains("`Closes #7`", body);
+        Assert.Contains("default branch", body);
+        Assert.Contains("does not verify them or edit the PR", body);
+
+        issue.Phase = Phase.BLOCKED;
+        Assert.DoesNotContain("### Issue closing link", StatusProjection.Render(issue));
+        issue.Phase = Phase.HUMAN_REVIEW;
+        issue.PullRequest = null;
+        Assert.DoesNotContain("### Issue closing link", StatusProjection.Render(issue));
+    }
+
+    [Fact]
     public async Task ReclosingSameGenerationRequeuesOldStatusAndUpdatesTheSingleOwnedComment()
     {
         var fixture = new ApiFixture { Closed = true };

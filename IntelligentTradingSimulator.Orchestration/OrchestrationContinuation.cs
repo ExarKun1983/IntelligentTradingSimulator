@@ -16,7 +16,7 @@ public static class OrchestrationContinuation
     {
         var labels = OrchestrationReducer.ProjectLabels(issue);
         var labelsConfirmed = issue.ObservedProjectionDigest == StateJson.Digest(string.Join("\n", labels));
-        var body = StatusProjection.Render(issue);
+        var body = StatusProjection.Render(issue, state.IsolatedTestManifestDigest is not null);
         var statusConfirmed = issue.StatusProjectionDigest == StateJson.Digest(body) &&
             state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number &&
                 effect.Generation == issue.Generation && effect.Kind == EffectKind.ProjectStatus &&

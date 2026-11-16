@@ -11,6 +11,7 @@ public static class OrchestrationCommand
     public static async Task<int> RunAsync(string[] args, TextWriter output, TextWriter error)
     {
         if (args.Contains("--github-route", StringComparer.Ordinal)) return await GitHubManagedRoutingCommand.RunAsync(args, output, error);
+        if (args.Contains("--github-merge-check", StringComparer.Ordinal)) return await GitHubPreMergeCommand.RunAsync(args, output, error);
         if (args.Contains("--github-live", StringComparer.Ordinal)) return await GitHubLiveCommand.RunAsync(args, output, error);
         if (!args.Contains("--github-read-only", StringComparer.Ordinal)) return Run(args, output, error);
         try
