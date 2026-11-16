@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 163,
+  "Version": 164,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "copilot-review-pending:1277929203:1:RequestReview:291:1:task:291:1:1:1:1",
@@ -350,7 +350,7 @@
       "SchemaVersion": 1,
       "Number": 291,
       "Generation": 1,
-      "Version": 46,
+      "Version": 47,
       "LastEventId": "copilot-review-pending:1277929203:1:RequestReview:291:1:task:291:1:1:1:1",
       "Phase": "REVIEW_PENDING",
       "Ready": false,
@@ -1834,7 +1834,18 @@
         "CiIntentId": "RunCi:291:1:task:291:1:1:1:1",
         "CiRunId": "43778324486"
       },
-      "RequiredStatusBoundary": null
+      "RequiredStatusBoundary": {
+        "ActorId": 41898282,
+        "ActorLogin": "github-actions[bot]",
+        "ActorNodeId": "MDM6Qm90NDE4OTgyODI=",
+        "ActorType": "Bot",
+        "PreparedAt": "2026-11-16T00:07:28.664608+00:00",
+        "ExistingStatusIds": [
+          58984537049,
+          58984413818
+        ],
+        "StatusId": null
+      }
     },
     "labels:291:1:E69BE9AD2A065B6850878EBD5AE6A93EBE2F91537056F1EA79A23278D419D58C": {
       "Id": "labels:291:1:E69BE9AD2A065B6850878EBD5AE6A93EBE2F91537056F1EA79A23278D419D58C",
