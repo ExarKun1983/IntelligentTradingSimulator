@@ -11,6 +11,9 @@ public sealed class RelativeStrengthCalculatorTests
     private static MarketCandle Candle(int day, decimal close) =>
         new() { Date = Start.AddDays(day), Close = close };
 
+    private static MarketCandle CandleAt(DateTime date, decimal close) =>
+        new() { Date = date, Close = close };
+
     [Theory]
     [InlineData(120, 110, 10)]
     [InlineData(110, 120, -10)]
@@ -46,6 +49,24 @@ public sealed class RelativeStrengthCalculatorTests
             [Candle(-1, 1), Candle(0, 100), Candle(3, 120), Candle(4, 1_000)],
             [Candle(-1, 1_000), Candle(0, 200), Candle(3, 220), Candle(4, 1)],
             Start, Start.AddDays(3));
+
+        Assert.Equal(10m, result);
+    }
+
+    [Fact]
+    public void Calculate_MatchesEndpointCalendarDatesWithDifferentTimesAtInclusiveBoundaries()
+    {
+        var result = _calculator.Calculate(
+            [
+                CandleAt(Start.AddHours(8), 100),
+                CandleAt(Start.AddDays(3).AddHours(21), 120)
+            ],
+            [
+                CandleAt(Start.AddHours(13), 200),
+                CandleAt(Start.AddDays(3).AddHours(5), 220)
+            ],
+            Start.AddHours(18),
+            Start.AddDays(3).AddHours(9));
 
         Assert.Equal(10m, result);
     }
@@ -96,6 +117,30 @@ public sealed class RelativeStrengthCalculatorTests
         var stock = new List<MarketCandle> { Candle(0, 100), Candle(3, 120) };
         var benchmark = new List<MarketCandle> { Candle(0, 200), Candle(3, 220) };
         (duplicateStock ? stock : benchmark).Add(Candle(day, 150));
+
+        Assert.Null(_calculator.Calculate(stock, benchmark, Start, Start.AddDays(3)));
+    }
+
+    [Theory]
+    [InlineData(true, 0)]
+    [InlineData(true, 3)]
+    [InlineData(false, 0)]
+    [InlineData(false, 3)]
+    public void Calculate_ReturnsNull_ForDuplicateEndpointCalendarDatesWithDifferentTimes(
+        bool duplicateStock, int day)
+    {
+        var stock = new List<MarketCandle>
+        {
+            CandleAt(Start, 100),
+            CandleAt(Start.AddDays(3), 120)
+        };
+        var benchmark = new List<MarketCandle>
+        {
+            CandleAt(Start, 200),
+            CandleAt(Start.AddDays(3), 220)
+        };
+        (duplicateStock ? stock : benchmark).Add(CandleAt(
+            Start.AddDays(day).AddHours(12), 150));
 
         Assert.Null(_calculator.Calculate(stock, benchmark, Start, Start.AddDays(3)));
     }
