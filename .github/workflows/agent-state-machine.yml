@@ -10,8 +10,6 @@ on:
   workflow_run:
     workflows: ["Agent managed CI (disabled)"]
     types: [completed]
-  schedule:
-    - cron: "7/15 * * * *"
   workflow_dispatch:
     inputs:
       issue:
@@ -79,10 +77,6 @@ on:
         required: false
         type: string
 
-concurrency:
-  group: agent-state-machine-${{ github.repository_id }}
-  cancel-in-progress: false
-
 permissions:
   contents: write
   issues: write
@@ -101,7 +95,7 @@ jobs:
            (vars.ORCHESTRATION_MULTI_ISSUE_APPROVED == 'true' && vars.ORCHESTRATION_TEST_ISSUE == '' &&
             vars.ORCHESTRATION_RETIRED_TEST_ISSUE == '' && vars.ORCHESTRATION_TEST_MAX_REPAIR_TASKS == '')) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 360
     environment: agent-orchestration
     steps:
       - name: Require an explicitly reviewed immutable code revision

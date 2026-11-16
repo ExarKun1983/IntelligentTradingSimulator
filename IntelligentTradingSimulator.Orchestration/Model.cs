@@ -92,6 +92,8 @@ public sealed class IssueState
 public sealed class TaskIdentity
 {
     public string Id { get; set; } = "";
+    public int AutomaticContinuations { get; set; }
+    public bool ContinuationPending { get; set; }
     public TaskKind Kind { get; set; }
     public TaskStatus Status { get; set; }
     public string? ParentTaskId { get; set; }

@@ -156,6 +156,266 @@ public sealed class OrchestrationWorkerTests
     }
 
     [Fact]
+    public async Task AutomaticContinuationStopsAfterThreeResumptionsAndHoldsTheTask()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { CompleteTasks = false };
+        var options = Fast with { MaximumIterations = 3, TrackAutomaticContinuations = true };
+        var worker = Worker();
+
+        var result = await new AutomaticWorkerContinuation(store).RunAsync(
+            token => worker.RunAsync(store, api, api, api, Simulation, options, token));
+
+        var issue = store.Current.Issues[7];
+        var task = issue.Tasks[issue.ActiveTaskId!];
+        Assert.Equal(WorkerStopReason.ContinuationLimit, result.Reason);
+        Assert.Equal(3, task.AutomaticContinuations);
+        Assert.False(task.ContinuationPending);
+        Assert.Equal(Phase.BLOCKED, issue.Phase);
+        Assert.Equal("Automatic continuation limit reached.", issue.HoldReason);
+        Assert.True(issue.ReactivationRequired);
+        Assert.Single(api.Executions, kind => kind == EffectKind.LaunchTask);
+        Assert.DoesNotContain(EffectKind.RunCi, api.Executions);
+    }
+
+    [Fact]
+    public async Task OtherWakesCannotResetOrBypassContinuationBudget()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { CompleteTasks = false };
+        var options = Fast with { MaximumIterations = 3, TrackAutomaticContinuations = true };
+        for (var iteration = 0; iteration < 4; iteration++)
+        {
+            await Worker().RunAsync(store, api, api, api, Simulation, options);
+            var issue = store.Current.Issues[7];
+            var task = issue.Tasks[issue.ActiveTaskId!];
+            Assert.Equal(iteration, task.AutomaticContinuations);
+            Assert.Equal(iteration < 3, task.ContinuationPending);
+        }
+
+        var before = store.Current.Issues[7];
+        Assert.Equal(Phase.BLOCKED, before.Phase);
+        await Worker().RunAsync(store, api, api, api, Simulation, options);
+        var after = store.Current.Issues[7];
+        Assert.Equal(Phase.BLOCKED, after.Phase);
+        Assert.Equal(3, after.Tasks[after.ActiveTaskId!].AutomaticContinuations);
+        Assert.Single(api.Executions, kind => kind == EffectKind.LaunchTask);
+    }
+
+    [Fact]
+    public async Task CompetingWakesConsumeOnlyOneContinuationWhileLeaseIsHeld()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { CompleteTasks = false };
+        var options = Fast with { MaximumIterations = 3, TrackAutomaticContinuations = true };
+        await Worker().RunAsync(store, api, api, api, Simulation, options);
+        var blocked = new BlockingSource();
+        var running = Worker().RunAsync(store, blocked, api, api, Simulation, options);
+        await blocked.Started.Task;
+        try
+        {
+            var concurrent = await Worker().RunAsync(store, api, api, api, Simulation, options);
+            Assert.Equal(WorkerStopReason.LeaseHeld, concurrent.Reason);
+            var issue = store.Current.Issues[7];
+            Assert.Equal(1, issue.Tasks[issue.ActiveTaskId!].AutomaticContinuations);
+        }
+        finally
+        {
+            blocked.Release.TrySetResult();
+            await running;
+        }
+        Assert.Single(api.Executions, kind => kind == EffectKind.LaunchTask);
+    }
+
+    [Fact]
+    public async Task ExpiredLeaseRecoversPendingContinuationWithoutDuplicatingTask()
+    {
+        var clock = new Clock();
+        var store = new Store();
+        var api = new OfflineApi(store) { CompleteTasks = false };
+        var options = Fast with { MaximumIterations = 3, TrackAutomaticContinuations = true };
+        await Worker(clock).RunAsync(store, api, api, api, Simulation, options);
+        var snapshot = await store.LoadAsync(CancellationToken.None);
+        snapshot.State.WorkerLease = new("crashed", Now - TimeSpan.FromSeconds(1));
+        Assert.True(await store.TrySaveAsync(snapshot, snapshot.State, CancellationToken.None));
+
+        await Worker(clock).RunAsync(store, api, api, api, Simulation, options);
+
+        var issue = store.Current.Issues[7];
+        var task = issue.Tasks[issue.ActiveTaskId!];
+        Assert.Equal(1, task.AutomaticContinuations);
+        Assert.True(task.ContinuationPending);
+        Assert.Single(api.Executions, kind => kind == EffectKind.LaunchTask);
+        Assert.Null(store.Current.WorkerLease);
+    }
+
+    [Theory]
+    [InlineData(0, WorkerStopReason.IterationLimit)]
+    [InlineData(3, WorkerStopReason.ContinuationLimit)]
+    public async Task ExpiredLeaseCountsInterruptedWorkerAndEnforcesItsExistingBudget(
+        int used, WorkerStopReason expected)
+    {
+        var clock = new Clock();
+        var store = new Store();
+        var api = new OfflineApi(store) { CompleteTasks = false };
+        var options = Fast with { MaximumIterations = 3, TrackAutomaticContinuations = true };
+        await Worker(clock).RunAsync(store, api, api, api, Simulation, options);
+        var snapshot = await store.LoadAsync(CancellationToken.None);
+        var issue = snapshot.State.Issues[7];
+        var task = issue.Tasks[issue.ActiveTaskId!];
+        task.AutomaticContinuations = used;
+        task.ContinuationPending = false;
+        snapshot.State.WorkerLease = new("crashed", Now - TimeSpan.FromSeconds(1));
+        Assert.True(await store.TrySaveAsync(snapshot, snapshot.State, CancellationToken.None));
+
+        var result = await Worker(clock).RunAsync(store, api, api, api, Simulation, options);
+
+        issue = store.Current.Issues[7];
+        Assert.Equal(expected, result.Reason);
+        Assert.Equal(used == 3 ? 3 : 1, issue.Tasks[issue.ActiveTaskId!].AutomaticContinuations);
+        Assert.Equal(used == 3 ? Phase.BLOCKED : Phase.CODING, issue.Phase);
+        Assert.Single(api.Executions, kind => kind == EffectKind.LaunchTask);
+    }
+
+    [Fact]
+    public async Task InterruptedWorkerRecordsContinuationForLaterWakeWithoutRepeatingLaunch()
+    {
+        var store = new Store();
+        using var cancellation = new CancellationTokenSource();
+        var api = new OfflineApi(store) { AfterExecute = cancellation.Cancel, CompleteTasks = false };
+        var options = Fast with { MaximumIterations = 3, TrackAutomaticContinuations = true };
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            Worker().RunAsync(store, api, api, api, Simulation, options, cancellation.Token));
+        var issue = store.Current.Issues[7];
+        Assert.True(issue.Tasks[issue.ActiveTaskId!].ContinuationPending);
+        api.AfterExecute = null;
+
+        await Worker().RunAsync(store, api, api, api, Simulation, options);
+
+        issue = store.Current.Issues[7];
+        Assert.Equal(1, issue.Tasks[issue.ActiveTaskId!].AutomaticContinuations);
+        Assert.Single(api.Executions, kind => kind == EffectKind.LaunchTask);
+        Assert.Equal(1, api.Recoveries);
+    }
+
+    [Fact]
+    public async Task PauseIsPersistedWhileWorkerIsActiveAndPreventsFurtherContinuation()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { CompleteTasks = false };
+        var options = Fast with { MaximumIterations = 3, TrackAutomaticContinuations = true };
+        await Worker().RunAsync(store, api, api, api, Simulation, options);
+        var blocked = new BlockingSource();
+        var running = Worker().RunAsync(store, blocked, api, api, Simulation, options);
+        await blocked.Started.Task;
+        try
+        {
+            await new OrchestrationReconciler(new OrchestrationReducer(new Authorized())).DispatchAsync(store,
+                new("pause", "owner/repo", 7, 1, 1, new("maintainer", ActorKind.Human), Now, new Pause("Stop.")));
+            Assert.True(store.Current.Issues[7].Paused);
+        }
+        finally
+        {
+            blocked.Release.TrySetResult();
+            await running;
+        }
+        var issue = store.Current.Issues[7];
+        Assert.Equal(Phase.BLOCKED, issue.Phase);
+        Assert.Equal("Stop.", issue.HoldReason);
+        Assert.False(issue.Tasks[issue.ActiveTaskId!].ContinuationPending);
+        Assert.Single(api.Executions, kind => kind == EffectKind.LaunchTask);
+    }
+
+    [Fact]
+    public async Task AutomaticWakeWaitsForLeaseInsteadOfDroppingItsObservation()
+    {
+        var clock = new Clock();
+        var calls = 0;
+        var continuation = new AutomaticWorkerContinuation(new Store(), clock).RunAsync(_ =>
+            Task.FromResult(new WorkerResult(++calls == 1 ? WorkerStopReason.LeaseHeld : WorkerStopReason.Settled, 0, null)));
+        Assert.False(continuation.IsCompleted);
+        await clock.TimerCreated.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        clock.Advance(TimeSpan.FromSeconds(10));
+        Assert.Equal(WorkerStopReason.Settled, (await continuation).Reason);
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task AutomaticContinuationDoesNotResumeSettledOrUncertainWork()
+    {
+        var options = Fast with { MaximumIterations = 64, TrackAutomaticContinuations = true };
+        var settledStore = new Store();
+        var settledApi = new OfflineApi(settledStore);
+        var settledCalls = 0;
+        var settled = await new AutomaticWorkerContinuation(settledStore).RunAsync(token =>
+        {
+            settledCalls++;
+            return Worker().RunAsync(settledStore, settledApi, settledApi, settledApi, Simulation, options, token);
+        });
+        Assert.Equal(WorkerStopReason.Settled, settled.Reason);
+        Assert.Equal(1, settledCalls);
+
+        var uncertainStore = new Store();
+        var uncertainApi = new OfflineApi(uncertainStore) { UnknownLaunch = true, RecoveryUnknown = true };
+        var uncertainCalls = 0;
+        var uncertain = await new AutomaticWorkerContinuation(uncertainStore).RunAsync(token =>
+        {
+            uncertainCalls++;
+            return Worker().RunAsync(uncertainStore, uncertainApi, uncertainApi, uncertainApi, Simulation, options, token);
+        });
+        Assert.Equal(WorkerStopReason.Blocked, uncertain.Reason);
+        Assert.Equal(1, uncertainCalls);
+        Assert.Single(uncertainApi.Executions, kind => kind == EffectKind.LaunchTask);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AutomaticContinuationTracksTheSameTaskWhileCiOrReviewIsPending(bool waitForCi)
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { CompleteCi = !waitForCi, CompleteReviews = false };
+        var options = Fast with { MaximumIterations = 12, TrackAutomaticContinuations = true };
+        var result = await new AutomaticWorkerContinuation(store).RunAsync(
+            token => Worker().RunAsync(store, api, api, api, Simulation, options, token));
+
+        var issue = store.Current.Issues[7];
+        Assert.Equal(WorkerStopReason.ContinuationLimit, result.Reason);
+        Assert.Equal(3, issue.Tasks[issue.ActiveTaskId!].AutomaticContinuations);
+        Assert.Equal(Phase.BLOCKED, issue.Phase);
+        Assert.Single(api.Executions, kind => kind == EffectKind.LaunchTask);
+        Assert.Single(api.Executions, kind => kind == EffectKind.RunCi);
+        Assert.Equal(waitForCi ? 0 : 1, api.Executions.Count(kind => kind == EffectKind.RequestReview));
+    }
+
+    [Fact]
+    public async Task ExclusiveRecoveryCannotRunWhileAnotherWorkerOwnsLease()
+    {
+        var store = new Store();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var api = new OfflineApi(store)
+        {
+            CompleteTasks = false,
+            BeforeExternalResult = () => { started.TrySetResult(); return finish.Task; }
+        };
+        var owner = Worker().RunAsync(store, api, api, api, Simulation, Fast with { MaximumIterations = 2 });
+        await started.Task;
+        var recoveryStarted = false;
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                Worker().RunExclusiveAsync(store, _ => { recoveryStarted = true; return Task.FromResult(true); }));
+            Assert.False(recoveryStarted);
+        }
+        finally
+        {
+            finish.TrySetResult();
+            await owner;
+        }
+    }
+
+    [Fact]
     public async Task ConcurrentWorkersPublishExactlyOneLaunchBeforeCallingAdapter()
     {
         var store = new Store();
@@ -611,10 +871,24 @@ public sealed class OrchestrationWorkerTests
         public bool IsAuthorized(OrchestrationEvent message) => true;
     }
 
+    private sealed class BlockingSource : IWorkerEventSource
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<WorkerEventBatch> ReadAsync(RepositoryState state, CancellationToken token)
+        {
+            Started.TrySetResult();
+            await Release.Task.WaitAsync(token);
+            return new([]);
+        }
+    }
+
     private sealed class Clock : TimeProvider
     {
         private long ticks;
         private readonly List<Timer> timers = [];
+        public TaskCompletionSource TimerCreated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public override long TimestampFrequency => TimeSpan.TicksPerSecond;
         public override long GetTimestamp() => ticks;
         public override DateTimeOffset GetUtcNow() => Now.AddTicks(ticks);
@@ -623,6 +897,7 @@ public sealed class OrchestrationWorkerTests
             var timer = new Timer(this, callback, state);
             timer.Change(dueTime, period);
             timers.Add(timer);
+            TimerCreated.TrySetResult();
             return timer;
         }
         public void Advance(TimeSpan duration)
@@ -704,6 +979,7 @@ public sealed class OrchestrationWorkerTests
         public int[] ReadyIssues { get; init; } = [7];
         public bool CompleteTasks { get; set; } = true;
         public bool CompleteCi { get; set; } = true;
+        public bool CompleteReviews { get; set; } = true;
         public bool SinglePassReady { get; init; }
         public bool ConfirmCiDispatch { get; init; }
         public bool NoInitialPullRequest { get; init; }
@@ -748,7 +1024,7 @@ public sealed class OrchestrationWorkerTests
                         green ? [] : [new("ci:compile", "Compiler failure", "Build job compiler diagnostic")]),
                         $"ci:{runId}", number);
                 }
-                if (issue.Review is { Classification: null } review &&
+                if (CompleteReviews && issue.Review is { Classification: null } review &&
                     (review.ReviewId ?? UnpublishedId(review.IntentId)) is { } reviewId)
                 {
                     var blocked = issue.Tasks.Values.Count(task => task.Kind == TaskKind.ReviewRepair) < ReviewBlockers;

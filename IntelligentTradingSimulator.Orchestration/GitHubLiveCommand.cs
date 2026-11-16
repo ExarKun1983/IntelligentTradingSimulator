@@ -187,7 +187,7 @@ public static class GitHubLiveCommand
                     statusPublisher: settings.Status.AllowsPublication ? publisher : null, statusApproval: settings.Status,
                     maxRepairTasks: settings.TestMaxRepairTasks ?? settings.MaxRepairTasks,
                     boundedScope: CreateBoundedScope(settings), commandOnly: recoveryOnly,
-                    recoveryApproval: settings.Recovery);
+                    recoveryApproval: settings.Recovery, automaticContinuations: !recoveryOnly);
             }
             else
             {
@@ -201,10 +201,10 @@ public static class GitHubLiveCommand
                     settings.Wake, publisher.ActorId, settings.BaseBranch, settings.ActorId, settings.Tasks,
                     ciRoute: settings.CiRoute, ciApproval: settings.Ci, reviewApproval: settings.Review,
                     statusPublisher: settings.Status.AllowsPublication ? publisher : null, statusApproval: settings.Status,
-                    boundedScope: CreateBoundedScope(settings));
+                    boundedScope: CreateBoundedScope(settings), automaticContinuations: true);
             }
             output.WriteLine(JsonSerializer.Serialize(new { Mode = "github-live", Result = result?.Reason.ToString() }, StateJson.Options));
-            return 0;
+            return result?.Reason == WorkerStopReason.ContinuationLimit ? 1 : 0;
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or InvalidOperationException or
             ArgumentException or UnauthorizedAccessException or KeyNotFoundException or HttpRequestException or

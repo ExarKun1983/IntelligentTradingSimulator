@@ -227,6 +227,8 @@ public sealed class ContinuationIntegrationTests
     [InlineData("identity")]
     [InlineData("deadline")]
     [InlineData("lease")]
+    [InlineData("budget")]
+    [InlineData("pending-budget")]
     public void MalformedCanonicalContinuationFailsClosed(string corruption)
     {
         var state = OrchestrationContinuation.Prepare(RepositoryState.Create("owner/repo"), Now, "In flight.", true);
@@ -238,6 +240,14 @@ public sealed class ContinuationIntegrationTests
             _ => state.Continuation
         };
         if (corruption == "lease") state.WorkerLease = new("", Now);
+        if (corruption is "budget" or "pending-budget")
+            state.Issues[7] = new IssueState
+            {
+                Number = 7,
+                Tasks = new() { ["task"] = new TaskIdentity
+                    { Id = "task", AutomaticContinuations = corruption == "budget" ? 4 : 3,
+                        ContinuationPending = corruption == "pending-budget" } }
+            };
         Assert.Throws<InvalidDataException>(() => OrchestrationContinuation.IsDue(state, Now));
     }
 

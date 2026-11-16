@@ -4,7 +4,24 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
     int? excludedIssueNumber = null, bool reviewRequestsEnabled = true, bool stopOnCiFailure = false)
 {
     public const int MaximumIndexEntries = 2048;
+    internal const string ContinuationLimitReason = "Automatic continuation limit reached.";
     private readonly IAuthorizationPolicy authorization = authorization ?? new DenyAllAuthorizationPolicy();
+
+    internal RepositoryState HoldForContinuationLimit(RepositoryState input, int issueNumber, string taskId)
+    {
+        ValidateState(input);
+        var state = StateJson.Clone(input);
+        var issue = state.Issues[issueNumber];
+        if (state.AdmittedIssue != issueNumber || issue.ActiveTaskId != taskId ||
+            !issue.ActiveAuthorized || issue.Paused || issue.ReactivationRequired ||
+            issue.Phase is not (Phase.CODING or Phase.CI_PENDING or Phase.REVIEW_PENDING) ||
+            !issue.Tasks.TryGetValue(taskId, out var task) || task.AutomaticContinuations != 3)
+            throw new InvalidOperationException("Continuation limit no longer matches the active task.");
+        Hold(issue, ContinuationLimitReason);
+        CancelPendingWork(state, issue);
+        Touch(state, issue, issue.LastEventId);
+        return state;
+    }
 
     public RepositoryState Apply(RepositoryState input, OrchestrationEvent message)
     {

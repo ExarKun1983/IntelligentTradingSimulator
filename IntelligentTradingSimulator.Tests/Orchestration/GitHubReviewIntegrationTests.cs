@@ -1117,7 +1117,7 @@ public sealed class GitHubReviewIntegrationTests
     }
 
     [Fact]
-    public async Task SerializedRecoveryWaitsForExecutorPausedImmediatelyBeforeReviewPost()
+    public async Task RecoveryRejectsConcurrentExecutorPausedImmediatelyBeforeReviewPost()
     {
         var store = new Store(Eligible());
         var atPost = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1132,31 +1132,16 @@ public sealed class GitHubReviewIntegrationTests
             }
         };
         using var client = handler.Client();
-        using var slot = new SemaphoreSlim(1);
-        // Model the shared, non-cancelling Actions concurrency slot.
-        async Task Execute()
+        var execution = new OrchestrationWorker(timeProvider: new Clock()).RunExclusiveAsync(store, async token =>
         {
-            await slot.WaitAsync();
-            try
-            {
-                var outcome = await CreateAdapter(client, store).ExecuteAsync(store.State.Outbox["review"], default);
-                store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
-            }
-            finally { slot.Release(); }
-        }
-        async Task Recover()
-        {
-            await slot.WaitAsync();
-            try { await RunAbandonment(client, store); }
-            finally { slot.Release(); }
-        }
-
-        var execution = Execute();
+            var outcome = await CreateAdapter(client, store).ExecuteAsync(store.State.Outbox["review"], token);
+            store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
+            return true;
+        });
         await atPost.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        var recovery = Recover();
         try
         {
-            Assert.False(recovery.IsCompleted);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => RunAbandonment(client, store));
             Assert.Equal(0, handler.Posts);
             Assert.Equal(DeliveryStatus.Executing, store.State.Outbox["review"].Status);
             Assert.Equal(7, store.State.AdmittedIssue);
@@ -1164,7 +1149,7 @@ public sealed class GitHubReviewIntegrationTests
         }
         finally { releasePost.TrySetResult(); }
         await execution;
-        await Assert.ThrowsAsync<InvalidDataException>(() => recovery);
+        await Assert.ThrowsAsync<InvalidDataException>(() => RunAbandonment(client, store));
         Assert.Equal(1, handler.Posts);
         Assert.Equal(DeliveryStatus.Succeeded, store.State.Outbox["review"].Status);
         Assert.Null(store.State.Issues[7].Review!.OperatorResolution);
@@ -1178,13 +1163,13 @@ public sealed class GitHubReviewIntegrationTests
     public async Task AbandonmentRejectsPendingReviewerOnLaterPageOrIncompletePagination(string pagination)
     {
         var store = new Store(UncertainReview());
-        var original = StateJson.Serialize(store.State);
+        var original = StateJson.Clone(store.State);
         using var handler = new Api { Corruption = "no-reviews", RequestedReviewerPagination = pagination };
         using var client = handler.Client();
 
         await Assert.ThrowsAnyAsync<Exception>(() => RunAbandonment(client, store));
 
-        Assert.Equal(original, StateJson.Serialize(store.State));
+        AssertOnlyRecoveryLeaseChanged(original, store.State);
         Assert.Contains(handler.Requests, request => request.Contains("requested_reviewers?per_page=100&page=2"));
         Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
     }
@@ -1224,19 +1209,19 @@ public sealed class GitHubReviewIntegrationTests
             store.State.Issues[7].ReactivationRequired = true;
             store.State.Issues[7].HoldReason = "New generation is blocked.";
         }
-        var original = StateJson.Serialize(store.State);
+        var original = StateJson.Clone(store.State);
         handler.Requests.Clear();
         handler.Corruption = "existing-request";
 
         var result = await RunAbandonment(client, store, statusEnabled: statusEnabled);
 
         Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
-        Assert.Equal(original, StateJson.Serialize(store.State));
+        AssertOnlyRecoveryLeaseChanged(original, store.State);
         Assert.DoesNotContain(handler.Requests, request => request.Contains("/tasks/") || request.Contains("/pulls/"));
         Assert.DoesNotContain(handler.Requests, request => request.Contains("/statuses"));
         await Assert.ThrowsAsync<InvalidDataException>(() =>
             RunAbandonment(client, store, reason: "Changed operator decision", statusEnabled: statusEnabled));
-        Assert.Equal(original, StateJson.Serialize(store.State));
+        AssertOnlyRecoveryLeaseChanged(original, store.State);
     }
 
     [Fact]
@@ -1266,25 +1251,27 @@ public sealed class GitHubReviewIntegrationTests
         var store = new Store(UncertainReview());
         store.AfterSave = () =>
         {
+            if (!store.State.Inbox.Values.Any(entry => entry.Event?.Data is AbandonUncertainReview))
+                return;
             store.AfterSave = null;
             throw new IOException("Lost response after committed abandonment.");
         };
         using var handler = new Api { Corruption = "no-reviews" };
         using var client = handler.Client();
         await Assert.ThrowsAsync<IOException>(() => RunAbandonment(client, store));
-        var persisted = StateJson.Serialize(store.State);
+        var persisted = StateJson.Clone(store.State);
         handler.Requests.Clear();
         handler.Corruption = "existing-request";
 
         var result = await RunAbandonment(client, store);
 
         Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
-        Assert.Equal(persisted, StateJson.Serialize(store.State));
+        AssertOnlyRecoveryLeaseChanged(persisted, store.State);
         Assert.DoesNotContain(handler.Requests, request =>
             request.Contains("/tasks/") || request.Contains("/pulls/"));
         await Assert.ThrowsAsync<InvalidDataException>(() =>
             RunAbandonment(client, store, reason: "Changed operator decision"));
-        Assert.Equal(persisted, StateJson.Serialize(store.State));
+        AssertOnlyRecoveryLeaseChanged(persisted, store.State);
         Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
     }
 
@@ -1297,12 +1284,26 @@ public sealed class GitHubReviewIntegrationTests
     public async Task HostRejectsUnsafeAbandonmentWithoutCanonicalMutation(string corruption)
     {
         var store = new Store(UncertainReview());
-        var original = StateJson.Serialize(store.State);
+        var original = StateJson.Clone(store.State);
         using var handler = new Api { Corruption = corruption };
         using var client = handler.Client();
         await Assert.ThrowsAnyAsync<Exception>(() => RunAbandonment(client, store));
-        Assert.Equal(original, StateJson.Serialize(store.State));
+        AssertOnlyRecoveryLeaseChanged(original, store.State);
         Assert.All(handler.Requests, request => Assert.StartsWith("GET ", request));
+    }
+
+    private static void AssertOnlyRecoveryLeaseChanged(RepositoryState original, RepositoryState current)
+    {
+        if (StateJson.Serialize(original) == StateJson.Serialize(current))
+            return;
+        Assert.Null(current.WorkerLease);
+        Assert.NotNull(current.Continuation);
+        Assert.True(current.Version > original.Version);
+        var normalized = StateJson.Clone(current);
+        normalized.Version = original.Version;
+        normalized.Continuation = original.Continuation;
+        normalized.WorkerLease = original.WorkerLease;
+        Assert.Equal(StateJson.Serialize(original), StateJson.Serialize(normalized));
     }
 
     [Theory]

@@ -12,7 +12,10 @@ public static class OrchestrationContinuation
                 ticket.RepositoryGeneration != state.Generation || ticket.DueAt == default ||
                 string.IsNullOrWhiteSpace(ticket.Reason) || ticket.Reason.Length > 2048) ||
             state.WorkerLease is { } lease && (string.IsNullOrWhiteSpace(lease.Owner) || lease.Owner.Length > 256 ||
-                lease.ExpiresAt == default))
+                lease.ExpiresAt == default) ||
+            state.Issues.Values.SelectMany(issue => issue.Tasks.Values)
+                .Any(task => task.AutomaticContinuations is < 0 or > 3 ||
+                    task.ContinuationPending && task.AutomaticContinuations == 3))
             throw new InvalidDataException("Invalid durable continuation or worker lease; operator reconciliation is required.");
     }
 
