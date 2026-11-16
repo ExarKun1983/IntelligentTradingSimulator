@@ -1,10 +1,10 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 386,
+  "Version": 387,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
-  "LastEventId": "actions:1277929203:43898043974",
+  "LastEventId": "actions:1277929203:43898535128",
   "AdmittedIssue": null,
   "WorkerLease": {
     "Owner": "74c0c3ccea1b4e72a6cd72259c44380e",
@@ -662,8 +662,8 @@
       "SchemaVersion": 1,
       "Number": 298,
       "Generation": 1,
-      "Version": 76,
-      "LastEventId": "actions:1277929203:43898043974",
+      "Version": 77,
+      "LastEventId": "actions:1277929203:43898535128",
       "Phase": "HUMAN_REVIEW",
       "Ready": false,
       "ActiveAuthorized": false,
@@ -765,7 +765,7 @@
       },
       "FeedbackEventIds": [],
       "LastFeedbackText": null,
-      "ClosurePending": false,
+      "ClosurePending": true,
       "TerminalOutcome": "None",
       "TerminalHistory": [],
       "CurrentHandoffId": "handoff:298:1:actions:1277929203:43898043974",
@@ -1143,6 +1143,14 @@
       "ReceivedAt": "2026-11-16T15:35:49+00:00",
       "CompletedAt": "2026-11-16T15:35:49+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022actions:1277929203:43898043974\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:298,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u00226195946\u0022,\u0022Kind\u0022:0,\u0022Id\u0022:6195946,\u0022NodeId\u0022:null,\u0022Type\u0022:\u0022User\u0022},\u0022OccurredAt\u0022:\u00222026-11-16T15:35:49\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022human-classification\u0022,\u0022HandoffId\u0022:\u0022handoff:298:1:review-observed:1277929203:1:RequestReview:298:1:task:298:1:1:1:1\u0022,\u0022Round\u0022:1,\u0022PullRequest\u0022:299,\u0022Sha\u0022:\u0022fd70f74d745fb5155a993e110c61fe8317ee2f70\u0022,\u0022Classification\u0022:0,\u0022Reason\u0022:\u0022Reviewed current tests and Copilot review; no open findings.\u0022,\u0022Findings\u0022:[],\u0022Responses\u0022:[]}}"
+    },
+    "actions:1277929203:43898535128": {
+      "Id": "actions:1277929203:43898535128",
+      "Digest": "8AD91424BF2BEA9B0AB40CA7591207CA25E5511158C3ACED07D5A669ACDBD0F0",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-16T15:38:29+00:00",
+      "CompletedAt": "2026-11-16T15:38:29+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022actions:1277929203:43898535128\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:298,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u00226195946\u0022,\u0022Kind\u0022:0,\u0022Id\u0022:6195946,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-16T15:38:29\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022closure\u0022}}"
     }
   },
   "Outbox": {
