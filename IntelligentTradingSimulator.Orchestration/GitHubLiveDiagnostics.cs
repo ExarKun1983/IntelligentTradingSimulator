@@ -18,6 +18,7 @@ public sealed class GitHubLiveDiagnostics
     private GitHubLiveStage stage = GitHubLiveStage.Invocation;
     private (GitHubLiveStage Stage, string ErrorType, int? HttpStatus)? failure;
 
+    internal GitHubLiveStage Stage => stage;
     internal void Mark(GitHubLiveStage value) => stage = value;
 
     internal void Capture(Exception exception)

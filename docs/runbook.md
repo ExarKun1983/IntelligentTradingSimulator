@@ -2645,8 +2645,9 @@ execution stage, exception category and optional HTTP status. It captures the
 failure before worker lease cleanup and never includes exception messages,
 response bodies, identifiers, credentials or input data. The stage identifies
 where execution stopped, not the precise cause; successful later reads do not
-reconstruct the earlier response. It does not diagnose a missing GitHub event
-and does not authorize retries or recovery.
+reconstruct the earlier response. Successful candidate validation restores its
+caller stage; a failure within validation retains the more specific stage. It
+does not diagnose a missing GitHub event and does not authorize retries or recovery.
 
 For `pull_request_target`, GitHub's run `head_sha` identifies the PR head, not
 the trusted workflow definition. The wake verifier requires the runner-provided

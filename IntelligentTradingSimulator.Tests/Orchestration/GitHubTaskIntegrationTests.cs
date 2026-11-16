@@ -251,8 +251,11 @@ public sealed class GitHubTaskIntegrationTests
         Assert.Equal(TaskStatus.Completed, task.Status);
         Assert.Equal(Head, task.CandidateShaEvidence!.ObservedHeadSha);
         Assert.Equal(Head, issue.Ci!.Sha);
-        await new GitHubTaskAdapter(api, store, "master", 55)
+        var diagnostics = new GitHubLiveDiagnostics();
+        diagnostics.Mark(GitHubLiveStage.EffectExecution);
+        await new GitHubTaskAdapter(api, store, "master", 55, liveDiagnostics: diagnostics)
             .ValidateCandidateShaAsync(store.State, issue, default);
+        Assert.Equal(GitHubLiveStage.EffectExecution, diagnostics.Stage);
         Assert.Empty(fixture.GraphQueries);
         Assert.DoesNotContain(fixture.Requests, path => path.Contains($"/pulls/{id}"));
         Assert.Single(fixture.Writes, write => write.Path.StartsWith("/agents/"));

@@ -292,6 +292,7 @@ public sealed class GitHubTaskAdapter(
 
     public async Task ValidateCandidateShaAsync(RepositoryState state, IssueState issue, CancellationToken token)
     {
+        var callerStage = liveDiagnostics?.Stage;
         if (state.Repository != api.Repository || !state.Issues.TryGetValue(issue.Number, out var canonical) ||
             canonical.Generation != issue.Generation || canonical.ActiveTaskId is not { } taskId ||
             !canonical.Tasks.TryGetValue(taskId, out var task) || task.Status != TaskStatus.Completed ||
@@ -331,6 +332,7 @@ public sealed class GitHubTaskAdapter(
         if (mappedPullRequest != evidence.PullRequest || liveSha != evidence.ObservedHeadSha ||
             canonical.HeadSha != evidence.ObservedHeadSha)
             throw new InvalidDataException("Candidate task mapping or PR head changed after its snapshot.");
+        if (callerStage is { } previousStage) liveDiagnostics?.Mark(previousStage);
     }
 
     private async Task<(int PullRequest, string Sha)> ReadTaskPullMappingAsync(JsonElement root, IssueState issue,

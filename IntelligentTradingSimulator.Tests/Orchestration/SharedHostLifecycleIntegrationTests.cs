@@ -21,6 +21,45 @@ public sealed class SharedHostLifecycleIntegrationTests
     private static readonly WorkerOptions Bounded = new() { MaximumIterations = 3, PollInterval = TimeSpan.Zero };
 
     [Theory]
+    [InlineData(true, "ReviewObservation", "HttpRequestException")]
+    [InlineData(false, "CandidateSessions", "InvalidDataException")]
+    public async Task ReviewDiagnosticRestoresCallerOnlyWhenCandidateValidationSucceeds(
+        bool failReviewRead, string expectedStage, string expectedError)
+    {
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
+        using var fixture = new PipelineApi(taskApi);
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store();
+        var diagnostics = new GitHubLiveDiagnostics();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock(),
+            liveDiagnostics: diagnostics);
+        await host.ReconcileAsync(taskApi.Notification(), "issues", "44", 1, 1, Now, [],
+            99, "master", 55, TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(),
+            reviewApproval: ReviewApproval, ciRoute: CiRoute, ciApproval: CiApproval,
+            statusPublisher: Publisher, statusApproval: StatusApproval);
+        taskApi.RemoteState = "completed";
+        await Wake(host);
+        fixture.CiCompleted = true;
+        await Wake(host);
+        Assert.Equal(1, fixture.ReviewRequests);
+
+        fixture.FailReviewRead = failReviewRead;
+        if (!failReviewRead) taskApi.Corruption = "session";
+        Exception error = failReviewRead
+            ? await Assert.ThrowsAsync<HttpRequestException>(() => Wake(host))
+            : await Assert.ThrowsAsync<InvalidDataException>(() => Wake(host));
+        using var output = new StringWriter();
+        diagnostics.WriteFailure(output, error);
+
+        Assert.Contains($"\"Stage\":\"{expectedStage}\"", output.ToString());
+        Assert.Contains($"\"ErrorType\":\"{expectedError}\"", output.ToString());
+        if (failReviewRead) Assert.Contains("\"HttpStatus\":403", output.ToString());
+        Assert.DoesNotContain("private response", output.ToString());
+        Assert.Equal(1, fixture.ReviewRequests);
+        Assert.Null(store.State.WorkerLease);
+    }
+
+    [Theory]
     [InlineData("unchanged")]
     [InlineData("feedback")]
     [InlineData("scheduled-feedback-contention")]
@@ -680,6 +719,7 @@ public sealed class SharedHostLifecycleIntegrationTests
         private readonly GitHubTaskIntegrationTests.ApiFixture taskApi;
         public bool CiCompleted { get; set; }
         public bool ReviewSubmitted { get; set; }
+        public bool FailReviewRead { get; set; }
         public bool InlineFinding { get; init; }
         public int ReviewSubmittedCount { get; set; }
         public bool VerifyCredentials { get; init; }
@@ -706,6 +746,9 @@ public sealed class SharedHostLifecycleIntegrationTests
                 Assert.Equal(path.StartsWith("/agents/") ? "offline-user" : "offline-workflow",
                     request.Headers.Authorization?.Parameter);
             const string prefix = "/repos/owner/repo/";
+            if (FailReviewRead && path == prefix + "pulls/17/reviews")
+                return new(HttpStatusCode.Forbidden)
+                    { Content = new StringContent("private response", Encoding.UTF8, "text/plain") };
             object response;
             if (path == prefix + "actions/runs/90")
                 response = new { id = 90, workflow_id = 10, path = taskApi.WorkflowPath,
