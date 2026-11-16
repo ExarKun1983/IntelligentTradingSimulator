@@ -534,6 +534,30 @@ public sealed class GitHubRequiredStatusTests
         Assert.Null(store.Value.AdmittedIssue);
     }
 
+    [Theory]
+    [InlineData("pause")]
+    [InlineData("feedback")]
+    [InlineData("head")]
+    [InlineData("handoff")]
+    public void ClassificationHoldDoesNotMaskOtherBlockingConditions(string corruption)
+    {
+        var state = State();
+        var issue = state.Issues[7];
+        issue.Phase = Phase.BLOCKED;
+        issue.HoldReason = "Review requires human classification.";
+        issue.Review!.Classification = ReviewClassification.NeedsHuman;
+        issue.Review.LifecycleState = ReviewLifecycleState.Completed;
+        switch (corruption)
+        {
+            case "pause": issue.Paused = true; break;
+            case "feedback": issue.PendingFeedbackEventIds.Add("feedback"); break;
+            case "head": issue.HeadSha = Definition; break;
+            case "handoff": issue.CurrentHandoffId = null; break;
+        }
+
+        Assert.Equal("error", RequiredStatusPolicy.Desired(state, issue).State);
+    }
+
     [Fact]
     public void StatusPlanningIsOptInIdempotentAndFeedbackCreatesARevocationNotSuccess()
     {

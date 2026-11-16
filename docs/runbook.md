@@ -2652,8 +2652,9 @@ ambiguous or absent evidence never repeats a success create.
 
 Green reflects eligible exact-head CI in `REVIEW_PENDING`, or the same eligible
 head after explicit accepted review in `HUMAN_REVIEW`. Before task completion/CI it
-is pending; failures, human holds, feedback and stale heads cannot advertise current
-success. Review classification and **human final approval remain separate gates**:
+is pending. A verified exact-head CI and review awaiting human classification also
+report pending with an explicit description; other holds, feedback and stale heads
+remain non-success. Review classification and **human final approval remain separate gates**:
 a green CI status is never review acceptance or permission for automatic merge.
 New pushes update the observed canonical head while retaining the old task-final,
 CI and review identities. An untracked completed-head change stops automation;

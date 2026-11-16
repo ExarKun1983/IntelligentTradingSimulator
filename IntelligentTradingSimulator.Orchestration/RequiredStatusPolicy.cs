@@ -16,7 +16,7 @@ public static class RequiredStatusPolicy
                 response.Resolved && !string.IsNullOrWhiteSpace(response.Evidence)));
         var eligiblePhase = finalApprovalHold || issue.Phase == Phase.REVIEW_PENDING &&
             issue.ActiveAuthorized && !issue.ReactivationRequired && issue.HoldReason is null;
-        var green = eligiblePhase && !issue.Paused && !issue.ClosurePending &&
+        var verifiedCi = !issue.Paused && !issue.ClosurePending &&
             issue.PendingFeedbackEventIds.Count == 0 && ci is { Green: true, TerminalStopReason: null } &&
             ci.Sha == issue.HeadSha && ci.TaskId == issue.ActiveTaskId && ci.Round == issue.Round &&
             issue.Tasks.TryGetValue(ci.TaskId, out var task) && task.Status == TaskStatus.Completed &&
@@ -26,13 +26,25 @@ public static class RequiredStatusPolicy
             dispatch.Status == DeliveryStatus.Succeeded && dispatch.ExternalId == ci.RunId &&
             dispatch.IssueNumber == issue.Number && dispatch.Generation == issue.Generation &&
             dispatch.TaskId == ci.TaskId && dispatch.Sha == ci.Sha && dispatch.Round == ci.Round;
+        var green = eligiblePhase && verifiedCi;
+        var awaitingClassification = verifiedCi && issue.Phase == Phase.BLOCKED &&
+            issue.ReactivationRequired && !issue.ActiveAuthorized &&
+            issue.HoldReason == "Review requires human classification." &&
+            issue.Review is { Classification: ReviewClassification.NeedsHuman, LifecycleState: ReviewLifecycleState.Completed } pendingReview &&
+            pendingReview.TaskId == issue.ActiveTaskId && pendingReview.Sha == issue.HeadSha &&
+            pendingReview.Round == issue.Round && issue.CurrentHandoffId is { } handoffId &&
+            issue.Handoffs.TryGetValue(handoffId, out var handoff) && handoff.Generation == issue.Generation &&
+            handoff.TaskId == issue.ActiveTaskId && handoff.Round == issue.Round && handoff.Sha == issue.HeadSha &&
+            handoff.ReviewId == pendingReview.ReviewId && handoff.ClassificationEventId is null;
         var stopped = issue.Phase is Phase.BLOCKED or Phase.CLOSED || issue.Paused ||
             issue.ReactivationRequired && !finalApprovalHold || issue.ClosurePending || issue.PendingFeedbackEventIds.Count != 0;
-        var result = green ? "success" : stopped ? "error" : ci?.Green == false && ci.Sha == issue.HeadSha ? "failure" : "pending";
+        var result = green ? "success" : awaitingClassification ? "pending" : stopped ? "error" :
+            ci?.Green == false && ci.Sha == issue.HeadSha ? "failure" : "pending";
         var target = ci?.RunId is { } id && long.TryParse(id, out var numeric) && numeric > 0
             ? $"https://github.com/{state.Repository}/actions/runs/{id}"
             : $"https://github.com/{state.Repository}/pull/{issue.PullRequest}";
         return new(Context, result, green ? "Exact tested head CI passed; human approval required." :
+            awaitingClassification ? "Exact tested head CI passed; review classification required." :
             stopped ? "Automation stopped or feedback pending; not eligible." :
             result == "failure" ? "Exact-head managed CI failed; repair required." :
             "Tracked coding or exact-head CI is not yet complete.", target, ci?.IntentId, ci?.RunId);
