@@ -606,6 +606,24 @@ public sealed class GitHubTaskIntegrationTests
     }
 
     [Fact]
+    public async Task HostedAutomaticContinuationStopsAfterThreeResumptionsWithoutAnotherTask()
+    {
+        var fixture = new ApiFixture();
+        var store = new Store();
+        using var client = fixture.Client();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+
+        var result = await host.ReconcileAsync(fixture.Notification(), "issues", "44", 1, 1, Now,
+            [], 99, "master", 55, ApprovedFixture, Bounded, new FinalHead(), automaticContinuations: true);
+
+        var issue = store.State.Issues[7];
+        Assert.Equal(WorkerStopReason.ContinuationLimit, result.Reason);
+        Assert.Equal(Phase.BLOCKED, issue.Phase);
+        Assert.Equal(3, issue.Tasks[issue.ActiveTaskId!].AutomaticContinuations);
+        Assert.Single(fixture.Writes, write => write.Path.StartsWith("/agents/"));
+    }
+
+    [Fact]
     public async Task WriteCapableHostQueuesLaunchOnceAndOnlyCreatesCiIntentAfterVerifiedTaskCompletion()
     {
         var fixture = new ApiFixture();

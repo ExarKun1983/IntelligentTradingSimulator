@@ -15,7 +15,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         ITaskFinalHeadSource? finalHeadSource = null, CancellationToken token = default,
         GitHubReviewApproval? reviewApproval = null, GitHubCiRoute? ciRoute = null, GitHubCiApproval? ciApproval = null,
         GitHubStatusPublisher? statusPublisher = null, GitHubRequiredStatusApproval? statusApproval = null,
-        BoundedOrchestrationScope? boundedScope = null)
+        BoundedOrchestrationScope? boundedScope = null, bool automaticContinuations = false)
     {
         if (!wakeApproval.AllowsWake || approval?.AllowsTasks != true)
             throw new InvalidOperationException("Automatic live execution prerequisites are not verified.");
@@ -28,7 +28,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             return null;
         return await RunVerifiedAsync(scopedStore, null, projectionActorId, baseBranch, taskCreatorId, approval, options,
             finalHeadSource, token, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval,
-            boundedScope?.RetiredIssueNumber, false);
+            boundedScope?.RetiredIssueNumber, false, automaticContinuations: automaticContinuations);
     }
 
     public async Task<WorkerResult> ReconcileAsync(JsonElement trustedActionsPayload, string eventName, string runId,
@@ -41,7 +41,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         int? maxRepairTasks = null, BoundedOrchestrationScope? boundedScope = null, bool commandOnly = false,
         bool isolatedStatusTest = false, string trustedWorkflowPath = ".github/workflows/agent-state-machine.yml",
         string? isolatedManifestDigest = null, GitHubRecoveryApproval? recoveryApproval = null,
-        bool requireDraftPullRequest = false, Func<CancellationToken, Task>? beforeEffect = null)
+        bool requireDraftPullRequest = false, Func<CancellationToken, Task>? beforeEffect = null,
+        bool automaticContinuations = false)
     {
         if (approval is null ||
             (!approval.AllowsTasks && !(commandOnly && recoveryApproval?.AllowsRecovery == true)))
@@ -90,10 +91,14 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             snapshot = await scopedStore.LoadAsync(token);
             ValidateIsolatedState(snapshot.State, issueNumber, isolatedManifestDigest!);
         }
-        return await RunVerifiedAsync(scopedStore, message, projectionActorId, baseBranch, taskCreatorId, approval, options,
-            finalHeadSource, token, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval,
-            boundedScope?.RetiredIssueNumber, commandOnly, isolatedStatusTest, trustedWorkflowPath,
-            requireDraftPullRequest, beforeEffect);
+        Task<WorkerResult> RunVerified(CancellationToken cancellationToken) =>
+            RunVerifiedAsync(scopedStore, message, projectionActorId, baseBranch, taskCreatorId, approval, options,
+                finalHeadSource, cancellationToken, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval,
+                boundedScope?.RetiredIssueNumber, commandOnly, isolatedStatusTest, trustedWorkflowPath,
+                requireDraftPullRequest, beforeEffect, automaticContinuations);
+        if (commandOnly && message?.Data is AbandonUncertainReview or ResolveTaskTerminal)
+            return await new OrchestrationWorker(timeProvider: clock).RunExclusiveAsync(scopedStore, RunVerified, token);
+        return await RunVerified(token);
     }
 
     private async Task<WorkerResult> RunVerifiedAsync(IStateStore stateStore, OrchestrationEvent? message,
@@ -103,7 +108,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         GitHubStatusPublisher? statusPublisher, GitHubRequiredStatusApproval? statusApproval,
         int? excludedIssueNumber, bool commandOnly, bool isolatedStatusTest = false,
         string trustedWorkflowPath = ".github/workflows/agent-state-machine.yml",
-        bool requireDraftPullRequest = false, Func<CancellationToken, Task>? beforeEffect = null)
+        bool requireDraftPullRequest = false, Func<CancellationToken, Task>? beforeEffect = null,
+        bool automaticContinuations = false)
     {
         var authorization = new VerifiedEvents();
         var tasks = new GitHubTaskAdapter(api, stateStore, baseBranch, taskCreatorId, approval, finalHeadSource,
@@ -194,24 +200,30 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         }
         if (commandOnly)
         {
-            var state = (await stateStore.LoadAsync(token)).State;
-            var issue = state.Issues[message!.IssueNumber];
-            var hasStatusHistory = state.Outbox.Values.Any(effect =>
-                effect.IssueNumber == issue.Number && effect.Kind == EffectKind.PublishRequiredStatus);
-            if (statusPublisher is not null && statusApproval?.AllowsPublication == true &&
-                issue.PullRequest is > 0 && issue.HeadSha is { Length: 40 })
+            async Task<WorkerResult> Revoke(CancellationToken cancellationToken)
             {
-                var revocation = new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher, statusApproval, clock);
-                state = await new OrchestrationReconciler().RevokeRequiredStatusAsync(stateStore, issue.Number,
-                    revocation, clock.GetUtcNow(), token);
-                var status = state.Outbox[state.Issues[issue.Number].RequiredStatusIntentId!];
-                if (status.Status != DeliveryStatus.Succeeded || status.RequiredStatus?.State != "error" ||
-                    !RequiredStatusPolicy.Matches(state, state.Issues[issue.Number], status))
-                    return new(WorkerStopReason.Blocked, 0, new(state, [], true));
+                var state = (await stateStore.LoadAsync(cancellationToken)).State;
+                var issue = state.Issues[message!.IssueNumber];
+                var hasStatusHistory = state.Outbox.Values.Any(effect =>
+                    effect.IssueNumber == issue.Number && effect.Kind == EffectKind.PublishRequiredStatus);
+                if (statusPublisher is not null && statusApproval?.AllowsPublication == true &&
+                    issue.PullRequest is > 0 && issue.HeadSha is { Length: 40 })
+                {
+                    var revocation = new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher, statusApproval, clock);
+                    state = await new OrchestrationReconciler().RevokeRequiredStatusAsync(stateStore, issue.Number,
+                        revocation, clock.GetUtcNow(), cancellationToken);
+                    var status = state.Outbox[state.Issues[issue.Number].RequiredStatusIntentId!];
+                    if (status.Status != DeliveryStatus.Succeeded || status.RequiredStatus?.State != "error" ||
+                        !RequiredStatusPolicy.Matches(state, state.Issues[issue.Number], status))
+                        return new(WorkerStopReason.Blocked, 0, new(state, [], true));
+                }
+                else if (hasStatusHistory)
+                    throw new InvalidOperationException("Recovery command saved, but required-status revocation prerequisites are unverified.");
+                return new(WorkerStopReason.EffectsDisabled, 0, new(state, [], true));
             }
-            else if (hasStatusHistory)
-                throw new InvalidOperationException("Recovery command saved, but required-status revocation prerequisites are unverified.");
-            return new(WorkerStopReason.EffectsDisabled, 0, new(state, [], true));
+            return message?.Data is Pause && statusPublisher is not null && statusApproval?.AllowsPublication == true
+                ? await new OrchestrationWorker(timeProvider: clock).RunExclusiveWhenAvailableAsync(stateStore, Revoke, token)
+                : await Revoke(token);
         }
         var ci = ciRoute is null ? null : new GitHubCiAdapter(api, stateStore, ciRoute, clock, ciApproval, tasks);
         var events = new ProductionEvents(message, api, tasks, reviews, ci, authorization, projectionActorId,
@@ -230,10 +242,45 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             AllowedEffectKinds: allowedEffects,
             AllowedRequiredStatusStates: isolatedStatusTest ? new HashSet<string>(["success"], StringComparer.Ordinal) : null,
             MaximumEffectExecutions: isolatedStatusTest ? 3 : null);
-        return await new OrchestrationWorker(reducer, clock).RunAsync(stateStore, events,
-            new TaskObservations(tasks, clock, excludedIssueNumber), effects, reconcile,
-            isolatedStatusTest ? new WorkerOptions { MaximumIterations = 256, MaximumDuration = TimeSpan.FromMinutes(30),
-                PollInterval = TimeSpan.FromSeconds(15) } : options, token);
+        var worker = new OrchestrationWorker(reducer, clock);
+        var observations = new TaskObservations(tasks, clock, excludedIssueNumber);
+        var workerOptions = isolatedStatusTest
+            ? new WorkerOptions { MaximumIterations = 256, MaximumDuration = TimeSpan.FromMinutes(30),
+                PollInterval = TimeSpan.FromSeconds(15) } : options;
+        if (automaticContinuations)
+            workerOptions = (workerOptions ?? new WorkerOptions()) with { TrackAutomaticContinuations = true };
+        Task<WorkerResult> RunWorker(CancellationToken cancellationToken) =>
+            worker.RunAsync(stateStore, events, observations, effects, reconcile, workerOptions, cancellationToken);
+        async Task<WorkerResult> PublishHold(int issueNumber, CancellationToken cancellationToken)
+        {
+            var result = await worker.RunAsync(stateStore, events, observations, effects,
+                reconcile with { ProjectionOnly = true, ProjectionIssueNumber = issueNumber, AllowedEffectKinds = new HashSet<EffectKind>
+                    { EffectKind.ProjectLabels, EffectKind.ProjectStatus, EffectKind.PublishRequiredStatus } },
+                new WorkerOptions { MaximumIterations = 8, MaximumDuration = TimeSpan.FromMinutes(1),
+                    PollInterval = TimeSpan.Zero }, cancellationToken);
+            if (result.Reason != WorkerStopReason.LeaseHeld)
+            {
+                VerifyHoldProjection(result, issueNumber, statuses is not null && statusApproval?.AllowsPublication == true);
+            }
+            return result;
+        }
+        return automaticContinuations
+            ? await new AutomaticWorkerContinuation(stateStore, clock).RunForIssueAsync(RunWorker, PublishHold, token)
+            : await RunWorker(token);
+    }
+
+    internal static void VerifyHoldProjection(WorkerResult result, int issueNumber, bool requiredStatusEnabled)
+    {
+        var state = result.LastReconciliation?.State;
+        if (result.Reason is not (WorkerStopReason.Settled or WorkerStopReason.Blocked) ||
+            state is null || state.Outbox.Values.Any(effect => effect.Status == DeliveryStatus.Executing ||
+                OrchestrationReconciler.IsExclusiveUncertain(effect)) ||
+            !state.Issues.TryGetValue(issueNumber, out var issue) ||
+            !OrchestrationContinuation.IsPublishableHold(issue))
+            throw new InvalidOperationException("Continuation-limit hold projection was not confirmed; operator attention is required.");
+        if (!OrchestrationContinuation.HoldProjectionConfirmed(state, issue,
+                requiredStatusEnabled || issue.ContinuationHoldBarrier?.RequireRequiredStatus == true))
+            throw new InvalidOperationException("Continuation-limit hold projection was not confirmed; operator attention is required.");
     }
 
     private static bool stateHasOutOfScopeData(RepositoryState state, int issueNumber) =>

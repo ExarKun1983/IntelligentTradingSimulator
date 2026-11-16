@@ -30,6 +30,7 @@ public sealed class GitStateStore(
     bool allowInitialization = false) : IStateStore
 {
     private int observedExistingState;
+    private GitCommitObject? cachedCommit;
 
     public async Task<StateSnapshot> LoadAsync(CancellationToken cancellationToken)
     {
@@ -40,12 +41,16 @@ public sealed class GitStateStore(
             return new(null, RepositoryState.Create(repository));
         }
         Interlocked.Exchange(ref observedExistingState, 1);
-        var commit = await transport.ReadCommitAsync(tip, cancellationToken);
+        // The ref is always read; only validated content-addressed commits are cached.
+        var commit = Volatile.Read(ref cachedCommit);
+        if (commit?.Id != tip)
+            commit = await transport.ReadCommitAsync(tip, cancellationToken);
         if (commit.Id != tip) throw new InvalidDataException("Git commit identity mismatch.");
         var state = StateJson.Deserialize(commit.StateJson);
         if (state.Repository != repository || state.SchemaVersion != 1)
             throw new InvalidDataException("State repository or schema mismatch.");
         OrchestrationContinuation.Validate(state);
+        Interlocked.Exchange(ref cachedCommit, commit);
         return new(tip, state);
     }
 

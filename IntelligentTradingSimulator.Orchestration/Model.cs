@@ -87,11 +87,17 @@ public sealed class IssueState
     public string? StatusProjectionDigest { get; set; }
     public long RequiredStatusSequence { get; set; }
     public string? RequiredStatusIntentId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ContinuationHoldBarrier? ContinuationHoldBarrier { get; set; }
 }
+
+public sealed record ContinuationHoldBarrier(long Generation, bool RequireRequiredStatus);
 
 public sealed class TaskIdentity
 {
     public string Id { get; set; } = "";
+    public int AutomaticContinuations { get; set; }
+    public bool ContinuationPending { get; set; }
     public TaskKind Kind { get; set; }
     public TaskStatus Status { get; set; }
     public string? ParentTaskId { get; set; }

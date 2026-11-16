@@ -45,9 +45,15 @@ public sealed record ReconcileOptions(
     bool AllowOfflineAgentSimulation = false,
     IReadOnlySet<EffectKind>? AllowedEffectKinds = null,
     IReadOnlySet<string>? AllowedRequiredStatusStates = null,
-    int? MaximumEffectExecutions = null)
+    int? MaximumEffectExecutions = null,
+    bool ProjectionOnly = false)
 {
+    internal int? ProjectionIssueNumber { get; init; }
+    internal bool PrioritizeAdmittedWork { get; init; }
+
     public bool AllowsEffect(EffectIntent effect) =>
+        (!ProjectionOnly || effect.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus or EffectKind.PublishRequiredStatus) &&
+        (ProjectionIssueNumber is null || effect.IssueNumber == ProjectionIssueNumber) &&
         (AllowedEffectKinds is null || AllowedEffectKinds.Contains(effect.Kind)) &&
         (effect.Kind != EffectKind.PublishRequiredStatus || AllowedRequiredStatusStates is null ||
             AllowedRequiredStatusStates.Contains(effect.RequiredStatus?.State ?? ""));
@@ -60,7 +66,8 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
 {
     private readonly OrchestrationReducer reducer = reducer ?? new OrchestrationReducer();
 
-    public ReconcileDecision Decide(RepositoryState state, LiveObservation observation) => reducer.Reconcile(state, observation);
+    public ReconcileDecision Decide(RepositoryState state, LiveObservation observation, ReconcileOptions? options = null) =>
+        reducer.Reconcile(state, observation, options?.ProjectionOnly == true);
 
     public async Task<RepositoryState> RevokeRequiredStatusAsync(IStateStore store, int issueNumber,
         GitHubRequiredStatusAdapter statuses, DateTimeOffset now, CancellationToken token = default)
@@ -146,7 +153,7 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
         {
             var snapshot = await store.LoadAsync(cancellationToken);
             var live = await observations.ObserveAsync(snapshot.State, cancellationToken);
-            var decision = reducer.Reconcile(snapshot.State, live);
+            var decision = reducer.Reconcile(snapshot.State, live, options.ProjectionOnly);
             if (options.DryRun) return new(decision.State, decision.PendingEffects, true);
             if (StateJson.Serialize(snapshot.State) != StateJson.Serialize(decision.State))
             {
@@ -165,7 +172,10 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             }
             var simulateAgents = options.AllowOfflineAgentSimulation && effects is IOfflineEffectAdapter ||
                 effects is IVerifiedAgentEffectAdapter { AgentEffectsAuthorized: true };
-            var pending = snapshot.State.Outbox.Values.FirstOrDefault(e => e.Status == DeliveryStatus.Pending &&
+            var pending = snapshot.State.Outbox.Values
+                .OrderBy(e => options.PrioritizeAdmittedWork && e.IssueNumber == snapshot.State.AdmittedIssue &&
+                    e.Kind is EffectKind.LaunchTask or EffectKind.RunCi or EffectKind.RequestReview ? 0 : 1)
+                .FirstOrDefault(e => e.Status == DeliveryStatus.Pending &&
                 options.AllowsEffect(e) &&
                 (e.Kind is not (EffectKind.LaunchTask or EffectKind.RequestReview) || simulateAgents) &&
                 !snapshot.State.Outbox.Values.Any(IsExclusiveUncertain) &&
@@ -238,6 +248,9 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
     private static bool IsSafeToExecute(RepositoryState state, EffectIntent intent, LiveObservation observation)
     {
         var issue = state.Issues[intent.IssueNumber];
+        if (intent.Kind is EffectKind.LaunchTask or EffectKind.RunCi or EffectKind.RequestReview &&
+            state.Issues.Values.Any(candidate => candidate.ContinuationHoldBarrier is not null))
+            return false;
         if (intent.Generation != issue.Generation ||
             !observation.Issues.TryGetValue(issue.Number, out var live)) return false;
         if (intent.Kind == EffectKind.PublishRequiredStatus)

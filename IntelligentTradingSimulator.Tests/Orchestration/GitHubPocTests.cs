@@ -415,6 +415,12 @@ public sealed class GitHubPocTests
             else if (path == prefix + "/git/ref/" + GitHubPocSettings.StateReference["refs/".Length..])
             {
                 if (!Exists) return new(HttpStatusCode.NotFound);
+                if (definitionReads >= 2)
+                {
+                    FinalStateReads++;
+                    if (corruption == "pause-read-failure" && FinalStateReads == 2)
+                        throw new HttpRequestException("Final state read failed.");
+                }
                 response = new { @object = new { sha = Tip } };
             }
             else if (request.Method == HttpMethod.Post && path.StartsWith(prefix + "/git/", StringComparison.Ordinal))
@@ -442,12 +448,6 @@ public sealed class GitHubPocTests
                     { new { path = "state.json", type = "blob", mode = "100644", sha = Blob } } };
             else if (path == prefix + "/git/blobs/" + Blob)
             {
-                if (definitionReads >= 2)
-                {
-                    FinalStateReads++;
-                    if (corruption == "pause-read-failure" && FinalStateReads == 2)
-                        throw new HttpRequestException("Final state read failed.");
-                }
                 var json = StateJson.Serialize(CurrentState);
                 response = new { encoding = "base64", size = Encoding.UTF8.GetByteCount(json),
                     content = Convert.ToBase64String(Encoding.UTF8.GetBytes(json)) };

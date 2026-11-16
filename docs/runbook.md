@@ -2007,11 +2007,12 @@ the old single-pass fixture eligible for repair-task execution.
 
 #### Audited abandonment of an uncertain Copilot request
 
-Normal and recovery runs share a repository-wide concurrency group with
-`cancel-in-progress: false`. Before the first recovery using this definition,
-disable new normal triggers and wait for every run started from an older,
-unserialized definition to finish. Do not recover while an older executor could
-still send a review POST; merging this workflow does not serialize existing runs.
+Normal workers and review-abandonment/task-resolution recovery acquire the same
+durable worker lease. Recovery refuses an occupied lease; retry it after the
+active invocation finishes. Pause is committed without waiting for the lease.
+Before the first recovery using this definition, disable new normal triggers and
+wait for every run started from an older definition to finish. Do not recover
+while an older executor could still send a review POST.
 
 The request-review endpoint has no idempotency key or request/job ID. An absent
 pending reviewer and absent submitted review do **not** prove that an earlier
@@ -2541,9 +2542,9 @@ recovery. Verified human commands are committed before unrelated service reads,
 so a service failure cannot lose an already-verified ready/pause/reactivation.
 Ticket expiry/due time is not task completion or permission to recreate an effect.
 
-The conditionally gated replacement workflow defines periodic `schedule`, exact managed
-`workflow_run` completion, PR synchronization/closure and ordinary feedback wakes.
-Review results use trusted worker/periodic API polling. Direct `pull_request_review`
+The conditionally gated replacement workflow has no `schedule`. It handles exact
+managed `workflow_run` completion, PR synchronization/closure and ordinary
+feedback wakes. Review results use API polling while a worker is active. Direct `pull_request_review`
 wakes are deliberately excluded: their PR merge revision is not the approved
 default-branch workflow definition and must not receive orchestration credentials.
 `GitHubWakeSource` checks repository/run/workflow/event and the
@@ -2553,10 +2554,45 @@ review text, actor labels and comment content never become synthetic completion
 or approval events. The leased shared host re-fetches feedback before downstream
 effects, performs lookup-only recovery, and automatically continues eligible work.
 Duplicate wakes cannot bypass admission or execute the same prepared intent twice.
-Scheduled reconciliation also re-observes tracked open PRs/active tasks after
-automatic work settles, including HUMAN_REVIEW. A late feedback/head wake that
-encounters a lease therefore cannot disappear forever when the active worker
-retires its ticket; the next periodic observation still applies status revocation.
+The workflow no longer uses the repository-wide Actions concurrency queue, where
+GitHub could replace a pending run. Verified commands are committed before worker
+lease acquisition; a wake that finds the lease held waits and retries for up to
+150 minutes, then fails explicitly. Recovery commands that resolve a task or
+abandon an uncertain review instead require the exclusive lease and fail fast
+if it is occupied. Lease waiters use jittered exponential backoff from 4–5
+seconds to 96–120 seconds. Unchanged state requires only a fresh ref lookup;
+validated immutable commit content is cached per store, never the ref itself.
+With many concurrent wakes or frequently changing state, API limits may still
+be reached; a released lease may take up to two minutes to be noticed.
+
+An active admitted task that reaches a 30-minute or iteration bound records a
+pending continuation atomically with lease release. The next lease acquisition
+consumes one of at most three durable continuations for that task; other wakes
+cannot reset the count or bypass it. After the third continuation reaches its
+bound, the Issue is held for human action and a bounded projection-only pass
+reports the hold without admitting or planning new work. If the held task has
+finished and admission can be safely released during that pass, the same wake
+returns to normal processing for other queued Issues. Otherwise admission stays
+held until a later observation or explicit recovery. These continuations run
+within the event-triggered workflow, not on a schedule. The job has a six-hour
+limit; a single waiter can use up to 150 minutes, in addition to the worker intervals.
+The live command reports an exhausted continuation limit as a failed Actions job
+even if other queued work progressed, so the human-action hold remains visible
+to operators. The persisted hold and projected status identify the affected Issue.
+The bounded hold-publication pass targets that Issue's projections before unrelated
+backlog. It proceeds to queued work only after confirming the current hold labels,
+status comment, and, when configured for a mapped head, required status. An
+incomplete or uncertain projection fails explicitly and requires operator attention;
+a persisted hold-publication barrier also blocks later wakes from admitting or
+executing other tasks until the current projections are confirmed. If required-status
+publication was enabled (or previously used), the barrier cannot be bypassed by a
+later wake without a confirmed required status. An unfinished task continues to occupy admission;
+the barrier remains until it finishes and its final mapped head is confirmed. A confirmed
+terminal closure can clear the barrier under the same checks; an unknown terminal
+outcome cannot. Automatic wakes prioritize the admitted Issue's work after recovery.
+When a bounded worker reports clearing a recovered barrier, it makes one further
+bounded handoff attempt if eligible queued work remains.
+This remains a proof of concept, not production-ready: Issues are processed sequentially.
 
 The production job checks out only `ORCHESTRATION_DEFINITION_SHA`, never PR code,
 and exposes the user credential only to the trusted reconciler step in the
@@ -2579,15 +2615,13 @@ inputs require explicit expected repository/Issue generations. All library effec
 status publication and the live CLI have default-false activation/policy/cost gates.
 
 [GitHub's event contract](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)
-requires the workflow on the default branch; schedules may be delayed/dropped,
-and public-repository schedules may be disabled after 60 inactive days. The
-15-minute off-hour schedule redelivers canonical pending work, not a guaranteed
-timer or lossless event inbox. `workflow_run` chains have a three-level limit;
-periodic reconciliation does not depend on indefinite chained dispatches. No
-self-dispatch API is used, so a lost dispatch acknowledgement cannot create an
-unbounded wake-up storm. Monitor the oldest pending ticket, worker lease expiry,
-workflow drift and disabled schedules. Exceptional authorized Resume remains the
-recovery path when GitHub cannot deliver wakes; it cannot clear holds.
+requires the workflow on the default branch. No self-dispatch API is used. If a
+runner crashes, a job times out, or GitHub drops an event, there is no independent
+timer to restart it: inspect the failed run, canonical ticket, lease expiry and
+any uncertain effects. An exceptional authorized Resume can request observation
+after lease expiry; it cannot clear a hold or replay an uncertain effect. Do not
+assume late PR changes will be observed without a delivered event. This is not a
+lossless delivery or automatic crash-recovery guarantee.
 
 For `pull_request_target`, GitHub's run `head_sha` identifies the PR head, not
 the trusted workflow definition. The wake verifier requires the runner-provided
@@ -3008,6 +3042,10 @@ entitlement, cost controls or repository protection must leave activation blocke
    level, if status history exists but publisher approvals are unavailable, the
    command is saved but the invocation fails explicitly rather than claiming
    revocation; CLI startup gates may reject unverified configuration earlier.
+   Pause is persisted before acquiring the worker lease; when publication is
+   authorized, status publication and recovery then wait up to 150 minutes for
+   exclusive ownership. A timeout fails explicitly and leaves the pause saved
+   for operator attention.
    Bounded tests with no status history and status publication disabled remain
    command-only without a status write. Commit statuses are not transactional:
    a late uncertain earlier success can still overwrite the corrective error;
@@ -3095,7 +3133,7 @@ entitlement, cost controls or repository protection must leave activation blocke
    completed terminal tasks/sessions plus observed task↔PR/head association are
    revalidated, **not** provider attestation of a task-produced commit. Ambiguous
    reviews require exact handoff classification, not guessed prose. Monitor old
-   tickets, lease expiry and delayed/dropped/disabled schedules; guarded Resume
+   tickets, lease expiry and failed or undelivered event runs; guarded Resume
    is exceptional recovery, not a lifecycle override.
 8. **Rollback without forgetting operations.** Set activation and managed routing
    false, disable the replacement and managed-CI workflows, and revoke the
@@ -3124,7 +3162,7 @@ this account's access, credentials, entitlements, policy or spending configurati
 | Review result | [PR reviews/comments](https://docs.github.com/en/rest/pulls/reviews) expose actor, `commit_id`, review ID and comments; bounded validated raw capture is implemented. | No request-round token or dependable prose classifier; captured output is `needs-human`, never guessed promotion/repair. Authorized classification or independently verified provider evidence is required. |
 | Lost mutation response | Neither task launch nor review request documents a caller-supplied idempotency key or exactly-once creation. | Persist intent before call; retain returned identity; if no unique operation can be established, hold for human reconciliation, never repeat a speculative create. |
 | CI/status | [Workflow dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event), [runs](https://docs.github.com/en/rest/actions/workflow-runs), [jobs](https://docs.github.com/en/rest/actions/workflow-jobs) and [commit statuses](https://docs.github.com/en/rest/commits/statuses) contracts; gated adapters, exact persisted candidate-SHA testing/status, and ordinary CI for all PRs. | Verify credential/publisher/context policy, immutable trusted tag/revision and no-added-charge enforcement. The bounded candidate SHA is only the terminal-task-time observed PR head, not an authoritative task-produced commit. Workflow execution depends on configuration; branch protection must be checked independently. |
-| Continuation | Documented default-branch schedule/workflow-run/comment/PR wakes; durable canonical ticket and leased shared host, conditionally gated workflow wiring. | GitHub may drop/delay schedules or disable inactive public schedules; monitor and use exceptional guarded Resume. Trusted definition/default-branch placement and account cost controls require maintainer verification. No lossless SLA. |
+| Continuation | Default-branch workflow-run/comment/PR wakes, durable task-scoped continuation limit and leased shared host; no schedule. | A crashed job or dropped wake has no automatic timer recovery; inspect state and use guarded Resume when appropriate. Trusted definition/default-branch placement and account cost controls require maintainer verification. No lossless SLA. |
 | Operator recovery | Saved task GET/session snapshot plus authorized `resolve-task`; local tracking ends Failed, with durable evidence and replay. `classify-review` references exact current handoff/head/round. | Task API does not promise irreversible remote termination. Verify quiescence before Reactivate; missing saved launch ID remains unresolved without an authoritative operation identity/design decision. No completion-SHA inference. |
 | Charges | [Organization billing](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing), [budgets](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/budgets), and [review pricing](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing) describe paid usage and review attribution. | Maintainer/admin must verify existing entitlement, attribution, disable paid overages, and enforce stop-usage controls for AI and Actions. Alerts alone are not caps; public Actions compute does not establish free AI use. No per-operation included-only billing field was established. |
 
@@ -3149,7 +3187,7 @@ refer to `IntelligentTradingSimulator.Tests/Orchestration`.
 | 11 Operations documentation | This runbook: trust/cost/cutover/rollback, continuation monitoring, status provenance and operator procedures | Maintainer must verify account/prerequisites and approve activation separately. |
 | 12 Human final approval/no auto-merge | Core `HUMAN_REVIEW`; Host classification leaves final approval hold; no merge effect/API | CI status alone is not approval; preserve independent human branch protection. |
 | 13 Label start/queue/guarded recovery | Verified command committed before service reads; split-credential PAT-owner/bot ingress, identity and replay tests; live CLI and conditionally gated workflow wiring | Solo maintainer uses the existing human PAT only for task APIs; Actions bot owns projections/state. Account/prerequisites remain unverified. No normal Start button. |
-| 14 Automatic stages/labels/continuation | Leased host, durable ticket, scheduled/event wake verification, bounded automatic polls and status projections | Configuration-dependent test gates and runtime approvals; GitHub schedule delays/drop/inactivity require monitoring and exceptional Resume, not a delivery SLA. |
+| 14 Automatic stages/labels/continuation | Leased host, durable ticket, event wake verification, task-scoped bounded continuations and status projections | Configuration-dependent test gates and runtime approvals; job failure or dropped wakes require monitoring and exceptional Resume, not a delivery SLA. |
 | 15 Shared C#/real response shapes | One reducer/reconciler; REST task/session/GraphQL/review/CI/status fixtures, trusted routing/wake adapters and production composition | Public contracts/offline fixtures do not establish this account's eligibility, credentials, spending or final-SHA capability. |
 | 16 Repository admission/queue | Core/CAS/worker concurrent admission; duplicate/expired-lease continuation tests; task recovery retains other unfinished work | Requires protected canonical branch; no paid database/external worker or premature lease release. |
 | 17 Reviewer needs-human | Raw output/handoff capture, explicit authorized live-head classification, unresolved finding regression and status revocation | Autonomous request-round/classification evidence absent; human gating remains intentional. |

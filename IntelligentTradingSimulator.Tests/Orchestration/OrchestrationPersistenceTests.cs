@@ -420,6 +420,25 @@ public sealed class OrchestrationPersistenceTests
     }
 
     [Fact]
+    public async Task CachedStateDoesNotHideAnotherWritersCommitOrPermitStalePublication()
+    {
+        var transport = new GitTransport();
+        var bootstrap = new GitStateStore(transport, "owner/repo", allowInitialization: true);
+        var initial = await bootstrap.LoadAsync(default);
+        Assert.True(await bootstrap.TrySaveAsync(initial, initial.State, default));
+        var first = new GitStateStore(transport, "owner/repo");
+        var second = new GitStateStore(transport, "owner/repo");
+        var stale = await first.LoadAsync(default);
+        var latest = await second.LoadAsync(default);
+        latest.State.Version = 42;
+        Assert.True(await second.TrySaveAsync(latest, latest.State, default));
+
+        Assert.False(await first.TrySaveAsync(stale, stale.State, default));
+        Assert.Equal(42, (await first.LoadAsync(default)).State.Version);
+        Assert.Equal(2, transport.Commits.Count);
+    }
+
+    [Fact]
     public async Task GitConflictDoesNotPublishOrPretendSuccess()
     {
         var transport = new GitTransport { RejectAdvance = true };
