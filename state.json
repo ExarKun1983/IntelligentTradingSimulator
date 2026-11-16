@@ -1,10 +1,10 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 206,
+  "Version": 207,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
-  "LastEventId": "review-observed:1277929203:1:RequestReview:291:1:task:291:1:1:1:1",
+  "LastEventId": "actions:1277929203:43872318856",
   "AdmittedIssue": null,
   "WorkerLease": null,
   "Continuation": {
@@ -43,6 +43,8 @@
       "Tasks": {
         "task:227:1:1:1": {
           "Id": "task:227:1:1:1",
+          "AutomaticContinuations": 0,
+          "ContinuationPending": false,
           "Kind": "Coding",
           "Status": "Failed",
           "ParentTaskId": null,
@@ -151,6 +153,8 @@
       "Tasks": {
         "task:237:1:1:1": {
           "Id": "task:237:1:1:1",
+          "AutomaticContinuations": 0,
+          "ContinuationPending": false,
           "Kind": "Coding",
           "Status": "Completed",
           "ParentTaskId": null,
@@ -296,6 +300,8 @@
       "Tasks": {
         "task:287:1:1:1": {
           "Id": "task:287:1:1:1",
+          "AutomaticContinuations": 0,
+          "ContinuationPending": false,
           "Kind": "Coding",
           "Status": "Completed",
           "ParentTaskId": null,
@@ -371,6 +377,8 @@
       "Tasks": {
         "task:291:1:1:1": {
           "Id": "task:291:1:1:1",
+          "AutomaticContinuations": 0,
+          "ContinuationPending": false,
           "Kind": "Coding",
           "Status": "Completed",
           "ParentTaskId": null,
@@ -474,6 +482,51 @@
       "StatusProjectionDigest": "DB2E783A427438E0E7A3638F855FEEB79C5DD63C3654D72D52889A17789B3EEB",
       "RequiredStatusSequence": 7,
       "RequiredStatusIntentId": "required-status:291:1:7"
+    },
+    "295": {
+      "SchemaVersion": 1,
+      "Number": 295,
+      "Generation": 1,
+      "Version": 1,
+      "LastEventId": "actions:1277929203:43872318856",
+      "Phase": "READY",
+      "Ready": true,
+      "ActiveAuthorized": false,
+      "ReadyAt": "2026-11-16T13:04:31+00:00",
+      "FeedbackSince": "2026-11-16T13:04:31+00:00",
+      "ReactivationRequired": false,
+      "Paused": false,
+      "HoldReason": null,
+      "PullRequest": null,
+      "HeadSha": null,
+      "Round": 0,
+      "ConsecutiveCiFailures": 0,
+      "ConsecutiveReviewFailures": 0,
+      "PendingReviewProgress": false,
+      "CiBudget": 3,
+      "ReviewBudget": 5,
+      "MaxRepairTasks": 5,
+      "SinglePassTest": false,
+      "ActiveTaskId": null,
+      "Tasks": {},
+      "Ci": null,
+      "Review": null,
+      "FeedbackEventIds": [],
+      "LastFeedbackText": null,
+      "ClosurePending": false,
+      "TerminalOutcome": "None",
+      "TerminalHistory": [],
+      "CurrentHandoffId": null,
+      "Handoffs": {},
+      "Feedback": {},
+      "PendingFeedbackEventIds": [],
+      "Reactivations": {},
+      "Classifications": {},
+      "ProjectionDigest": null,
+      "ObservedProjectionDigest": null,
+      "StatusProjectionDigest": null,
+      "RequiredStatusSequence": 0,
+      "RequiredStatusIntentId": null
     }
   },
   "Inbox": {
@@ -668,6 +721,14 @@
       "ReceivedAt": "2026-11-16T00:07:02.4274468+00:00",
       "CompletedAt": "2026-11-16T00:07:02.4274468+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022review-observed:1277929203:1:RequestReview:291:1:task:291:1:1:1:1\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:291,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022copilot-pull-request-reviewer[bot]\u0022,\u0022Kind\u0022:3,\u0022Id\u0022:175728472,\u0022NodeId\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022Type\u0022:\u0022Bot\u0022},\u0022OccurredAt\u0022:\u00222026-11-16T00:07:02.4274468\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022review-result\u0022,\u0022ReviewId\u0022:\u0022review-request:RequestReview:291:1:task:291:1:1:1:1\u0022,\u0022TaskId\u0022:\u0022task:291:1:1:1\u0022,\u0022Round\u0022:1,\u0022PullRequest\u0022:292,\u0022Sha\u0022:\u00229be01a31feedd98ed2dee7c3db75ba0a94847aec\u0022,\u0022Classification\u0022:2,\u0022Findings\u0022:[],\u0022Responses\u0022:[],\u0022SourceEvidence\u0022:\u0022{\\u0022reason\\u0022:\\u0022REST has no request-to-submission round token; human classification is required for this output.\\u0022,\\u0022policy\\u0022:\\u0022exact-head-inline-findings-v1\\u0022,\\u0022request\\u0022:\\u0022review-request:RequestReview:291:1:task:291:1:1:1:1\\u0022,\\u0022observedReviews\\u0022:[{\\u0022id\\u0022:5913666636,\\u0022node_id\\u0022:\\u0022PRR_kwDOTCum888AAAABYHtkTA\\u0022,\\u0022user\\u0022:{\\u0022login\\u0022:\\u0022copilot-pull-request-reviewer[bot]\\u0022,\\u0022id\\u0022:175728472,\\u0022node_id\\u0022:\\u0022BOT_kgDOCnlnWA\\u0022,\\u0022avatar_url\\u0022:\\u0022https://avatars.githubusercontent.com/in/946600?v=4\\u0022,\\u0022gravatar_id\\u0022:\\u0022\\u0022,\\u0022url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D\\u0022,\\u0022html_url\\u0022:\\u0022https://github.com/apps/copilot-pull-request-reviewer\\u0022,\\u0022followers_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/followers\\u0022,\\u0022following_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/following{/other_user}\\u0022,\\u0022gists_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/gists{/gist_id}\\u0022,\\u0022starred_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/starred{/owner}{/repo}\\u0022,\\u0022subscriptions_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/subscriptions\\u0022,\\u0022organizations_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/orgs\\u0022,\\u0022repos_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/repos\\u0022,\\u0022events_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/events{/privacy}\\u0022,\\u0022received_events_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/received_events\\u0022,\\u0022type\\u0022:\\u0022Bot\\u0022,\\u0022user_view_type\\u0022:\\u0022public\\u0022,\\u0022site_admin\\u0022:false},\\u0022body\\u0022:\\u0022\\\\u003C!-- ccr-overview-v2 --\\\\u003E\\\\n\\\\n### \\\\uD83D\\\\uDFE2 Approval recommended\\\\n\\\\nNo active review issues block the configurable-window regression test additions.\\\\n\\\\n**No open issues** \\\\uD83C\\\\uDF89\\\\n\\\\n\\\\u003Cdetails\\\\u003E\\\\n\\\\u003Csummary\\\\u003E\\\\u003Cstrong\\\\u003EWhat changed in this PR\\\\u003C/strong\\\\u003E\\\\u003C/summary\\\\u003E\\\\n\\\\nAdds regression tests for \\\\u0060Week52HighCalculator\\\\u0060\\\\u2019s configurable trailing-session window without changing calculation logic.\\\\n\\\\n**Changes:**\\\\n- Covers insufficient, exact-length, and one-session windows, including high and distance results.\\\\n- Verifies that a high immediately outside the configured window is excluded.\\\\n- Tests zero and negative session counts and replaces the fixture\\\\u2019s current date with a fixed date.\\\\n\\\\n| File | Description |\\\\r\\\\n| ---- | ----------- |\\\\r\\\\n| \\\\u0060IntelligentTradingSimulator.Tests/\\\\u200BWeek52HighCalculatorTests.cs\\\\u0060 | Adds configurable-window and invalid-configuration coverage with deterministic fixtures. |\\\\n\\\\u003C/details\\\\u003E\\\\n\\\\n\\\\u003Csub\\\\u003EReview effort: Balanced\\\\u003C/sub\\\\u003E\\u0022,\\u0022state\\u0022:\\u0022COMMENTED\\u0022,\\u0022html_url\\u0022:\\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/292#pullrequestreview-5913666636\\u0022,\\u0022pull_request_url\\u0022:\\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/292\\u0022,\\u0022author_association\\u0022:\\u0022NONE\\u0022,\\u0022is_copilot_code_review\\u0022:true,\\u0022copilot_code_review_effort\\u0022:\\u0022balanced\\u0022,\\u0022_links\\u0022:{\\u0022html\\u0022:{\\u0022href\\u0022:\\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/292#pullrequestreview-5913666636\\u0022},\\u0022pull_request\\u0022:{\\u0022href\\u0022:\\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/292\\u0022}},\\u0022submitted_at\\u0022:\\u00222026-11-16T00:08:17Z\\u0022,\\u0022commit_id\\u0022:\\u00229be01a31feedd98ed2dee7c3db75ba0a94847aec\\u0022}],\\u0022observedComments\\u0022:[]}\u0022}}"
+    },
+    "actions:1277929203:43872318856": {
+      "Id": "actions:1277929203:43872318856",
+      "Digest": "48B6BF3E646D457A85FE17B45371DCD182DAF2672276DDF16E0ECE956DA01211",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-16T13:04:31+00:00",
+      "CompletedAt": "2026-11-16T13:04:31+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022actions:1277929203:43872318856\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:295,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u00226195946\u0022,\u0022Kind\u0022:0,\u0022Id\u0022:6195946,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-16T13:04:31\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022ready\u0022,\u0022MaxRepairTasks\u0022:5}}"
     }
   },
   "Outbox": {
