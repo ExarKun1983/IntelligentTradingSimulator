@@ -1,20 +1,17 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 440,
+  "Version": 441,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "task-completed:1277929203:1:58c8550a-67d4-4c94-901f-8f44787ce047",
   "AdmittedIssue": 301,
-  "WorkerLease": {
-    "Owner": "8a91343462674c6dbe5dcf648c122416",
-    "ExpiresAt": "2026-11-16T22:36:31.8841247+00:00"
-  },
+  "WorkerLease": null,
   "Continuation": {
     "Id": "continue:1:402",
     "RepositoryGeneration": 1,
-    "DueAt": "2026-11-16T22:10:32.3467096+00:00",
-    "Reason": "Invocation in flight.",
+    "DueAt": "2026-11-16T22:15:21.8210726+00:00",
+    "Reason": "Automatic work remains.",
     "Pending": true
   },
   "Issues": {
@@ -859,7 +856,7 @@
         "task:301:1:1:1": {
           "Id": "task:301:1:1:1",
           "AutomaticContinuations": 0,
-          "ContinuationPending": false,
+          "ContinuationPending": true,
           "Kind": "Coding",
           "Status": "Completed",
           "ParentTaskId": null,
