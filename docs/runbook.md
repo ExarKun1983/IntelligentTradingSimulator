@@ -2583,7 +2583,11 @@ The bounded hold-publication pass targets that Issue's projections before unrela
 backlog. It proceeds to queued work only after confirming the current hold labels,
 status comment, and, when configured for a mapped head, required status. An
 incomplete or uncertain projection fails explicitly and requires operator attention;
-an unfinished task continues to occupy admission.
+a persisted hold-publication barrier also blocks later wakes from admitting or
+executing other tasks until the current projections are confirmed. If required-status
+publication was enabled (or previously used), the barrier cannot be bypassed by a
+later wake without a confirmed required status. An unfinished task continues to occupy admission;
+the barrier remains until it finishes and its final mapped head is confirmed.
 
 The production job checks out only `ORCHESTRATION_DEFINITION_SHA`, never PR code,
 and exposes the user credential only to the trusted reconciler step in the

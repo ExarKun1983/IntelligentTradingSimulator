@@ -620,6 +620,7 @@ public sealed class OrchestrationWorkerTests
             {
                 Assert.Empty(store.Current.Issues[8].Tasks);
                 Assert.Equal(completeTask ? null : 7, store.Current.AdmittedIssue);
+                Assert.Equal(!completeTask, store.Current.Issues[7].ContinuationHoldBarrier is not null);
                 Assert.Contains("agent:blocked", api.ProjectedLabels[7]);
                 Assert.Contains(api.Deliveries, delivery => delivery.Issue == 7 &&
                     delivery.Kind == EffectKind.ProjectStatus && delivery.StatusBody!.Contains("Agent workflow: **BLOCKED**"));
@@ -694,8 +695,82 @@ public sealed class OrchestrationWorkerTests
                 token => worker.RunAsync(store, api, api, api, Simulation, options, token), Publish));
         Assert.Single(store.Current.Outbox.Values, effect => effect.IssueNumber == 7 &&
             effect.Kind == EffectKind.PublishRequiredStatus && effect.Status == DeliveryStatus.Unknown);
+        Assert.Equal(TaskStatus.Completed, store.Current.Issues[7].Tasks[store.Current.Issues[7].ActiveTaskId!].Status);
+        Assert.True(store.Current.Issues[7].ContinuationHoldBarrier!.RequireRequiredStatus);
+        Assert.Equal(7, store.Current.AdmittedIssue);
         Assert.Empty(store.Current.Issues[8].Tasks);
         Assert.Equal(new[] { 7 }, api.LaunchedIssues);
+
+        await worker.RunAsync(store, api, api, api, Simulation, Fast);
+        Assert.Equal(7, store.Current.AdmittedIssue);
+        Assert.NotNull(store.Current.Issues[7].ContinuationHoldBarrier);
+        Assert.Empty(store.Current.Issues[8].Tasks);
+        await Worker().RunAsync(store, api, api, api, Simulation, Fast);
+        Assert.NotNull(store.Current.Issues[7].ContinuationHoldBarrier);
+        Assert.Empty(store.Current.Issues[8].Tasks);
+        var noAdmission = StateJson.Clone(store.Current);
+        noAdmission.AdmittedIssue = null;
+        var decision = new OrchestrationReducer(new Authorized(), requiredStatusEnabled: true)
+            .Reconcile(noAdmission, await api.ObserveAsync(noAdmission, CancellationToken.None));
+        Assert.Null(decision.State.AdmittedIssue);
+        Assert.Empty(decision.State.Issues[8].Tasks);
+        decision.State.Outbox["blocked-launch"] = new EffectIntent
+        {
+            Id = "blocked-launch", IssueNumber = 8, Kind = EffectKind.LaunchTask, Status = DeliveryStatus.Pending
+        };
+        Assert.False(OrchestrationContinuation.HasWork(decision.State,
+            Simulation with { AllowedEffectKinds = new HashSet<EffectKind> { EffectKind.LaunchTask } }));
+        Assert.Throws<InvalidOperationException>(() =>
+            new OrchestrationReducer().MarkExecuting(decision.State, "blocked-launch", Now));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new OrchestrationReconciler(new OrchestrationReducer(new Authorized())).DispatchAsync(store,
+                new("reactivate-held", "owner/repo", 7, 1, 1, new("maintainer", ActorKind.Human), Now,
+                    new Reactivate("Reactivation must wait for publication."))));
+
+        api.RecoveryUnknown = false;
+        api.UnknownProjection = null;
+        await worker.RunAsync(store, api, api, api, Simulation, Fast);
+        Assert.Null(store.Current.Issues[7].ContinuationHoldBarrier);
+        Assert.Contains(store.Current.Outbox.Values, effect => effect.IssueNumber == 7 &&
+            effect.Kind == EffectKind.PublishRequiredStatus && effect.Status == DeliveryStatus.Succeeded &&
+            effect.RequiredStatus?.State == "error");
+        Assert.Contains(8, api.LaunchedIssues);
+    }
+
+    [Fact]
+    public async Task PublishedRunningHoldRemainsBarredUntilItsFinalHeadStatusIsConfirmed()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store)
+        {
+            ReadyIssues = [7, 8], NoInitialPullRequest = true, CompleteTasks = false, RecoveryUnknown = true
+        };
+        var worker = new OrchestrationWorker(new OrchestrationReducer(new Authorized(), requiredStatusEnabled: true));
+        var options = Fast with { MaximumIterations = 3, TrackAutomaticContinuations = true };
+        async Task<WorkerResult> Publish(int issueNumber, CancellationToken token)
+        {
+            var projection = await worker.RunAsync(store, api, api, api,
+                Simulation with { ProjectionOnly = true, ProjectionIssueNumber = issueNumber },
+                Fast with { MaximumIterations = 8 }, token);
+            GitHubOrchestrationHost.VerifyHoldProjection(projection, issueNumber, true);
+            return projection;
+        }
+
+        await new AutomaticWorkerContinuation(store).RunForIssueAsync(
+            token => worker.RunAsync(store, api, api, api, Simulation, options, token), Publish);
+        Assert.Null(store.Current.Issues[7].PullRequest);
+        Assert.NotNull(store.Current.Issues[7].ContinuationHoldBarrier);
+        Assert.Equal(7, store.Current.AdmittedIssue);
+
+        api.CompleteTasks = true;
+        api.UnknownProjection = EffectKind.PublishRequiredStatus;
+        await worker.RunAsync(store, api, api, api, Simulation, Fast);
+        Assert.NotNull(store.Current.Issues[7].PullRequest);
+        Assert.NotNull(store.Current.Issues[7].ContinuationHoldBarrier);
+        Assert.Equal(7, store.Current.AdmittedIssue);
+        Assert.Empty(store.Current.Issues[8].Tasks);
+        Assert.Single(store.Current.Outbox.Values, effect => effect.IssueNumber == 7 &&
+            effect.Kind == EffectKind.PublishRequiredStatus && effect.Status == DeliveryStatus.Unknown);
     }
 
     [Fact]
@@ -1358,7 +1433,7 @@ public sealed class OrchestrationWorkerTests
         public bool NoInitialPullRequest { get; init; }
         public string? CompletionMismatch { get; set; }
         public bool UnknownLaunch { get; init; }
-        public bool RecoveryUnknown { get; init; }
+        public bool RecoveryUnknown { get; set; }
         public bool IncludeUnpublishedResults { get; init; }
         public bool FailObservation { get; set; }
         public bool AmbiguousFirstReview { get; init; }

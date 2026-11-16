@@ -19,6 +19,9 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             task.AutomaticContinuations != OrchestrationContinuation.MaxAutomaticContinuations)
             throw new InvalidOperationException("Continuation limit no longer matches the active task.");
         Hold(issue, ContinuationLimitReason);
+        issue.ContinuationHoldBarrier = new(issue.Generation, requiredStatusEnabled ||
+            state.Outbox.Values.Any(effect => effect.IssueNumber == issueNumber &&
+                effect.Kind == EffectKind.PublishRequiredStatus));
         CancelPendingWork(state, issue);
         Touch(state, issue, issue.LastEventId);
         return state;
@@ -97,7 +100,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 if (string.IsNullOrWhiteSpace(reactivate.Reason)) throw new InvalidOperationException("Reactivation requires an audit reason.");
                 if (!issue.ReactivationRequired || issue.Phase is not (Phase.BLOCKED or Phase.HUMAN_REVIEW or Phase.CLOSED))
                     throw new InvalidOperationException("Only a held or terminal issue can be explicitly reactivated.");
-                if (HasUnfinishedWork(state, issue)) throw new InvalidOperationException("An operation is still active or uncertain.");
+                if (issue.ContinuationHoldBarrier is not null || HasUnfinishedWork(state, issue))
+                    throw new InvalidOperationException("An operation or continuation hold publication is still active or uncertain.");
                 var previousGeneration = issue.Generation;
                 issue.Generation++;
                 issue.Reactivations.Add(message.Id, new ReactivationRecord(message.Id, previousGeneration,
@@ -590,6 +594,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             ReleaseIfSafe(state, issue);
         }
         if (!projectionOnly && state.AdmittedIssue is null &&
+            !state.Issues.Values.Any(issue => issue.ContinuationHoldBarrier is not null) &&
             !state.Outbox.Values.Any(e => e.Kind != EffectKind.PublishRequiredStatus &&
                 e.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown))
         {
@@ -708,6 +713,16 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                         idOverride: statusId, statusBody: statusBody);
                 else status.Status = DeliveryStatus.Pending;
             }
+            if (issue.ContinuationHoldBarrier is { } barrier && !HasUnfinishedWork(state, issue) &&
+                issue.Phase == Phase.BLOCKED && issue.ReactivationRequired &&
+                !state.Outbox.Values.Any(effect => effect.Status == DeliveryStatus.Executing ||
+                    OrchestrationReconciler.IsExclusiveUncertain(effect)) &&
+                OrchestrationContinuation.HoldProjectionConfirmed(state, issue,
+                    barrier.RequireRequiredStatus || requiredStatusEnabled))
+            {
+                issue.ContinuationHoldBarrier = null;
+                ReleaseIfSafe(state, issue);
+            }
             if (input.Issues.TryGetValue(issue.Number, out var before) &&
                 System.Text.Json.JsonSerializer.Serialize(before, StateJson.Options) !=
                 System.Text.Json.JsonSerializer.Serialize(issue, StateJson.Options))
@@ -731,13 +746,18 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         return state;
     }
 
-    public RepositoryState MarkExecuting(RepositoryState input, string id, DateTimeOffset now) =>
-        ChangeEffect(input, id, effect =>
+    public RepositoryState MarkExecuting(RepositoryState input, string id, DateTimeOffset now)
+    {
+        if (input.Outbox[id].Kind is EffectKind.LaunchTask or EffectKind.RunCi or EffectKind.RequestReview &&
+            input.Issues.Values.Any(issue => issue.ContinuationHoldBarrier is not null))
+            throw new InvalidOperationException("Continuation hold publication must be confirmed before starting new work.");
+        return ChangeEffect(input, id, effect =>
         {
             if (effect.Status != DeliveryStatus.Pending) throw new InvalidOperationException("Effect is not pending.");
             effect.Status = DeliveryStatus.Executing;
             effect.StartedAt = now;
         });
+    }
 
     public RepositoryState RecordOutcome(RepositoryState input, string id, EffectOutcome outcome, DateTimeOffset now)
     {
@@ -1156,7 +1176,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
 
     private static void ReleaseIfSafe(RepositoryState state, IssueState issue)
     {
-        if (state.AdmittedIssue == issue.Number && issue.Phase is Phase.HUMAN_REVIEW or Phase.BLOCKED or Phase.CLOSED &&
+        if (state.AdmittedIssue == issue.Number && issue.ContinuationHoldBarrier is null &&
+            issue.Phase is Phase.HUMAN_REVIEW or Phase.BLOCKED or Phase.CLOSED &&
             !HasUnfinishedWork(state, issue)) state.AdmittedIssue = null;
     }
     private static void CancelPendingWork(RepositoryState state, IssueState issue)
@@ -1259,6 +1280,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             state.Outbox.Count > MaximumIndexEntries ||
             state.Issues.Any(pair => pair.Key != pair.Value.Number || pair.Key <= 0) ||
             state.Issues.Values.Any(issue => issue.SchemaVersion != 1 || issue.Generation <= 0 || issue.Version < 0 ||
+                issue.ContinuationHoldBarrier is { } barrier && barrier.Generation != issue.Generation ||
                 !Enum.IsDefined(issue.Phase) || issue.CiBudget <= 0 || issue.ReviewBudget <= 0 ||
                 issue.MaxRepairTasks is < 1 or > 8 ||
                 issue.PullRequest is <= 0 || issue.HeadSha is not null && !IsSha(issue.HeadSha) ||

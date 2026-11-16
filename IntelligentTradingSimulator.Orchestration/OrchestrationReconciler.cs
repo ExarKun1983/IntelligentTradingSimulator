@@ -248,6 +248,9 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
     private static bool IsSafeToExecute(RepositoryState state, EffectIntent intent, LiveObservation observation)
     {
         var issue = state.Issues[intent.IssueNumber];
+        if (intent.Kind is EffectKind.LaunchTask or EffectKind.RunCi or EffectKind.RequestReview &&
+            state.Issues.Values.Any(candidate => candidate.ContinuationHoldBarrier is not null))
+            return false;
         if (intent.Generation != issue.Generation ||
             !observation.Issues.TryGetValue(issue.Number, out var live)) return false;
         if (intent.Kind == EffectKind.PublishRequiredStatus)

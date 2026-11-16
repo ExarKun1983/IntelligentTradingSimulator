@@ -57,7 +57,9 @@ public sealed class AutomaticWorkerContinuation(IStateStore store, TimeProvider?
         await LeaseWait.RunWorkerAsync(cancellationToken => publishHold(issueNumber.Value, cancellationToken), clock,
             "hold publication needs operator attention", token);
         var state = (await store.LoadAsync(token)).State;
-        return state.AdmittedIssue is null && state.Issues.Values.Any(issue =>
+        return state.AdmittedIssue is null &&
+            !state.Issues.Values.Any(issue => issue.ContinuationHoldBarrier is not null) &&
+            state.Issues.Values.Any(issue =>
             (issue.Ready || issue.ActiveAuthorized) && !issue.Paused && !issue.ReactivationRequired &&
             issue.Phase is Phase.READY or Phase.FIX_PENDING);
     }

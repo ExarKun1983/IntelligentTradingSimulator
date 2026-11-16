@@ -8,6 +8,23 @@ public static class OrchestrationContinuation
 {
     internal const int MaxAutomaticContinuations = 3;
 
+    internal static bool HoldProjectionConfirmed(RepositoryState state, IssueState issue, bool requiredStatusEnabled)
+    {
+        var labels = OrchestrationReducer.ProjectLabels(issue);
+        var labelsConfirmed = issue.ObservedProjectionDigest == StateJson.Digest(string.Join("\n", labels));
+        var body = StatusProjection.Render(issue);
+        var statusConfirmed = issue.StatusProjectionDigest == StateJson.Digest(body) &&
+            state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number &&
+                effect.Generation == issue.Generation && effect.Kind == EffectKind.ProjectStatus &&
+                effect.Status == DeliveryStatus.Succeeded && effect.StatusBody == body);
+        var requiredStatusConfirmed = !requiredStatusEnabled || issue.PullRequest is not > 0 ||
+            issue.HeadSha is not { Length: 40 or 64 } ||
+            issue.RequiredStatusIntentId is { } id && state.Outbox.TryGetValue(id, out var status) &&
+            status.Status == DeliveryStatus.Succeeded && status.RequiredStatus?.State == "error" &&
+            RequiredStatusPolicy.Matches(state, issue, status);
+        return labelsConfirmed && statusConfirmed && requiredStatusConfirmed;
+    }
+
     public static void Validate(RepositoryState state)
     {
         if (state.Continuation is { } ticket && (string.IsNullOrWhiteSpace(ticket.Id) || ticket.Id.Length > 256 ||
@@ -21,18 +38,22 @@ public static class OrchestrationContinuation
             throw new InvalidDataException("Invalid durable continuation or worker lease; operator reconciliation is required.");
     }
 
-    public static bool HasWork(RepositoryState state, ReconcileOptions? options = null) =>
-        state.Outbox.Values.Any(effect => effect.Status == DeliveryStatus.Executing ||
-            effect.Status == DeliveryStatus.Pending && (options?.AllowsEffect(effect) ?? true)) ||
-        options?.ProjectionOnly != true && (
-        state.Issues.Values.Any(issue =>
-            !issue.Paused && !issue.ReactivationRequired && (issue.Ready || issue.ActiveAuthorized) &&
-            (issue.Phase is Phase.READY or Phase.FIX_PENDING &&
-                (options?.AllowedEffectKinds?.Contains(EffectKind.LaunchTask) ?? true) ||
-             issue.Phase is Phase.CODING or Phase.CI_PENDING ||
-             issue.Phase == Phase.REVIEW_PENDING &&
-                (options?.AllowedEffectKinds?.Contains(EffectKind.RequestReview) ?? true))) ||
-        state.Issues.Values.Any(issue => issue.Ci is { RunId: not null, Green: null, TerminalStopReason: null }));
+    public static bool HasWork(RepositoryState state, ReconcileOptions? options = null)
+    {
+        var barrierPending = state.Issues.Values.Any(issue => issue.ContinuationHoldBarrier is not null);
+        return state.Outbox.Values.Any(effect => effect.Status == DeliveryStatus.Executing ||
+            effect.Status == DeliveryStatus.Pending && (options?.AllowsEffect(effect) ?? true) &&
+            (!barrierPending || effect.Kind is not (EffectKind.LaunchTask or EffectKind.RunCi or EffectKind.RequestReview))) ||
+            options?.ProjectionOnly != true && !barrierPending && (
+            state.Issues.Values.Any(issue =>
+                !issue.Paused && !issue.ReactivationRequired && (issue.Ready || issue.ActiveAuthorized) &&
+                (issue.Phase is Phase.READY or Phase.FIX_PENDING &&
+                    (options?.AllowedEffectKinds?.Contains(EffectKind.LaunchTask) ?? true) ||
+                 issue.Phase is Phase.CODING or Phase.CI_PENDING ||
+                 issue.Phase == Phase.REVIEW_PENDING &&
+                    (options?.AllowedEffectKinds?.Contains(EffectKind.RequestReview) ?? true))) ||
+            state.Issues.Values.Any(issue => issue.Ci is { RunId: not null, Green: null, TerminalStopReason: null }));
+    }
 
     public static bool RequiresObservation(RepositoryState state) =>
         state.Issues.Values.Any(issue => issue.Phase != Phase.CLOSED &&

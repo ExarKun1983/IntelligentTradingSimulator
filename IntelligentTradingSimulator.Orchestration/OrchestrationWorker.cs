@@ -173,6 +173,9 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                 if (last.ExecutedEffect is not null &&
                     ++executedEffects >= reconcileOptions.MaximumEffectExecutions)
                     return new(WorkerStopReason.EffectLimit, iterations, last);
+                if (last.ExecutedEffect is not null &&
+                    last.State.Issues.Values.Any(issue => issue.ContinuationHoldBarrier is not null))
+                    continue;
                 if (!OrchestrationContinuation.HasWork(last.State, reconcileOptions))
                     return new(last.State.Issues.Values.Any(issue => issue.Phase == Phase.BLOCKED)
                         ? WorkerStopReason.Blocked : WorkerStopReason.Settled, iterations, last);
