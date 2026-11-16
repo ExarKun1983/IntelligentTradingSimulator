@@ -28,14 +28,28 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
     private readonly OrchestrationReducer reducer = reducer ?? new OrchestrationReducer();
     private readonly TimeProvider timeProvider = timeProvider ?? TimeProvider.System;
 
-    public async Task<T> RunExclusiveAsync<T>(IStateStore store, Func<CancellationToken, Task<T>> action,
-        CancellationToken cancellationToken = default)
+    public Task<T> RunExclusiveAsync<T>(IStateStore store, Func<CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken = default) => RunExclusiveAsync(store, action, false, cancellationToken);
+
+    internal Task<T> RunExclusiveWhenAvailableAsync<T>(IStateStore store, Func<CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken = default) => RunExclusiveAsync(store, action, true, cancellationToken);
+
+    private async Task<T> RunExclusiveAsync<T>(IStateStore store, Func<CancellationToken, Task<T>> action,
+        bool waitForLease, CancellationToken cancellationToken)
     {
         var owner = Guid.NewGuid().ToString("N");
-        var acquired = await AcquireLeaseAsync(store, owner, timeProvider.GetUtcNow() + TimeSpan.FromMinutes(31),
-            8, false, true, cancellationToken);
-        if (!acquired.Acquired)
-            throw new InvalidOperationException("Worker lease is occupied; retry recovery after the active invocation finishes.");
+        var started = timeProvider.GetTimestamp();
+        while (true)
+        {
+            var acquired = await AcquireLeaseAsync(store, owner, timeProvider.GetUtcNow() + TimeSpan.FromMinutes(31),
+                8, false, true, cancellationToken);
+            if (acquired.Acquired) break;
+            if (!waitForLease)
+                throw new InvalidOperationException("Worker lease is occupied; retry recovery after the active invocation finishes.");
+            if (timeProvider.GetElapsedTime(started) >= TimeSpan.FromMinutes(150))
+                throw new InvalidOperationException("Worker lease remained occupied; status revocation needs operator attention.");
+            await Task.Delay(TimeSpan.FromSeconds(1), timeProvider, cancellationToken);
+        }
         try
         {
             using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(30), timeProvider);

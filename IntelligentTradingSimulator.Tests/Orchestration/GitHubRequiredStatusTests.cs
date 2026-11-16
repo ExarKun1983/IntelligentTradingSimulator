@@ -78,27 +78,148 @@ public sealed class GitHubRequiredStatusTests
         using var client = api.Client();
         var success = await Adapter(client, store).ExecuteAsync(Intent(store.Value), default);
         store.Value = new OrchestrationReducer().RecordOutcome(store.Value, Intent(store.Value).Id, success, Now);
-        var overlapObserved = false;
-        api.OnPullRead = async () =>
+        Task<WorkerResult>? concurrent = null;
+        api.OnPullRead = () =>
         {
-            if (overlapObserved || (Intent(store.Value).RequiredStatusBoundary is not null) != afterBoundary)
-                return;
-            overlapObserved = true;
-            var concurrent = await PauseCommandOnlyAsync(client, store, Approved);
-            Assert.Equal(WorkerStopReason.Blocked, concurrent.Reason);
+            if (concurrent is not null || (Intent(store.Value).RequiredStatusBoundary is not null) != afterBoundary)
+                return Task.CompletedTask;
+            concurrent = PauseCommandOnlyAsync(client, store, Approved);
             Assert.Equal(DeliveryStatus.Executing, Intent(store.Value).Status);
             Assert.Equal(1, api.Posts);
+            return Task.CompletedTask;
         };
 
         var result = await PauseCommandOnlyAsync(client, store, Approved);
 
-        Assert.True(overlapObserved);
+        Assert.NotNull(concurrent);
+        Assert.Equal(WorkerStopReason.EffectsDisabled, (await concurrent).Reason);
         Assert.Equal(WorkerStopReason.EffectsDisabled, result.Reason);
         Assert.Equal(DeliveryStatus.Succeeded, Intent(store.Value).Status);
         Assert.Equal("error", Intent(store.Value).RequiredStatus!.State);
         Assert.Equal(2, api.Posts);
         await PauseCommandOnlyAsync(client, store, Approved);
         Assert.Equal(2, api.Posts);
+    }
+
+    [Fact]
+    public async Task PausePersistsBeforeInFlightWorkerSuccessAndRevokesItAfterWorkerReleasesLease()
+    {
+        var state = Planned();
+        Intent(state).Status = DeliveryStatus.Pending;
+        var store = new Store(state);
+        var api = new Api();
+        using var client = api.Client();
+        var atSuccessPost = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSuccessPost = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        api.BeforePostAsync = async () =>
+        {
+            if (Intent(store.Value).RequiredStatus?.State != "success") return;
+            atSuccessPost.TrySetResult();
+            await releaseSuccessPost.Task;
+        };
+        var worker = new OrchestrationWorker(new OrchestrationReducer(new Allow(), requiredStatusEnabled: true), new Clock());
+        var running = worker.RunAsync(store, new EmptyEvents(), new Observations(),
+            new RecordingEffects(Adapter(client, store)),
+            new ReconcileOptions(false, true, true, true, AllowOfflineAgentSimulation: true),
+            new WorkerOptions { MaximumIterations = 1, PollInterval = TimeSpan.Zero });
+        await atSuccessPost.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Task<WorkerResult>? pause = null;
+        try
+        {
+            pause = PauseCommandOnlyAsync(client, store, Approved);
+            Assert.True(store.Value.Issues[7].Paused);
+            Assert.False(pause.IsCompleted);
+            Assert.Equal(0, api.Posts);
+        }
+        finally
+        {
+            releaseSuccessPost.TrySetResult();
+            await running;
+        }
+
+        Assert.Equal(WorkerStopReason.EffectsDisabled, (await pause!).Reason);
+        Assert.Equal(2, api.Posts);
+        Assert.Equal("error", JsonDocument.Parse(api.Body!).RootElement.GetProperty("state").GetString());
+        Assert.Equal(DeliveryStatus.Succeeded, Intent(store.Value).Status);
+        Assert.True(store.Value.Issues[7].Paused);
+    }
+
+    [Fact]
+    public async Task ActivePausePublisherPreventsWorkerFromRecoveringUnpreparedRevocation()
+    {
+        var store = new Store(Planned());
+        var api = new Api();
+        using var client = api.Client();
+        var success = await Adapter(client, store).ExecuteAsync(Intent(store.Value), default);
+        store.Value = new OrchestrationReducer().RecordOutcome(store.Value, Intent(store.Value).Id, success, Now);
+        var publishing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        api.OnPullRead = async () =>
+        {
+            if (Intent(store.Value).RequiredStatus?.State != "error" ||
+                Intent(store.Value).RequiredStatusBoundary is not null) return;
+            publishing.TrySetResult();
+            await release.Task;
+        };
+        var pause = PauseCommandOnlyAsync(client, store, Approved);
+        await publishing.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        try
+        {
+            Assert.True(store.Value.Issues[7].Paused);
+            Assert.Equal(DeliveryStatus.Executing, Intent(store.Value).Status);
+            Assert.Null(Intent(store.Value).RequiredStatusBoundary);
+            var worker = new OrchestrationWorker(new OrchestrationReducer(new Allow(), requiredStatusEnabled: true), new Clock());
+            var result = await worker.RunAsync(store, new EmptyEvents(), new Observations(),
+                new RecordingEffects(Adapter(client, store)),
+                new ReconcileOptions(false, true, true, true, AllowOfflineAgentSimulation: true),
+                new WorkerOptions { MaximumIterations = 1, PollInterval = TimeSpan.Zero });
+            Assert.Equal(WorkerStopReason.LeaseHeld, result.Reason);
+            Assert.Equal(DeliveryStatus.Executing, Intent(store.Value).Status);
+            Assert.Equal(1, api.Posts);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        Assert.Equal(WorkerStopReason.EffectsDisabled, (await pause).Reason);
+        Assert.Equal(DeliveryStatus.Succeeded, Intent(store.Value).Status);
+        Assert.Equal(2, api.Posts);
+        Assert.Equal("error", JsonDocument.Parse(api.Body!).RootElement.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task CancellingPauseWhileWaitingForLeaseKeepsTheCommandWithoutPublishing()
+    {
+        var store = new Store(Planned());
+        var api = new Api();
+        using var client = api.Client();
+        var acquired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var owner = new OrchestrationWorker(timeProvider: new Clock()).RunExclusiveAsync(store, async _ =>
+        {
+            acquired.TrySetResult();
+            await release.Task;
+            return true;
+        });
+        await acquired.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var pause = PauseCommandOnlyAsync(client, store, Approved, token: cancellation.Token);
+            Assert.True(store.Value.Issues[7].Paused);
+            Assert.False(pause.IsCompleted);
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pause);
+            Assert.True(store.Value.Issues[7].Paused);
+            Assert.Equal(0, api.Posts);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await owner;
+        }
     }
 
     [Theory]
@@ -226,7 +347,7 @@ public sealed class GitHubRequiredStatusTests
     }
 
     private static Task<WorkerResult> PauseCommandOnlyAsync(HttpClient client, Store store,
-        GitHubRequiredStatusApproval approval, bool missingPublisher = false)
+        GitHubRequiredStatusApproval approval, bool missingPublisher = false, CancellationToken token = default)
     {
         var payload = JsonSerializer.SerializeToElement(new
         {
@@ -236,7 +357,7 @@ public sealed class GitHubRequiredStatusTests
         });
         return new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock())
             .ReconcileAsync(payload, "workflow_dispatch", "44", 1, 1, Now, [], 9, "master", 55,
-                new(true, true, true, true), reviewApproval: new(), ciApproval: new(),
+                new(true, true, true, true), token: token, reviewApproval: new(), ciApproval: new(),
                 statusPublisher: missingPublisher ? null : Publisher, statusApproval: approval, commandOnly: true);
     }
 
@@ -916,6 +1037,11 @@ public sealed class GitHubRequiredStatusTests
                 [new("feedback-after-loss", "owner/repo", 7, 1, 1, new("human", ActorKind.Human), Now,
                     new HumanFeedback("Please inspect this human feedback before doing more work."))]));
     }
+    private sealed class EmptyEvents : IWorkerEventSource
+    {
+        public Task<WorkerEventBatch> ReadAsync(RepositoryState state, CancellationToken token) =>
+            Task.FromResult(new WorkerEventBatch([]));
+    }
     private sealed class RecordingEffects(GitHubRequiredStatusAdapter adapter) : IEffectAdapter
     {
         public List<EffectIntent> Executed { get; } = [];
@@ -958,6 +1084,7 @@ public sealed class GitHubRequiredStatusTests
         public bool HideCreatedStatus { get; set; }
         public bool HideFirstStatus { get; set; }
         public Action? BeforePost { get; set; }
+        public Func<Task>? BeforePostAsync { get; set; }
         public Action? AfterPullRead { get; set; }
         public Func<Task>? OnPullRead { get; set; }
         private object? created;
@@ -974,6 +1101,7 @@ public sealed class GitHubRequiredStatusTests
             if (request.Method == HttpMethod.Post)
             {
                 BeforePost?.Invoke();
+                if (BeforePostAsync is not null) await BeforePostAsync();
                 Posts++;
                 Body = await request.Content!.ReadAsStringAsync(token);
                 var sha = path[(path.LastIndexOf('/') + 1)..];

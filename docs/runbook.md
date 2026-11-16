@@ -3021,6 +3021,10 @@ entitlement, cost controls or repository protection must leave activation blocke
    level, if status history exists but publisher approvals are unavailable, the
    command is saved but the invocation fails explicitly rather than claiming
    revocation; CLI startup gates may reject unverified configuration earlier.
+   Pause is persisted before acquiring the worker lease; when publication is
+   authorized, status publication and recovery then wait up to 150 minutes for
+   exclusive ownership. A timeout fails explicitly and leaves the pause saved
+   for operator attention.
    Bounded tests with no status history and status publication disabled remain
    command-only without a status write. Commit statuses are not transactional:
    a late uncertain earlier success can still overwrite the corrective error;
