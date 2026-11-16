@@ -72,7 +72,9 @@ public sealed class SharedHostLifecycleIntegrationTests
         Assert.Equal(Phase.BLOCKED, held.Phase);
         Assert.True(held.ReactivationRequired);
         Assert.Null(store.State.AdmittedIssue);
-        Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+        Assert.Equal("pending", fixture.Statuses.Last().GetProperty("state").GetString());
+        Assert.Equal("Exact tested head CI passed; review classification required.",
+            fixture.Statuses.Last().GetProperty("description").GetString());
         Assert.NotNull(held.Review.SourceEvidence);
 
         taskApi.RunEvent = "workflow_dispatch";
@@ -208,7 +210,7 @@ public sealed class SharedHostLifecycleIntegrationTests
             ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval));
         Assert.Equal(ReviewClassification.NeedsHuman, store.State.Issues[7].Review!.Classification);
         Assert.Equal(statusCount, fixture.Statuses.Count);
-        Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+        Assert.Equal("pending", fixture.Statuses.Last().GetProperty("state").GetString());
     }
 
     [Fact]
@@ -353,7 +355,7 @@ public sealed class SharedHostLifecycleIntegrationTests
         {
             Assert.Equal(ReviewClassification.NeedsHuman, firstReview.Review!.Classification);
             Assert.True(firstReview.ReactivationRequired);
-            if (!isolatedPoc) Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+            if (!isolatedPoc) Assert.Equal("pending", fixture.Statuses.Last().GetProperty("state").GetString());
             taskApi.RunEvent = "workflow_dispatch";
             var blocking = Classification(firstReview, classification: "blocking",
                 findings: """[{"Id":"poc-finding","Description":"A bounded regression needs correction","Evidence":"The test fixture records this review finding."}]""");
@@ -388,7 +390,7 @@ public sealed class SharedHostLifecycleIntegrationTests
         var finalReview = store.State.Issues[7];
         Assert.Equal(ReviewClassification.NeedsHuman, finalReview.Review!.Classification);
         Assert.Equal(repairHead, finalReview.Review.Sha);
-        if (!isolatedPoc) Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+        if (!isolatedPoc) Assert.Equal("pending", fixture.Statuses.Last().GetProperty("state").GetString());
 
         var accepted = Classification(finalReview,
             responses: JsonSerializer.Serialize(new[] { new
@@ -565,7 +567,7 @@ public sealed class SharedHostLifecycleIntegrationTests
             ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval));
         Assert.Single(store.State.Issues[7].Review!.Findings);
         Assert.Equal(ReviewClassification.NeedsHuman, store.State.Issues[7].Review!.Classification);
-        Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+        Assert.Equal("pending", fixture.Statuses.Last().GetProperty("state").GetString());
         await host.ReconcileAsync(Classification(issue,
                 """[{"FindingId":"retained","Evidence":"Human checked the corrected behavior against the finding","Resolved":true}]"""),
             "workflow_dispatch", "91", 1, 1, Now.AddMinutes(3), [], 99, "master", 55, TaskApproval, Bounded,
