@@ -1,10 +1,10 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 473,
+  "Version": 474,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
-  "LastEventId": "review-observed:1277929203:1:RequestReview:301:1:task:301:1:1:1:1",
+  "LastEventId": "actions:1277929203:43976921326",
   "AdmittedIssue": null,
   "WorkerLease": null,
   "Continuation": {
@@ -831,8 +831,8 @@
       "SchemaVersion": 1,
       "Number": 301,
       "Generation": 1,
-      "Version": 55,
-      "LastEventId": "review-observed:1277929203:1:RequestReview:301:1:task:301:1:1:1:1",
+      "Version": 56,
+      "LastEventId": "actions:1277929203:43976921326",
       "Phase": "BLOCKED",
       "Ready": false,
       "ActiveAuthorized": false,
@@ -955,7 +955,7 @@
       "PendingFeedbackEventIds": [],
       "Reactivations": {},
       "Classifications": {},
-      "ProjectionDigest": "20889BFD9052DBEF2DEF2E37B5DBEC21613732B134722417FBEB164FFB7FBD35",
+      "ProjectionDigest": null,
       "ObservedProjectionDigest": "20889BFD9052DBEF2DEF2E37B5DBEC21613732B134722417FBEB164FFB7FBD35",
       "StatusProjectionDigest": "172E3CB7A9CB9595BD8D75422B680D053B40A02A86153DC95874BED641DB828B",
       "RequiredStatusSequence": 5,
@@ -1354,6 +1354,14 @@
       "ReceivedAt": "2026-11-16T23:06:15.6119698+00:00",
       "CompletedAt": "2026-11-16T23:06:15.6119698+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022review-observed:1277929203:1:RequestReview:301:1:task:301:1:1:1:1\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:301,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022copilot-pull-request-reviewer[bot]\u0022,\u0022Kind\u0022:3,\u0022Id\u0022:175728472,\u0022NodeId\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022Type\u0022:\u0022Bot\u0022},\u0022OccurredAt\u0022:\u00222026-11-16T23:06:15.6119698\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022review-result\u0022,\u0022ReviewId\u0022:\u0022review-request:RequestReview:301:1:task:301:1:1:1:1\u0022,\u0022TaskId\u0022:\u0022task:301:1:1:1\u0022,\u0022Round\u0022:1,\u0022PullRequest\u0022:302,\u0022Sha\u0022:\u00221594728340588b1368654a542db0528c4532c359\u0022,\u0022Classification\u0022:2,\u0022Findings\u0022:[],\u0022Responses\u0022:[],\u0022SourceEvidence\u0022:\u0022{\\u0022reason\\u0022:\\u0022REST has no request-to-submission round token; human classification is required for this output.\\u0022,\\u0022policy\\u0022:\\u0022exact-head-inline-findings-v1\\u0022,\\u0022request\\u0022:\\u0022review-request:RequestReview:301:1:task:301:1:1:1:1\\u0022,\\u0022observedReviews\\u0022:[{\\u0022id\\u0022:5929518290,\\u0022node_id\\u0022:\\u0022PRR_kwDOTCum888AAAABYW1E0g\\u0022,\\u0022user\\u0022:{\\u0022login\\u0022:\\u0022copilot-pull-request-reviewer[bot]\\u0022,\\u0022id\\u0022:175728472,\\u0022node_id\\u0022:\\u0022BOT_kgDOCnlnWA\\u0022,\\u0022avatar_url\\u0022:\\u0022https://avatars.githubusercontent.com/in/946600?v=4\\u0022,\\u0022gravatar_id\\u0022:\\u0022\\u0022,\\u0022url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D\\u0022,\\u0022html_url\\u0022:\\u0022https://github.com/apps/copilot-pull-request-reviewer\\u0022,\\u0022followers_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/followers\\u0022,\\u0022following_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/following{/other_user}\\u0022,\\u0022gists_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/gists{/gist_id}\\u0022,\\u0022starred_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/starred{/owner}{/repo}\\u0022,\\u0022subscriptions_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/subscriptions\\u0022,\\u0022organizations_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/orgs\\u0022,\\u0022repos_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/repos\\u0022,\\u0022events_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/events{/privacy}\\u0022,\\u0022received_events_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/received_events\\u0022,\\u0022type\\u0022:\\u0022Bot\\u0022,\\u0022user_view_type\\u0022:\\u0022public\\u0022,\\u0022site_admin\\u0022:false},\\u0022body\\u0022:\\u0022\\\\u003C!-- ccr-overview-v2 --\\\\u003E\\\\n\\\\n### \\\\uD83D\\\\uDFE2 Approval recommended\\\\n\\\\nNo active review issues were identified for the test-only changes covering calendar-date matching and ambiguous endpoints.\\\\n\\\\n**No open issues** \\\\uD83C\\\\uDF89\\\\n\\\\n\\\\u003Cdetails\\\\u003E\\\\n\\\\u003Csummary\\\\u003E\\\\u003Cstrong\\\\u003EWhat changed in this PR\\\\u003C/strong\\\\u003E\\\\u003C/summary\\\\u003E\\\\n\\\\nAdds regression tests for calendar-date endpoint matching in relative-strength calculations, without changing production code.\\\\n\\\\n**Changes:**\\\\n- Verifies inclusive date boundaries when stock and benchmark candle timestamps differ by time of day.\\\\n- Verifies duplicate candles on either endpoint date return \\\\u0060null\\\\u0060 for both stock and benchmark data.\\\\n\\\\n| File | Description |\\\\r\\\\n| ---- | ----------- |\\\\r\\\\n| \\\\u0060IntelligentTradingSimulator.Tests/\\\\u200BRelativeStrengthCalculatorTests.cs\\\\u0060 | Adds a timestamp helper and regression cases for date matching and ambiguous endpoints. |\\\\n\\\\u003C/details\\\\u003E\\\\n\\\\n\\\\u003Csub\\\\u003EReview effort: Balanced\\\\u003C/sub\\\\u003E\\u0022,\\u0022state\\u0022:\\u0022COMMENTED\\u0022,\\u0022html_url\\u0022:\\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/302#pullrequestreview-5929518290\\u0022,\\u0022pull_request_url\\u0022:\\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/302\\u0022,\\u0022author_association\\u0022:\\u0022NONE\\u0022,\\u0022is_copilot_code_review\\u0022:true,\\u0022copilot_code_review_effort\\u0022:\\u0022balanced\\u0022,\\u0022_links\\u0022:{\\u0022html\\u0022:{\\u0022href\\u0022:\\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/302#pullrequestreview-5929518290\\u0022},\\u0022pull_request\\u0022:{\\u0022href\\u0022:\\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/302\\u0022}},\\u0022submitted_at\\u0022:\\u00222026-11-16T23:07:27Z\\u0022,\\u0022commit_id\\u0022:\\u00221594728340588b1368654a542db0528c4532c359\\u0022}],\\u0022observedComments\\u0022:[]}\u0022}}"
+    },
+    "actions:1277929203:43976921326": {
+      "Id": "actions:1277929203:43976921326",
+      "Digest": "4F94F340F2A6C289F2B767663DB05BB49EA8BCB30443343409D26DDFF7B6AF42",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-16T23:10:27+00:00",
+      "CompletedAt": "2026-11-16T23:10:27+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022actions:1277929203:43976921326\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:301,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u00226195946\u0022,\u0022Kind\u0022:0,\u0022Id\u0022:6195946,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-16T23:10:27\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022stage-edited\u0022}}"
     }
   },
   "Outbox": {
