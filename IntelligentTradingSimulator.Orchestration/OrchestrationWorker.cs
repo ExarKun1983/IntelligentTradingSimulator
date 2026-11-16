@@ -23,6 +23,7 @@ public enum WorkerStopReason { DryRun, EventBacklog, LeaseHeld, EffectsDisabled,
 public sealed record WorkerResult(WorkerStopReason Reason, int Iterations, ReconcileResult? LastReconciliation)
 {
     internal int? LeaseAdmittedIssue { get; init; }
+    internal bool HoldBarrierReleased { get; init; }
 }
 
 /// <summary>Bounded host loop; all decisions and effect recovery still use the shared reconciler.</summary>
@@ -96,10 +97,12 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
         int? leaseAdmittedIssue = null;
         var yielded = false;
         var interrupted = false;
+        var holdBarrierReleased = false;
         WorkerResult Yield(WorkerStopReason reason)
         {
             yielded = true;
-            return new(reason, iterations, last) { LeaseAdmittedIssue = leaseAdmittedIssue };
+            return new(reason, iterations, last)
+                { LeaseAdmittedIssue = leaseAdmittedIssue, HoldBarrierReleased = holdBarrierReleased };
         }
         try
         {
@@ -169,6 +172,10 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
 
                 // Re-fetch live guards after event publication, including after any CAS conflict.
                 last = await reconciler.RunAsync(store, observations, effects, reconcileOptions, token);
+                holdBarrierReleased |= snapshot.State.Issues.Any(pair =>
+                    pair.Value.ContinuationHoldBarrier is not null &&
+                    last.State.Issues.TryGetValue(pair.Key, out var currentIssue) &&
+                    currentIssue.ContinuationHoldBarrier is null);
                 if (last.EffectsDisabled) return new(WorkerStopReason.EffectsDisabled, iterations, last);
                 if (last.State.Outbox.Values.Any(OrchestrationReconciler.IsExclusiveUncertain))
                     return new(WorkerStopReason.Blocked, iterations, last);

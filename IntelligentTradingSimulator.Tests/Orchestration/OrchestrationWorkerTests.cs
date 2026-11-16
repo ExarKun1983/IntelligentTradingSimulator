@@ -895,6 +895,104 @@ public sealed class OrchestrationWorkerTests
     }
 
     [Fact]
+    public async Task BarrierReleasedOnLastIterationContinuesToNextIssueWithoutAnotherWake()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store)
+        {
+            ReadyIssues = [7, 8], CompleteTasks = false, RecoveryUnknown = true, TrackProjectedLabels = true
+        };
+        var worker = new OrchestrationWorker(new OrchestrationReducer(new Authorized(), requiredStatusEnabled: true));
+        var initial = Fast with { MaximumIterations = 3, TrackAutomaticContinuations = true };
+        async Task<WorkerResult> Publish(int issueNumber, CancellationToken token)
+        {
+            api.CompleteTasks = true;
+            api.UnknownProjection = EffectKind.PublishRequiredStatus;
+            var projection = await worker.RunAsync(store, api, api, api,
+                Simulation with { ProjectionOnly = true, ProjectionIssueNumber = issueNumber },
+                Fast with { MaximumIterations = 8 }, token);
+            GitHubOrchestrationHost.VerifyHoldProjection(projection, issueNumber, true);
+            return projection;
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new AutomaticWorkerContinuation(store).RunForIssueAsync(
+                token => worker.RunAsync(store, api, api, api, Simulation, initial, token), Publish));
+
+        api.ClosedIssues.Add(7);
+        api.ClosedPullRequestMerged = false;
+        api.RecoveryUnknown = false;
+        api.UnknownProjection = null;
+        var projectionOptions = Simulation with { ProjectionOnly = true, ProjectionIssueNumber = 7 };
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var state = store.Current;
+            var issue = state.Issues[7];
+            if (issue.Phase == Phase.CLOSED && OrchestrationContinuation.HoldProjectionConfirmed(state, issue, true))
+                break;
+            await worker.RunAsync(store, api, api, api, projectionOptions, Fast with { MaximumIterations = 1 });
+        }
+        var before = store.Current.Issues[7];
+        Assert.Equal(Phase.CLOSED, before.Phase);
+        Assert.NotNull(before.ContinuationHoldBarrier);
+        Assert.True(OrchestrationContinuation.HoldProjectionConfirmed(store.Current, before, true));
+
+        var calls = 0;
+        api.AfterExecute = () =>
+        {
+            if (api.LaunchedIssues.Contains(8))
+            {
+                var previous = store.Current.Issues[7];
+                Assert.Equal(TaskStatus.Completed, previous.Tasks[previous.ActiveTaskId!].Status);
+                api.CompleteTasks = false;
+            }
+        };
+        await new AutomaticWorkerContinuation(store).RunAsync(async token =>
+        {
+            var result = await worker.RunAsync(store, api, api, api, Simulation,
+                Fast with { MaximumIterations = 1, TrackAutomaticContinuations = true }, token);
+            if (++calls == 1)
+            {
+                Assert.Equal(WorkerStopReason.IterationLimit, result.Reason);
+                Assert.Null(store.Current.Issues[7].ContinuationHoldBarrier);
+                Assert.Null(store.Current.AdmittedIssue);
+                Assert.Empty(store.Current.Issues[8].Tasks);
+            }
+            return result;
+        });
+
+        Assert.True(calls > 1);
+        Assert.Contains(8, api.LaunchedIssues);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task ReleasedBarrierDoesNotRetryWithoutEligibleUnblockedQueue(bool paused, bool blocked)
+    {
+        var store = new Store();
+        var snapshot = await store.LoadAsync(CancellationToken.None);
+        snapshot.State.Issues[8] = new IssueState { Number = 8, Ready = true, Paused = paused };
+        if (blocked)
+            snapshot.State.Issues[7] = new IssueState
+            {
+                Number = 7, Phase = Phase.BLOCKED, ReactivationRequired = true,
+                ContinuationHoldBarrier = new ContinuationHoldBarrier(1, false)
+            };
+        Assert.True(await store.TrySaveAsync(snapshot, snapshot.State, CancellationToken.None));
+
+        var calls = 0;
+        var result = await new AutomaticWorkerContinuation(store).RunAsync(_ =>
+        {
+            calls++;
+            return Task.FromResult(new WorkerResult(WorkerStopReason.IterationLimit, 1, null)
+                { HoldBarrierReleased = true });
+        });
+
+        Assert.Equal(WorkerStopReason.IterationLimit, result.Reason);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
     public async Task HoldProjectionLeaseTimeoutFailsWithoutInspectingOrStartingQueue()
     {
         var clock = new Clock();

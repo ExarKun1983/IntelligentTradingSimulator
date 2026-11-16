@@ -2590,6 +2590,8 @@ later wake without a confirmed required status. An unfinished task continues to 
 the barrier remains until it finishes and its final mapped head is confirmed. A confirmed
 terminal closure can clear the barrier under the same checks; an unknown terminal
 outcome cannot. Automatic wakes prioritize the admitted Issue's work after recovery.
+When a bounded worker reports clearing a recovered barrier, it makes one further
+bounded handoff attempt if eligible queued work remains.
 This remains a proof of concept, not production-ready: Issues are processed sequentially.
 
 The production job checks out only `ORCHESTRATION_DEFINITION_SHA`, never PR code,

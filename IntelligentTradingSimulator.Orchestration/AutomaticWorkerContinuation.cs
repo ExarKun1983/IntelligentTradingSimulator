@@ -33,6 +33,7 @@ public sealed class AutomaticWorkerContinuation(IStateStore store, TimeProvider?
 
             var state = (await store.LoadAsync(token)).State;
             OrchestrationContinuation.Validate(state);
+            if (result.HoldBarrierReleased && HasQueuedWork(state)) continue;
             var affected = result.LastReconciliation?.State.AdmittedIssue ?? result.LeaseAdmittedIssue ?? state.AdmittedIssue;
             if (affected is { } number && state.Issues.TryGetValue(number, out var issue) &&
                 issue.HoldReason == OrchestrationReducer.ContinuationLimitReason && issue.ReactivationRequired)
@@ -57,12 +58,15 @@ public sealed class AutomaticWorkerContinuation(IStateStore store, TimeProvider?
         await LeaseWait.RunWorkerAsync(cancellationToken => publishHold(issueNumber.Value, cancellationToken), clock,
             "hold publication needs operator attention", token);
         var state = (await store.LoadAsync(token)).State;
-        return state.AdmittedIssue is null &&
+        return HasQueuedWork(state);
+    }
+
+    private static bool HasQueuedWork(RepositoryState state) =>
+        state.AdmittedIssue is null &&
             !state.Issues.Values.Any(issue => issue.ContinuationHoldBarrier is not null) &&
             state.Issues.Values.Any(issue =>
             (issue.Ready || issue.ActiveAuthorized) && !issue.Paused && !issue.ReactivationRequired &&
             issue.Phase is Phase.READY or Phase.FIX_PENDING);
-    }
 }
 
 internal static class LeaseWait
