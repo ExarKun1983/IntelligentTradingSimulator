@@ -2566,9 +2566,12 @@ pending continuation atomically with lease release. The next lease acquisition
 consumes one of at most three durable continuations for that task; other wakes
 cannot reset the count or bypass it. After the third continuation reaches its
 bound, the Issue is held for human action and a bounded projection-only pass
-reports the hold. These continuations run within the event-triggered workflow,
-not on a schedule. The job has a six-hour limit; a single waiter can use up to
-150 minutes, in addition to the worker intervals.
+reports the hold without admitting or planning new work. If the held task has
+finished and admission can be safely released during that pass, the same wake
+returns to normal processing for other queued Issues. Otherwise admission stays
+held until a later observation or explicit recovery. These continuations run
+within the event-triggered workflow, not on a schedule. The job has a six-hour
+limit; a single waiter can use up to 150 minutes, in addition to the worker intervals.
 
 The production job checks out only `ORCHESTRATION_DEFINITION_SHA`, never PR code,
 and exposes the user credential only to the trusted reconciler step in the

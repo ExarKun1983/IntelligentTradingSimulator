@@ -10,6 +10,7 @@ public sealed class AutomaticWorkerContinuation(IStateStore store, TimeProvider?
         CancellationToken token = default, Func<CancellationToken, Task<WorkerResult>>? publishHold = null)
     {
         var waitStarted = clock.GetTimestamp();
+        var limitReached = false;
         while (true)
         {
             var before = (await store.LoadAsync(token)).State.AdmittedIssue;
@@ -24,11 +25,12 @@ public sealed class AutomaticWorkerContinuation(IStateStore store, TimeProvider?
             waitStarted = clock.GetTimestamp();
             if (result.Reason == WorkerStopReason.ContinuationLimit)
             {
-                if (publishHold is not null) await publishHold(token);
+                limitReached = true;
+                if (await PublishAndHasQueuedWorkAsync(publishHold, token)) continue;
                 return result;
             }
             if (result.Reason is not (WorkerStopReason.TimeLimit or WorkerStopReason.IterationLimit))
-                return result;
+                return limitReached ? result with { Reason = WorkerStopReason.ContinuationLimit } : result;
 
             var state = (await store.LoadAsync(token)).State;
             OrchestrationContinuation.Validate(state);
@@ -36,12 +38,24 @@ public sealed class AutomaticWorkerContinuation(IStateStore store, TimeProvider?
             if (affected is { } number && state.Issues.TryGetValue(number, out var issue) &&
                 issue.HoldReason == OrchestrationReducer.ContinuationLimitReason && issue.ReactivationRequired)
             {
-                if (publishHold is not null) await publishHold(token);
+                limitReached = true;
+                if (await PublishAndHasQueuedWorkAsync(publishHold, token)) continue;
                 return result with { Reason = WorkerStopReason.ContinuationLimit };
             }
             if (OrchestrationWorker.ActiveTask(state)?.ContinuationPending != true &&
                 state.WorkerLease is null)
-                return result;
+                return limitReached ? result with { Reason = WorkerStopReason.ContinuationLimit } : result;
         }
+    }
+
+    private async Task<bool> PublishAndHasQueuedWorkAsync(
+        Func<CancellationToken, Task<WorkerResult>>? publishHold, CancellationToken token)
+    {
+        if (publishHold is null) return false;
+        await publishHold(token);
+        var state = (await store.LoadAsync(token)).State;
+        return state.AdmittedIssue is null && state.Issues.Values.Any(issue =>
+            (issue.Ready || issue.ActiveAuthorized) && !issue.Paused && !issue.ReactivationRequired &&
+            issue.Phase is Phase.READY or Phase.FIX_PENDING);
     }
 }

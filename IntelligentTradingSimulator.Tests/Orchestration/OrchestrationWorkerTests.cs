@@ -389,6 +389,105 @@ public sealed class OrchestrationWorkerTests
     }
 
     [Fact]
+    public async Task RunningRepairKeepsItsOwnContinuationBudgetAcrossWorkerBounds()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { CiFailures = 1 };
+        api.AfterExecute = () =>
+        {
+            if (api.LaunchedIssues.Count == 2) api.CompleteTasks = false;
+        };
+        await Worker().RunAsync(store, api, api, api, Simulation, Fast);
+        var issue = store.Current.Issues[7];
+        var repairId = issue.ActiveTaskId!;
+        Assert.Equal(Phase.FIX_PENDING, issue.Phase);
+        Assert.Equal(TaskKind.CiRepair, issue.Tasks[repairId].Kind);
+        Assert.Equal(TaskStatus.Running, issue.Tasks[repairId].Status);
+
+        var options = Fast with { MaximumIterations = 3, TrackAutomaticContinuations = true };
+        var result = await new AutomaticWorkerContinuation(store).RunAsync(
+            token => Worker().RunAsync(store, api, api, api, Simulation, options, token));
+
+        issue = store.Current.Issues[7];
+        Assert.Equal(WorkerStopReason.ContinuationLimit, result.Reason);
+        Assert.Equal(Phase.BLOCKED, issue.Phase);
+        Assert.Equal(repairId, issue.ActiveTaskId);
+        Assert.Equal(3, issue.Tasks[repairId].AutomaticContinuations);
+        Assert.Equal(2, api.Executions.Count(kind => kind == EffectKind.LaunchTask));
+    }
+
+    [Fact]
+    public async Task HoldProjectionDoesNotPlanQueuedWorkAndNormalWorkerStartsItAfterRelease()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { ReadyIssues = [7, 8], CompleteTasks = false };
+        api.AfterExecute = () =>
+        {
+            if (api.LaunchedIssues.Contains(8)) api.CompleteTasks = false;
+        };
+        var options = Fast with { MaximumIterations = 3, TrackAutomaticContinuations = true };
+        var projectionOptions = Simulation with { ProjectionOnly = true };
+        var projectionCalls = 0;
+        async Task<WorkerResult> Publish(CancellationToken token)
+        {
+            api.CompleteTasks = true;
+            var result = await Worker().RunAsync(store, api, api, api, projectionOptions,
+                Fast with { MaximumIterations = 8 }, token);
+            if (++projectionCalls == 1)
+            {
+                var state = store.Current;
+                Assert.Null(state.AdmittedIssue);
+                Assert.Empty(state.Issues[8].Tasks);
+                Assert.DoesNotContain(state.Outbox.Values, effect =>
+                    effect.IssueNumber == 8 && effect.Kind is EffectKind.LaunchTask or EffectKind.RunCi or EffectKind.RequestReview);
+            }
+            return result;
+        }
+
+        var result = await new AutomaticWorkerContinuation(store).RunAsync(
+            token => Worker().RunAsync(store, api, api, api, Simulation, options, token),
+            publishHold: Publish);
+
+        Assert.Equal(WorkerStopReason.ContinuationLimit, result.Reason);
+        Assert.True(projectionCalls >= 1);
+        Assert.Equal(new[] { 7, 8 }, api.LaunchedIssues);
+        Assert.Single(store.Current.Issues[8].Tasks);
+    }
+
+    [Fact]
+    public async Task ProjectionDefersUnheldTaskCompletionUntilNormalPlanning()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { CompleteTasks = false };
+        await Worker().RunAsync(store, api, api, api, Simulation, Fast with { MaximumIterations = 3 });
+        api.CompleteTasks = true;
+
+        await Worker().RunAsync(store, api, api, api, Simulation with { ProjectionOnly = true }, Fast);
+
+        var issue = store.Current.Issues[7];
+        Assert.Equal(TaskStatus.AwaitingHeadConfirmation, issue.Tasks[issue.ActiveTaskId!].Status);
+        Assert.Null(issue.Ci);
+        Assert.DoesNotContain(store.Current.Outbox.Values, effect => effect.Kind is EffectKind.RunCi or EffectKind.RequestReview);
+        await Worker().RunAsync(store, api, api, api, Simulation, Fast);
+        Assert.Single(api.Executions, kind => kind == EffectKind.RunCi);
+        Assert.Equal(Phase.HUMAN_REVIEW, store.Current.Issues[7].Phase);
+    }
+
+    [Fact]
+    public async Task ProjectionDoesNotRetryAnUncertainLaunch()
+    {
+        var store = new Store();
+        var api = new OfflineApi(store) { UnknownLaunch = true, RecoveryUnknown = true };
+        await Worker().RunAsync(store, api, api, api, Simulation, Fast);
+
+        await Worker().RunAsync(store, api, api, api, Simulation with { ProjectionOnly = true }, Fast);
+
+        Assert.Single(api.Executions, kind => kind == EffectKind.LaunchTask);
+        Assert.Equal(7, store.Current.AdmittedIssue);
+        Assert.Equal(Phase.BLOCKED, store.Current.Issues[7].Phase);
+    }
+
+    [Fact]
     public async Task ExclusiveRecoveryCannotRunWhileAnotherWorkerOwnsLease()
     {
         var store = new Store();

@@ -22,6 +22,7 @@ public static class OrchestrationContinuation
     public static bool HasWork(RepositoryState state, ReconcileOptions? options = null) =>
         state.Outbox.Values.Any(effect => effect.Status == DeliveryStatus.Executing ||
             effect.Status == DeliveryStatus.Pending && (options?.AllowsEffect(effect) ?? true)) ||
+        options?.ProjectionOnly != true && (
         state.Issues.Values.Any(issue =>
             !issue.Paused && !issue.ReactivationRequired && (issue.Ready || issue.ActiveAuthorized) &&
             (issue.Phase is Phase.READY or Phase.FIX_PENDING &&
@@ -29,7 +30,7 @@ public static class OrchestrationContinuation
              issue.Phase is Phase.CODING or Phase.CI_PENDING ||
              issue.Phase == Phase.REVIEW_PENDING &&
                 (options?.AllowedEffectKinds?.Contains(EffectKind.RequestReview) ?? true))) ||
-        state.Issues.Values.Any(issue => issue.Ci is { RunId: not null, Green: null, TerminalStopReason: null });
+        state.Issues.Values.Any(issue => issue.Ci is { RunId: not null, Green: null, TerminalStopReason: null }));
 
     public static bool RequiresObservation(RepositoryState state) =>
         state.Issues.Values.Any(issue => issue.Phase != Phase.CLOSED &&

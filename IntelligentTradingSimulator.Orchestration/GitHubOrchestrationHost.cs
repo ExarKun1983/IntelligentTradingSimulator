@@ -247,7 +247,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             worker.RunAsync(stateStore, events, observations, effects, reconcile, workerOptions, cancellationToken);
         Task<WorkerResult> PublishHold(CancellationToken cancellationToken) =>
             worker.RunAsync(stateStore, events, observations, effects,
-                reconcile with { AllowedEffectKinds = new HashSet<EffectKind>
+                reconcile with { ProjectionOnly = true, AllowedEffectKinds = new HashSet<EffectKind>
                     { EffectKind.ProjectLabels, EffectKind.ProjectStatus, EffectKind.PublishRequiredStatus } },
                 new WorkerOptions { MaximumIterations = 8, MaximumDuration = TimeSpan.FromMinutes(1),
                     PollInterval = TimeSpan.Zero }, cancellationToken);

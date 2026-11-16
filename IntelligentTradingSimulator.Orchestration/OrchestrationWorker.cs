@@ -120,7 +120,7 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                         last = new(state, [], true);
                         return new(WorkerStopReason.EventBacklog, iterations, last);
                     }
-                    var decision = reconciler.Decide(state, await observations.ObserveAsync(state, token));
+                    var decision = reconciler.Decide(state, await observations.ObserveAsync(state, token), reconcileOptions);
                     last = new(decision.State, decision.PendingEffects, true);
                     return new(WorkerStopReason.DryRun, iterations, last);
                 }
@@ -262,7 +262,7 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
         if (state.AdmittedIssue is not { } number ||
             !state.Issues.TryGetValue(number, out var issue) || !issue.ActiveAuthorized ||
             issue.Paused || issue.ReactivationRequired ||
-            issue.Phase is not (Phase.CODING or Phase.CI_PENDING or Phase.REVIEW_PENDING) ||
+            issue.Phase is not (Phase.CODING or Phase.CI_PENDING or Phase.REVIEW_PENDING or Phase.FIX_PENDING) ||
             issue.ActiveTaskId is not { } taskId || !issue.Tasks.TryGetValue(taskId, out var task) ||
             state.Outbox.Values.Any(OrchestrationReconciler.IsExclusiveUncertain))
             return null;

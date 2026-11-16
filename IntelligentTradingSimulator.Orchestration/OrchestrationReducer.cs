@@ -14,7 +14,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         var issue = state.Issues[issueNumber];
         if (state.AdmittedIssue != issueNumber || issue.ActiveTaskId != taskId ||
             !issue.ActiveAuthorized || issue.Paused || issue.ReactivationRequired ||
-            issue.Phase is not (Phase.CODING or Phase.CI_PENDING or Phase.REVIEW_PENDING) ||
+            issue.Phase is not (Phase.CODING or Phase.CI_PENDING or Phase.REVIEW_PENDING or Phase.FIX_PENDING) ||
             !issue.Tasks.TryGetValue(taskId, out var task) || task.AutomaticContinuations != 3)
             throw new InvalidOperationException("Continuation limit no longer matches the active task.");
         Hold(issue, ContinuationLimitReason);
@@ -483,7 +483,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         return state;
     }
 
-    public ReconcileDecision Reconcile(RepositoryState input, LiveObservation observation)
+    public ReconcileDecision Reconcile(RepositoryState input, LiveObservation observation, bool projectionOnly = false)
     {
         ValidateState(input);
         var state = StateJson.Clone(input);
@@ -538,7 +538,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 CancelPendingWork(state, issue);
             }
             if (issue.ActiveTaskId is { } taskId && issue.Tasks.TryGetValue(taskId, out var task) &&
-                task.Status == TaskStatus.AwaitingHeadConfirmation)
+                task.Status == TaskStatus.AwaitingHeadConfirmation &&
+                (!projectionOnly || issue.ReactivationRequired || issue.Paused))
             {
                 if (live.PullRequest == issue.PullRequest && live.HeadSha == task.FinalSha && live.CompletedTaskId == task.Id)
                 {
@@ -587,7 +588,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             }
             ReleaseIfSafe(state, issue);
         }
-        if (state.AdmittedIssue is null &&
+        if (!projectionOnly && state.AdmittedIssue is null &&
             !state.Outbox.Values.Any(e => e.Kind != EffectKind.PublishRequiredStatus &&
                 e.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown))
         {
@@ -613,7 +614,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 }
             }
         }
-        if (state.AdmittedIssue is { } owner)
+        if (!projectionOnly && state.AdmittedIssue is { } owner)
         {
             var issue = state.Issues[owner];
             if (observation.Issues.TryGetValue(owner, out var live) && issue.ActiveAuthorized && !live.Closed &&
