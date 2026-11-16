@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 156,
+  "Version": 157,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "ci-observed:1277929203:1:RunCi:291:1:task:291:1:1:1:1",
@@ -350,7 +350,7 @@
       "SchemaVersion": 1,
       "Number": 291,
       "Generation": 1,
-      "Version": 39,
+      "Version": 40,
       "LastEventId": "ci-observed:1277929203:1:RunCi:291:1:task:291:1:1:1:1",
       "Phase": "REVIEW_PENDING",
       "Ready": false,
@@ -421,7 +421,24 @@
           "WorkflowPath": ".github/workflows/agent-managed-ci.yml"
         }
       },
-      "Review": null,
+      "Review": {
+        "IntentId": "RequestReview:291:1:task:291:1:1:1:1",
+        "ReviewId": null,
+        "TaskId": "task:291:1:1:1",
+        "Round": 1,
+        "Sha": "9be01a31feedd98ed2dee7c3db75ba0a94847aec",
+        "Classification": null,
+        "LifecycleState": "NotRequested",
+        "CopilotRequestNodeId": null,
+        "ReviewRequestedAt": null,
+        "ReviewDeadlineAt": null,
+        "RequestFailureReason": null,
+        "Findings": [],
+        "Responses": [],
+        "RequestBoundary": null,
+        "SourceEvidence": null,
+        "OperatorResolution": null
+      },
       "FeedbackEventIds": [],
       "LastFeedbackText": null,
       "ClosurePending": false,
@@ -433,11 +450,11 @@
       "PendingFeedbackEventIds": [],
       "Reactivations": {},
       "Classifications": {},
-      "ProjectionDigest": "4F7E66F85917C8F306CC6C9AF540B5E37E0BA1254A7B4AF36717E50EB2E24D58",
+      "ProjectionDigest": "E69BE9AD2A065B6850878EBD5AE6A93EBE2F91537056F1EA79A23278D419D58C",
       "ObservedProjectionDigest": "4F7E66F85917C8F306CC6C9AF540B5E37E0BA1254A7B4AF36717E50EB2E24D58",
       "StatusProjectionDigest": "CBBB44AD1B97ED0DA1119A7A2062D2FBA2766442C88EE003281D5BBC1FCA691B",
-      "RequiredStatusSequence": 4,
-      "RequiredStatusIntentId": "required-status:291:1:4"
+      "RequiredStatusSequence": 5,
+      "RequiredStatusIntentId": "required-status:291:1:5"
     }
   },
   "Inbox": {
@@ -1751,6 +1768,99 @@
         ],
         "StatusId": 58984537049
       }
+    },
+    "RequestReview:291:1:task:291:1:1:1:1": {
+      "Id": "RequestReview:291:1:task:291:1:1:1:1",
+      "Digest": "D866869F66006894279F439F5AFD8801199EAC6F4A87D712DBB09A57C8B101DE",
+      "IssueNumber": 291,
+      "Generation": 1,
+      "Kind": "RequestReview",
+      "Status": "Pending",
+      "TaskId": "task:291:1:1:1",
+      "Round": 1,
+      "Sha": "9be01a31feedd98ed2dee7c3db75ba0a94847aec",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-16T00:06:52.0790669+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": null,
+      "RequiredStatusBoundary": null
+    },
+    "required-status:291:1:5": {
+      "Id": "required-status:291:1:5",
+      "Digest": "7222A08792D625C16CA4A3150DB8CFC6D31EA7ADD1F4270D54E1EE38305E80B6",
+      "IssueNumber": 291,
+      "Generation": 1,
+      "Kind": "PublishRequiredStatus",
+      "Status": "Pending",
+      "TaskId": "task:291:1:1:1",
+      "Round": 1,
+      "Sha": "9be01a31feedd98ed2dee7c3db75ba0a94847aec",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-16T00:06:52.0790669+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": {
+        "Context": "Agent managed CI",
+        "State": "success",
+        "Description": "Exact tested head CI passed; human approval required.",
+        "TargetUrl": "https://github.com/ExarKun1983/IntelligentTradingSimulator/actions/runs/43778324486#agent-status-7b8bb4b497538dc3fee09304ff83c2be36b962b25d0fcfdd6eaf7b660608e57a",
+        "CiIntentId": "RunCi:291:1:task:291:1:1:1:1",
+        "CiRunId": "43778324486"
+      },
+      "RequiredStatusBoundary": null
+    },
+    "labels:291:1:E69BE9AD2A065B6850878EBD5AE6A93EBE2F91537056F1EA79A23278D419D58C": {
+      "Id": "labels:291:1:E69BE9AD2A065B6850878EBD5AE6A93EBE2F91537056F1EA79A23278D419D58C",
+      "Digest": "10223F6B443A0784296A974B1E1520E4E879BC8A9CAA2C0E3B48D61A1F6A8AE1",
+      "IssueNumber": 291,
+      "Generation": 1,
+      "Kind": "ProjectLabels",
+      "Status": "Pending",
+      "TaskId": null,
+      "Round": 1,
+      "Sha": "9be01a31feedd98ed2dee7c3db75ba0a94847aec",
+      "ExternalId": null,
+      "Labels": [
+        "agent:ai-review"
+      ],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-16T00:06:52.0790669+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": null,
+      "RequiredStatusBoundary": null
+    },
+    "status:291:1:555931602516146865C63FB29327260797E8DC8D88D1D857A09CBFF597E5CD29": {
+      "Id": "status:291:1:555931602516146865C63FB29327260797E8DC8D88D1D857A09CBFF597E5CD29",
+      "Digest": "62BFEF6F13F18164A3A4AF4A68DCB463A27BE732DA43983CB3251FCAC37F7352",
+      "IssueNumber": 291,
+      "Generation": 1,
+      "Kind": "ProjectStatus",
+      "Status": "Pending",
+      "TaskId": null,
+      "Round": 1,
+      "Sha": "9be01a31feedd98ed2dee7c3db75ba0a94847aec",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-16T00:06:52.0790669+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": "\u003C!-- its-agent-state:291:1 --\u003E\nAgent workflow: **REVIEW_PENDING**\n\nGeneration: 1; round: 1.\nPR: #292; head: \u00609be01a31feedd98ed2dee7c3db75ba0a94847aec\u0060.\nTask: Completed.\nConsecutive CI failures: 0/3; review failures: 0/5.\nAutomation held: False; terminal outcome: None.\n\nHandoff: \u0060none\u0060.\n\nCanonical Git state is authoritative. Human approval is required; no automatic merge.",
+      "TaskPrompt": null,
+      "RequiredStatus": null,
+      "RequiredStatusBoundary": null
     }
   }
 }
