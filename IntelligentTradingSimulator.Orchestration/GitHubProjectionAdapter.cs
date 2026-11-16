@@ -1,3 +1,5 @@
+using System.Net;
+
 namespace IntelligentTradingSimulator.Orchestration;
 
 public static class StatusProjection
@@ -8,13 +10,98 @@ public static class StatusProjection
         $"{Marker(issue.Number, issue.Generation)}\n" +
         $"Agent workflow: **{issue.Phase}**\n\n" +
         $"Generation: {issue.Generation}; round: {issue.Round}.\n" +
-        $"PR: {(issue.PullRequest is { } pr ? $"#{pr}" : "unmapped")}; head: `{issue.HeadSha ?? "not captured"}`.\n" +
+        $"PR: {(issue.PullRequest is { } pr ? $"#{pr}" : "unmapped")}; head: {Value(issue.HeadSha)}.\n" +
         $"Task: {(issue.ActiveTaskId is { } task ? issue.Tasks[task].Status.ToString() : "none")}.\n" +
         $"Consecutive CI failures: {issue.ConsecutiveCiFailures}/{issue.CiBudget}; " +
         $"review failures: {issue.ConsecutiveReviewFailures}/{issue.ReviewBudget}.\n" +
         $"Automation held: {issue.ReactivationRequired || issue.Paused}; terminal outcome: {issue.TerminalOutcome}.\n\n" +
-        $"Handoff: `{issue.CurrentHandoffId ?? "none"}`.\n\n" +
+        $"Handoff: {Value(issue.CurrentHandoffId)}.\n\n" +
+        ClassificationSummary(issue) +
+        ClosingLinkGuidance(issue) +
         "Canonical Git state is authoritative. Human approval is required; no automatic merge.";
+
+    private static string ClosingLinkGuidance(IssueState issue) =>
+        issue.Phase == Phase.HUMAN_REVIEW && issue.Number > 0 && issue.PullRequest is > 0
+            ? "### Issue closing link\n\n" +
+              $"Confirm that live PR #{issue.PullRequest} uniquely addresses Issue #{issue.Number} and targets " +
+              "the repository's default branch. If the correct closing link is absent, add " +
+              $"`Closes #{issue.Number}` to the PR description, or link the Issue manually in Development. " +
+              "Inspect existing links first; this snapshot does not verify them or edit the PR.\n\n"
+            : "";
+
+    private static string ClassificationSummary(IssueState issue)
+    {
+        if (issue.Phase != Phase.BLOCKED || issue.HoldReason != "Review requires human classification." ||
+            issue.Review is not { Classification: ReviewClassification.NeedsHuman } review)
+            return "";
+
+        issue.Handoffs.TryGetValue(issue.CurrentHandoffId ?? "", out var handoff);
+        issue.Tasks.TryGetValue(issue.ActiveTaskId ?? "", out var task);
+        var ci = issue.Ci;
+        var ciResult = ci?.Green switch { true => "passed", false => "failed", null => "not available" };
+
+        return "### Review classification required\n\n" +
+            "The following is a canonical snapshot, not a live check or merge approval. " +
+            "Compare all identities with the live open PR and current state before deciding.\n\n" +
+            $"- Issue: #{issue.Number}; issue generation: {issue.Generation}; PR: " +
+            $"{(issue.PullRequest is { } pr ? $"#{pr}" : "unmapped")}; current head: {Value(issue.HeadSha)}.\n" +
+            $"- Active task: {Value(issue.ActiveTaskId)}; status: {task?.Status.ToString() ?? "not captured"}; " +
+            $"round: {task?.Round.ToString() ?? "not captured"}; final SHA: {Value(task?.FinalSha)}.\n" +
+            $"- Managed CI (recorded): {ciResult}; run: {Value(ci?.RunId)}; task: {Value(ci?.TaskId)}; " +
+            $"round: {ci?.Round.ToString() ?? "not captured"}; SHA: {Value(ci?.Sha)}.\n" +
+            $"- Review: {review.LifecycleState}; classification: {review.Classification}; " +
+            $"ID: {Value(review.ReviewId)}; task: {Value(review.TaskId)}; round: {review.Round}; SHA: {Value(review.Sha)}.\n" +
+            $"- Handoff: {Value(issue.CurrentHandoffId)}; recorded generation: {handoff?.Generation.ToString() ?? "not captured"}; " +
+            $"task: {Value(handoff?.TaskId)}; review: {Value(handoff?.ReviewId)}; " +
+            $"round: {handoff?.Round.ToString() ?? "not captured"}; SHA: {Value(handoff?.Sha)}.\n\n" +
+            "After inspecting the review and any findings, an authorized human may submit one " +
+            "`classify-review` decision (`accepted`, `blocking`, or `needs-human`) with the exact handoff, " +
+            "round, PR, SHA, issue generation, current repository generation and a reason. " +
+            "Supply findings and responses where required; an empty review is not automatic acceptance. " +
+            "Classification and the final merge decision are separate.\n\n" +
+            ClassificationCommand(issue, review, handoff);
+    }
+
+    private static string ClassificationCommand(IssueState issue, ReviewIdentity review, HumanHandoff? handoff)
+    {
+        var sha = issue.HeadSha;
+        var id = issue.CurrentHandoffId;
+        if (issue.Paused || issue.ClosurePending || issue.PendingFeedbackEventIds.Count != 0 ||
+            !issue.ReactivationRequired || issue.ActiveAuthorized || issue.Number <= 0 || issue.Generation <= 0 ||
+            issue.Round <= 0 || issue.PullRequest is not > 0 ||
+            sha is not { Length: 40 } || !sha.All(Uri.IsHexDigit) ||
+            id is not { Length: > 0 and <= 256 } ||
+            !id.All(c => char.IsAsciiLetterOrDigit(c) || c is ':' or '-' or '_' or '.') ||
+            handoff is null || handoff.Id != id || handoff.Generation != issue.Generation ||
+            handoff.ClassificationEventId is not null || handoff.Round != issue.Round || handoff.Sha != sha ||
+            handoff.TaskId != issue.ActiveTaskId || handoff.ReviewId != review.ReviewId ||
+            string.IsNullOrEmpty(issue.ActiveTaskId) || string.IsNullOrEmpty(review.ReviewId) ||
+            review.TaskId != issue.ActiveTaskId || review.Round != issue.Round || review.Sha != sha ||
+            review.LifecycleState != ReviewLifecycleState.Completed ||
+            !issue.Tasks.TryGetValue(issue.ActiveTaskId, out var task) ||
+            task.Status != TaskStatus.Completed || task.Round != issue.Round || task.FinalSha != sha ||
+            issue.Ci is not { Green: true, TerminalStopReason: null } ci ||
+            ci.TaskId != issue.ActiveTaskId || ci.Round != issue.Round || ci.Sha != sha)
+            return "The recorded handoff is incomplete or inconsistent; no dispatch template is provided.\n\n";
+
+        return "For Bash, after verifying the snapshot and live PR, set `REPO`, " +
+            "`REPOSITORY_GENERATION`, `CLASSIFICATION` and `REASON` explicitly. " +
+            "Set `FINDINGS` and `RESPONSES` to the required JSON arrays when applicable. " +
+            "This template does not verify current state or submit a decision by itself:\n\n" +
+            "```bash\n" +
+            ": \"${REPO:?Set REPO}\" \"${REPOSITORY_GENERATION:?Set REPOSITORY_GENERATION}\" " +
+            "\"${CLASSIFICATION:?Set CLASSIFICATION}\" \"${REASON:?Set REASON}\" && \\\n" +
+            "gh workflow run agent-state-machine.yml --repo \"$REPO\" --ref master \\\n" +
+            $"  -f issue={issue.Number} -f operation=classify-review -f issue_generation={issue.Generation} \\\n" +
+            "  -f \"repository_generation=$REPOSITORY_GENERATION\" \\\n" +
+            $"  -f handoff={id} -f round={issue.Round} -f pull={issue.PullRequest} -f sha={sha} \\\n" +
+            "  -f \"classification=$CLASSIFICATION\" -f \"reason=$REASON\" \\\n" +
+            "  -f \"findings=${FINDINGS:-}\" -f \"responses=${RESPONSES:-}\"\n" +
+            "```\n\n";
+    }
+
+    private static string Value(string? value) =>
+        value is null ? "not captured" : $"<code>{WebUtility.HtmlEncode(value)}</code>";
 }
 
 /// <summary>Projection-only adapter. Unknown/lost writes are reconciled by reads, never repeated creates.</summary>

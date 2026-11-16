@@ -5,6 +5,22 @@ namespace IntelligentTradingSimulator.Tests.Orchestration;
 
 public class OrchestrationCommandTests
 {
+    [Fact]
+    public async Task PreMergeCheckCannotEnableExecutionOrUseIncompleteArguments()
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        Assert.Equal(1, await OrchestrationCommand.RunAsync(
+            ["--github-merge-check", "--dry-run", "--execute"], output, error));
+        Assert.Contains("read-only", error.ToString());
+        Assert.Empty(output.ToString());
+        error.GetStringBuilder().Clear();
+        Assert.Equal(1, await OrchestrationCommand.RunAsync(
+            ["--github-merge-check", "--dry-run"], output, error));
+        Assert.Contains("argument", error.ToString());
+        Assert.Empty(output.ToString());
+    }
+
     [Theory]
     [InlineData("--execute")]
     [InlineData("--context")]

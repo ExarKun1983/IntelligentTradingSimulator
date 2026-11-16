@@ -2160,6 +2160,17 @@ human review. Replaying the same command does not create another task. This is
 an explicit manual dispatch, not automatic handling of GitHub's "Request changes"
 review button. Final approval/merge remains a human action in GitHub.
 
+For a mapped `HUMAN_REVIEW` handoff, the status comment suggests verifying the
+live PR/Issue mapping and existing links before a human adds `Closes #<issue>`
+to the PR description or links the Issue through GitHub's Development sidebar.
+Closing keywords in a PR description are effective only when the PR targets
+the repository's default branch. The suggestion is not proof of a link or
+authority to close an Issue. The orchestrator does not edit the PR body: GitHub
+does not document conditional PATCH support for that endpoint, so a read-then-
+write cannot reliably protect a concurrent human edit. See GitHub's
+[conditional request guidance](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#use-conditional-requests)
+and [linking documentation](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue).
+
 Duplicate ready notifications do not launch another task. Withdrawal prevents
 admission of queued, unstarted work. Withdrawal during active work must stop new
 effects without forgetting an active/uncertain task. Stage-label edits only request
@@ -2677,6 +2688,23 @@ launching another repair. REST output outside the opt-in inline-findings policy
 stays human-gated; this command is not an automated classifier and does not
 assert provider request-round correlation.
 
+For a classification hold, the Issue status comment shows the recorded task,
+managed CI, review and handoff identities separately, including their rounds and
+SHAs. It is an informational canonical snapshot, not a live check: compare it
+with the current state and open PR, inspect the review and findings, and obtain
+the current repository generation before submitting the single explicit decision.
+Missing or mismatched evidence must not be interpreted as approval. A classification
+does not authorize a merge, which remains a separate human decision.
+
+When the recorded handoff, task, CI and review identities agree, the comment
+also includes a Bash dispatch template with that exact handoff, Issue generation,
+round, PR and SHA. Set the repository, current repository generation, explicit
+classification and reason yourself after checking the live PR and canonical
+state; provide findings/responses where required. No command is emitted for
+incomplete or inconsistent recorded identities. The template is not a live
+validation or authorization and cannot run while the workflow is disabled.
+The existing ingress, generation, live-head and reducer checks still apply.
+
 #### Required tested-head status and managed push routing
 
 `GitHubRequiredStatusAdapter` publishes the separate `Agent managed CI` commit
@@ -2727,6 +2755,44 @@ publication and managed ownership. It must not execute untrusted PR code with
 status-write credentials. Waiting while ownership is ambiguous is acceptable;
 publishing ordinary success as a fallback is not.
 
+##### Candidate design for an enforced gate (not approved for activation)
+
+A possible design is a separate, trusted GitHub App publishing a uniquely named
+required check, bound in branch protection to that App. It must not execute PR
+code with check-write credentials. The ordinary CI remains separate. GitHub
+[documents](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches#require-status-checks-before-merging)
+that required checks can be bound to an expected App and that `neutral` and
+`skipped` also satisfy a required check: uncertain work must therefore stay
+non-successful, not use either conclusion as a fallback. App identity does not
+by itself solve stale or shared-SHA decisions.
+
+The proposed admission contract must identify ownership before granting success:
+
+1. Register managed intent durably before an agent can create a PR; a missing
+   mapping, incomplete discovery or concurrent admission remains ambiguous.
+   Ordinary PRs also need an independently trustworthy classification; absence
+   of a managed mapping, a label, ordinary CI or author identity is insufficient.
+2. For a managed PR, verify its live open mapping and head against the completed
+   task, exact-head managed CI, accepted review, current feedback and findings.
+   For an ordinary PR, define and verify a separate eligibility contract without
+   bypassing possible in-flight managed work.
+3. Before publishing, enumerate all relevant PRs sharing the SHA and require every
+   applicable ownership/eligibility decision to be safe. Recheck on changes,
+   serialize publication, retain delivery receipts and reconcile lost responses
+   without blindly repeating an uncertain success. A stale success, late write,
+   lost webhook or new PR reusing a SHA must not be assumed harmless.
+4. Prove what GitHub evaluates at merge time, including head versus test-merge
+   commits, new shared-SHA PRs, concurrent updates, publisher identity and any
+   admin bypass. A check run is attached to a commit, not a PR, and cannot by
+   itself provide a transactional PR-specific authorization.
+
+This is a threat model and candidate design, not an implemented guarantee. The
+ordinary-PR ownership proof and a merge-time race-free enforcement mechanism
+remain open: do not claim atomic enforcement or change branch protection until
+the provider contract and recovery behavior are independently demonstrated and
+the operational tradeoffs are separately approved. The current interim process
+continues to require human review and a final human merge decision.
+
 The ordinary `CI` workflow runs `Build and test` for every PR targeting `master`,
 including managed PRs, and does not publish managed statuses. The previous
 read-only routing command remains available for diagnostics but is not connected
@@ -2775,6 +2841,26 @@ gh api "repos/$REPO/commits/$SHA/status" --jq '{sha, statuses: [.statuses[] | se
 This is a manual operational control, **not an atomic or branch-enforced
 managed gate**. A push, feedback, or late status write can race a human check.
 Only the human decides whether to merge; the orchestrator never merges.
+
+For an additional read-only check, use a repository credential in `GITHUB_TOKEN`
+and an agent-task read credential in `ORCHESTRATION_USER_TOKEN`. Supply verified
+repository and task-creator numeric IDs; the command reads only the production
+`agent-state` ref and never dispatches a workflow or modifies state:
+
+```bash
+dotnet run --project IntelligentTradingSimulator.Orchestration -- \
+  --github-merge-check --dry-run --repository "$REPO" --repository-id "$REPOSITORY_ID" \
+  --task-creator-id "$TASK_CREATOR_ID" --base-branch master --issue "$ISSUE"
+```
+
+It rechecks the open Issue and PR/head, completed task mapping, exact managed CI
+run, accepted human classification and the recorded review submissions; it also
+detects a state revision or head change during the check. It reports remaining
+manual checks explicitly: ordinary CI, the latest trusted managed status, current
+threads/findings and feedback, ownership or late-write ambiguity outside the
+snapshot, and a final reread before merge. It does not prove
+provider review-to-request correlation, prevent later changes, or approve merge.
+Missing or inaccessible evidence causes failure, not a successful fallback.
 
 #### Split-credential contracts and permissions
 

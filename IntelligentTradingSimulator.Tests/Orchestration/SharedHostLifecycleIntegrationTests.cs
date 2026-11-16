@@ -94,6 +94,50 @@ public sealed class SharedHostLifecycleIntegrationTests
         Assert.All(fixture.StatusWrites, write => Assert.Equal("/repos/owner/repo/statuses/" + Head, write));
         Assert.DoesNotContain(fixture.StatusWrites, write => write.EndsWith(Definition));
 
+        if (afterApproval == "unchanged")
+        {
+            var api = new GitHubRepositoryApi(client, "owner/repo", 1);
+            var check = new GitHubPreMergeCheck(api, store,
+                new GitHubTaskAdapter(api, store, "master", 55, taskApi: new(userClient, "owner/repo", 1)));
+            var writes = fixture.StatusWrites.Count + taskApi.Writes.Count;
+            var result = await check.CheckAsync(7);
+            Assert.Equal(Head, result.HeadSha);
+            Assert.Equal(accepted.Round, result.ReviewRound);
+            Assert.False(result.MergeApproved);
+            Assert.False(result.AtomicOrEnforced);
+            Assert.Contains(result.ManualChecks, item => item.Contains("trusted publisher"));
+            Assert.Equal(writes, fixture.StatusWrites.Count + taskApi.Writes.Count);
+
+            var staleState = StateJson.Clone(store.State);
+            staleState.Issues[7].Phase = Phase.REVIEW_PENDING;
+            var staleStore = new GitHubTaskIntegrationTests.Store(staleState);
+            var staleCheck = new GitHubPreMergeCheck(api, staleStore,
+                new GitHubTaskAdapter(api, staleStore, "master", 55, taskApi: new(userClient, "owner/repo", 1)));
+            await Assert.ThrowsAsync<PreMergeCheckException>(() => staleCheck.CheckAsync(7));
+
+            var ambiguousState = StateJson.Clone(store.State);
+            ambiguousState.Issues[8] = new IssueState { Number = 8, HeadSha = Head };
+            var ambiguousStore = new GitHubTaskIntegrationTests.Store(ambiguousState);
+            var ambiguousCheck = new GitHubPreMergeCheck(api, ambiguousStore,
+                new GitHubTaskAdapter(api, ambiguousStore, "master", 55, taskApi: new(userClient, "owner/repo", 1)));
+            await Assert.ThrowsAsync<PreMergeCheckException>(() => ambiguousCheck.CheckAsync(7));
+
+            var changingStore = new ChangingRevisionStore(store);
+            var changingCheck = new GitHubPreMergeCheck(api, changingStore,
+                new GitHubTaskAdapter(api, changingStore, "master", 55, taskApi: new(userClient, "owner/repo", 1)));
+            await Assert.ThrowsAsync<PreMergeCheckException>(() => changingCheck.CheckAsync(7));
+
+            taskApi.HeadSha = ChangedHead;
+            await Assert.ThrowsAsync<PreMergeCheckException>(() => check.CheckAsync(7));
+            taskApi.HeadSha = Head;
+            fixture.CiCompleted = false;
+            await Assert.ThrowsAsync<PreMergeCheckException>(() => check.CheckAsync(7));
+            fixture.CiCompleted = true;
+            fixture.ReviewSubmitted = false;
+            await Assert.ThrowsAsync<PreMergeCheckException>(() => check.CheckAsync(7));
+            fixture.ReviewSubmitted = true;
+        }
+
         if (afterApproval.StartsWith("request-changes", StringComparison.Ordinal))
         {
             var payload = JsonSerializer.SerializeToElement(new
@@ -604,6 +648,20 @@ public sealed class SharedHostLifecycleIntegrationTests
             sha = sha ?? issue.HeadSha ?? Head, classification, findings, responses }
     });
     private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now.AddMinutes(3); }
+
+    private sealed class ChangingRevisionStore(IStateStore inner) : IStateStore
+    {
+        private int reads;
+
+        public async Task<StateSnapshot> LoadAsync(CancellationToken token)
+        {
+            var snapshot = await inner.LoadAsync(token);
+            return ++reads == 1 ? snapshot : snapshot with { Revision = "changed" };
+        }
+
+        public Task<bool> TrySaveAsync(StateSnapshot expected, RepositoryState state, CancellationToken token) =>
+            throw new InvalidOperationException("The read-only check must not write state.");
+    }
 
     private sealed class PipelineApi : HttpMessageHandler
     {

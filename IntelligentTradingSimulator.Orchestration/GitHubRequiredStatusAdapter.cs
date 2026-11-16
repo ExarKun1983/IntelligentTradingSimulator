@@ -123,11 +123,11 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
         {
             if (liveIssue.RootElement.GetProperty("state").GetString() != "open" || pr.GetProperty("state").GetString() != "open")
                 throw new InvalidDataException("Closed work cannot publish success.");
-            await VerifyGreenRunAsync(issue, token);
+            await VerifyGreenRunAsync(api, issue, token);
         }
     }
 
-    private async Task VerifyGreenRunAsync(IssueState issue, CancellationToken token)
+    internal static async Task VerifyGreenRunAsync(GitHubRepositoryApi api, IssueState issue, CancellationToken token)
     {
         var ci = issue.Ci!;
         var boundary = ci.DispatchBoundary!;
