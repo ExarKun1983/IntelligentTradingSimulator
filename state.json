@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 374,
+  "Version": 375,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "actions:1277929203:43898043974",
@@ -662,7 +662,7 @@
       "SchemaVersion": 1,
       "Number": 298,
       "Generation": 1,
-      "Version": 66,
+      "Version": 67,
       "LastEventId": "actions:1277929203:43898043974",
       "Phase": "HUMAN_REVIEW",
       "Ready": false,
@@ -816,11 +816,11 @@
           "OccurredAt": "2026-11-16T15:35:49+00:00"
         }
       },
-      "ProjectionDigest": "20889BFD9052DBEF2DEF2E37B5DBEC21613732B134722417FBEB164FFB7FBD35",
+      "ProjectionDigest": "6AD23EA4B7B12BC6F254EB7F202DDDC4D9FA4092112F745901199F19496FA8AB",
       "ObservedProjectionDigest": "20889BFD9052DBEF2DEF2E37B5DBEC21613732B134722417FBEB164FFB7FBD35",
       "StatusProjectionDigest": "92837B15620BD5242E91046FA152E880DC0A5A821B44B2E4CC729C530C7996EE",
-      "RequiredStatusSequence": 6,
-      "RequiredStatusIntentId": "required-status:298:1:6"
+      "RequiredStatusSequence": 7,
+      "RequiredStatusIntentId": "required-status:298:1:7"
     }
   },
   "Inbox": {
@@ -3721,6 +3721,79 @@
       "StartedAt": "2026-11-16T15:28:31.4183008+00:00",
       "CompletedAt": "2026-11-16T15:28:31.4183008+00:00",
       "StatusBody": "\u003C!-- its-agent-state:298:1 --\u003E\nAgent workflow: **BLOCKED**\n\nGeneration: 1; round: 1.\nPR: #299; head: \u0060fd70f74d745fb5155a993e110c61fe8317ee2f70\u0060.\nTask: Completed.\nConsecutive CI failures: 0/3; review failures: 0/5.\nAutomation held: True; terminal outcome: None.\n\nHandoff: \u0060handoff:298:1:review-observed:1277929203:1:RequestReview:298:1:task:298:1:1:1:1\u0060.\n\nCanonical Git state is authoritative. Human approval is required; no automatic merge.",
+      "TaskPrompt": null,
+      "RequiredStatus": null,
+      "RequiredStatusBoundary": null
+    },
+    "required-status:298:1:7": {
+      "Id": "required-status:298:1:7",
+      "Digest": "CB8BD9E3296067E4074172A1966420686E494BF468413427484B8D8038EB2C8F",
+      "IssueNumber": 298,
+      "Generation": 1,
+      "Kind": "PublishRequiredStatus",
+      "Status": "Pending",
+      "TaskId": "task:298:1:1:1",
+      "Round": 1,
+      "Sha": "fd70f74d745fb5155a993e110c61fe8317ee2f70",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-16T15:36:39.2613282+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": {
+        "Context": "Agent managed CI",
+        "State": "success",
+        "Description": "Exact tested head CI passed; human approval required.",
+        "TargetUrl": "https://github.com/ExarKun1983/IntelligentTradingSimulator/actions/runs/43896026403#agent-status-d7b8a1b6ccea1d3a06a9f8ffbd012c0f9f6c66dd595855b23b20823cc11c6f49",
+        "CiIntentId": "RunCi:298:1:task:298:1:1:1:1",
+        "CiRunId": "43896026403"
+      },
+      "RequiredStatusBoundary": null
+    },
+    "labels:298:1:6AD23EA4B7B12BC6F254EB7F202DDDC4D9FA4092112F745901199F19496FA8AB": {
+      "Id": "labels:298:1:6AD23EA4B7B12BC6F254EB7F202DDDC4D9FA4092112F745901199F19496FA8AB",
+      "Digest": "7A209A9090B1032BA52C131AF8E7CD496DC31857295A84AC55934CC98BA3A6AF",
+      "IssueNumber": 298,
+      "Generation": 1,
+      "Kind": "ProjectLabels",
+      "Status": "Pending",
+      "TaskId": null,
+      "Round": 1,
+      "Sha": "fd70f74d745fb5155a993e110c61fe8317ee2f70",
+      "ExternalId": null,
+      "Labels": [
+        "agent:review",
+        "human:review"
+      ],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-16T15:36:39.2613282+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": null,
+      "RequiredStatusBoundary": null
+    },
+    "status:298:1:C67202191C9AB4BED8227AD897AA28DCE7D25AB344B561D5CD53A1FF4EE3F0AB": {
+      "Id": "status:298:1:C67202191C9AB4BED8227AD897AA28DCE7D25AB344B561D5CD53A1FF4EE3F0AB",
+      "Digest": "779D9A34F1DE43E80114DA20DE5225D18E12312A199FC2536D9F3C29A8FD07A8",
+      "IssueNumber": 298,
+      "Generation": 1,
+      "Kind": "ProjectStatus",
+      "Status": "Pending",
+      "TaskId": null,
+      "Round": 1,
+      "Sha": "fd70f74d745fb5155a993e110c61fe8317ee2f70",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-16T15:36:39.2613282+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": "\u003C!-- its-agent-state:298:1 --\u003E\nAgent workflow: **HUMAN_REVIEW**\n\nGeneration: 1; round: 1.\nPR: #299; head: \u0060fd70f74d745fb5155a993e110c61fe8317ee2f70\u0060.\nTask: Completed.\nConsecutive CI failures: 0/3; review failures: 0/5.\nAutomation held: True; terminal outcome: None.\n\nHandoff: \u0060handoff:298:1:actions:1277929203:43898043974\u0060.\n\nCanonical Git state is authoritative. Human approval is required; no automatic merge.",
       "TaskPrompt": null,
       "RequiredStatus": null,
       "RequiredStatusBoundary": null
