@@ -101,6 +101,35 @@ public sealed class AtrCalculatorTests
         Assert.Null(new AtrCalculator().Calculate(candles));
     }
 
+    [Theory]
+    [InlineData(2, 11, 0, 10)]
+    [InlineData(5, 11, 0, 10)]
+    [InlineData(2, 8, 9, 9)]
+    [InlineData(5, 8, 9, 9)]
+    [InlineData(2, 11, 9, 8)]
+    [InlineData(5, 11, 9, 8)]
+    [InlineData(2, 11, 9, 12)]
+    [InlineData(5, 11, 9, 12)]
+    public void Calculate_ReturnsNull_WhenInitialOrSmoothedCandleHasInvalidPrices(
+        int index,
+        decimal high,
+        decimal low,
+        decimal close)
+    {
+        var candles = new List<MarketCandle>
+        {
+            Candle(10m, 10m, 10m),
+            Candle(12m, 9m, 11m),
+            Candle(16m, 14m, 15m),
+            Candle(12m, 10m, 11m),
+            Candle(14m, 10m, 12m),
+            Candle(17m, 16m, 16m)
+        };
+        candles[index] = Candle(high, low, close);
+
+        Assert.Null(new AtrCalculator(3).Calculate(candles));
+    }
+
     [Fact]
     public void Calculate_ReturnsNull_OnArithmeticOverflow()
     {
