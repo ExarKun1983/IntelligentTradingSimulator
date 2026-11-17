@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 555,
+  "Version": 556,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "actions:1277929203:43993595848",
@@ -976,7 +976,7 @@
       "SchemaVersion": 1,
       "Number": 304,
       "Generation": 4,
-      "Version": 58,
+      "Version": 59,
       "LastEventId": "actions:1277929203:43993595848",
       "Phase": "READY",
       "Ready": true,
@@ -1094,11 +1094,11 @@
         }
       },
       "Classifications": {},
-      "ProjectionDigest": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "ProjectionDigest": "D56352742C984F1855638D1119AA4CE1C6F0927B24C52FDB302FC61D46B0CC02",
       "ObservedProjectionDigest": "0C6FB4E07CCDF772ED6952443013494B821B7F84127D4AA2CB643AC48E54DF51",
       "StatusProjectionDigest": "315848286D0D50C2C41C62DF8F2E2CF973D7444EDA5B8A5F059B11494BEDACBB",
-      "RequiredStatusSequence": 6,
-      "RequiredStatusIntentId": "required-status:304:3:6"
+      "RequiredStatusSequence": 7,
+      "RequiredStatusIntentId": "required-status:304:4:7"
     }
   },
   "Inbox": {
@@ -5458,7 +5458,7 @@
       "IssueNumber": 304,
       "Generation": 3,
       "Kind": "ProjectLabels",
-      "Status": "Pending",
+      "Status": "Cancelled",
       "TaskId": null,
       "Round": 1,
       "Sha": "ce246a9583982114e968500efc46028d3bd830ec",
@@ -5534,6 +5534,34 @@
       "StatusBody": null,
       "TaskPrompt": null,
       "RequiredStatus": null,
+      "RequiredStatusBoundary": null
+    },
+    "required-status:304:4:7": {
+      "Id": "required-status:304:4:7",
+      "Digest": "A0056282B4B4BFE3D223B8D14C7FAACCFC396D9656F766469151CBE5355FF2AB",
+      "IssueNumber": 304,
+      "Generation": 4,
+      "Kind": "PublishRequiredStatus",
+      "Status": "Pending",
+      "TaskId": null,
+      "Round": 1,
+      "Sha": "ce246a9583982114e968500efc46028d3bd830ec",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-17T01:12:08.1134389+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": {
+        "Context": "Agent managed CI",
+        "State": "pending",
+        "Description": "Tracked coding or exact-head CI is not yet complete.",
+        "TargetUrl": "https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/305#agent-status-a4af924c2bfc7a59bf885a0f17fc16bb0338e8e48a41fffffa577694672735ea",
+        "CiIntentId": null,
+        "CiRunId": null
+      },
       "RequiredStatusBoundary": null
     }
   }
