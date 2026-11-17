@@ -18,7 +18,7 @@ public sealed record GitHubStatusPublisher(long ActorId, string Login, string No
 /// confirms delivery, never lifecycle eligibility; late writes cannot be atomically revoked.</summary>
 public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateStore store,
     GitHubStatusPublisher publisher, GitHubRequiredStatusApproval? approval = null,
-    TimeProvider? clock = null) : IEffectAdapter
+    TimeProvider? clock = null, GitHubLiveDiagnostics? diagnostics = null) : IEffectAdapter
 {
     public const string RecoveryLimitation =
         "GitHub commit-status creation is not transactional with canonical state or human feedback. " +
@@ -30,6 +30,8 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
 
     public async Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken token)
     {
+        var callerStage = diagnostics?.Stage;
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusPreflight);
         if (approval?.AllowsPublication != true) throw new InvalidOperationException("Required-status prerequisites are not verified.");
         var state = (await store.LoadAsync(token)).State;
         var issue = ValidateIntent(state, intent);
@@ -46,8 +48,10 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
         state = (await store.LoadAsync(token)).State;
         ValidateCurrent(state, ValidateIntent(state, intent), intent);
         var payload = intent.RequiredStatus!;
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusPublication);
         using var receipt = await api.WriteAsync(HttpMethod.Post, $"statuses/{intent.Sha}",
             new { state = payload.State, context = payload.Context, description = payload.Description, target_url = payload.TargetUrl }, token);
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusConfirmation);
         var id = ValidateStatus(receipt.RootElement, intent, boundary);
         if (boundary.ExistingStatusIds.Contains(id)) throw new InvalidDataException("Status receipt predates the creation boundary.");
         await SaveBoundaryAsync(intent, boundary with { StatusId = id }, token);
@@ -55,15 +59,18 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
         issue = ValidateIntent(state, intent);
         await PreflightAsync(state, issue, intent, token);
         var confirmed = (await ReadStatusesAsync(intent, token)).Where(item => item.GetProperty("id").GetInt64() == id).ToList();
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusConfirmation);
         if (confirmed.Count != 1) throw new InvalidDataException("Created status is not visible on the exact tested SHA.");
         ValidateStatus(confirmed[0], intent, boundary);
         state = (await store.LoadAsync(token)).State;
         ValidateCurrent(state, ValidateIntent(state, intent), intent);
+        if (callerStage is { } previousStage) diagnostics?.Mark(previousStage);
         return new(DeliveryStatus.Succeeded, id.ToString(CultureInfo.InvariantCulture));
     }
 
     public async Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken token)
     {
+        var callerStage = diagnostics?.Stage;
         var state = (await store.LoadAsync(token)).State;
         ValidateIntent(state, intent);
         if (state.Outbox[intent.Id].RequiredStatusBoundary is not { } boundary) return new(DeliveryStatus.Unknown);
@@ -75,8 +82,14 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
             : !boundary.ExistingStatusIds.Contains(item.GetProperty("id").GetInt64()) &&
               item.GetProperty("context").GetString() == intent.RequiredStatus!.Context &&
               item.GetProperty("target_url").GetString() == intent.RequiredStatus.TargetUrl).ToList();
-        if (candidates.Count != 1) return new(DeliveryStatus.Unknown);
+        if (candidates.Count != 1)
+        {
+            if (callerStage is { } stage) diagnostics?.Mark(stage);
+            return new(DeliveryStatus.Unknown);
+        }
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusConfirmation);
         var id = ValidateStatus(candidates[0], intent, boundary);
+        if (callerStage is { } previousStage) diagnostics?.Mark(previousStage);
         return new(DeliveryStatus.Succeeded, id.ToString(CultureInfo.InvariantCulture));
     }
 
@@ -102,6 +115,7 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
 
     private async Task PreflightAsync(RepositoryState state, IssueState issue, EffectIntent intent, CancellationToken token)
     {
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusPreflight);
         ValidateCurrent(state, issue, intent);
         ValidatePublisher(new(publisher.ActorId, publisher.Login, publisher.NodeId, publisher.Type, clock.GetUtcNow(), []));
         await api.VerifyRepositoryAsync(token);
@@ -168,6 +182,7 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
 
     private async Task<List<JsonElement>> ReadStatusesAsync(EffectIntent intent, CancellationToken token)
     {
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusLookup);
         using var combined = await api.GetAsync($"commits/{intent.Sha}/status", token);
         if (combined.RootElement.GetProperty("sha").GetString() != intent.Sha ||
             combined.RootElement.GetProperty("repository").GetProperty("id").GetInt64() != api.RepositoryId ||
@@ -211,6 +226,7 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
 
     private async Task SaveBoundaryAsync(EffectIntent intent, RequiredStatusBoundary boundary, CancellationToken token)
     {
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusBoundary);
         for (var attempt = 0; attempt < 8; attempt++)
         {
             var snapshot = await store.LoadAsync(token);

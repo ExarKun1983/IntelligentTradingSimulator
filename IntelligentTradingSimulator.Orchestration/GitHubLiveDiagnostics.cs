@@ -10,10 +10,11 @@ public enum GitHubLiveStage
     CandidateTask, CandidateSessions, CandidateMapping, CiLiveEligibility, CiRunIdentity,
     CiJobEvidence, ReviewObservation, EventPublication, LiveObservation, ReconcileDecision,
     ReconcileStateSave, EffectRecovery, EffectSelection, EffectExecution, EffectOutcomeSave,
-    WorkerLeaseRelease
+    WorkerLeaseRelease, RequiredStatusPreflight, RequiredStatusLookup, RequiredStatusBoundary,
+    RequiredStatusPublication, RequiredStatusConfirmation
 }
 
-public sealed class GitHubLiveDiagnostics
+public sealed class GitHubLiveDiagnostics(TextWriter? effectError = null)
 {
     private GitHubLiveStage stage = GitHubLiveStage.Invocation;
     private (GitHubLiveStage Stage, string ErrorType, int? HttpStatus)? failure;
@@ -25,22 +26,39 @@ public sealed class GitHubLiveDiagnostics
 
     internal void Capture(Exception exception)
     {
-        failure ??= (stage, exception switch
-        {
-            InvalidDataException => "InvalidDataException",
-            HttpRequestException => "HttpRequestException",
-            JsonException => "JsonException",
-            InvalidOperationException => "InvalidOperationException",
-            UnauthorizedAccessException => "UnauthorizedAccessException",
-            KeyNotFoundException => "KeyNotFoundException",
-            FormatException => "FormatException",
-            OverflowException => "OverflowException",
-            ArgumentException => "ArgumentException",
-            OperationCanceledException => "OperationCanceledException",
-            IOException => "IOException",
-            _ => "Other"
-        }, exception is HttpRequestException { StatusCode: { } status } ? (int)status : null);
+        failure ??= (stage, ErrorType(exception), HttpStatus(exception));
     }
+
+    internal void ReportEffectFailure(EffectKind kind, EffectFailureCode code, Exception exception)
+    {
+        effectError?.WriteLine(JsonSerializer.Serialize(new
+        {
+            EffectDiagnostic = new
+            {
+                Stage = stage.ToString(), Effect = kind.ToString(), FailureCode = code.ToString(),
+                ErrorType = ErrorType(exception), HttpStatus = HttpStatus(exception)
+            }
+        }));
+    }
+
+    private static string ErrorType(Exception exception) => exception switch
+    {
+        InvalidDataException => "InvalidDataException",
+        HttpRequestException => "HttpRequestException",
+        JsonException => "JsonException",
+        InvalidOperationException => "InvalidOperationException",
+        UnauthorizedAccessException => "UnauthorizedAccessException",
+        KeyNotFoundException => "KeyNotFoundException",
+        FormatException => "FormatException",
+        OverflowException => "OverflowException",
+        ArgumentException => "ArgumentException",
+        OperationCanceledException => "OperationCanceledException",
+        IOException => "IOException",
+        _ => "Other"
+    };
+
+    private static int? HttpStatus(Exception exception) =>
+        exception is HttpRequestException { StatusCode: { } status } ? (int)status : null;
 
     internal void WriteFailure(TextWriter error, Exception exception)
     {

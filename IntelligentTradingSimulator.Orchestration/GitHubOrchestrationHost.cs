@@ -215,8 +215,9 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                 if (statusPublisher is not null && statusApproval?.AllowsPublication == true &&
                     issue.PullRequest is > 0 && issue.HeadSha is { Length: 40 })
                 {
-                    var revocation = new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher, statusApproval, clock);
-                    state = await new OrchestrationReconciler().RevokeRequiredStatusAsync(stateStore, issue.Number,
+                    var revocation = new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher, statusApproval, clock,
+                        liveDiagnostics);
+                    state = await new OrchestrationReconciler(diagnostics: liveDiagnostics).RevokeRequiredStatusAsync(stateStore, issue.Number,
                         revocation, clock.GetUtcNow(), cancellationToken);
                     var status = state.Outbox[state.Issues[issue.Number].RequiredStatusIntentId!];
                     if (status.Status != DeliveryStatus.Succeeded || status.RequiredStatus?.State != "error" ||
@@ -235,7 +236,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         var ci = ciRoute is null ? null : new GitHubCiAdapter(api, stateStore, ciRoute, clock, ciApproval, tasks, liveDiagnostics);
         var events = new ProductionEvents(message, api, tasks, reviews, ci, authorization, projectionActorId,
             excludedIssueNumber, !isolatedStatusTest, liveDiagnostics);
-        var statuses = statusPublisher is null ? null : new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher, statusApproval, clock);
+        var statuses = statusPublisher is null ? null : new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher,
+            statusApproval, clock, liveDiagnostics);
         IVerifiedAgentEffectAdapter effects = new ProductionEffects(tasks, reviews, ci, statuses,
             new GitHubProjectionAdapter(api, projectionActorId, true));
         if (beforeEffect is not null) effects = new GuardedEffects(effects, beforeEffect);

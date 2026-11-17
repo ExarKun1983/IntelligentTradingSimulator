@@ -15,6 +15,137 @@ public sealed class GitHubRequiredStatusTests
     private static readonly GitHubRequiredStatusApproval Approved = new(true, true, true, true, true);
 
     [Theory]
+    [InlineData("preflight", "RequiredStatusPreflight", "HttpRequestException", 403, 0)]
+    [InlineData("lookup", "RequiredStatusLookup", "HttpRequestException", 403, 0)]
+    [InlineData("boundary", "RequiredStatusBoundary", "IOException", null, 0)]
+    [InlineData("post", "RequiredStatusPublication", "HttpRequestException", null, 1)]
+    [InlineData("confirmation", "RequiredStatusConfirmation", "InvalidDataException", null, 1)]
+    public async Task HandledStatusFailureReportsItsStageWithoutRetryingOrExposingContent(
+        string failure, string expectedStage, string expectedError, int? httpStatus, int posts)
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var store = new Store(reducer.Reconcile(State(), Live()).State);
+        var intentId = Intent(store.Value).Id;
+        using var api = new Api
+        {
+            ForbiddenSuffix = failure == "preflight" ? "/pulls/17" : failure == "lookup" ? "/status" : null,
+            LostResponse = failure == "post",
+            Corruption = failure == "confirmation" ? "status-id-url" : null
+        };
+        if (failure == "boundary")
+            store.RejectSave = next => Intent(next).RequiredStatusBoundary is not null
+                ? throw new IOException("private persistence input") : false;
+        using var client = api.Client();
+        using var output = new StringWriter();
+        var diagnostics = new GitHubLiveDiagnostics(output);
+        var adapter = new GitHubRequiredStatusAdapter(new(client, "owner/repo", 1), store, Publisher, Approved,
+            new Clock(), diagnostics);
+        var reconciler = new OrchestrationReconciler(reducer, diagnostics);
+
+        await reconciler.RunAsync(store, new Observations(), new RecordingEffects(adapter),
+            new(false, true, true, true, AllowedEffectKinds: new HashSet<EffectKind> { EffectKind.PublishRequiredStatus }));
+
+        Assert.Equal(DeliveryStatus.Unknown, store.Value.Outbox[intentId].Status);
+        Assert.Equal(EffectFailureCode.ExecutionException, store.Value.Outbox[intentId].FailureCode);
+        Assert.Equal(Phase.BLOCKED, store.Value.Issues[7].Phase);
+        Assert.Equal(posts, api.Posts);
+        using var document = JsonDocument.Parse(output.ToString());
+        var diagnostic = document.RootElement.GetProperty("EffectDiagnostic");
+        Assert.Equal(expectedStage, diagnostic.GetProperty("Stage").GetString());
+        Assert.Equal("PublishRequiredStatus", diagnostic.GetProperty("Effect").GetString());
+        Assert.Equal("ExecutionException", diagnostic.GetProperty("FailureCode").GetString());
+        Assert.Equal(expectedError, diagnostic.GetProperty("ErrorType").GetString());
+        Assert.Equal(httpStatus, diagnostic.GetProperty("HttpStatus").Deserialize<int?>());
+        Assert.Equal(5, diagnostic.EnumerateObject().Count());
+        Assert.DoesNotContain("private", output.ToString());
+        Assert.DoesNotContain("owner/repo", output.ToString());
+        Assert.DoesNotContain(Sha, output.ToString());
+
+        diagnostics.Mark(GitHubLiveStage.CiRunIdentity);
+        using var unhandled = new StringWriter();
+        diagnostics.WriteFailure(unhandled, new InvalidDataException("private later input"));
+        Assert.Contains("\"Stage\":\"CiRunIdentity\"", unhandled.ToString());
+    }
+
+    [Fact]
+    public async Task HandledStatusRecoveryFailureIsReportedWithoutAnotherPost()
+    {
+        var store = new Store(Planned());
+        using var api = new Api { LostResponse = true };
+        using var client = api.Client();
+        using var output = new StringWriter();
+        var diagnostics = new GitHubLiveDiagnostics(output);
+        var adapter = new GitHubRequiredStatusAdapter(new(client, "owner/repo", 1), store, Publisher, Approved,
+            new Clock(), diagnostics);
+        await Assert.ThrowsAsync<HttpRequestException>(() => adapter.ExecuteAsync(Intent(store.Value), default));
+        var intentId = Intent(store.Value).Id;
+        store.Value = new OrchestrationReducer().RecordOutcome(store.Value, intentId, new(DeliveryStatus.Unknown), Now);
+        api.ForbiddenSuffix = "/status";
+
+        await new OrchestrationReconciler(diagnostics: diagnostics).RecoverInFlightAsync(store,
+            new RecordingEffects(adapter), Now, new(false, true, true, true));
+
+        Assert.Equal(1, api.Posts);
+        Assert.Equal(DeliveryStatus.Unknown, store.Value.Outbox[intentId].Status);
+        using var document = JsonDocument.Parse(output.ToString());
+        var diagnostic = document.RootElement.GetProperty("EffectDiagnostic");
+        Assert.Equal("RequiredStatusLookup", diagnostic.GetProperty("Stage").GetString());
+        Assert.Equal("RecoveryException", diagnostic.GetProperty("FailureCode").GetString());
+        Assert.Equal(403, diagnostic.GetProperty("HttpStatus").GetInt32());
+        Assert.DoesNotContain("private", output.ToString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SuccessfulStatusCallsRestoreCallerStageEvenWhenRecoveryFindsNoReceipt(bool missingReceipt)
+    {
+        var store = new Store(Planned());
+        using var api = new Api();
+        using var client = api.Client();
+        using var output = new StringWriter();
+        var diagnostics = new GitHubLiveDiagnostics(output);
+        var adapter = new GitHubRequiredStatusAdapter(new(client, "owner/repo", 1), store, Publisher, Approved,
+            new Clock(), diagnostics);
+        diagnostics.Mark(GitHubLiveStage.EffectExecution);
+
+        await adapter.ExecuteAsync(Intent(store.Value), default);
+
+        Assert.Equal(GitHubLiveStage.EffectExecution, diagnostics.Stage);
+        diagnostics.Mark(GitHubLiveStage.EffectRecovery);
+        api.HideCreatedStatus = missingReceipt;
+        var recovered = await adapter.ReconcileAsync(Intent(store.Value), default);
+        Assert.Equal(missingReceipt ? DeliveryStatus.Unknown : DeliveryStatus.Succeeded, recovered.Status);
+        Assert.Equal(GitHubLiveStage.EffectRecovery, diagnostics.Stage);
+        Assert.Equal(1, api.Posts);
+        Assert.Equal("", output.ToString());
+    }
+
+    [Fact]
+    public async Task CommandOnlyRevocationReportsHandledFailureThroughHostDiagnostics()
+    {
+        var store = new Store(Planned());
+        using var api = new Api();
+        using var client = api.Client();
+        var success = await Adapter(client, store).ExecuteAsync(Intent(store.Value), default);
+        store.Value = new OrchestrationReducer().RecordOutcome(store.Value, Intent(store.Value).Id, success, Now);
+        api.ForbiddenSuffix = "/status";
+        using var output = new StringWriter();
+        var diagnostics = new GitHubLiveDiagnostics(output);
+
+        var result = await PauseCommandOnlyAsync(client, store, Approved, diagnostics: diagnostics);
+
+        Assert.Equal(WorkerStopReason.Blocked, result.Reason);
+        Assert.True(store.Value.Issues[7].Paused);
+        Assert.Equal(1, api.Posts);
+        using var document = JsonDocument.Parse(output.ToString());
+        var diagnostic = document.RootElement.GetProperty("EffectDiagnostic");
+        Assert.Equal("RequiredStatusLookup", diagnostic.GetProperty("Stage").GetString());
+        Assert.Equal("ExecutionException", diagnostic.GetProperty("FailureCode").GetString());
+        Assert.DoesNotContain("private", output.ToString());
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task CommandOnlyPauseRevokesPublishedSuccessWithoutDownstreamApprovalOrQueuedWork(bool uncertainSuccess)
@@ -1084,6 +1215,7 @@ public sealed class GitHubRequiredStatusTests
         public int Posts { get; private set; }
         public string? Body { get; private set; }
         public string? Corruption { get; set; }
+        public string? ForbiddenSuffix { get; set; }
         public bool LostResponse { get; set; }
         public bool CancelAfterPost { get; set; }
         public bool SynchronizePreparation { get; set; }
@@ -1103,6 +1235,9 @@ public sealed class GitHubRequiredStatusTests
             var path = request.RequestUri!.AbsolutePath;
             Requests.Add(path.StartsWith("/repos/owner/repo", StringComparison.Ordinal)
                 ? path["/repos/owner/repo".Length..] : path);
+            if (request.Method == HttpMethod.Get && ForbiddenSuffix is { } suffix &&
+                path.EndsWith(suffix, StringComparison.Ordinal))
+                return new(HttpStatusCode.Forbidden) { Content = new StringContent("private API response") };
             object value;
             if (request.Method == HttpMethod.Post)
             {
