@@ -100,6 +100,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 if (string.IsNullOrWhiteSpace(reactivate.Reason)) throw new InvalidOperationException("Reactivation requires an audit reason.");
                 if (!issue.ReactivationRequired || issue.Phase is not (Phase.BLOCKED or Phase.HUMAN_REVIEW or Phase.CLOSED))
                     throw new InvalidOperationException("Only a held or terminal issue can be explicitly reactivated.");
+                if (RequiredStatusPolicy.HasOutstandingIssueLinkRevocation(state, issue))
+                    throw new InvalidOperationException("Issue-link status revocation must be confirmed before reactivation.");
                 if (issue.ContinuationHoldBarrier is not null || HasUnfinishedWork(state, issue))
                     throw new InvalidOperationException("An operation or continuation hold publication is still active or uncertain.");
                 var previousGeneration = issue.Generation;
@@ -786,10 +788,48 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         ValidateState(input);
         var state = StateJson.Clone(input);
         var issue = state.Issues[issueNumber];
-        if (issue.Number == excludedIssueNumber || issue.PullRequest is not > 0 || !IsSha(issue.HeadSha) ||
-            RequiredStatusPolicy.Desired(state, issue).State != "error")
+        var link = state.Outbox.Values.Where(effect => effect.Kind == EffectKind.LinkIssue &&
+                effect.IssueNumber == issue.Number &&
+                (effect.IssueLinkRevocationRequired ?? effect.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown) &&
+                effect.IssueLink is { Version: 1 } payload && payload.PullRequest == issue.PullRequest &&
+                IsSha(effect.Sha))
+            .OrderBy(effect => effect.Generation).ThenBy(effect => effect.Sha, StringComparer.Ordinal)
+            .ThenBy(effect => effect.CreatedAt).FirstOrDefault();
+        if (issue.Number == excludedIssueNumber || issue.PullRequest is not > 0)
             throw new InvalidOperationException("Status-only recovery requires a held mapped head and a non-success status.");
-        PlanRequiredStatus(state, issue, now);
+        if (link is null)
+        {
+            if (!IsSha(issue.HeadSha) || RequiredStatusPolicy.Desired(state, issue).State != "error")
+                throw new InvalidOperationException("Status-only recovery requires a held mapped head and a non-success status.");
+            PlanRequiredStatus(state, issue, now);
+        }
+        else
+        {
+            if (issue.RequiredStatusIntentId is { } previousId &&
+                state.Outbox.TryGetValue(previousId, out var previous) &&
+                previous.RequiredStatus?.State == "error" &&
+                previous.Generation == link.Generation && previous.Sha == link.Sha &&
+                RequiredStatusPolicy.MatchesIssueLinkRevocation(state, issue, previous)) return state;
+            foreach (var stale in state.Outbox.Values.Where(effect => effect.IssueNumber == issue.Number &&
+                         effect.Kind == EffectKind.PublishRequiredStatus && effect.Status == DeliveryStatus.Pending))
+                stale.Status = DeliveryStatus.Cancelled;
+            EnsureCapacity(state);
+            var intent = new EffectIntent
+            {
+                Id = $"required-status:{issue.Number}:{link.Generation}:{++issue.RequiredStatusSequence}",
+                Kind = EffectKind.PublishRequiredStatus,
+                IssueNumber = issue.Number,
+                Generation = link.Generation,
+                TaskId = link.TaskId,
+                Round = link.Round,
+                Sha = link.Sha,
+                CreatedAt = now
+            };
+            intent.RequiredStatus = RequiredStatusPolicy.ForIssueLinkRevocation(state, issue, intent.Id);
+            intent.Digest = StateJson.Digest(System.Text.Json.JsonSerializer.Serialize(intent, StateJson.Options));
+            state.Outbox.Add(intent.Id, intent);
+            issue.RequiredStatusIntentId = intent.Id;
+        }
         if (StateJson.Serialize(state) != StateJson.Serialize(input))
             Touch(state, issue, input.LastEventId);
         return state;
@@ -974,7 +1014,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         var intent = state.Outbox[id];
         var issue = state.Issues[intent.IssueNumber];
         if (intent.Kind != EffectKind.PublishRequiredStatus || intent.Status != DeliveryStatus.Executing ||
-            intent.Generation != issue.Generation || boundary.ActorId <= 0 ||
+            intent.Generation != issue.Generation && !RequiredStatusPolicy.Matches(state, issue, intent) ||
+            boundary.ActorId <= 0 ||
             string.IsNullOrWhiteSpace(boundary.ActorLogin) || string.IsNullOrWhiteSpace(boundary.ActorNodeId) ||
             boundary.ActorType is not ("User" or "Bot") || boundary.PreparedAt == default ||
             boundary.ExistingStatusIds.Count > MaximumIndexEntries ||

@@ -869,6 +869,91 @@ public sealed class GitHubRequiredStatusTests
         Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
     }
 
+    [Fact]
+    public void LinkRevocationUsesRecordedGenerationAndShaAndBlocksReactivationUntilConfirmed()
+    {
+        var reducer = new OrchestrationReducer(new Allow(), requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var link = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        var success = Intent(state);
+        state = reducer.MarkExecuting(state, success.Id, Now);
+        state = reducer.RecordOutcome(state, success.Id, new(DeliveryStatus.Succeeded, "success-receipt"), Now);
+        state = reducer.MarkExecuting(state, link.Id, Now);
+        state = reducer.RecordOutcome(state, link.Id, new(DeliveryStatus.Failed), Now);
+
+        var reactivate = new OrchestrationEvent("reactivate", "owner/repo", 7, 1, 1,
+            new("operator", ActorKind.Human), Now, new Reactivate("Retry after inspecting the failed link."));
+        Assert.Throws<InvalidOperationException>(() => reducer.Apply(state, reactivate));
+
+        state.Issues[7].Generation = 2;
+        state.Issues[7].HeadSha = new('c', 40);
+        Assert.True(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+        state = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        var revocation = Intent(state);
+        Assert.Equal(link.Generation, revocation.Generation);
+        Assert.Equal(link.Sha, revocation.Sha);
+        Assert.Equal("error", revocation.RequiredStatus!.State);
+        Assert.True(RequiredStatusPolicy.Matches(state, state.Issues[7], revocation));
+
+        state = reducer.MarkExecuting(state, revocation.Id, Now);
+        state = reducer.RecordOutcome(state, revocation.Id, new(DeliveryStatus.Unknown), Now);
+        Assert.True(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+        Assert.Throws<InvalidOperationException>(() => reducer.Apply(state, reactivate with
+        {
+            Id = "reactivate-after-unknown-status",
+            IssueGeneration = 2
+        }));
+        state = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        Assert.Equal(revocation.Id, Intent(state).Id);
+        state = reducer.RecordOutcome(state, revocation.Id, new(DeliveryStatus.Succeeded, "error-receipt"), Now);
+
+        Assert.False(state.Outbox[link.Id].IssueLinkRevocationRequired);
+        Assert.False(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+        Assert.Equal(2, state.Issues[7].Generation);
+    }
+
+    [Fact]
+    public async Task LinkRevocationPublishesToOriginalShaAfterHeadAndGenerationChange()
+    {
+        var reducer = new OrchestrationReducer(new Allow(), requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var link = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        var success = Intent(state);
+        state = reducer.MarkExecuting(state, success.Id, Now);
+        state = reducer.RecordOutcome(state, success.Id, new(DeliveryStatus.Succeeded, "success-receipt"), Now);
+        state = reducer.MarkExecuting(state, link.Id, Now);
+        state = reducer.RecordOutcome(state, link.Id, new(DeliveryStatus.Failed), Now);
+        state.Issues[7].Generation = 2;
+        state.Issues[7].HeadSha = new('c', 40);
+        var laterHead = Live();
+        laterHead.Issues[7].HeadSha = state.Issues[7].HeadSha;
+        state = reducer.Reconcile(state, laterHead).State;
+        var currentError = Intent(state);
+        Assert.Equal(2, currentError.Generation);
+        Assert.Equal(state.Issues[7].HeadSha, currentError.Sha);
+        Assert.Equal("error", currentError.RequiredStatus!.State);
+        state = reducer.MarkExecuting(state, currentError.Id, Now);
+        state = reducer.RecordOutcome(state, currentError.Id, new(DeliveryStatus.Succeeded, "later-error-receipt"), Now);
+        Assert.True(state.Outbox[link.Id].IssueLinkRevocationRequired);
+
+        state = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        var revocation = Intent(state);
+        Assert.NotEqual(currentError.Id, revocation.Id);
+        state = reducer.MarkExecuting(state, revocation.Id, Now);
+
+        var store = new Store(state);
+        using var api = new Api();
+        using var client = api.Client();
+        var outcome = await Adapter(client, store).ExecuteAsync(Intent(store.Value), default);
+        state = reducer.RecordOutcome(store.Value, revocation.Id, outcome, Now);
+
+        Assert.Equal(DeliveryStatus.Succeeded, outcome.Status);
+        Assert.Equal(1, api.Posts);
+        Assert.Equal(Sha, state.Outbox[revocation.Id].Sha);
+        Assert.False(state.Outbox[link.Id].IssueLinkRevocationRequired);
+        Assert.False(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+    }
+
     [Theory]
     [InlineData("unmerged")]
     [InlineData("unknown")]

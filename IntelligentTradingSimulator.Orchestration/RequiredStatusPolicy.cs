@@ -6,13 +6,12 @@ public static class RequiredStatusPolicy
     public const string Context = "Agent managed CI";
 
     internal static bool RequiresIssueLinkRevocation(RepositoryState state, IssueState issue) =>
-        issue.PullRequest is > 0 &&
+        issue.PullRequest is > 0 && HasOutstandingIssueLinkRevocation(state, issue);
+
+    internal static bool HasOutstandingIssueLinkRevocation(RepositoryState state, IssueState issue) =>
         state.Outbox.Values.Any(effect => effect.Kind == EffectKind.LinkIssue &&
-            effect.IssueNumber == issue.Number && effect.Generation == issue.Generation &&
-            (effect.IssueLinkRevocationRequired ?? effect.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown)) &&
-        Desired(state, issue).State == "error" &&
-        (issue.RequiredStatusIntentId is null || !state.Outbox.TryGetValue(issue.RequiredStatusIntentId, out var status) ||
-         status.Status != DeliveryStatus.Succeeded || !Matches(state, issue, status));
+            effect.IssueNumber == issue.Number &&
+            (effect.IssueLinkRevocationRequired ?? effect.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown));
 
     public static RequiredStatusPayload Desired(RepositoryState state, IssueState issue)
     {
@@ -118,9 +117,23 @@ public static class RequiredStatusPolicy
 
     public static bool Matches(RepositoryState state, IssueState issue, EffectIntent intent) =>
         intent.Kind == EffectKind.PublishRequiredStatus && issue.RequiredStatusIntentId == intent.Id &&
-        issue.Generation == intent.Generation && issue.HeadSha == intent.Sha &&
-        issue.ActiveTaskId == intent.TaskId && issue.Round == intent.Round &&
-        intent.RequiredStatus == ForIntent(state, issue, intent.Id);
+        (issue.Generation == intent.Generation && issue.HeadSha == intent.Sha &&
+         issue.ActiveTaskId == intent.TaskId && issue.Round == intent.Round &&
+         intent.RequiredStatus == ForIntent(state, issue, intent.Id) ||
+         MatchesIssueLinkRevocation(state, issue, intent));
+
+    internal static RequiredStatusPayload ForIssueLinkRevocation(RepositoryState state, IssueState issue, string id) =>
+        new(Context, "error", "Issue link requires revocation on its recorded tested head.",
+            $"https://github.com/{state.Repository}/pull/{issue.PullRequest}#agent-status-{StateJson.Digest(id).ToLowerInvariant()}",
+            null, null);
+
+    internal static bool MatchesIssueLinkRevocation(RepositoryState state, IssueState issue, EffectIntent intent) =>
+        intent.RequiredStatus?.State == "error" &&
+        intent.RequiredStatus == ForIssueLinkRevocation(state, issue, intent.Id) &&
+        state.Outbox.Values.Any(link => link.Kind == EffectKind.LinkIssue &&
+            link.IssueNumber == issue.Number && link.Generation == intent.Generation && link.Sha == intent.Sha &&
+            link.IssueLink is { Version: 1 } payload && payload.PullRequest == issue.PullRequest &&
+            (link.IssueLinkRevocationRequired ?? link.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown));
 
     public static RequiredStatusPayload ForIntent(RepositoryState state, IssueState issue, string id)
     {
