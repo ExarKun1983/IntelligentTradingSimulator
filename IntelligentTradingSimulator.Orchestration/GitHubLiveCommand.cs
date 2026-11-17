@@ -110,7 +110,7 @@ public static class GitHubLiveCommand
             return await GitHubPocCommand.RunAsync(args, output, error);
         if (args.Contains("--github-isolated-status-test", StringComparer.Ordinal))
             return await GitHubIsolatedStatusTestCommand.RunAsync(args, output, error);
-        var diagnostics = new GitHubLiveDiagnostics();
+        var diagnostics = new GitHubLiveDiagnostics(error);
         try
         {
             if (!args.Contains("--execute", StringComparer.Ordinal) || args.Contains("--dry-run", StringComparer.Ordinal) ||

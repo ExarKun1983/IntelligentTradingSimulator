@@ -106,10 +106,12 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             EffectOutcome outcome;
             try
             {
+                diagnostics?.Mark(GitHubLiveStage.EffectExecution);
                 outcome = await statuses.ExecuteAsync(executing.Outbox[intent.Id], token);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
+                diagnostics?.ReportEffectFailure(intent.Kind, EffectFailureCode.ExecutionException, exception);
                 outcome = new(DeliveryStatus.Unknown, FailureCode: EffectFailureCode.ExecutionException);
             }
             return await PublishOutcomeAsync(store, intent.Id, intent.Digest, outcome, now, 8, token);
@@ -198,6 +200,7 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
+                diagnostics?.ReportEffectFailure(pending.Kind, EffectFailureCode.ExecutionException, exception);
                 outcome = new(DeliveryStatus.Unknown, FailureCode: EffectFailureCode.ExecutionException);
             }
             // Once execution started, a lost result must never cause another Execute call.
@@ -227,10 +230,12 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
         EffectOutcome recovered;
         try
         {
+            diagnostics?.Mark(GitHubLiveStage.EffectRecovery);
             recovered = await effects.ReconcileAsync(intent, cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            diagnostics?.ReportEffectFailure(intent.Kind, EffectFailureCode.RecoveryException, exception);
             recovered = new(DeliveryStatus.Unknown, FailureCode: EffectFailureCode.RecoveryException);
         }
         return await PublishOutcomeAsync(store, intent.Id, intent.Digest, recovered,

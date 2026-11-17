@@ -2653,6 +2653,14 @@ action and lease release both fail, the diagnostic retains the action failure;
 the release failure is signaled separately and preserved in the exception, and
 the lease may remain held.
 
+Handled effect execution and recovery exceptions emit an `EffectDiagnostic`
+immediately to standard error, even when the invocation subsequently returns
+`Blocked` without throwing. It includes only the stage, effect kind, failure
+code, allowlisted exception category and optional HTTP status. Required-status
+stages distinguish preflight, lookup, boundary persistence, POST and confirmation.
+These records do not change delivery outcomes, authorize retries, or clear holds.
+A green Actions job with `Result: Blocked` is not a successful lifecycle.
+
 For `pull_request_target`, GitHub's run `head_sha` identifies the PR head, not
 the trusted workflow definition. The wake verifier requires the runner-provided
 `GITHUB_WORKFLOW_REF` to name this workflow on `master` and
