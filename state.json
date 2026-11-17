@@ -1,10 +1,10 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 762,
+  "Version": 763,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
-  "LastEventId": "ci-observed:1277929203:1:RunCi:312:1:task:312:1:1:1:1",
+  "LastEventId": "copilot-review-pending:1277929203:1:RequestReview:312:1:task:312:1:1:1:1",
   "AdmittedIssue": 312,
   "WorkerLease": {
     "Owner": "cb044a82ee9d4ae7a8e6b876871eadba",
@@ -1377,8 +1377,8 @@
       "SchemaVersion": 1,
       "Number": 312,
       "Generation": 1,
-      "Version": 45,
-      "LastEventId": "ci-observed:1277929203:1:RunCi:312:1:task:312:1:1:1:1",
+      "Version": 46,
+      "LastEventId": "copilot-review-pending:1277929203:1:RequestReview:312:1:task:312:1:1:1:1",
       "Phase": "REVIEW_PENDING",
       "Ready": false,
       "ActiveAuthorized": true,
@@ -1457,7 +1457,7 @@
         "Round": 1,
         "Sha": "7ba0956d391ffe91e23bbc1c7e0d0df26d9de0ce",
         "Classification": null,
-        "LifecycleState": "Requested",
+        "LifecycleState": "Pending",
         "CopilotRequestNodeId": "RR_kwDOTCum887xhS2D",
         "ReviewRequestedAt": "2026-11-17T20:51:36.7002826+00:00",
         "ReviewDeadlineAt": "2026-11-17T21:06:36.7002826+00:00",
@@ -2112,6 +2112,14 @@
       "ReceivedAt": "2026-11-17T20:50:32+00:00",
       "CompletedAt": "2026-11-17T20:50:32+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022ci-observed:1277929203:1:RunCi:312:1:task:312:1:1:1:1\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:312,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022github-actions\u0022,\u0022Kind\u0022:2,\u0022Id\u0022:null,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-17T20:50:32\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022ci-result\u0022,\u0022RunId\u0022:\u002244173335892\u0022,\u0022TaskId\u0022:\u0022task:312:1:1:1\u0022,\u0022Round\u0022:1,\u0022PullRequest\u0022:313,\u0022Sha\u0022:\u00227ba0956d391ffe91e23bbc1c7e0d0df26d9de0ce\u0022,\u0022Green\u0022:true,\u0022Blockers\u0022:[]}}"
+    },
+    "copilot-review-pending:1277929203:1:RequestReview:312:1:task:312:1:1:1:1": {
+      "Id": "copilot-review-pending:1277929203:1:RequestReview:312:1:task:312:1:1:1:1",
+      "Digest": "E5767B58629D58D9582BD6885BBFE624C1821407D71391A12756181E094E6315",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-17T20:51:49.8374141+00:00",
+      "CompletedAt": "2026-11-17T20:51:49.8374141+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022copilot-review-pending:1277929203:1:RequestReview:312:1:task:312:1:1:1:1\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:312,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022copilot-pull-request-reviewer[bot]\u0022,\u0022Kind\u0022:3,\u0022Id\u0022:175728472,\u0022NodeId\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022Type\u0022:\u0022Bot\u0022},\u0022OccurredAt\u0022:\u00222026-11-17T20:51:49.8374141\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022review-pending\u0022,\u0022IntentId\u0022:\u0022RequestReview:312:1:task:312:1:1:1:1\u0022,\u0022PullRequest\u0022:313,\u0022Sha\u0022:\u00227ba0956d391ffe91e23bbc1c7e0d0df26d9de0ce\u0022}}"
     }
   },
   "Outbox": {
