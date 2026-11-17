@@ -119,6 +119,9 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 issue.ClosurePending = false;
                 issue.CurrentHandoffId = null;
                 issue.TerminalOutcome = TerminalOutcome.None;
+                var readinessLabels = ProjectLabels(issue);
+                AddIntent(state, issue, EffectKind.ProjectLabels, message.OccurredAt,
+                    idOverride: LabelProjectionId(issue, readinessLabels), labels: readinessLabels);
                 break;
             case TaskStopped stopped:
                 if (issue.ActiveTaskId != stopped.TaskId || !issue.Tasks.TryGetValue(stopped.TaskId, out var stoppedTask) ||
@@ -496,7 +499,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         {
             if (issue.Number == excludedIssueNumber) continue;
             if (!observation.Issues.TryGetValue(issue.Number, out var live)) continue;
-            if (!live.Ready && (issue.Ready || RequiresInitialReadiness(issue)))
+            if (!live.Ready && (issue.Ready || RequiresInitialReadiness(issue)) &&
+                !AwaitingReactivationReadinessProjection(state, issue))
             {
                 issue.Ready = false;
                 issue.ReadyAt = observation.ObservedAt;
@@ -680,7 +684,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             if (!labels.SequenceEqual(observedLabels))
             {
                 var digest = StateJson.Digest(string.Join("\n", labels));
-                var id = $"labels:{issue.Number}:{issue.Generation}:{digest}";
+                var id = LabelProjectionId(issue, labels);
                 if (!state.Outbox.ContainsKey(id))
                 {
                     AddIntent(state, issue, EffectKind.ProjectLabels, observation.ObservedAt, idOverride: id, labels: labels);
@@ -932,9 +936,11 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         var issue = state.Issues[effect.IssueNumber];
         if (outcome is null && effect.Kind != EffectKind.PublishRequiredStatus)
         {
-            if (state.AdmittedIssue is { } owner && owner != issue.Number && !IsCurrentSettledProjection(state, issue, effect))
+            var independentProjection = IsCurrentIndependentProjection(state, issue, effect);
+            if (state.AdmittedIssue is { } owner && owner != issue.Number && !independentProjection)
                 throw new InvalidOperationException("Another issue owns the repository admission.");
-            state.AdmittedIssue ??= issue.Number;
+            if (issue.Phase != Phase.READY || !independentProjection)
+                state.AdmittedIssue ??= issue.Number;
         }
         change(effect);
         if (outcome is not null)
@@ -984,12 +990,22 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         return state;
     }
 
-    internal static bool IsCurrentSettledProjection(RepositoryState state, IssueState issue, EffectIntent effect) =>
-        issue.Phase is Phase.HUMAN_REVIEW or Phase.BLOCKED or Phase.CLOSED &&
+    internal static bool IsCurrentIndependentProjection(RepositoryState state, IssueState issue, EffectIntent effect) =>
+        issue.Phase is Phase.READY or Phase.HUMAN_REVIEW or Phase.BLOCKED or Phase.CLOSED &&
         effect.Generation == issue.Generation &&
         (effect.Kind == EffectKind.ProjectLabels && effect.Labels.SequenceEqual(ProjectLabels(issue)) ||
-         effect.Kind == EffectKind.ProjectStatus &&
+         issue.Phase != Phase.READY && effect.Kind == EffectKind.ProjectStatus &&
          effect.StatusBody == StatusProjection.Render(issue, state.IsolatedTestManifestDigest is not null));
+
+    private static bool AwaitingReactivationReadinessProjection(RepositoryState state, IssueState issue) =>
+        issue.Phase == Phase.READY && issue.Ready &&
+        issue.Reactivations.Values.Any(record => record.Generation == issue.Generation) &&
+        state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number && effect.Generation == issue.Generation &&
+            effect.Kind == EffectKind.ProjectLabels && effect.Status is DeliveryStatus.Pending or DeliveryStatus.Executing &&
+            effect.Labels.SequenceEqual(ProjectLabels(issue)));
+
+    private static string LabelProjectionId(IssueState issue, IReadOnlyList<string> labels) =>
+        $"labels:{issue.Number}:{issue.Generation}:{StateJson.Digest(string.Join("\n", labels))}";
 
     private static bool ValidReviewProgressActor(OrchestrationEvent message, IssueState issue) =>
         message.Actor.Kind == ActorKind.ReviewService && message.Actor.Type == "Bot" &&

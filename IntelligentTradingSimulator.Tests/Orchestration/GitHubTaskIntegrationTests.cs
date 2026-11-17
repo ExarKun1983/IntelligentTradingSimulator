@@ -608,6 +608,65 @@ public sealed class GitHubTaskIntegrationTests
         Assert.Single(fixture.Writes, write => write.Path.StartsWith("/agents/"));
     }
 
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 0)]
+    [InlineData(false, 1)]
+    [InlineData(true, 2)]
+    public async Task ReactivationRestoresHeldLabelsBeforeLaunchingExactlyOneNewTask(bool mapped, int interruptAfter)
+    {
+        var fixture = new ApiFixture { RunEvent = "workflow_dispatch" };
+        fixture.Labels.Clear();
+        fixture.Labels.AddRange(["agent:blocked", "human:action-required"]);
+        var state = RepositoryState.Create("owner/repo");
+        state.Issues[7] = new IssueState
+        {
+            Number = 7, Phase = Phase.BLOCKED, ReactivationRequired = true,
+            PullRequest = mapped ? 17 : null, HeadSha = mapped ? Head : null
+        };
+        var store = new Store(state);
+        using var client = fixture.Client();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        var notification = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            sender = new { id = 55, login = "maintainer", type = "User" },
+            inputs = new { issue = "7", operation = "reactivate", reason = "Verified recovery" }
+        });
+
+        if (interruptAfter > 0)
+        {
+            var yielded = await host.ReconcileAsync(notification, "workflow_dispatch", "44", 1, 1, Now,
+                [], 99, "master", 55, ApprovedFixture, Bounded with { MaximumIterations = interruptAfter }, new FinalHead());
+            Assert.Equal(WorkerStopReason.IterationLimit, yielded.Reason);
+            Assert.Equal(Phase.READY, store.State.Issues[7].Phase);
+            Assert.True(store.State.Issues[7].Ready);
+            Assert.Null(store.State.AdmittedIssue);
+            Assert.Empty(store.State.Issues[7].Tasks);
+        }
+        await host.ReconcileAsync(notification, "workflow_dispatch", "44", 1, 1, Now,
+            [], 99, "master", 55, ApprovedFixture, Bounded, new FinalHead());
+
+        var issue = store.State.Issues[7];
+        Assert.Equal(2, issue.Generation);
+        Assert.Equal(Phase.CODING, issue.Phase);
+        Assert.Equal(7, store.State.AdmittedIssue);
+        var launch = Assert.Single(fixture.Writes, write => write.Path.StartsWith("/agents/"));
+        var readiness = fixture.Writes.FindIndex(write => write.Path.EndsWith("/labels") &&
+            write.Body.Contains("agent:ready"));
+        Assert.True(readiness >= 0);
+        Assert.True(readiness < fixture.Writes.IndexOf(launch));
+        Assert.DoesNotContain("agent:blocked", fixture.Labels);
+        Assert.DoesNotContain("human:action-required", fixture.Labels);
+
+        await host.ReconcileAsync(notification, "workflow_dispatch", "44", 1, 1, Now,
+            [], 99, "master", 55, ApprovedFixture, Bounded, new FinalHead());
+        Assert.Equal(2, store.State.Issues[7].Generation);
+        Assert.Single(store.State.Issues[7].Tasks);
+        Assert.Single(fixture.Writes, write => write.Path.StartsWith("/agents/"));
+        Assert.Null(store.State.Issues[7].Ci);
+    }
+
     [Fact]
     public async Task HostedAutomaticContinuationStopsAfterThreeResumptionsWithoutAnotherTask()
     {
@@ -970,6 +1029,7 @@ public sealed class GitHubTaskIntegrationTests
         public bool NodeIdAsString { get; init; }
         public string ArtifactGlobalId { get; init; } = "PR_node";
         private List<string> labels = ["agent:ready"];
+        public List<string> Labels => labels;
         public string RemoteState { get; set; } = "in_progress";
         public string HeadSha { get; set; } = Head;
         public string BaseBranch { get; init; } = "master";
