@@ -72,6 +72,7 @@ public sealed class GitHubPreMergeCheck(GitHubRepositoryApi api, IStateStore sto
             "Verify the latest Agent managed CI status on that SHA is success from the trusted publisher.",
             "Inspect ambiguous ownership, reused SHAs and uncertain or late status writes outside the canonical snapshot.",
             "Inspect current review threads, findings and human feedback; the review API does not prove request-to-round correlation.",
+            "Verify the intended closing Issue in Development and that the PR still targets the default branch.",
             "Recheck the live PR and canonical state immediately before the separate human merge decision."
         ]);
     }

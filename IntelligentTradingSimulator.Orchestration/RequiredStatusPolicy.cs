@@ -8,13 +8,18 @@ public static class RequiredStatusPolicy
     public static RequiredStatusPayload Desired(RepositoryState state, IssueState issue)
     {
         var ci = issue.Ci;
-        var finalApprovalHold = issue.Phase == Phase.HUMAN_REVIEW &&
-            issue.HoldReason == "Awaiting human approval." &&
-            issue.Review is { Classification: ReviewClassification.Accepted } review &&
+        var acceptedReview = issue.Review is { Classification: ReviewClassification.Accepted } review &&
             review.TaskId == issue.ActiveTaskId && review.Sha == issue.HeadSha && review.Round == issue.Round &&
             review.Findings.All(finding => review.Responses.Any(response => response.FindingId == finding.Id &&
                 response.Resolved && !string.IsNullOrWhiteSpace(response.Evidence)));
-        var eligiblePhase = finalApprovalHold || issue.Phase == Phase.REVIEW_PENDING &&
+        var finalApprovalHold = issue.Phase == Phase.HUMAN_REVIEW &&
+            issue.HoldReason == "Awaiting human approval." && acceptedReview;
+        var merged = IsRecordedMerge(issue) && acceptedReview &&
+            issue.Review?.LifecycleState == ReviewLifecycleState.Completed &&
+            !state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number &&
+                effect.Kind != EffectKind.PublishRequiredStatus &&
+                effect.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown);
+        var eligiblePhase = merged || finalApprovalHold || issue.Phase == Phase.REVIEW_PENDING &&
             issue.ActiveAuthorized && !issue.ReactivationRequired && issue.HoldReason is null;
         var verifiedCi = !issue.Paused && !issue.ClosurePending &&
             issue.PendingFeedbackEventIds.Count == 0 && ci is { Green: true, TerminalStopReason: null } &&
@@ -43,12 +48,21 @@ public static class RequiredStatusPolicy
         var target = ci?.RunId is { } id && long.TryParse(id, out var numeric) && numeric > 0
             ? $"https://github.com/{state.Repository}/actions/runs/{id}"
             : $"https://github.com/{state.Repository}/pull/{issue.PullRequest}";
-        return new(Context, result, green ? "Exact tested head CI passed; human approval required." :
+        return new(Context, result, green && merged ? "Merged; exact tested head CI and accepted review verified." :
+            green ? "Exact tested head CI passed; human approval required." :
             awaitingClassification ? "Exact tested head CI passed; review classification required." :
             stopped ? "Automation stopped or feedback pending; not eligible." :
             result == "failure" ? "Exact-head managed CI failed; repair required." :
             "Tracked coding or exact-head CI is not yet complete.", target, ci?.IntentId, ci?.RunId);
     }
+
+    internal static bool IsRecordedMerge(IssueState issue) =>
+        issue.Phase == Phase.CLOSED && issue.TerminalOutcome == TerminalOutcome.Merged &&
+        issue.HoldReason == "Closed." && !issue.ActiveAuthorized &&
+        issue.PullRequest is > 0 && issue.HeadSha is not null &&
+        issue.TerminalHistory.LastOrDefault() is { Outcome: TerminalOutcome.Merged } terminal &&
+        terminal.Generation == issue.Generation && terminal.PullRequest == issue.PullRequest &&
+        terminal.Sha == issue.HeadSha;
 
     public static bool Matches(RepositoryState state, IssueState issue, EffectIntent intent) =>
         intent.Kind == EffectKind.PublishRequiredStatus && issue.RequiredStatusIntentId == intent.Id &&

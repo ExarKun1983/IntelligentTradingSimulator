@@ -9,7 +9,7 @@ public enum Phase { READY, CODING, CI_PENDING, REVIEW_PENDING, FIX_PENDING, HUMA
 public enum TaskKind { Coding, CiRepair, ReviewRepair, FeedbackRepair }
 public enum TaskLaunchSource { PullRequestHead, UnmappedIssue }
 public enum TaskStatus { Intended, Executing, Running, AwaitingHeadConfirmation, Completed, Failed, Unknown }
-public enum EffectKind { LaunchTask, RunCi, RequestReview, ProjectLabels, ProjectStatus, PublishRequiredStatus }
+public enum EffectKind { LaunchTask, RunCi, RequestReview, ProjectLabels, ProjectStatus, PublishRequiredStatus, LinkIssue }
 public enum DeliveryStatus { Pending, Executing, Succeeded, Failed, Unknown, Cancelled }
 public enum ReviewClassification { Accepted, Blocking, NeedsHuman }
 public enum ReviewLifecycleState { NotRequested, Requesting, RequestUnknown, Requested, Pending, Completed, Failed, TimedOut }

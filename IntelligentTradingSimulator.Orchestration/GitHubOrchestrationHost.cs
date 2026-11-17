@@ -239,7 +239,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         var statuses = statusPublisher is null ? null : new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher,
             statusApproval, clock, liveDiagnostics);
         IVerifiedAgentEffectAdapter effects = new ProductionEffects(tasks, reviews, ci, statuses,
-            new GitHubProjectionAdapter(api, projectionActorId, true));
+            new GitHubProjectionAdapter(api, projectionActorId, true), new GitHubIssueLinkAdapter(api, stateStore, true));
         if (beforeEffect is not null) effects = new GuardedEffects(effects, beforeEffect);
         var reducer = new OrchestrationReducer(authorization, statuses is not null &&
             statusApproval?.AllowsPublication == true, excludedIssueNumber, reviewRequestsEnabled: !isolatedStatusTest,
@@ -543,7 +543,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
     }
 
     private sealed class ProductionEffects(GitHubTaskAdapter tasks, GitHubReviewAdapter reviews,
-        GitHubCiAdapter? ci, GitHubRequiredStatusAdapter? statuses, GitHubProjectionAdapter projections) : IVerifiedAgentEffectAdapter
+        GitHubCiAdapter? ci, GitHubRequiredStatusAdapter? statuses, GitHubProjectionAdapter projections,
+        GitHubIssueLinkAdapter links) : IVerifiedAgentEffectAdapter
     {
         public bool AgentEffectsAuthorized => tasks.AgentEffectsAuthorized;
         public Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken token) => intent.Kind switch
@@ -552,6 +553,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             EffectKind.RequestReview => reviews.ExecuteAsync(intent, token),
             EffectKind.RunCi when ci is not null => ci.ExecuteAsync(intent, token),
             EffectKind.PublishRequiredStatus when statuses is not null => statuses.ExecuteAsync(intent, token),
+            EffectKind.LinkIssue => links.ExecuteAsync(intent, token),
             EffectKind.ProjectLabels or EffectKind.ProjectStatus => projections.ExecuteAsync(intent, token),
             // Missing adapters/capabilities must never issue speculative effects.
             _ => Task.FromResult(new EffectOutcome(DeliveryStatus.Unknown))
@@ -562,6 +564,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             EffectKind.RequestReview => reviews.ReconcileAsync(intent, token),
             EffectKind.RunCi when ci is not null => ci.ReconcileAsync(intent, token),
             EffectKind.PublishRequiredStatus when statuses is not null => statuses.ReconcileAsync(intent, token),
+            EffectKind.LinkIssue => links.ReconcileAsync(intent, token),
             EffectKind.ProjectLabels or EffectKind.ProjectStatus => projections.ReconcileAsync(intent, token),
             _ => Task.FromResult(new EffectOutcome(DeliveryStatus.Unknown))
         };

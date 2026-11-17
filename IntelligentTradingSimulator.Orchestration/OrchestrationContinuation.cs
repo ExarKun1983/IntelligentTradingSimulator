@@ -24,7 +24,9 @@ public static class OrchestrationContinuation
         var requiredStatusConfirmed = !requiredStatusEnabled || issue.PullRequest is not > 0 ||
             issue.HeadSha is not { Length: 40 or 64 } ||
             issue.RequiredStatusIntentId is { } id && state.Outbox.TryGetValue(id, out var status) &&
-            status.Status == DeliveryStatus.Succeeded && status.RequiredStatus?.State == "error" &&
+            status.Status == DeliveryStatus.Succeeded &&
+            status.RequiredStatus?.State == (issue.Phase == Phase.CLOSED
+                ? RequiredStatusPolicy.Desired(state, issue).State : "error") &&
             RequiredStatusPolicy.Matches(state, issue, status);
         return labelsConfirmed && statusConfirmed && requiredStatusConfirmed;
     }

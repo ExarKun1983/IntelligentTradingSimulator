@@ -2202,16 +2202,40 @@ human review. Replaying the same command does not create another task. This is
 an explicit manual dispatch, not automatic handling of GitHub's "Request changes"
 review button. Final approval/merge remains a human action in GitHub.
 
-For a mapped `HUMAN_REVIEW` handoff, the status comment suggests verifying the
-live PR/Issue mapping and existing links before a human adds `Closes #<issue>`
-to the PR description or links the Issue through GitHub's Development sidebar.
-Closing keywords in a PR description are effective only when the PR targets
-the repository's default branch. The suggestion is not proof of a link or
-authority to close an Issue. The orchestrator does not edit the PR body: GitHub
-does not document conditional PATCH support for that endpoint, so a read-then-
-write cannot reliably protect a concurrent human edit. See GitHub's
+For a settled, accepted `HUMAN_REVIEW` handoff with verified exact-head CI, a
+durable `LinkIssue` projection adds the closing relationship through GraphQL
+`addCloseIssueReferences`. It verifies the unique canonical PR/Issue mapping,
+live open Issue and PR, same-repository head and base, exact head SHA and the
+repository's current default target branch. An existing correct link is a no-op;
+other closing Issues, incomplete pagination or GraphQL errors stop the projection
+for reconciliation without changing those links. The isolated status-test profile
+does not plan this effect. No PR description is overwritten, no Issue is directly
+closed and no PR is approved or merged. The separate human merge closes the linked
+Issue through GitHub. Interrupted mutations remain lookup-only, never retried on
+an absent read result. Linking and merge are not transactional: verify the link in
+Development before the manual merge, especially if a concurrent edit or merge
+interrupts projection. This does not retrofit already-merged PRs or close old
+unlinked Issues.
+
+The handoff comment describes the separate projection, not confirmed delivery.
+An authorized human can reconcile a missing link by inspecting the live mapping
+and adding `Closes #<issue>` or using Development. The orchestrator does not edit
+the PR body: GitHub does not document conditional PATCH support for that endpoint,
+so a read-then-write cannot reliably protect a concurrent human edit. See GitHub's
 [conditional request guidance](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#use-conditional-requests)
 and [linking documentation](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue).
+
+After a confirmed merge, `Agent managed CI` reports terminal success only when
+the latest terminal record matches the current generation, PR and head, the
+completed task and exact-head CI evidence still match, the review is accepted
+with all findings resolved, and no pause, pending feedback or uncertain
+non-status effect remains. Publication rechecks that the live PR is closed and
+actually merged, and revalidates the trusted CI run. Its description reports a
+verified merge rather than asking for human approval again. Unmerged/unknown
+closures and missing or contradictory evidence remain errors. The terminal
+projection barrier accepts this verified merged result without reopening work.
+This status is retrospective evidence, not permission to merge or a replacement
+for branch protection; the manual merge gate is unchanged.
 
 Duplicate ready notifications do not launch another task. Withdrawal prevents
 admission of queued, unstarted work. Withdrawal during active work must stop new

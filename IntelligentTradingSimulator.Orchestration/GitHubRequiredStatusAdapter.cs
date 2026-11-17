@@ -135,7 +135,11 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
             throw new InvalidDataException("Required-status live head/repository mapping changed.");
         if (intent.RequiredStatus!.State == "success")
         {
-            if (liveIssue.RootElement.GetProperty("state").GetString() != "open" || pr.GetProperty("state").GetString() != "open")
+            var merged = RequiredStatusPolicy.IsRecordedMerge(issue);
+            if (merged
+                ? pr.GetProperty("state").GetString() != "closed" || !pr.GetProperty("merged").GetBoolean()
+                : liveIssue.RootElement.GetProperty("state").GetString() != "open" ||
+                  pr.GetProperty("state").GetString() != "open")
                 throw new InvalidDataException("Closed work cannot publish success.");
             await VerifyGreenRunAsync(api, issue, token);
         }

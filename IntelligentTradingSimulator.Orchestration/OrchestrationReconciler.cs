@@ -52,7 +52,7 @@ public sealed record ReconcileOptions(
     internal bool PrioritizeAdmittedWork { get; init; }
 
     public bool AllowsEffect(EffectIntent effect) =>
-        (!ProjectionOnly || effect.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus or EffectKind.PublishRequiredStatus) &&
+        (!ProjectionOnly || effect.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus or EffectKind.PublishRequiredStatus or EffectKind.LinkIssue) &&
         (ProjectionIssueNumber is null || effect.IssueNumber == ProjectionIssueNumber) &&
         (AllowedEffectKinds is null || AllowedEffectKinds.Contains(effect.Kind)) &&
         (effect.Kind != EffectKind.PublishRequiredStatus || AllowedRequiredStatusStates is null ||
@@ -270,7 +270,11 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
         if (intent.Kind == EffectKind.PublishRequiredStatus)
             return RequiredStatusPolicy.Matches(state, issue, intent) && issue.PullRequest == live.PullRequest &&
                 issue.HeadSha == live.HeadSha &&
-                (intent.RequiredStatus?.State != "success" || !live.Closed);
+                (intent.RequiredStatus?.State != "success" || !live.Closed ||
+                    RequiredStatusPolicy.IsRecordedMerge(issue) && live.PullRequestMerged == true);
+        if (intent.Kind == EffectKind.LinkIssue)
+            return IssueLinkPolicy.Matches(state, issue, intent) &&
+                issue.PullRequest == live.PullRequest && intent.Sha == live.HeadSha && !live.Closed;
         if (intent.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus)
             return (state.AdmittedIssue == issue.Number ||
                     OrchestrationReducer.IsCurrentIndependentProjection(state, issue, intent)) &&

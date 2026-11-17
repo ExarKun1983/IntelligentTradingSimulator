@@ -674,6 +674,13 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             if (!observation.Issues.TryGetValue(issue.Number, out var live)) continue;
             if (requiredStatusEnabled && issue.PullRequest is > 0 && IsSha(issue.HeadSha))
                 PlanRequiredStatus(state, issue, observation.ObservedAt);
+            foreach (var stale in state.Outbox.Values.Where(effect => effect.IssueNumber == issue.Number &&
+                         effect.Kind == EffectKind.LinkIssue && effect.Status == DeliveryStatus.Pending &&
+                         !IssueLinkPolicy.Matches(state, issue, effect)))
+                stale.Status = DeliveryStatus.Cancelled;
+            if (IssueLinkPolicy.Eligible(state, issue))
+                AddIntent(state, issue, EffectKind.LinkIssue, observation.ObservedAt, issue.ActiveTaskId,
+                    idOverride: IssueLinkPolicy.IntentId(issue));
             var labels = ProjectLabels(issue);
             foreach (var stale in state.Outbox.Values.Where(effect => effect.IssueNumber == issue.Number &&
                          effect.Kind == EffectKind.ProjectLabels && effect.Status == DeliveryStatus.Pending &&
@@ -994,6 +1001,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         issue.Phase is Phase.READY or Phase.HUMAN_REVIEW or Phase.BLOCKED or Phase.CLOSED &&
         effect.Generation == issue.Generation &&
         (effect.Kind == EffectKind.ProjectLabels && effect.Labels.SequenceEqual(ProjectLabels(issue)) ||
+         effect.Kind == EffectKind.LinkIssue && IssueLinkPolicy.Matches(state, issue, effect) ||
          issue.Phase != Phase.READY && effect.Kind == EffectKind.ProjectStatus &&
          effect.StatusBody == StatusProjection.Render(issue, state.IsolatedTestManifestDigest is not null));
 
@@ -1180,7 +1188,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         issue.Review is { ReviewId: not null, Classification: null } ||
         state.Outbox.Values.Any(e => e.IssueNumber == issue.Number && e.Kind != EffectKind.PublishRequiredStatus &&
             (e.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown ||
-                e.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus) && e.Status == DeliveryStatus.Pending));
+                e.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus or EffectKind.LinkIssue) && e.Status == DeliveryStatus.Pending));
 
     private static bool HasOtherUnfinishedWork(RepositoryState state, IssueState issue, string excludedIntentId) =>
         issue.Tasks.Values.Any(t => t.Status is TaskStatus.Intended or TaskStatus.Executing or TaskStatus.Running or
@@ -1189,7 +1197,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number && effect.Id != excludedIntentId &&
             effect.Kind != EffectKind.PublishRequiredStatus &&
             (effect.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown ||
-                effect.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus) &&
+                effect.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus or EffectKind.LinkIssue) &&
                 effect.Status == DeliveryStatus.Pending));
 
     private static void ReleaseIfSafe(RepositoryState state, IssueState issue)
@@ -1201,7 +1209,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
     private static void CancelPendingWork(RepositoryState state, IssueState issue)
     {
         foreach (var effect in state.Outbox.Values.Where(e => e.IssueNumber == issue.Number && e.Status == DeliveryStatus.Pending &&
-                     e.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus or EffectKind.PublishRequiredStatus)))
+                     e.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus or EffectKind.PublishRequiredStatus or EffectKind.LinkIssue)))
         {
             effect.Status = DeliveryStatus.Cancelled;
             if (effect.Kind == EffectKind.LaunchTask && effect.TaskId is { } id && issue.Tasks[id].Status == TaskStatus.Intended)

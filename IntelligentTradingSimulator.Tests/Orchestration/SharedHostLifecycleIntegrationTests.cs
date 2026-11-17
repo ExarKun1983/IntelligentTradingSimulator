@@ -126,7 +126,7 @@ public sealed class SharedHostLifecycleIntegrationTests
 
             var classification = Classification(held);
             await host.ReconcileAsync(classification, "workflow_dispatch", "91", 1, 1, Now.AddMinutes(3), [],
-                99, "master", 55, TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(),
+                99, "master", 55, TaskApproval, Bounded with { MaximumIterations = 4 }, new GitHubTaskIntegrationTests.FinalHead(),
                 reviewApproval: ReviewApproval, ciRoute: CiRoute, ciApproval: CiApproval,
                 statusPublisher: Publisher, statusApproval: StatusApproval);
         }
@@ -141,6 +141,10 @@ public sealed class SharedHostLifecycleIntegrationTests
         Assert.Equal(ReviewClassification.Accepted, accepted.Review!.Classification);
         Assert.True(accepted.ReactivationRequired);
         Assert.Null(store.State.AdmittedIssue);
+        Assert.True(fixture.IssueLinked);
+        Assert.Equal(1, fixture.LinkMutations);
+        Assert.Equal(DeliveryStatus.Succeeded,
+            Assert.Single(store.State.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue).Status);
         var success = fixture.Statuses.Last();
         Assert.Equal("success", success.GetProperty("state").GetString());
         Assert.Equal(RequiredStatusPolicy.Context, success.GetProperty("context").GetString());
@@ -760,6 +764,8 @@ public sealed class SharedHostLifecycleIntegrationTests
         public string DefinitionSha { get; set; } = Definition;
         public int CiDispatches { get; private set; }
         public int ReviewRequests { get; private set; }
+        public int LinkMutations { get; private set; }
+        public bool IssueLinked { get; private set; }
         public List<JsonElement> Statuses { get; } = [];
         public List<string> StatusWrites { get; } = [];
         private readonly Dictionary<int, (string Correlation, string Sha)> ciRuns = [];
@@ -782,7 +788,27 @@ public sealed class SharedHostLifecycleIntegrationTests
                 return new(HttpStatusCode.Forbidden)
                     { Content = new StringContent("private response", Encoding.UTF8, "text/plain") };
             object response;
-            if (path == prefix + "actions/runs/90")
+            if (path == "/graphql")
+            {
+                using var payload = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
+                var query = payload.RootElement.GetProperty("query").GetString()!;
+                if (query.Contains("addCloseIssueReferences", StringComparison.Ordinal))
+                {
+                    Assert.Equal("I_7", payload.RootElement.GetProperty("variables").GetProperty("issue").GetString());
+                    Assert.Equal("PR_node", payload.RootElement.GetProperty("variables").GetProperty("pull").GetString());
+                    LinkMutations++;
+                    IssueLinked = true;
+                    response = new { data = new { addCloseIssueReferences = new { issue = new { id = "I_7" } } } };
+                }
+                else if (query.Contains("closingIssuesReferences", StringComparison.Ordinal))
+                    response = new { data = new { node = new { id = "PR_node", closingIssuesReferences = new
+                    {
+                        nodes = IssueLinked ? new[] { new { id = "I_7" } } : [],
+                        pageInfo = new { hasNextPage = false }
+                    } } } };
+                else return await tasks.SendAsync(request, token);
+            }
+            else if (path == prefix + "actions/runs/90")
                 response = new { id = 90, workflow_id = 10, path = taskApi.WorkflowPath,
                     head_sha = WakeEvent == "pull_request_target" ? ChangedHead : Definition,
                     @event = WakeEvent, repository = new { id = 1 }, actor = new { id = 55 } };

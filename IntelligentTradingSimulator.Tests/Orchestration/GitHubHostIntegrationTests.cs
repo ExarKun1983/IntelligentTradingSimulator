@@ -253,14 +253,15 @@ public sealed class GitHubHostIntegrationTests
     }
 
     [Fact]
-    public void FinalHandoffSuggestsManualClosingLinkWithoutClaimingVerification()
+    public void FinalHandoffExplainsAutomaticClosingLinkWithoutClaimingDelivery()
     {
         var issue = new IssueState { Number = 7, PullRequest = 17, Phase = Phase.HUMAN_REVIEW };
         var body = StatusProjection.Render(issue);
-        Assert.Contains("live PR #17 uniquely addresses Issue #7", body);
+        Assert.Contains("links live PR #17 to Issue #7", body);
         Assert.Contains("`Closes #7`", body);
         Assert.Contains("default branch", body);
-        Assert.Contains("does not verify them or edit the PR", body);
+        Assert.Contains("does not confirm delivery", body);
+        Assert.Contains("preserves the PR description", body);
 
         issue.Phase = Phase.BLOCKED;
         Assert.DoesNotContain("### Issue closing link", StatusProjection.Render(issue));

@@ -793,6 +793,97 @@ public sealed class GitHubRequiredStatusTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task VerifiedMergePublishesSuccessAndReleasesTerminalProjectionBarrier(bool issueClosed)
+    {
+        var state = State();
+        state.Issues[7].ContinuationHoldBarrier = new(1, true);
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].Labels = [];
+        var store = new Store(state);
+        using var api = new Api { Merged = true, Corruption = issueClosed ? "issue-closed" : null };
+        using var client = api.Client();
+        var result = await new OrchestrationWorker(new OrchestrationReducer(requiredStatusEnabled: true), new Clock())
+            .RunAsync(store, new EmptyEvents(), new Observations(live), new RecordingEffects(Adapter(client, store)),
+                new(false, true, true, true),
+                new WorkerOptions { MaximumIterations = 8, PollInterval = TimeSpan.Zero });
+
+        Assert.Equal(WorkerStopReason.Settled, result.Reason);
+        Assert.Equal(1, api.Posts);
+        Assert.Equal("success", Intent(store.Value).RequiredStatus!.State);
+        Assert.Equal("Merged; exact tested head CI and accepted review verified.", Intent(store.Value).RequiredStatus!.Description);
+        Assert.Equal(Phase.CLOSED, store.Value.Issues[7].Phase);
+        Assert.Equal(TerminalOutcome.Merged, store.Value.Issues[7].TerminalOutcome);
+        Assert.Null(store.Value.Issues[7].ContinuationHoldBarrier);
+        Assert.Null(store.Value.AdmittedIssue);
+        Assert.DoesNotContain(store.Value.Outbox.Values,
+            effect => effect.Kind is EffectKind.LaunchTask or EffectKind.RequestReview);
+    }
+
+    [Theory]
+    [InlineData("unmerged")]
+    [InlineData("unknown")]
+    [InlineData("missing-record")]
+    [InlineData("record-sha")]
+    [InlineData("record-pr")]
+    [InlineData("record-generation")]
+    [InlineData("ci-failed")]
+    [InlineData("review-missing")]
+    [InlineData("review-failed")]
+    [InlineData("unresolved-finding")]
+    [InlineData("paused")]
+    [InlineData("feedback")]
+    [InlineData("uncertain-effect")]
+    public void ClosedWorkCannotClaimVerifiedMergeWithMissingOrConflictingEvidence(string corruption)
+    {
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestMerged = true;
+        var state = new OrchestrationReducer().Reconcile(State(), live).State;
+        var issue = state.Issues[7];
+        switch (corruption)
+        {
+            case "unmerged": issue.TerminalOutcome = TerminalOutcome.Unmerged; break;
+            case "unknown": issue.TerminalOutcome = TerminalOutcome.Unknown; break;
+            case "missing-record": issue.TerminalHistory.Clear(); break;
+            case "record-sha": issue.TerminalHistory[0] = issue.TerminalHistory[0] with { Sha = Definition }; break;
+            case "record-pr": issue.TerminalHistory[0] = issue.TerminalHistory[0] with { PullRequest = 18 }; break;
+            case "record-generation": issue.TerminalHistory[0] = issue.TerminalHistory[0] with { Generation = 2 }; break;
+            case "ci-failed": issue.Ci!.Green = false; break;
+            case "review-missing": issue.Review = null; break;
+            case "review-failed": issue.Review!.LifecycleState = ReviewLifecycleState.Failed; break;
+            case "unresolved-finding": issue.Review!.Findings.Add(new("open", "Needs fix", "evidence")); break;
+            case "paused": issue.Paused = true; break;
+            case "feedback": issue.PendingFeedbackEventIds.Add("new-feedback"); break;
+            case "uncertain-effect":
+                state.Outbox["unknown"] = new() { IssueNumber = 7, Kind = EffectKind.LinkIssue, Status = DeliveryStatus.Unknown };
+                break;
+        }
+
+        Assert.Equal("error", RequiredStatusPolicy.Desired(state, issue).State);
+    }
+
+    [Fact]
+    public async Task RecordedMergeCannotPublishSuccessIfLivePullWasClosedWithoutMerging()
+    {
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestMerged = true;
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), live).State;
+        var store = new Store(reducer.MarkExecuting(state, Intent(state).Id, Now));
+        using var api = new Api { Corruption = "pull-closed" };
+        using var client = api.Client();
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => Adapter(client, store).ExecuteAsync(Intent(store.Value), default));
+
+        Assert.Equal(0, api.Posts);
+    }
+
+    [Theory]
     [InlineData("pause")]
     [InlineData("feedback")]
     [InlineData("head")]
@@ -1163,9 +1254,9 @@ public sealed class GitHubRequiredStatusTests
 
     private sealed class Allow : IAuthorizationPolicy { public bool IsAuthorized(OrchestrationEvent message) => true; }
     private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now; }
-    private sealed class Observations : IObservationSource
+    private sealed class Observations(LiveObservation? observation = null) : IObservationSource
     {
-        public Task<LiveObservation> ObserveAsync(RepositoryState state, CancellationToken token) => Task.FromResult(Live());
+        public Task<LiveObservation> ObserveAsync(RepositoryState state, CancellationToken token) => Task.FromResult(observation ?? Live());
     }
     private sealed class FeedbackEvents : IWorkerEventSource
     {
@@ -1186,7 +1277,7 @@ public sealed class GitHubRequiredStatusTests
         {
             Executed.Add(intent);
             return intent.Kind == EffectKind.PublishRequiredStatus ? adapter.ExecuteAsync(intent, token) :
-                intent.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus
+                intent.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus or EffectKind.LinkIssue
                     ? Task.FromResult(new EffectOutcome(DeliveryStatus.Succeeded, "offline-projection")) :
                     throw new InvalidOperationException("New automated work must not execute.");
         }
@@ -1217,6 +1308,7 @@ public sealed class GitHubRequiredStatusTests
         public string? Corruption { get; set; }
         public string? ForbiddenSuffix { get; set; }
         public bool LostResponse { get; set; }
+        public bool Merged { get; set; }
         public bool CancelAfterPost { get; set; }
         public bool SynchronizePreparation { get; set; }
         public bool HideCreatedStatus { get; set; }
@@ -1266,7 +1358,7 @@ public sealed class GitHubRequiredStatusTests
                     labels = Array.Empty<object>() };
             else if (path.EndsWith("/pulls/17", StringComparison.Ordinal))
             {
-                value = new { number = 17, state = Corruption == "pull-closed" ? "closed" : "open",
+                value = new { number = 17, state = Merged || Corruption == "pull-closed" ? "closed" : "open", merged = Merged,
                     @base = new { repo = new { id = 1 } },
                     head = new { sha = Corruption == "head" ? Definition : Sha, repo = new { id = 1 } } };
                 AfterPullRead?.Invoke();
