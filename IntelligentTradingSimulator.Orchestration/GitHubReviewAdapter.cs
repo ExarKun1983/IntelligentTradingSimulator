@@ -9,13 +9,14 @@ public sealed record GitHubReviewApproval(bool ActivationApproved = false, bool 
 {
     public TimeSpan ReviewTimeout { get; init; } = TimeSpan.FromMinutes(15);
     public bool AutoRepairFindings { get; init; }
+    public bool AutoAcceptCleanReviews { get; init; }
 
     public bool AllowsReviews => ActivationApproved && ApiPolicyAndCredentialVerified &&
         NoAdditionalChargesVerified && AutomaticReviewsDisabledVerified &&
         ReviewTimeout >= TimeSpan.FromMinutes(1) && ReviewTimeout <= TimeSpan.FromMinutes(30);
 }
 
-/// <summary>Requests Copilot review; an opt-in exact-head policy can classify fresh inline findings as blocking.</summary>
+/// <summary>Requests Copilot review; opt-in exact-head policies classify findings or verified clean output.</summary>
 public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore store, TimeProvider? clock = null,
     GitHubReviewApproval? approval = null, ICandidateShaValidator? candidateShaValidator = null,
     GitHubReviewRequestDiagnostics? diagnostics = null) : IEffectAdapter
@@ -311,13 +312,40 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
             }
         }
         var findings = ReadAutomaticFindings(issue, boundary, observed, comments, number);
+        var classifiedAt = clock.GetUtcNow();
         var classification = findings.Count > 0 ? ReviewClassification.Blocking : ReviewClassification.NeedsHuman;
+        if (approval is { AllowsReviews: true, AutoAcceptCleanReviews: true } &&
+            issue.Review.LifecycleState is ReviewLifecycleState.Requested or ReviewLifecycleState.Pending &&
+            issue.Review.Findings.Count == 0 && issue.Phase == Phase.REVIEW_PENDING &&
+            issue.ActiveAuthorized && !issue.Paused && !issue.ReactivationRequired && !issue.ClosurePending &&
+            issue.PendingFeedbackEventIds.Count == 0 &&
+            !reviews.Any(candidate => candidate.GetProperty("state").GetString() == "PENDING" &&
+                candidate.GetProperty("user").ValueKind == JsonValueKind.Object &&
+                ActorMatches(candidate.GetProperty("user"), boundary)) &&
+            GitHubCleanReviewPolicy.Matches(boundary, observed, comments, classifiedAt))
+        {
+            ValidateEligibility(state, issue, intent);
+            await ValidateCandidateShaAsync(state, issue, token);
+            if (!await LiveEligibleAsync(issue, token)) return null;
+            classifiedAt = clock.GetUtcNow();
+            if (GitHubCleanReviewPolicy.Matches(boundary, observed, comments, classifiedAt))
+                classification = ReviewClassification.Accepted;
+        }
         var evidence = JsonSerializer.Serialize(new
         {
-            reason = classification == ReviewClassification.Blocking
-                ? "Opt-in exact-head inline findings require repair; provider request-to-submission correlation is not asserted."
-                : "REST has no request-to-submission round token; human classification is required for this output.",
-            policy = approval?.AutoRepairFindings == true ? "exact-head-inline-findings-v1" : "human-classification",
+            reason = classification switch
+            {
+                ReviewClassification.Accepted =>
+                    "Opt-in fresh exact-head clean review accepted for final human approval; provider request-to-submission correlation is not asserted.",
+                ReviewClassification.Blocking =>
+                    "Opt-in exact-head inline findings require repair; provider request-to-submission correlation is not asserted.",
+                _ when approval?.AutoAcceptCleanReviews == true =>
+                    "Clean-review auto-acceptance is enabled, but eligibility or unambiguous clean-review evidence is missing; human classification is required.",
+                _ => "REST has no request-to-submission round token; human classification is required for this output."
+            },
+            policy = classification == ReviewClassification.Accepted ? GitHubCleanReviewPolicy.Name :
+                approval?.AutoRepairFindings == true ? "exact-head-inline-findings-v1" : "human-classification",
+            classifiedAt,
             request = Receipt(intent.Id), observedReviews = observed, observedComments = comments
         });
         if (Encoding.UTF8.GetByteCount(evidence) > 1024 * 1024)
@@ -464,7 +492,7 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
             throw new InvalidDataException("Review live PR/head/repository mismatch.");
     }
 
-    private static bool VerifiedReviewer(JsonElement user) =>
+    internal static bool VerifiedReviewer(JsonElement user) =>
         user.TryGetProperty("id", out var id) && id.TryGetInt64(out var number) && number == ReviewerId &&
         user.TryGetProperty("node_id", out var node) && node.GetString() == ReviewerNodeId &&
         user.TryGetProperty("login", out var login) && login.GetString() is Reviewer or "Copilot" &&

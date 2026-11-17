@@ -53,13 +53,14 @@ public sealed class GitHubPreMergeCheck(GitHubRepositoryApi api, IStateStore sto
             handoff.Generation == issue.Generation && handoff.TaskId == taskId &&
             handoff.ReviewId == review.ReviewId && handoff.Round == issue.Round && handoff.Sha == sha &&
             handoff.ClassificationEventId == classification.EventId).ToList();
-        if (classifications.Count != 1)
-            throw new PreMergeCheckException("The exact review has no unique explicit human classification.");
+        if (classifications.Count > 1)
+            throw new PreMergeCheckException("The exact review has ambiguous human classifications.");
 
         await VerifyLiveIssueAndPullAsync(issue, token);
         await VerifyAsync("Task", () => candidate.ValidateCandidateShaAsync(state, issue, token));
         await VerifyAsync("Managed CI", () => GitHubRequiredStatusAdapter.VerifyGreenRunAsync(api, issue, token));
-        await VerifyAsync("Review", () => VerifyReviewEvidenceAsync(issue, review, boundary, token));
+        await VerifyAsync("Review", () => VerifyReviewEvidenceAsync(issue, review, boundary,
+            classifications.Count == 1, token));
 
         var latest = await store.LoadAsync(token);
         if (latest.Revision != snapshot.Revision)
@@ -107,7 +108,7 @@ public sealed class GitHubPreMergeCheck(GitHubRepositoryApi api, IStateStore sto
     }
 
     private async Task VerifyReviewEvidenceAsync(IssueState issue, ReviewIdentity review,
-        ReviewRequestBoundary boundary, CancellationToken token)
+        ReviewRequestBoundary boundary, bool humanClassified, CancellationToken token)
     {
         using var evidence = JsonDocument.Parse(review.SourceEvidence!);
         var root = evidence.RootElement;
@@ -127,6 +128,24 @@ public sealed class GitHubPreMergeCheck(GitHubRepositoryApi api, IStateStore sto
             var matches = live.Where(candidate => candidate.GetProperty("id").GetInt64() == id).ToList();
             if (matches.Count != 1 || !MatchesReview(matches[0], issue, boundary))
                 throw new PreMergeCheckException("The recorded review submission is no longer current.");
+        }
+        if (!humanClassified)
+        {
+            if (!root.TryGetProperty("policy", out var policy) || policy.GetString() != GitHubCleanReviewPolicy.Name ||
+                !root.TryGetProperty("classifiedAt", out var at) || !at.TryGetDateTimeOffset(out var classifiedAt) ||
+                review.Findings.Count != 0 ||
+                !GitHubCleanReviewPolicy.Matches(boundary, recorded,
+                    root.GetProperty("observedComments").EnumerateArray().ToList(), classifiedAt))
+                throw new PreMergeCheckException("The exact review has neither human classification nor verified automatic acceptance.");
+
+            var current = live.Where(item =>
+                !boundary.ExistingReviewIds.Contains(item.GetProperty("id").GetInt64()) &&
+                item.GetProperty("user").ValueKind == JsonValueKind.Object &&
+                GitHubReviewAdapter.VerifiedReviewer(item.GetProperty("user")) &&
+                item.GetProperty("commit_id").GetString() == review.Sha).ToList();
+            var comments = await api.ListAsync($"pulls/{issue.PullRequest}/reviews/{recorded[0].GetProperty("id").GetInt64()}/comments", token);
+            if (!GitHubCleanReviewPolicy.Matches(boundary, current, comments, classifiedAt))
+                throw new PreMergeCheckException("Automatically accepted review is no longer unambiguous and clean.");
         }
     }
 

@@ -11,6 +11,8 @@ public sealed class GitHubReviewIntegrationTests
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
     private static readonly string Sha = new('a', 40);
     private static readonly GitHubReviewApproval Approved = new(true, true, true, true);
+    private const string CleanSummary = "<!-- ccr-overview-v2 -->\n\n### \uD83D\uDFE2 Approval recommended\n\n" +
+        "The calendar-date regression test changes have no active review issues.\n\n**No open issues** \uD83C\uDF89";
     private static GitHubReviewAdapter CreateAdapter(HttpClient client, Store store) =>
         new(new(client, "owner/repo", 1), store, new Clock(), Approved, new CandidateValidator());
 
@@ -1002,6 +1004,199 @@ public sealed class GitHubReviewIntegrationTests
     }
 
     [Theory]
+    [InlineData("APPROVED")]
+    [InlineData("COMMENTED")]
+    public async Task OptInCleanReviewReachesFinalHumanApprovalWithoutHumanClassification(string reviewState)
+    {
+        var store = new Store(Eligible());
+        var handler = new Api { ReviewState = reviewState, ReviewBody = CleanSummary, EmptyComments = true };
+        using var client = handler.Client();
+        var clock = new Clock();
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, clock,
+            Approved with { AutoAcceptCleanReviews = true }, new CandidateValidator());
+        var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
+        handler.HasOutput = true;
+        clock.Instant = Now.AddSeconds(2);
+
+        var message = await adapter.ReadEventAsync(store.State, store.State.Issues[7], default);
+        var result = Assert.IsType<ReviewResult>(message!.Data);
+        Assert.Equal(ReviewClassification.Accepted, result.Classification);
+        Assert.Empty(result.Findings);
+        Assert.Empty(result.Responses);
+        Assert.NotNull(result.SourceEvidence);
+        using var evidence = JsonDocument.Parse(result.SourceEvidence);
+        Assert.Equal("exact-head-clean-review-v1", evidence.RootElement.GetProperty("policy").GetString());
+        var reducer = new OrchestrationReducer(new Allow());
+        store.State = reducer.Apply(store.State, message);
+        var issue = store.State.Issues[7];
+        Assert.Equal(Phase.HUMAN_REVIEW, issue.Phase);
+        Assert.Equal("Awaiting human approval.", issue.HoldReason);
+        Assert.False(issue.ActiveAuthorized);
+        Assert.True(issue.ReactivationRequired);
+        Assert.Empty(issue.Classifications);
+        Assert.Null(store.State.AdmittedIssue);
+        var applied = StateJson.Serialize(store.State);
+        Assert.Equal(applied, StateJson.Serialize(reducer.Apply(store.State, message)));
+        Assert.Null(await adapter.ReadEventAsync(store.State, issue, default));
+        Assert.Equal(1, handler.Posts);
+    }
+
+    [Theory]
+    [InlineData("disabled")]
+    [InlineData("CHANGES_REQUESTED")]
+    [InlineData("DISMISSED")]
+    [InlineData("unknown-summary")]
+    [InlineData("quoted-summary")]
+    [InlineData("contradictory-summary")]
+    [InlineData("missing-marker")]
+    [InlineData("multiple-submissions")]
+    [InlineData("conflict")]
+    [InlineData("timed-out")]
+    [InlineData("paused")]
+    [InlineData("inactive")]
+    [InlineData("hold")]
+    [InlineData("feedback")]
+    [InlineData("wrong-phase")]
+    [InlineData("prior-finding")]
+    [InlineData("before-ack")]
+    [InlineData("late-submission")]
+    [InlineData("future-submission")]
+    [InlineData("missing-request-id")]
+    [InlineData("concurrent-pending")]
+    [InlineData("inline-comments")]
+    public async Task CleanReviewPolicyNeverBypassesAmbiguityHoldsOrPriorFindings(string scenario)
+    {
+        var store = new Store(Eligible());
+        var handler = new Api
+        {
+            ReviewPostStatus = scenario == "conflict" ? HttpStatusCode.Conflict : HttpStatusCode.Created,
+            ReviewState = scenario is "CHANGES_REQUESTED" or "DISMISSED" ? scenario : "COMMENTED",
+            ReviewBody = scenario switch
+            {
+                "unknown-summary" => "No issues (unstructured prose is not acceptance).",
+                "quoted-summary" => "> " + CleanSummary,
+                "contradictory-summary" => CleanSummary + "\n### Changes requested",
+                _ => CleanSummary
+            },
+            EmptyComments = scenario != "inline-comments"
+        };
+        using var client = handler.Client();
+        var clock = new Clock();
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, clock,
+            Approved with { AutoAcceptCleanReviews = scenario != "disabled" }, new CandidateValidator());
+        var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
+        var issue = store.State.Issues[7];
+        var boundary = issue.Review!.RequestBoundary!;
+        switch (scenario)
+        {
+            case "timed-out":
+                issue.Review.LifecycleState = ReviewLifecycleState.TimedOut;
+                issue.Review.RequestBoundary = boundary with { DeadlineAt = Now };
+                break;
+            case "paused": issue.Paused = true; break;
+            case "inactive": issue.ActiveAuthorized = false; break;
+            case "hold": issue.ReactivationRequired = true; break;
+            case "feedback": issue.PendingFeedbackEventIds.Add("pending-human-feedback"); break;
+            case "wrong-phase": issue.Phase = Phase.BLOCKED; break;
+            case "prior-finding": issue.Review.Findings.Add(new("old", "Unresolved blocker", "prior review")); break;
+            case "before-ack": issue.Review.RequestBoundary = boundary with { AcceptedAt = Now.AddSeconds(2) }; break;
+            case "late-submission": issue.Review.RequestBoundary = boundary with { DeadlineAt = Now.AddSeconds(1) }; break;
+            case "future-submission": handler.SubmittedAt = Now.AddMinutes(1); break;
+            case "missing-request-id": issue.Review.RequestBoundary = boundary with { RequestNodeId = null }; break;
+        }
+        handler.Corruption = scenario;
+        handler.HasOutput = true;
+        clock.Instant = Now.AddSeconds(3);
+
+        var result = Assert.IsType<ReviewResult>((await adapter.ReadEventAsync(store.State, issue, default))!.Data);
+
+        Assert.Equal(ReviewClassification.NeedsHuman, result.Classification);
+        Assert.Empty(result.Responses);
+        Assert.False(string.IsNullOrWhiteSpace(result.SourceEvidence));
+        Assert.Equal(scenario == "prior-finding" ? 1 : 0, issue.Review.Findings.Count);
+        Assert.Equal(1, handler.Posts);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedEvidenceReadCannotAutomaticallyAcceptCleanReview(bool secondPage)
+    {
+        var store = new Store(Eligible());
+        var handler = new Api { EmptyComments = true, ReviewBody = CleanSummary, Paginated = secondPage };
+        using var client = handler.Client();
+        var clock = new Clock();
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, clock,
+            Approved with { AutoAcceptCleanReviews = true }, new CandidateValidator());
+        var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
+        handler.HasOutput = true;
+        handler.Corruption = secondPage ? null : "comments-read";
+        handler.FailSecondPage = secondPage;
+        clock.Instant = Now.AddSeconds(2);
+        var original = StateJson.Serialize(store.State);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            adapter.ReadEventAsync(store.State, store.State.Issues[7], default));
+
+        Assert.Equal(original, StateJson.Serialize(store.State));
+        Assert.Equal(1, handler.Posts);
+    }
+
+    [Fact]
+    public async Task HeadChangeWhileReadingCleanEvidencePreventsAutomaticAcceptance()
+    {
+        var store = new Store(Eligible());
+        var handler = new Api { EmptyComments = true, ReviewBody = CleanSummary };
+        using var client = handler.Client();
+        var clock = new Clock();
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, clock,
+            Approved with { AutoAcceptCleanReviews = true }, new CandidateValidator());
+        var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
+        handler.HasOutput = true;
+        handler.BeforeComments = () => handler.Corruption = "live-sha";
+        clock.Instant = Now.AddSeconds(2);
+
+        Assert.Null(await adapter.ReadEventAsync(store.State, store.State.Issues[7], default));
+        Assert.Null(store.State.Issues[7].Review!.Classification);
+        Assert.Equal(1, handler.Posts);
+    }
+
+    [Theory]
+    [InlineData("ci-round")]
+    [InlineData("ci-receipt")]
+    [InlineData("task-round")]
+    public async Task CleanReviewRevalidatesCanonicalTaskAndCiProofBeforeAccepting(string corruption)
+    {
+        var store = new Store(Eligible());
+        var handler = new Api { EmptyComments = true, ReviewBody = CleanSummary };
+        using var client = handler.Client();
+        var clock = new Clock();
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, clock,
+            Approved with { AutoAcceptCleanReviews = true }, new CandidateValidator());
+        var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
+        store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
+        switch (corruption)
+        {
+            case "ci-round": store.State.Issues[7].Ci!.Round++; break;
+            case "ci-receipt": store.State.Outbox["ci"].ExternalId = "other-run"; break;
+            case "task-round": store.State.Issues[7].Tasks["task"].Round++; break;
+        }
+        handler.HasOutput = true;
+        clock.Instant = Now.AddSeconds(2);
+        var original = StateJson.Serialize(store.State);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            adapter.ReadEventAsync(store.State, store.State.Issues[7], default));
+
+        Assert.Equal(original, StateJson.Serialize(store.State));
+        Assert.Equal(1, handler.Posts);
+    }
+
+    [Theory]
     [InlineData("COMMENTED")]
     [InlineData("APPROVED")]
     [InlineData("CHANGES_REQUESTED")]
@@ -1036,16 +1231,21 @@ public sealed class GitHubReviewIntegrationTests
     }
 
     [Theory]
-    [InlineData("old-review")]
-    [InlineData("stale-review")]
-    [InlineData("other-actor")]
-    [InlineData("PENDING")]
-    public async Task HistoricalStaleOtherActorAndPendingReviewsDoNotSatisfyResult(string corruption)
+    [InlineData("old-review", false)]
+    [InlineData("stale-review", false)]
+    [InlineData("other-actor", false)]
+    [InlineData("PENDING", false)]
+    [InlineData("old-review", true)]
+    [InlineData("stale-review", true)]
+    [InlineData("other-actor", true)]
+    [InlineData("PENDING", true)]
+    public async Task HistoricalStaleOtherActorAndPendingReviewsDoNotSatisfyResult(string corruption, bool autoAccept)
     {
         var store = new Store(Eligible());
         var handler = new Api();
         using var client = handler.Client();
-        var adapter = CreateAdapter(client, store);
+        var adapter = new GitHubReviewAdapter(new(client, "owner/repo", 1), store, new Clock(),
+            Approved with { AutoAcceptCleanReviews = autoAccept }, new CandidateValidator());
         var outcome = await adapter.ExecuteAsync(store.State.Outbox["review"], default);
         store.State = new OrchestrationReducer().RecordOutcome(store.State, "review", outcome, Now);
         handler.HasOutput = true;
@@ -1443,7 +1643,8 @@ public sealed class GitHubReviewIntegrationTests
     private sealed class Allow : IAuthorizationPolicy { public bool IsAuthorized(OrchestrationEvent message) => true; }
     private sealed class Clock(DateTimeOffset? instant = null) : TimeProvider
     {
-        public override DateTimeOffset GetUtcNow() => instant ?? Now;
+        public DateTimeOffset Instant { get; set; } = instant ?? Now;
+        public override DateTimeOffset GetUtcNow() => Instant;
     }
     private sealed class Store(RepositoryState state) : IStateStore
     {
@@ -1472,6 +1673,10 @@ public sealed class GitHubReviewIntegrationTests
     {
         public string? Corruption { get; set; }
         public string ReviewState { get; set; } = "COMMENTED";
+        public string ReviewBody { get; init; } = "Review body preserved without semantic inference";
+        public DateTimeOffset SubmittedAt { get; set; } = Now.AddSeconds(1);
+        public bool EmptyComments { get; init; }
+        public Action? BeforeComments { get; set; }
         public HttpStatusCode ReviewPostStatus { get; init; } = HttpStatusCode.Created;
         public IReadOnlyList<HttpStatusCode> ReviewPostStatuses { get; init; } = [];
         public string? ApiFailureReason { get; init; }
@@ -1523,10 +1728,10 @@ public sealed class GitHubReviewIntegrationTests
         {
             id = baseline || Corruption == "old-review" ? 100 : 101, node_id = "REVIEW_node",
             is_copilot_code_review = Corruption != "missing-marker",
-            user = Actor(Corruption == "other-actor"), body = "Review body preserved without semantic inference",
+            user = Actor(Corruption == "other-actor"), body = ReviewBody,
             state = Corruption is "pending-review" or "PENDING" ? "PENDING" : ReviewState,
             commit_id = Corruption == "stale-review" ? new string('b', 40) : Sha,
-            submitted_at = baseline ? Now.AddDays(-1) : Now.AddSeconds(1),
+            submitted_at = baseline ? Now.AddDays(-1) : SubmittedAt,
             pull_request_url = Corruption == "review-url" ? "https://api.github.com/repos/other/repo/pulls/17" : PullUrl
         };
         private const string PullUrl = "https://api.github.com/repos/owner/repo/pulls/17";
@@ -1637,11 +1842,17 @@ public sealed class GitHubReviewIntegrationTests
                     response = new[] { new { id = 101, state = "COMMENTED", user = AbandonmentActor } };
                 else if (HasOutput && Corruption == "multiple-submissions")
                     response = new[] { Review(false), Review(false) };
+                else if (HasOutput && Corruption == "concurrent-pending")
+                    response = new object[] { Review(false), new { id = 102, user = Actor(),
+                        state = "PENDING", commit_id = Sha } };
                 else response = Corruption == "no-reviews" ? [] : Paginated ? HasOutput ? new[] { Review(false) } : [] :
                     HasOutput ? new[] { Review(true), Review(false) } : new[] { Review(true) };
             }
             else if (path.EndsWith("/comments") || path == "/repos/owner/repo/pulls/comments/201")
             {
+                BeforeComments?.Invoke();
+                if (Corruption == "comments-read")
+                    throw new HttpRequestException("Injected comment list read failure.");
                 var detail = path == "/repos/owner/repo/pulls/comments/201";
                 if (detail && Corruption == "detail-read")
                     throw new HttpRequestException("Injected comment detail read failure.");
@@ -1662,7 +1873,7 @@ public sealed class GitHubReviewIntegrationTests
                 var listed = JsonSerializer.SerializeToElement(comment).EnumerateObject()
                     .Where(property => property.Name is not ("line" or "side"))
                     .ToDictionary(property => property.Name, property => property.Value.Clone());
-                response = detail ? comment : Corruption == "empty-comments" ? Array.Empty<object>() :
+                response = detail ? comment : EmptyComments || Corruption == "empty-comments" ? Array.Empty<object>() :
                     Corruption == "duplicate-comment" ? new[] { listed, listed } : new[] { listed };
             }
             else throw new InvalidOperationException("Unexpected review fixture route");
