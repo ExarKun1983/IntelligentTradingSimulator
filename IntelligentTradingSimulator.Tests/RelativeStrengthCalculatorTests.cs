@@ -71,6 +71,34 @@ public sealed class RelativeStrengthCalculatorTests
             Start, Start.AddDays(3)));
     }
 
+    [Theory]
+    [InlineData(true, 0)]
+    [InlineData(true, -1)]
+    [InlineData(false, 0)]
+    [InlineData(false, -1)]
+    public void Calculate_IgnoresNonPositiveInteriorPrices(bool invalidStock, decimal close)
+    {
+        var stock = new List<MarketCandle> { Candle(0, 100), Candle(3, 120) };
+        var benchmark = new List<MarketCandle> { Candle(0, 200), Candle(3, 220) };
+        (invalidStock ? stock : benchmark).Add(Candle(1, close));
+
+        Assert.Equal(10m, _calculator.Calculate(stock, benchmark, Start, Start.AddDays(3)));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Calculate_IgnoresDuplicateInteriorDates(bool duplicateStock)
+    {
+        var stock = new List<MarketCandle> { Candle(0, 100), Candle(3, 120) };
+        var benchmark = new List<MarketCandle> { Candle(0, 200), Candle(3, 220) };
+        var candles = duplicateStock ? stock : benchmark;
+        candles.Add(Candle(1, 105));
+        candles.Add(Candle(1, 110));
+
+        Assert.Equal(10m, _calculator.Calculate(stock, benchmark, Start, Start.AddDays(3)));
+    }
+
     [Fact]
     public void Calculate_ReturnsNull_ForMissingOrInsufficientData()
     {
