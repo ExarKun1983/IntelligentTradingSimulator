@@ -63,6 +63,31 @@ public sealed class OrchestrationWorkerTests
     }
 
     [Fact]
+    public async Task InactiveReadyIssueClearsStaleHeldLabelsAndSettlesWithoutTakingAdmission()
+    {
+        var store = new Store();
+        var snapshot = await store.LoadAsync(default);
+        snapshot.State.Issues[7] = new IssueState { Number = 7 };
+        Assert.True(await store.TrySaveAsync(snapshot, snapshot.State, default));
+        var api = new OfflineApi(store)
+        {
+            ReadyIssues = [], AdditionalObservedIssues = [7], TrackProjectedLabels = true
+        };
+        api.ProjectedLabels[7] = ["agent:blocked", "human:action-required"];
+
+        var result = await Worker().RunAsync(store, api, api, api, Simulation, Fast);
+
+        Assert.Equal(WorkerStopReason.Settled, result.Reason);
+        Assert.True(result.Iterations < Fast.MaximumIterations);
+        Assert.Empty(api.ProjectedLabels[7]);
+        Assert.Null(store.Current.AdmittedIssue);
+        Assert.False(store.Current.Issues[7].Ready);
+        Assert.Empty(store.Current.Issues[7].Tasks);
+        Assert.Single(api.Deliveries, delivery => delivery.Kind == EffectKind.ProjectLabels && delivery.Admission is null);
+        Assert.DoesNotContain(store.Current.Outbox.Values, effect => effect.Status == DeliveryStatus.Pending);
+    }
+
+    [Fact]
     public async Task UnmappedIssueLaunchesOnceAndWaitsForCompletionAndVerifiedFinalMapping()
     {
         var store = new Store();
@@ -1871,7 +1896,7 @@ public sealed class OrchestrationWorkerTests
         {
             Assert.Equal(DeliveryStatus.Executing, store.Current.Outbox[intent.Id].Status);
             if (intent.Kind is not (EffectKind.ProjectLabels or EffectKind.ProjectStatus or EffectKind.PublishRequiredStatus) ||
-                store.Current.Issues[intent.IssueNumber].Phase is not (Phase.HUMAN_REVIEW or Phase.BLOCKED or Phase.CLOSED))
+                store.Current.Issues[intent.IssueNumber].Phase is not (Phase.READY or Phase.HUMAN_REVIEW or Phase.BLOCKED or Phase.CLOSED))
                 Assert.Equal(intent.IssueNumber, store.Current.AdmittedIssue);
             Executions.Add(intent.Kind);
             Deliveries.Add((intent.IssueNumber, intent.Kind, store.Current.AdmittedIssue, intent.StatusBody));

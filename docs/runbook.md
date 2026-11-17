@@ -2356,6 +2356,15 @@ generation's feedback. It also fetches comments for newly verified PR mappings
 before applying completion. An interrupted invocation can replay its exact committed
 reactivation ID/digest against current state without incrementing the generation
 again; unaccepted stale commands or changed content cannot use that exception.
+Reactivation also records the new generation's `agent:ready` label projection in
+the same commit. Missing readiness on the previously held Issue does not withdraw
+that authorization while this exact projection is pending or executing. Coding
+still requires a fresh live observation of `agent:ready`; a completed projection
+does not override a later live withdrawal. Explicit withdrawal, pause, closure,
+and uncertain/failed projection outcomes retain their normal stopping behavior.
+Current label projections for queued or inactive `READY` Issues can run without
+taking repository admission, including clearing stale blocked labels. They drain
+instead of keeping the worker polling on an ineligible label update.
 It drains validated commands and feedback before task-completion events,
 in 128-event pages, remembering each observed immutable event until inbox acceptance.
 It feeds the same leased bounded worker and CAS store as existing reducer tests.

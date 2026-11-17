@@ -273,7 +273,7 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                 (intent.RequiredStatus?.State != "success" || !live.Closed);
         if (intent.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus)
             return (state.AdmittedIssue == issue.Number ||
-                    OrchestrationReducer.IsCurrentSettledProjection(state, issue, intent)) &&
+                    OrchestrationReducer.IsCurrentIndependentProjection(state, issue, intent)) &&
                 (intent.Kind == EffectKind.ProjectLabels
                     ? intent.Labels.SequenceEqual(OrchestrationReducer.ProjectLabels(issue))
                     : intent.StatusBody == StatusProjection.Render(issue, state.IsolatedTestManifestDigest is not null));

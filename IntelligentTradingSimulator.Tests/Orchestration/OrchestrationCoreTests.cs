@@ -1241,6 +1241,104 @@ public sealed class OrchestrationCoreTests
     }
 
     [Fact]
+    public void ConfirmedReactivationProjectionDoesNotOverrideSubsequentLiveReadinessWithdrawal()
+    {
+        var reducer = Reducer();
+        var state = reducer.Apply(Empty(), Event(new Ready(), "ready"));
+        state = reducer.Apply(state, Event(new Pause("Hold."), "pause"));
+        state = reducer.Apply(state, Event(new Reactivate("Start a new generation."), "reactivate"));
+        state = SucceedEffect(state, EffectKind.ProjectLabels, "ready-projection");
+        state = StateJson.Deserialize(StateJson.Serialize(state));
+        var live = Live(state, ready: false);
+        live.Issues[7].Labels = [];
+
+        state = reducer.Reconcile(state, live).State;
+        state = reducer.Reconcile(state, live).State;
+
+        Assert.False(state.Issues[7].Ready);
+        Assert.False(state.Issues[7].ActiveAuthorized);
+        Assert.Empty(state.Issues[7].Tasks);
+        Assert.DoesNotContain(state.Outbox.Values, effect => effect.Status == DeliveryStatus.Pending &&
+            effect.Kind == EffectKind.ProjectLabels && effect.Labels.Contains("agent:ready"));
+    }
+
+    [Theory]
+    [InlineData("withdraw", false)]
+    [InlineData("withdraw", true)]
+    [InlineData("pause", false)]
+    [InlineData("close", false)]
+    [InlineData("reopen", false)]
+    public void ReactivationReadinessProjectionCannotOverrideLaterStopCommands(string operation, bool liveReady)
+    {
+        var reducer = Reducer();
+        var state = reducer.Apply(Empty(), Event(new Ready(), "ready"));
+        state = reducer.Apply(state, Event(new Pause("Hold."), "pause"));
+        state = reducer.Apply(state, Event(new Reactivate("Start a new generation."), "reactivate"));
+        EventData stop = operation switch
+        {
+            "withdraw" => new Withdraw(),
+            "pause" => new Pause("Stop the new generation."),
+            "close" => new Closure(),
+            _ => new Reopen()
+        };
+        state = reducer.Apply(state, Event(stop, "stop", generation: 2, at: Now.AddSeconds(1)));
+        state = reducer.Reconcile(state, Live(state, ready: liveReady, closed: operation == "close")).State;
+
+        Assert.False(state.Issues[7].Ready);
+        Assert.False(state.Issues[7].ActiveAuthorized);
+        Assert.Empty(state.Issues[7].Tasks);
+        Assert.DoesNotContain(state.Outbox.Values, effect => effect.Status == DeliveryStatus.Pending &&
+            (effect.Kind == EffectKind.LaunchTask ||
+             effect.Kind == EffectKind.ProjectLabels && effect.Labels.Contains("agent:ready")));
+    }
+
+    [Theory]
+    [InlineData(DeliveryStatus.Failed)]
+    [InlineData(DeliveryStatus.Unknown)]
+    public void FailedOrUncertainReactivationProjectionHoldsWithoutLaunchingEvenIfLabelAppears(DeliveryStatus status)
+    {
+        var reducer = Reducer();
+        var state = reducer.Apply(Empty(), Event(new Ready(), "ready"));
+        state = reducer.Apply(state, Event(new Pause("Hold."), "pause"));
+        state = reducer.Apply(state, Event(new Reactivate("Start a new generation."), "reactivate"));
+        var projection = Assert.Single(state.Outbox.Values);
+        state = reducer.MarkExecuting(state, projection.Id, Now);
+        state = reducer.RecordOutcome(state, projection.Id, new(status), Now);
+        state = reducer.Reconcile(state, Live(state)).State;
+
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+        Assert.True(state.Issues[7].ReactivationRequired);
+        Assert.False(state.Issues[7].ActiveAuthorized);
+        Assert.Empty(state.Issues[7].Tasks);
+        Assert.Equal(status, state.Outbox[projection.Id].Status);
+    }
+
+    [Fact]
+    public void QueuedReadyLabelProjectionCannotTakeAnotherIssuesAdmission()
+    {
+        var reducer = Reducer();
+        var state = reducer.Apply(Empty(), Event(new Ready(), "ready"));
+        state = reducer.Apply(state, Event(new Pause("Hold."), "pause"));
+        state = reducer.Apply(state, Event(new Reactivate("Start a new generation."), "reactivate"));
+        state = reducer.Apply(state, Event(new Ready(), "ready8", issue: 8));
+        var live = Live(state);
+        live.Issues[7].Ready = false;
+        live.Issues[7].Labels = ["agent:blocked"];
+        state = reducer.Reconcile(state, live).State;
+        Assert.Equal(8, state.AdmittedIssue);
+        var projection = Assert.Single(state.Outbox.Values, effect =>
+            effect.IssueNumber == 7 && effect.Kind == EffectKind.ProjectLabels && effect.Status == DeliveryStatus.Pending);
+
+        state = reducer.MarkExecuting(state, projection.Id, Now);
+        Assert.Equal(8, state.AdmittedIssue);
+        state = reducer.RecordOutcome(state, projection.Id, new(DeliveryStatus.Succeeded), Now);
+
+        Assert.Equal(8, state.AdmittedIssue);
+        Assert.True(state.Issues[7].Ready);
+        Assert.Empty(state.Issues[7].Tasks);
+    }
+
+    [Fact]
     public void InitialReadinessIsVerifiedButItsProjectedRemovalCannotWithdrawActiveAuthorization()
     {
         var reducer = Reducer();
