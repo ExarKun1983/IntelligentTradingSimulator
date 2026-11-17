@@ -790,7 +790,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         var issue = state.Issues[issueNumber];
         var link = state.Outbox.Values.Where(effect => effect.Kind == EffectKind.LinkIssue &&
                 effect.IssueNumber == issue.Number &&
-                effect.IssueLinkRevocationRequired == true &&
+                RequiredStatusPolicy.RequiresIssueLinkRevocation(state, effect) &&
                 effect.IssueLink is { Version: 1 } payload && payload.PullRequest == issue.PullRequest &&
                 IsSha(effect.Sha))
             .OrderBy(effect => effect.Generation).ThenBy(effect => effect.Sha, StringComparer.Ordinal)
@@ -881,7 +881,9 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         {
             if (effect.Status is not (DeliveryStatus.Executing or DeliveryStatus.Unknown))
                 throw new InvalidOperationException("Effect is not executing or awaiting reconciliation.");
-            if (effect.Kind == EffectKind.LinkIssue &&
+            // A confirmed discharge (IssueLinkRevocationDischargedBy) is a durable fact: a later outcome
+            // for this same link must never recompute the obligation back to true.
+            if (effect.Kind == EffectKind.LinkIssue && effect.IssueLinkRevocationDischargedBy is null &&
                 (existing.Status == DeliveryStatus.Unknown ||
                  outcome.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown))
                 effect.IssueLinkRevocationRequired = input.Outbox.Values.Any(status =>
@@ -1115,9 +1117,16 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     link.IssueLinkRevocationRequired = false;
                     link.IssueLinkRevocationDischargedBy = effect.Id;
                 }
-            if (outcome.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown)
+            // A LinkIssue outcome can recover straight to Succeeded (e.g. a receipt found during crash
+            // recovery) while still owing a status revocation for a stale success. Hold even though the
+            // outcome itself was not Failed/Unknown, so the required status does not stay green.
+            if (outcome.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown ||
+                effect.Kind == EffectKind.LinkIssue && effect.IssueLinkRevocationRequired == true &&
+                issue.Phase != Phase.BLOCKED)
             {
-                Hold(issue, outcome.Status == DeliveryStatus.Unknown ? "Effect outcome is ambiguous." : "Effect failed.");
+                Hold(issue, outcome.Status == DeliveryStatus.Unknown ? "Effect outcome is ambiguous." :
+                    outcome.Status == DeliveryStatus.Failed ? "Effect failed." :
+                    "Issue-link requires status revocation.");
                 CancelPendingWork(state, issue);
             }
         }

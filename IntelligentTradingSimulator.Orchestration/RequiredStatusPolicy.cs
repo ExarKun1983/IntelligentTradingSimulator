@@ -10,8 +10,19 @@ public static class RequiredStatusPolicy
 
     internal static bool HasOutstandingIssueLinkRevocation(RepositoryState state, IssueState issue) =>
         state.Outbox.Values.Any(effect => effect.Kind == EffectKind.LinkIssue &&
-            effect.IssueNumber == issue.Number &&
-            effect.IssueLinkRevocationRequired == true);
+            effect.IssueNumber == issue.Number && RequiresIssueLinkRevocation(state, effect));
+
+    /// <summary>A link saved before the revocation marker existed has a null marker. Infer the obligation
+    /// from its own recorded generation/SHA and status history rather than treating null as "no obligation",
+    /// while never reopening an obligation that was already discharged.</summary>
+    internal static bool RequiresIssueLinkRevocation(RepositoryState state, EffectIntent link) =>
+        link.IssueLinkRevocationDischargedBy is null &&
+        (link.IssueLinkRevocationRequired == true ||
+         link.IssueLinkRevocationRequired is null && link.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown &&
+            state.Outbox.Values.Any(status => status.Kind == EffectKind.PublishRequiredStatus &&
+                status.IssueNumber == link.IssueNumber && status.Generation == link.Generation &&
+                status.Sha == link.Sha &&
+                status.Status is DeliveryStatus.Succeeded or DeliveryStatus.Executing or DeliveryStatus.Unknown));
 
     public static RequiredStatusPayload Desired(RepositoryState state, IssueState issue)
     {
@@ -133,7 +144,10 @@ public static class RequiredStatusPolicy
         state.Outbox.Values.Any(link => link.Kind == EffectKind.LinkIssue &&
             link.IssueNumber == issue.Number && link.Generation == intent.Generation && link.Sha == intent.Sha &&
             link.IssueLink is { Version: 1 } payload && payload.PullRequest == issue.PullRequest &&
-            (link.IssueLinkRevocationRequired == true || link.IssueLinkRevocationDischargedBy == intent.Id));
+            (RequiresIssueLinkRevocation(state, link) ||
+             // A discharged receipt remains matchable for recovery, but once reactivation has advanced the
+             // Issue to a new generation it must not block normal planning from replacing it.
+             link.IssueLinkRevocationDischargedBy == intent.Id && issue.Generation == intent.Generation));
 
     public static RequiredStatusPayload ForIntent(RepositoryState state, IssueState issue, string id)
     {

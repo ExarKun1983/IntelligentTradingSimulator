@@ -64,6 +64,9 @@ public sealed class GitHubIssueLinkAdapter(GitHubRepositoryApi api, IStateStore 
             var boundary = Saved((await store.LoadAsync(token)).State, intent).IssueLinkBoundary;
             // Another executor's boundary cannot prove that the shared operation was not sent.
             if (boundary is not null && boundary.OwnerId != owner) throw;
+            // Re-check immediately before committing to "proven unsent": a concurrent executor may have
+            // saved its own boundary between the read above and when this outcome is published.
+            if (Saved((await store.LoadAsync(token)).State, intent).IssueLinkBoundary != boundary) throw;
             throw new IssueLinkNotStartedException(exception, new(boundary));
         }
         if (linked) return new(DeliveryStatus.Succeeded, scope.PullId);
@@ -91,8 +94,14 @@ public sealed class GitHubIssueLinkAdapter(GitHubRepositoryApi api, IStateStore 
         if (saved.IssueLink is not { Version: 1 })
             throw new InvalidDataException("Unsupported Issue-link protocol version.");
         if (saved.IssueLinkBoundary is not { } boundary)
+        {
+            // Re-check immediately before committing to "proven unsent": a concurrent executor may have
+            // saved a boundary and started sending the mutation between the read above and publication.
+            if (Saved((await store.LoadAsync(token)).State, intent).IssueLinkBoundary is not null)
+                return new(DeliveryStatus.Unknown);
             return new(DeliveryStatus.Failed, FailureCode: EffectFailureCode.IssueLinkNotStarted,
                 IssueLinkFailure: new(null));
+        }
         if (boundary.RepositoryId != api.RepositoryId || boundary.Issue != saved.IssueNumber ||
             saved.IssueLink is not { Version: 1 } payload || payload.PullRequest != boundary.PullRequest ||
             string.IsNullOrWhiteSpace(boundary.IssueNodeId) || string.IsNullOrWhiteSpace(boundary.PullNodeId) ||

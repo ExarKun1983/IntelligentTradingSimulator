@@ -392,8 +392,13 @@ public sealed class GitHubIssueLinkTests
             {
                 Raced = true;
                 var concurrent = await inner.LoadAsync(token);
-                var next = new OrchestrationReducer().RecordIssueLinkBoundary(concurrent.State,
-                    Intent(concurrent.State).Id, new(1, 7, 17, "I_7", "PR_17", Now, "competing-executor"));
+                // Simulate a competing executor's boundary commit landing between our "not started"
+                // classification (read) and its publication. A real competing executor could be mid-write
+                // on an Unknown/Held intent from its own earlier (still-Executing) perspective; here we
+                // inject the resulting persisted fact directly rather than re-deriving its own eligibility.
+                var next = StateJson.Clone(concurrent.State);
+                Intent(next).IssueLinkBoundary = new(1, 7, 17, "I_7", "PR_17", Now, "competing-executor");
+                next.Version++;
                 Assert.True(await inner.TrySaveAsync(concurrent, next, token));
             }
             return await inner.TrySaveAsync(expected, state, token);

@@ -125,10 +125,17 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
         using var pull = await api.GetAsync($"pulls/{issue.PullRequest}", token);
         var pr = pull.RootElement;
         var revokingPublishedHead = intent.RequiredStatus!.State == "error" &&
-            state.Outbox.Values.Any(previous => previous.Kind == EffectKind.PublishRequiredStatus &&
+            (state.Outbox.Values.Any(previous => previous.Kind == EffectKind.PublishRequiredStatus &&
                 previous.IssueNumber == intent.IssueNumber && previous.Generation == intent.Generation &&
                 previous.Sha == intent.Sha && previous.RequiredStatus?.State == "success" &&
-                (previous.Status == DeliveryStatus.Succeeded || previous.RequiredStatusBoundary is not null));
+                (previous.Status == DeliveryStatus.Succeeded || previous.RequiredStatusBoundary is not null)) ||
+             // An Issue-link revocation error targets the link's own recorded tested head, which is no
+             // longer required to be the live head once a later push or reactivation has moved it on.
+             state.Outbox.Values.Any(link => link.Kind == EffectKind.LinkIssue &&
+                link.IssueNumber == intent.IssueNumber && link.Generation == intent.Generation &&
+                link.Sha == intent.Sha &&
+                (RequiredStatusPolicy.RequiresIssueLinkRevocation(state, link) ||
+                 link.IssueLinkRevocationDischargedBy == intent.Id)));
         if (liveIssue.RootElement.GetProperty("number").GetInt32() != issue.Number ||
             pr.GetProperty("number").GetInt32() != issue.PullRequest ||
             pr.GetProperty("base").GetProperty("repo").GetProperty("id").GetInt64() != api.RepositoryId ||

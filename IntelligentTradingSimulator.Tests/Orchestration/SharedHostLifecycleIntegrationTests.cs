@@ -771,6 +771,7 @@ public sealed class SharedHostLifecycleIntegrationTests
     [InlineData(true, false)]
     [InlineData(true, true)]
     [InlineData(false, true)]
+    [InlineData(false, false)]
     public async Task RecoveredUncertainLinkRevokesStatusBeforeFailingFeedbackRead(bool hideReceipt, bool alreadyHeld)
     {
         using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();

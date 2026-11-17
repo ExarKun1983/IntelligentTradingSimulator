@@ -873,6 +873,38 @@ public sealed class GitHubRequiredStatusTests
     }
 
     [Fact]
+    public void ConfirmedLinkRevocationDischargeSurvivesALaterSuccessfulLinkLookup()
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var linkId = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue).Id;
+        var statusId = Intent(state).Id;
+        state = reducer.MarkExecuting(state, statusId, Now);
+        state = reducer.RecordOutcome(state, statusId, new(DeliveryStatus.Succeeded, "status-receipt"), Now);
+        state = reducer.MarkExecuting(state, linkId, Now);
+        // The link mutation becomes ambiguous (still Unknown, not yet terminal) while a prior success
+        // status is live, so revocation is required.
+        state = reducer.RecordOutcome(state, linkId, new(DeliveryStatus.Unknown), Now);
+        Assert.True(state.Outbox[linkId].IssueLinkRevocationRequired);
+
+        state = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        var errorId = Intent(state).Id;
+        state = reducer.MarkExecuting(state, errorId, Now);
+        state = reducer.RecordOutcome(state, errorId, new(DeliveryStatus.Succeeded, "error-receipt"), Now);
+        Assert.False(state.Outbox[linkId].IssueLinkRevocationRequired);
+        Assert.Equal(errorId, state.Outbox[linkId].IssueLinkRevocationDischargedBy);
+
+        // A later reconciliation determines the ambiguous link mutation actually succeeded. The already
+        // confirmed discharge must not be reopened by this later outcome.
+        state = reducer.RecordOutcome(state, linkId, new(DeliveryStatus.Succeeded, "PR_node"), Now);
+
+        Assert.False(state.Outbox[linkId].IssueLinkRevocationRequired);
+        Assert.Equal(errorId, state.Outbox[linkId].IssueLinkRevocationDischargedBy);
+        Assert.False(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+        Assert.True(RequiredStatusPolicy.Matches(state, state.Issues[7], state.Outbox[errorId]));
+    }
+
+    [Fact]
     public void StateValidationRejectsUnversionedIssueLinkIntent()
     {
         var state = State();
@@ -886,6 +918,59 @@ public sealed class GitHubRequiredStatusTests
             new OrchestrationReducer().Reconcile(state, Live()));
 
         Assert.Contains("IssueLink payload with protocol version 1", error.Message);
+    }
+
+    [Fact]
+    public void NullRevocationMarkerOnAFailedOrUnknownLinkIsInferredFromMatchingStatusHistory()
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var link = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        var success = Intent(state);
+        state = reducer.MarkExecuting(state, success.Id, Now);
+        state = reducer.RecordOutcome(state, success.Id, new(DeliveryStatus.Succeeded, "success-receipt"), Now);
+        // Simulate data persisted before the revocation marker existed: the link is Failed, its own
+        // generation/SHA still matches the live success record, but the marker field is null rather than
+        // explicitly true.
+        state.Outbox[link.Id].Status = DeliveryStatus.Failed;
+        state.Outbox[link.Id].IssueLinkRevocationRequired = null;
+        Assert.Null(state.Outbox[link.Id].IssueLinkRevocationRequired);
+
+        Assert.True(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+        Assert.True(RequiredStatusPolicy.HasOutstandingIssueLinkRevocation(state, state.Issues[7]));
+
+        state = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        var revocation = Intent(state);
+        Assert.Equal("error", revocation.RequiredStatus!.State);
+        Assert.Equal(link.Generation, revocation.Generation);
+        Assert.Equal(link.Sha, revocation.Sha);
+
+        state = reducer.MarkExecuting(state, revocation.Id, Now);
+        state = reducer.RecordOutcome(state, revocation.Id, new(DeliveryStatus.Succeeded, "error-receipt"), Now);
+
+        // Discharging explicitly sets the marker to false; the null-marker inference must never reopen it.
+        Assert.False(state.Outbox[link.Id].IssueLinkRevocationRequired);
+        Assert.Equal(revocation.Id, state.Outbox[link.Id].IssueLinkRevocationDischargedBy);
+        Assert.False(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+    }
+
+    [Fact]
+    public void NullRevocationMarkerDoesNotApplyToAnUnchangedUnrelatedSuccessRecord()
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var link = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        var success = Intent(state);
+        state = reducer.MarkExecuting(state, success.Id, Now);
+        state = reducer.RecordOutcome(state, success.Id, new(DeliveryStatus.Succeeded, "success-receipt"), Now);
+        // A migrated link whose Status is still Unknown but whose generation/SHA no longer matches any
+        // PublishRequiredStatus history has no obligation to infer.
+        state.Outbox[link.Id].Status = DeliveryStatus.Unknown;
+        state.Outbox[link.Id].IssueLinkRevocationRequired = null;
+        state.Outbox[link.Id].Generation = 99;
+
+        Assert.False(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+        Assert.False(RequiredStatusPolicy.HasOutstandingIssueLinkRevocation(state, state.Issues[7]));
     }
 
     [Fact]
@@ -906,6 +991,55 @@ public sealed class GitHubRequiredStatusTests
             new("operator", ActorKind.Human), Now, new Reactivate("Retry after confirming no status was published.")));
 
         Assert.Equal(2, state.Issues[7].Generation);
+    }
+
+    [Fact]
+    public void DischargedReceiptIsReplacedByNormalPlanningAfterReactivationAdvancesGeneration()
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var link = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        var success = Intent(state);
+        state = reducer.MarkExecuting(state, success.Id, Now);
+        state = reducer.RecordOutcome(state, success.Id, new(DeliveryStatus.Succeeded, "success-receipt"), Now);
+        state = reducer.MarkExecuting(state, link.Id, Now);
+        state = reducer.RecordOutcome(state, link.Id, new(DeliveryStatus.Failed), Now);
+
+        state = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        var errorId = Intent(state).Id;
+        state = reducer.MarkExecuting(state, errorId, Now);
+        state = reducer.RecordOutcome(state, errorId, new(DeliveryStatus.Succeeded, "error-receipt"), Now);
+        Assert.Equal(errorId, state.Issues[7].RequiredStatusIntentId);
+        Assert.True(RequiredStatusPolicy.Matches(state, state.Issues[7], state.Outbox[errorId]));
+
+        // Reactivation advances the Issue to a new generation whose task completes CI and review again.
+        var newSha = new string('c', 40);
+        state.Issues[7].Generation = 2;
+        state.Issues[7].HeadSha = newSha;
+        state.Issues[7].Phase = Phase.HUMAN_REVIEW;
+        state.Issues[7].HoldReason = "Awaiting human approval.";
+        state.Issues[7].ActiveTaskId = "task2";
+        state.Issues[7].Tasks["task2"] = new() { Id = "task2", Status = TaskStatus.Completed,
+            LaunchConfirmed = true, FinalSha = newSha, Round = 1 };
+        state.Outbox["ci2"] = new() { Id = "ci2", IssueNumber = 7, Generation = 2, TaskId = "task2",
+            Sha = newSha, Round = 1, Kind = EffectKind.RunCi, Status = DeliveryStatus.Succeeded, ExternalId = "91" };
+        state.Issues[7].Ci = new() { IntentId = "ci2", TaskId = "task2", Sha = newSha, Round = 1,
+            Green = true, RunId = "91", DispatchBoundary = new(10, new('b', 40), "refs/tags/trusted", "correlation2", Now, 91) };
+        state.Issues[7].Review = new() { TaskId = "task2", Sha = newSha, Round = 1,
+            LifecycleState = ReviewLifecycleState.Completed, Classification = ReviewClassification.Accepted };
+        Assert.Equal("success", RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+        // A discharged receipt from the superseded generation must no longer count as still current.
+        Assert.False(RequiredStatusPolicy.Matches(state, state.Issues[7], state.Outbox[errorId]));
+
+        var newLive = Live();
+        newLive.Issues[7].HeadSha = newSha;
+        state = reducer.Reconcile(state, newLive).State;
+        var replaced = Intent(state);
+
+        Assert.NotEqual(errorId, replaced.Id);
+        Assert.Equal(2, replaced.Generation);
+        Assert.Equal(newSha, replaced.Sha);
+        Assert.Equal("success", replaced.RequiredStatus!.State);
     }
 
     [Fact]
@@ -982,6 +1116,41 @@ public sealed class GitHubRequiredStatusTests
         Assert.False(state.Outbox[link.Id].IssueLinkRevocationRequired);
         Assert.False(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
         Assert.Equal(2, state.Issues[7].Generation);
+    }
+
+    [Fact]
+    public async Task LinkRevocationErrorToleratesLiveHeadChangeWithoutAMatchingSuccessStatusRecord()
+    {
+        var reducer = new OrchestrationReducer(new Allow(), requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var link = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        var success = Intent(state);
+        state = reducer.MarkExecuting(state, success.Id, Now);
+        state = reducer.RecordOutcome(state, success.Id, new(DeliveryStatus.Succeeded, "success-receipt"), Now);
+        state = reducer.MarkExecuting(state, link.Id, Now);
+        state = reducer.RecordOutcome(state, link.Id, new(DeliveryStatus.Failed), Now);
+        Assert.True(state.Outbox[link.Id].IssueLinkRevocationRequired);
+        // Remove the exact-match success record: only the link's own recorded obligation can justify
+        // publishing an error for a head that a concurrent push has already moved away from.
+        state.Outbox.Remove(success.Id);
+
+        state = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        var revocation = Intent(state);
+        Assert.Equal("error", revocation.RequiredStatus!.State);
+        Assert.Equal(link.Generation, revocation.Generation);
+        Assert.Equal(link.Sha, revocation.Sha);
+        state = reducer.MarkExecuting(state, revocation.Id, Now);
+
+        var store = new Store(state);
+        using var api = new Api { Corruption = "head" };
+        using var client = api.Client();
+        var outcome = await Adapter(client, store).ExecuteAsync(Intent(store.Value), default);
+        state = reducer.RecordOutcome(store.Value, revocation.Id, outcome, Now);
+
+        Assert.Equal(DeliveryStatus.Succeeded, outcome.Status);
+        Assert.Equal(1, api.Posts);
+        Assert.False(state.Outbox[link.Id].IssueLinkRevocationRequired);
+        Assert.False(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
     }
 
     [Fact]
