@@ -11,7 +11,7 @@ public static class RequiredStatusPolicy
     internal static bool HasOutstandingIssueLinkRevocation(RepositoryState state, IssueState issue) =>
         state.Outbox.Values.Any(effect => effect.Kind == EffectKind.LinkIssue &&
             effect.IssueNumber == issue.Number &&
-            (effect.IssueLinkRevocationRequired ?? effect.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown));
+            effect.IssueLinkRevocationRequired == true);
 
     public static RequiredStatusPayload Desired(RepositoryState state, IssueState issue)
     {
@@ -133,7 +133,7 @@ public static class RequiredStatusPolicy
         state.Outbox.Values.Any(link => link.Kind == EffectKind.LinkIssue &&
             link.IssueNumber == issue.Number && link.Generation == intent.Generation && link.Sha == intent.Sha &&
             link.IssueLink is { Version: 1 } payload && payload.PullRequest == issue.PullRequest &&
-            (link.IssueLinkRevocationRequired ?? link.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown));
+            (link.IssueLinkRevocationRequired == true || link.IssueLinkRevocationDischargedBy == intent.Id));
 
     public static RequiredStatusPayload ForIntent(RepositoryState state, IssueState issue, string id)
     {

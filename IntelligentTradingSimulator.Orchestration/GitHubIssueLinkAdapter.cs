@@ -88,11 +88,11 @@ public sealed class GitHubIssueLinkAdapter(GitHubRepositoryApi api, IStateStore 
     public async Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken token)
     {
         var saved = Saved((await store.LoadAsync(token)).State, intent);
+        if (saved.IssueLink is not { Version: 1 })
+            throw new InvalidDataException("Unsupported Issue-link protocol version.");
         if (saved.IssueLinkBoundary is not { } boundary)
-            return saved.IssueLink is { Version: 1 }
-                ? new(DeliveryStatus.Failed, FailureCode: EffectFailureCode.IssueLinkNotStarted,
-                    IssueLinkFailure: new(null))
-                : new(DeliveryStatus.Unknown);
+            return new(DeliveryStatus.Failed, FailureCode: EffectFailureCode.IssueLinkNotStarted,
+                IssueLinkFailure: new(null));
         if (boundary.RepositoryId != api.RepositoryId || boundary.Issue != saved.IssueNumber ||
             saved.IssueLink is not { Version: 1 } payload || payload.PullRequest != boundary.PullRequest ||
             string.IsNullOrWhiteSpace(boundary.IssueNodeId) || string.IsNullOrWhiteSpace(boundary.PullNodeId) ||

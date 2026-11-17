@@ -795,6 +795,7 @@ public sealed class SharedHostLifecycleIntegrationTests
         link.CompletedAt = null;
         if (alreadyHeld)
         {
+            link.IssueLinkRevocationRequired = true;
             interrupted.Issues[7].Phase = Phase.BLOCKED;
             interrupted.Issues[7].HoldReason = "Effect outcome is ambiguous.";
         }

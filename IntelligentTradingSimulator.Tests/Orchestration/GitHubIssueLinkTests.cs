@@ -238,19 +238,16 @@ public sealed class GitHubIssueLinkTests
         Assert.Equal(0, api.Mutations);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task MissingBoundaryIsDefiniteOnlyForVersionedProtocol(bool legacy)
+    [Fact]
+    public async Task MissingBoundaryIsDefiniteForVersionedProtocol()
     {
         var store = Executing();
-        if (legacy) Intent(store.State).IssueLink = null;
         using var api = new Api();
         using var client = api.Client();
         var outcome = await new GitHubIssueLinkAdapter(new(client, "owner/repo", 1), store, true)
             .ReconcileAsync(Intent(store.State), default);
 
-        Assert.Equal(legacy ? DeliveryStatus.Unknown : DeliveryStatus.Failed, outcome.Status);
+        Assert.Equal(DeliveryStatus.Failed, outcome.Status);
         Assert.Empty(api.Requests);
         Assert.Equal(0, api.Mutations);
     }

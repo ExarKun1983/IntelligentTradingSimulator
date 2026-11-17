@@ -790,7 +790,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         var issue = state.Issues[issueNumber];
         var link = state.Outbox.Values.Where(effect => effect.Kind == EffectKind.LinkIssue &&
                 effect.IssueNumber == issue.Number &&
-                (effect.IssueLinkRevocationRequired ?? effect.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown) &&
+                effect.IssueLinkRevocationRequired == true &&
                 effect.IssueLink is { Version: 1 } payload && payload.PullRequest == issue.PullRequest &&
                 IsSha(effect.Sha))
             .OrderBy(effect => effect.Generation).ThenBy(effect => effect.Sha, StringComparer.Ordinal)
@@ -884,7 +884,9 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             if (effect.Kind == EffectKind.LinkIssue &&
                 (existing.Status == DeliveryStatus.Unknown ||
                  outcome.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown))
-                effect.IssueLinkRevocationRequired ??= true;
+                effect.IssueLinkRevocationRequired = input.Outbox.Values.Any(status =>
+                    status.IssueNumber == effect.IssueNumber && status.Kind == EffectKind.PublishRequiredStatus &&
+                    status.Status is DeliveryStatus.Succeeded or DeliveryStatus.Executing or DeliveryStatus.Unknown);
             effect.Status = outcome.Status;
             effect.ExternalId = outcome.ExternalId ?? effect.ExternalId;
             effect.CompletedAt = now;
@@ -1109,7 +1111,10 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 effect.RequiredStatus?.State == "error" && RequiredStatusPolicy.Matches(state, issue, effect))
                 foreach (var link in state.Outbox.Values.Where(link => link.Kind == EffectKind.LinkIssue &&
                     link.IssueNumber == issue.Number && link.Generation == effect.Generation && link.Sha == effect.Sha))
+                {
                     link.IssueLinkRevocationRequired = false;
+                    link.IssueLinkRevocationDischargedBy = effect.Id;
+                }
             if (outcome.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown)
             {
                 Hold(issue, outcome.Status == DeliveryStatus.Unknown ? "Effect outcome is ambiguous." : "Effect failed.");
@@ -1429,6 +1434,9 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
     }
     private static void ValidateState(RepositoryState state)
     {
+        if (state.Outbox.Values.Any(effect => effect.Kind == EffectKind.LinkIssue &&
+            effect.IssueLink is not { Version: 1 }))
+            throw new InvalidDataException("LinkIssue effects require an IssueLink payload with protocol version 1.");
         if (state.SchemaVersion != 1 || state.Generation <= 0 || state.Version < 0 || string.IsNullOrWhiteSpace(state.Repository) ||
             state.Issues.Count > MaximumIndexEntries || state.Inbox.Count > MaximumIndexEntries ||
             state.Outbox.Count > MaximumIndexEntries ||

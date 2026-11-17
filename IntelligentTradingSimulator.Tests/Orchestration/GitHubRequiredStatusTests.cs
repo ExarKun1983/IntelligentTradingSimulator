@@ -840,6 +840,9 @@ public sealed class GitHubRequiredStatusTests
         var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
         var state = reducer.Reconcile(State(), Live()).State;
         var linkId = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue).Id;
+        var statusId = Intent(state).Id;
+        state = reducer.MarkExecuting(state, statusId, Now);
+        state = reducer.RecordOutcome(state, statusId, new(DeliveryStatus.Succeeded, "status-receipt"), Now);
         state = reducer.MarkExecuting(state, linkId, Now);
         state = reducer.RecordOutcome(state, linkId, new(outcome), Now);
         state = StateJson.Deserialize(StateJson.Serialize(state));
@@ -867,6 +870,75 @@ public sealed class GitHubRequiredStatusTests
         Assert.False(state.Outbox[linkId].IssueLinkRevocationRequired);
         Assert.False(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
         Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+    }
+
+    [Fact]
+    public void StateValidationRejectsUnversionedIssueLinkIntent()
+    {
+        var state = State();
+        state.Outbox["unversioned-link"] = new()
+        {
+            Id = "unversioned-link", IssueNumber = 7, Generation = 1, Kind = EffectKind.LinkIssue,
+            Status = DeliveryStatus.Unknown
+        };
+
+        var error = Assert.Throws<InvalidDataException>(() =>
+            new OrchestrationReducer().Reconcile(state, Live()));
+
+        Assert.Contains("IssueLink payload with protocol version 1", error.Message);
+    }
+
+    [Fact]
+    public void StatuslessLinkNotStartedFailureCanBeReactivated()
+    {
+        var reducer = new OrchestrationReducer(new Allow());
+        var state = reducer.Reconcile(State(), Live()).State;
+        var link = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        Assert.DoesNotContain(state.Outbox.Values, effect => effect.IssueNumber == 7 &&
+            effect.Kind == EffectKind.PublishRequiredStatus);
+        state = reducer.MarkExecuting(state, link.Id, Now);
+        state = reducer.RecordOutcome(state, link.Id, new(DeliveryStatus.Failed,
+            FailureCode: EffectFailureCode.IssueLinkNotStarted, IssueLinkFailure: new(null)), Now);
+
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+        Assert.False(state.Outbox[link.Id].IssueLinkRevocationRequired);
+        state = reducer.Apply(state, new("reactivate", "owner/repo", 7, 1, 1,
+            new("operator", ActorKind.Human), Now, new Reactivate("Retry after confirming no status was published.")));
+
+        Assert.Equal(2, state.Issues[7].Generation);
+    }
+
+    [Fact]
+    public async Task ConfirmedLinkRevocationRemainsMatchableInCommandOnlyRecovery()
+    {
+        var reducer = new OrchestrationReducer(new Allow(), requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var link = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        var success = Intent(state);
+        state = reducer.MarkExecuting(state, success.Id, Now);
+        state = reducer.RecordOutcome(state, success.Id, new(DeliveryStatus.Succeeded, "success-receipt"), Now);
+        state = reducer.MarkExecuting(state, link.Id, Now);
+        state = reducer.RecordOutcome(state, link.Id, new(DeliveryStatus.Failed), Now);
+        var store = new Store(state);
+        using var api = new Api();
+        using var client = api.Client();
+
+        var first = await PauseCommandOnlyAsync(client, store, Approved);
+        var revocation = Intent(store.Value);
+
+        Assert.Equal(WorkerStopReason.EffectsDisabled, first.Reason);
+        Assert.Equal(DeliveryStatus.Succeeded, revocation.Status);
+        Assert.False(store.Value.Outbox[link.Id].IssueLinkRevocationRequired);
+        Assert.Equal(revocation.Id, store.Value.Outbox[link.Id].IssueLinkRevocationDischargedBy);
+        Assert.True(RequiredStatusPolicy.Matches(store.Value, store.Value.Issues[7], revocation));
+        Assert.Equal(StateJson.Serialize(store.Value),
+            StateJson.Serialize(reducer.PlanRequiredStatusRevocation(store.Value, 7, Now)));
+
+        var recovered = await PauseCommandOnlyAsync(client, store, Approved);
+
+        Assert.Equal(WorkerStopReason.EffectsDisabled, recovered.Reason);
+        Assert.Equal(1, api.Posts);
+        Assert.Equal(revocation.Id, Intent(store.Value).Id);
     }
 
     [Fact]
@@ -1002,7 +1074,9 @@ public sealed class GitHubRequiredStatusTests
             case "shared-sha": state.Issues[8] = new() { Number = 8, HeadSha = Sha, Phase = Phase.BLOCKED }; break;
             case "shared-pr": state.Issues[8] = new() { Number = 8, PullRequest = 17, Phase = Phase.BLOCKED }; break;
             case "uncertain-effect":
-                state.Outbox["unknown"] = new() { IssueNumber = 7, Kind = EffectKind.LinkIssue, Status = DeliveryStatus.Unknown };
+                state.Outbox["unknown"] = new() { Id = "unknown", IssueNumber = 7, Generation = 1,
+                    Kind = EffectKind.LinkIssue, Status = DeliveryStatus.Unknown, Sha = Sha,
+                    IssueLink = new(1, 17) };
                 break;
         }
 
@@ -1324,7 +1398,7 @@ public sealed class GitHubRequiredStatusTests
         state.Issues[7].Phase = Phase.BLOCKED;
         state.Issues[7].HoldReason = "Link interrupted.";
         state.Outbox["link"] = new() { Id = "link", IssueNumber = 7, Generation = 1,
-            Kind = EffectKind.LinkIssue, Status = DeliveryStatus.Unknown };
+            Kind = EffectKind.LinkIssue, Status = DeliveryStatus.Unknown, Sha = Sha, IssueLink = new(1, 17) };
         var store = new Store(state);
         var before = StateJson.Serialize(state);
         var result = await new OrchestrationWorker().RunAsync(store, new EmptyEvents(), new Observations(),
