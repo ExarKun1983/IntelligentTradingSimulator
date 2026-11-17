@@ -803,6 +803,13 @@ public sealed class SharedHostLifecycleIntegrationTests
         fixture.HideLinkReceipt = hideReceipt;
         fixture.FailFeedbackRead = true;
         fixture.OnStatusWrite = status => { if (status == "error") Assert.NotNull(store.State.WorkerLease); };
+        if (!alreadyHeld)
+            fixture.OnLinkLookup = () =>
+            {
+                Assert.Equal(DeliveryStatus.Unknown, store.State.Outbox[link.Id].Status);
+                Assert.True(store.State.Outbox[link.Id].IssueLinkRevocationRequired);
+                Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
+            };
 
         await Assert.ThrowsAsync<HttpRequestException>(() => Wake(host));
 
@@ -1046,6 +1053,7 @@ public sealed class SharedHostLifecycleIntegrationTests
         public bool HideLinkReceipt { get; set; }
         public bool AwaitLinkCancellation { get; set; }
         public Action? CancelLink { get; set; }
+        public Action? OnLinkLookup { get; set; }
         public Action<string?>? OnStatusWrite { get; set; }
         public List<JsonElement> Statuses { get; } = [];
         public List<string> StatusWrites { get; } = [];
@@ -1089,6 +1097,8 @@ public sealed class SharedHostLifecycleIntegrationTests
                     response = new { data = new { addCloseIssueReferences = new { issue = new { id = "I_7" } } } };
                 }
                 else if (query.Contains("closingIssuesReferences", StringComparison.Ordinal))
+                {
+                    OnLinkLookup?.Invoke();
                     response = LinkFailure == "preflight" ? (object)new { errors = new[] { new { message = "offline refusal" } } } :
                         new { data = new { node = new { id = "PR_node", number = 17,
                         repository = new { nameWithOwner = "owner/repo" }, closingIssuesReferences = new
@@ -1096,6 +1106,7 @@ public sealed class SharedHostLifecycleIntegrationTests
                         nodes = IssueLinked && !HideLinkReceipt ? new[] { new { id = "I_7" } } : [],
                         pageInfo = new { hasNextPage = false }
                     } } } };
+                }
                 else return await tasks.SendAsync(request, token);
             }
             else if (path == prefix + "actions/runs/90")

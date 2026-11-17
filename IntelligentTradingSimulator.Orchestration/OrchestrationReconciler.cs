@@ -276,6 +276,14 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
     private async Task<RepositoryState> RecoverIntentAsync(IStateStore store, IEffectAdapter effects,
         EffectIntent intent, DateTimeOffset observedAt, int maximumConflicts, CancellationToken cancellationToken)
     {
+        if (intent.Kind == EffectKind.LinkIssue && intent.Status == DeliveryStatus.Executing)
+        {
+            var interrupted = await PublishOutcomeAsync(store, intent.Id, intent.Digest,
+                new(DeliveryStatus.Unknown, FailureCode: EffectFailureCode.Interrupted), observedAt,
+                maximumConflicts, cancellationToken);
+            intent = interrupted.Outbox[intent.Id];
+        }
+
         EffectOutcome recovered;
         try
         {
