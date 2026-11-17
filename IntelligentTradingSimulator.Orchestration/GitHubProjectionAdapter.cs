@@ -23,10 +23,13 @@ public static class StatusProjection
     private static string ClosingLinkGuidance(IssueState issue) =>
         issue.Phase == Phase.HUMAN_REVIEW && issue.Number > 0 && issue.PullRequest is > 0
             ? "### Issue closing link\n\n" +
-              $"Confirm that live PR #{issue.PullRequest} uniquely addresses Issue #{issue.Number} and targets " +
-              "the repository's default branch. If the correct closing link is absent, add " +
+              $"A separate durable projection links live PR #{issue.PullRequest} to Issue #{issue.Number} " +
+              "after checking its unique mapping, exact head and the repository's default branch. " +
+              "It preserves the PR description and existing links; conflicting links require reconciliation. " +
+              "This snapshot does not confirm delivery. Before merging, verify the Issue appears in Development. " +
+              "If manual reconciliation is needed, add " +
               $"`Closes #{issue.Number}` to the PR description, or link the Issue manually in Development. " +
-              "Inspect existing links first; this snapshot does not verify them or edit the PR.\n\n"
+              "Inspect existing links first; the Issue closes only after the human merges the PR.\n\n"
             : "";
 
     private static string ClassificationSummary(IssueState issue, bool isolatedProfile)

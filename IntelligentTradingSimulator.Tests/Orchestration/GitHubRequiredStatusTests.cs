@@ -362,7 +362,7 @@ public sealed class GitHubRequiredStatusTests
     [InlineData("lost-response")]
     [InlineData("publisher")]
     [InlineData("head")]
-    public async Task CommandOnlyRevocationFailurePreservesPauseAndNeverBlindlyRepeatsPost(string failure)
+    public async Task CommandOnlyRevocationPreservesPauseAndNeverBlindlyRepeatsPost(string failure)
     {
         var store = new Store(Planned());
         var api = new Api();
@@ -376,12 +376,18 @@ public sealed class GitHubRequiredStatusTests
 
         var result = await PauseCommandOnlyAsync(client, store, Approved);
 
-        Assert.Equal(WorkerStopReason.Blocked, result.Reason);
+        Assert.Equal(failure == "head" ? WorkerStopReason.EffectsDisabled : WorkerStopReason.Blocked, result.Reason);
         Assert.True(store.Value.Issues[7].Paused);
         Assert.Empty(store.Value.Issues[8].Tasks);
-        Assert.Equal(DeliveryStatus.Unknown, Intent(store.Value).Status);
+        Assert.Equal(failure == "head" ? DeliveryStatus.Succeeded : DeliveryStatus.Unknown, Intent(store.Value).Status);
         Assert.Equal("error", Intent(store.Value).RequiredStatus!.State);
         var posts = api.Posts;
+        if (failure == "head")
+        {
+            Assert.Equal(2, posts);
+            Assert.Equal(Sha, Intent(store.Value).Sha);
+            Assert.NotNull(Intent(store.Value).RequiredStatusBoundary);
+        }
         await PauseCommandOnlyAsync(client, store, Approved);
         Assert.Equal(posts, api.Posts);
         if (failure == "lost-response")
@@ -793,6 +799,861 @@ public sealed class GitHubRequiredStatusTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task VerifiedMergePublishesSuccessAndReleasesTerminalProjectionBarrier(bool issueClosed)
+    {
+        var state = MergeReady();
+        state.Issues[7].ContinuationHoldBarrier = new(1, true);
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestClosed = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        live.Issues[7].Labels = [];
+        var store = new Store(state);
+        using var api = new Api { Merged = true, Corruption = issueClosed ? "issue-closed" : null };
+        using var client = api.Client();
+        var result = await new OrchestrationWorker(new OrchestrationReducer(requiredStatusEnabled: true), new Clock())
+            .RunAsync(store, new EmptyEvents(), new Observations(live), new RecordingEffects(Adapter(client, store)),
+                new(false, true, true, true),
+                new WorkerOptions { MaximumIterations = 8, PollInterval = TimeSpan.Zero });
+
+        Assert.Equal(WorkerStopReason.Settled, result.Reason);
+        Assert.Equal(1, api.Posts);
+        Assert.Equal("success", Intent(store.Value).RequiredStatus!.State);
+        Assert.Equal("Merged; exact tested head CI and accepted review verified.", Intent(store.Value).RequiredStatus!.Description);
+        Assert.Equal(Phase.CLOSED, store.Value.Issues[7].Phase);
+        Assert.Equal(TerminalOutcome.Merged, store.Value.Issues[7].TerminalOutcome);
+        Assert.Null(store.Value.Issues[7].ContinuationHoldBarrier);
+        Assert.Null(store.Value.AdmittedIssue);
+        Assert.DoesNotContain(store.Value.Outbox.Values,
+            effect => effect.Kind is EffectKind.LaunchTask or EffectKind.RequestReview);
+    }
+
+    [Theory]
+    [InlineData(DeliveryStatus.Failed)]
+    [InlineData(DeliveryStatus.Unknown)]
+    public void LinkRevocationObligationSurvivesPersistenceAndReceiptRecoveryUntilMatchingErrorIsConfirmed(
+        DeliveryStatus outcome)
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var linkId = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue).Id;
+        var statusId = Intent(state).Id;
+        state = reducer.MarkExecuting(state, statusId, Now);
+        state = reducer.RecordOutcome(state, statusId, new(DeliveryStatus.Succeeded, "status-receipt"), Now);
+        state = reducer.MarkExecuting(state, linkId, Now);
+        state = reducer.RecordOutcome(state, linkId, new(outcome), Now);
+        state = StateJson.Deserialize(StateJson.Serialize(state));
+        Assert.True(state.Outbox[linkId].IssueLinkRevocationRequired);
+        if (outcome == DeliveryStatus.Unknown)
+            state = reducer.RecordOutcome(state, linkId, new(DeliveryStatus.Succeeded, "PR_node"), Now);
+        Assert.True(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+
+        state = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        var errorId = Intent(state).Id;
+        var unrelated = StateJson.Clone(state).Outbox[errorId];
+        unrelated.Id = "unrelated-error";
+        unrelated.Digest = "unrelated-error";
+        state.Outbox.Add(unrelated.Id, unrelated);
+        state = reducer.MarkExecuting(state, unrelated.Id, Now);
+        state = reducer.RecordOutcome(state, unrelated.Id, new(DeliveryStatus.Succeeded, "other-receipt"), Now);
+        Assert.True(state.Outbox[linkId].IssueLinkRevocationRequired);
+
+        state = reducer.MarkExecuting(state, errorId, Now);
+        state = reducer.RecordOutcome(state, errorId, new(DeliveryStatus.Unknown), Now);
+        Assert.True(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+        state = reducer.RecordOutcome(state, errorId, new(DeliveryStatus.Succeeded, "error-receipt"), Now);
+        state = StateJson.Deserialize(StateJson.Serialize(state));
+
+        Assert.False(state.Outbox[linkId].IssueLinkRevocationRequired);
+        Assert.False(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+    }
+
+    [Fact]
+    public void ConfirmedLinkRevocationDischargeSurvivesALaterSuccessfulLinkLookup()
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var linkId = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue).Id;
+        var statusId = Intent(state).Id;
+        state = reducer.MarkExecuting(state, statusId, Now);
+        state = reducer.RecordOutcome(state, statusId, new(DeliveryStatus.Succeeded, "status-receipt"), Now);
+        state = reducer.MarkExecuting(state, linkId, Now);
+        // The link mutation becomes ambiguous (still Unknown, not yet terminal) while a prior success
+        // status is live, so revocation is required.
+        state = reducer.RecordOutcome(state, linkId, new(DeliveryStatus.Unknown), Now);
+        Assert.True(state.Outbox[linkId].IssueLinkRevocationRequired);
+
+        state = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        var errorId = Intent(state).Id;
+        state = reducer.MarkExecuting(state, errorId, Now);
+        state = reducer.RecordOutcome(state, errorId, new(DeliveryStatus.Succeeded, "error-receipt"), Now);
+        Assert.False(state.Outbox[linkId].IssueLinkRevocationRequired);
+        Assert.Equal(errorId, state.Outbox[linkId].IssueLinkRevocationDischargedBy);
+
+        // A later reconciliation determines the ambiguous link mutation actually succeeded. The already
+        // confirmed discharge must not be reopened by this later outcome.
+        state = reducer.RecordOutcome(state, linkId, new(DeliveryStatus.Succeeded, "PR_node"), Now);
+
+        Assert.False(state.Outbox[linkId].IssueLinkRevocationRequired);
+        Assert.Equal(errorId, state.Outbox[linkId].IssueLinkRevocationDischargedBy);
+        Assert.False(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+        Assert.True(RequiredStatusPolicy.Matches(state, state.Issues[7], state.Outbox[errorId]));
+    }
+
+    [Fact]
+    public void StateValidationRejectsUnversionedIssueLinkIntent()
+    {
+        var state = State();
+        state.Outbox["unversioned-link"] = new()
+        {
+            Id = "unversioned-link", IssueNumber = 7, Generation = 1, Kind = EffectKind.LinkIssue,
+            Status = DeliveryStatus.Unknown
+        };
+
+        var error = Assert.Throws<InvalidDataException>(() =>
+            new OrchestrationReducer().Reconcile(state, Live()));
+
+        Assert.Contains("IssueLink payload with protocol version 1", error.Message);
+    }
+
+    [Fact]
+    public void NullRevocationMarkerOnAFailedOrUnknownLinkIsInferredFromMatchingStatusHistory()
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var link = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        var success = Intent(state);
+        state = reducer.MarkExecuting(state, success.Id, Now);
+        state = reducer.RecordOutcome(state, success.Id, new(DeliveryStatus.Succeeded, "success-receipt"), Now);
+        // Simulate data persisted before the revocation marker existed: the link is Failed, its own
+        // generation/SHA still matches the live success record, but the marker field is null rather than
+        // explicitly true.
+        state.Outbox[link.Id].Status = DeliveryStatus.Failed;
+        state.Outbox[link.Id].IssueLinkRevocationRequired = null;
+        Assert.Null(state.Outbox[link.Id].IssueLinkRevocationRequired);
+
+        Assert.True(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+        Assert.True(RequiredStatusPolicy.HasOutstandingIssueLinkRevocation(state, state.Issues[7]));
+
+        state = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        var revocation = Intent(state);
+        Assert.Equal("error", revocation.RequiredStatus!.State);
+        Assert.Equal(link.Generation, revocation.Generation);
+        Assert.Equal(link.Sha, revocation.Sha);
+
+        state = reducer.MarkExecuting(state, revocation.Id, Now);
+        state = reducer.RecordOutcome(state, revocation.Id, new(DeliveryStatus.Succeeded, "error-receipt"), Now);
+
+        // Discharging explicitly sets the marker to false; the null-marker inference must never reopen it.
+        Assert.False(state.Outbox[link.Id].IssueLinkRevocationRequired);
+        Assert.Equal(revocation.Id, state.Outbox[link.Id].IssueLinkRevocationDischargedBy);
+        Assert.False(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+    }
+
+    [Fact]
+    public void NullRevocationMarkerDoesNotApplyToAnUnchangedUnrelatedSuccessRecord()
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var link = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        var success = Intent(state);
+        state = reducer.MarkExecuting(state, success.Id, Now);
+        state = reducer.RecordOutcome(state, success.Id, new(DeliveryStatus.Succeeded, "success-receipt"), Now);
+        // A migrated link whose Status is still Unknown but whose generation/SHA no longer matches any
+        // PublishRequiredStatus history has no obligation to infer.
+        state.Outbox[link.Id].Status = DeliveryStatus.Unknown;
+        state.Outbox[link.Id].IssueLinkRevocationRequired = null;
+        state.Outbox[link.Id].Generation = 99;
+
+        Assert.False(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+        Assert.False(RequiredStatusPolicy.HasOutstandingIssueLinkRevocation(state, state.Issues[7]));
+    }
+
+    [Fact]
+    public void StatuslessLinkNotStartedFailureCanBeReactivated()
+    {
+        var reducer = new OrchestrationReducer(new Allow());
+        var state = reducer.Reconcile(State(), Live()).State;
+        var link = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        Assert.DoesNotContain(state.Outbox.Values, effect => effect.IssueNumber == 7 &&
+            effect.Kind == EffectKind.PublishRequiredStatus);
+        state = reducer.MarkExecuting(state, link.Id, Now);
+        state = reducer.RecordOutcome(state, link.Id, new(DeliveryStatus.Failed,
+            FailureCode: EffectFailureCode.IssueLinkNotStarted, IssueLinkFailure: new(null)), Now);
+
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+        Assert.False(state.Outbox[link.Id].IssueLinkRevocationRequired);
+        state = reducer.Apply(state, new("reactivate", "owner/repo", 7, 1, 1,
+            new("operator", ActorKind.Human), Now, new Reactivate("Retry after confirming no status was published.")));
+
+        Assert.Equal(2, state.Issues[7].Generation);
+    }
+
+    [Fact]
+    public void DischargedReceiptIsReplacedByNormalPlanningAfterReactivationAdvancesGeneration()
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var link = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        var success = Intent(state);
+        state = reducer.MarkExecuting(state, success.Id, Now);
+        state = reducer.RecordOutcome(state, success.Id, new(DeliveryStatus.Succeeded, "success-receipt"), Now);
+        state = reducer.MarkExecuting(state, link.Id, Now);
+        state = reducer.RecordOutcome(state, link.Id, new(DeliveryStatus.Failed), Now);
+
+        state = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        var errorId = Intent(state).Id;
+        state = reducer.MarkExecuting(state, errorId, Now);
+        state = reducer.RecordOutcome(state, errorId, new(DeliveryStatus.Succeeded, "error-receipt"), Now);
+        Assert.Equal(errorId, state.Issues[7].RequiredStatusIntentId);
+        Assert.True(RequiredStatusPolicy.Matches(state, state.Issues[7], state.Outbox[errorId]));
+
+        // Reactivation advances the Issue to a new generation whose task completes CI and review again.
+        var newSha = new string('c', 40);
+        state.Issues[7].Generation = 2;
+        state.Issues[7].HeadSha = newSha;
+        state.Issues[7].Phase = Phase.HUMAN_REVIEW;
+        state.Issues[7].HoldReason = "Awaiting human approval.";
+        state.Issues[7].ActiveTaskId = "task2";
+        state.Issues[7].Tasks["task2"] = new() { Id = "task2", Status = TaskStatus.Completed,
+            LaunchConfirmed = true, FinalSha = newSha, Round = 1 };
+        state.Outbox["ci2"] = new() { Id = "ci2", IssueNumber = 7, Generation = 2, TaskId = "task2",
+            Sha = newSha, Round = 1, Kind = EffectKind.RunCi, Status = DeliveryStatus.Succeeded, ExternalId = "91" };
+        state.Issues[7].Ci = new() { IntentId = "ci2", TaskId = "task2", Sha = newSha, Round = 1,
+            Green = true, RunId = "91", DispatchBoundary = new(10, new('b', 40), "refs/tags/trusted", "correlation2", Now, 91) };
+        state.Issues[7].Review = new() { TaskId = "task2", Sha = newSha, Round = 1,
+            LifecycleState = ReviewLifecycleState.Completed, Classification = ReviewClassification.Accepted };
+        Assert.Equal("success", RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+        // A discharged receipt from the superseded generation must no longer count as still current.
+        Assert.False(RequiredStatusPolicy.Matches(state, state.Issues[7], state.Outbox[errorId]));
+
+        var newLive = Live();
+        newLive.Issues[7].HeadSha = newSha;
+        state = reducer.Reconcile(state, newLive).State;
+        var replaced = Intent(state);
+
+        Assert.NotEqual(errorId, replaced.Id);
+        Assert.Equal(2, replaced.Generation);
+        Assert.Equal(newSha, replaced.Sha);
+        Assert.Equal("success", replaced.RequiredStatus!.State);
+    }
+
+    [Fact]
+    public async Task ConfirmedLinkRevocationRemainsMatchableInCommandOnlyRecovery()
+    {
+        var reducer = new OrchestrationReducer(new Allow(), requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var link = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        var success = Intent(state);
+        state = reducer.MarkExecuting(state, success.Id, Now);
+        state = reducer.RecordOutcome(state, success.Id, new(DeliveryStatus.Succeeded, "success-receipt"), Now);
+        state = reducer.MarkExecuting(state, link.Id, Now);
+        state = reducer.RecordOutcome(state, link.Id, new(DeliveryStatus.Failed), Now);
+        var store = new Store(state);
+        using var api = new Api();
+        using var client = api.Client();
+
+        var first = await PauseCommandOnlyAsync(client, store, Approved);
+        var revocation = Intent(store.Value);
+
+        Assert.Equal(WorkerStopReason.EffectsDisabled, first.Reason);
+        Assert.Equal(DeliveryStatus.Succeeded, revocation.Status);
+        Assert.False(store.Value.Outbox[link.Id].IssueLinkRevocationRequired);
+        Assert.Equal(revocation.Id, store.Value.Outbox[link.Id].IssueLinkRevocationDischargedBy);
+        Assert.True(RequiredStatusPolicy.Matches(store.Value, store.Value.Issues[7], revocation));
+        Assert.Equal(StateJson.Serialize(store.Value),
+            StateJson.Serialize(reducer.PlanRequiredStatusRevocation(store.Value, 7, Now)));
+
+        var recovered = await PauseCommandOnlyAsync(client, store, Approved);
+
+        Assert.Equal(WorkerStopReason.EffectsDisabled, recovered.Reason);
+        Assert.Equal(1, api.Posts);
+        Assert.Equal(revocation.Id, Intent(store.Value).Id);
+    }
+
+    [Fact]
+    public void LinkRevocationUsesRecordedGenerationAndShaAndBlocksReactivationUntilConfirmed()
+    {
+        var reducer = new OrchestrationReducer(new Allow(), requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var link = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        var success = Intent(state);
+        state = reducer.MarkExecuting(state, success.Id, Now);
+        state = reducer.RecordOutcome(state, success.Id, new(DeliveryStatus.Succeeded, "success-receipt"), Now);
+        state = reducer.MarkExecuting(state, link.Id, Now);
+        state = reducer.RecordOutcome(state, link.Id, new(DeliveryStatus.Failed), Now);
+
+        var reactivate = new OrchestrationEvent("reactivate", "owner/repo", 7, 1, 1,
+            new("operator", ActorKind.Human), Now, new Reactivate("Retry after inspecting the failed link."));
+        Assert.Throws<InvalidOperationException>(() => reducer.Apply(state, reactivate));
+
+        state.Issues[7].Generation = 2;
+        state.Issues[7].HeadSha = new('c', 40);
+        Assert.True(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+        state = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        var revocation = Intent(state);
+        Assert.Equal(link.Generation, revocation.Generation);
+        Assert.Equal(link.Sha, revocation.Sha);
+        Assert.Equal("error", revocation.RequiredStatus!.State);
+        Assert.True(RequiredStatusPolicy.Matches(state, state.Issues[7], revocation));
+
+        state = reducer.MarkExecuting(state, revocation.Id, Now);
+        state = reducer.RecordOutcome(state, revocation.Id, new(DeliveryStatus.Unknown), Now);
+        Assert.True(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+        Assert.Throws<InvalidOperationException>(() => reducer.Apply(state, reactivate with
+        {
+            Id = "reactivate-after-unknown-status",
+            IssueGeneration = 2
+        }));
+        state = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        Assert.Equal(revocation.Id, Intent(state).Id);
+        state = reducer.RecordOutcome(state, revocation.Id, new(DeliveryStatus.Succeeded, "error-receipt"), Now);
+
+        Assert.False(state.Outbox[link.Id].IssueLinkRevocationRequired);
+        Assert.False(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+        Assert.Equal(2, state.Issues[7].Generation);
+    }
+
+    [Fact]
+    public async Task LinkRevocationErrorToleratesLiveHeadChangeWithoutAMatchingSuccessStatusRecord()
+    {
+        var reducer = new OrchestrationReducer(new Allow(), requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var link = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        var success = Intent(state);
+        state = reducer.MarkExecuting(state, success.Id, Now);
+        state = reducer.RecordOutcome(state, success.Id, new(DeliveryStatus.Succeeded, "success-receipt"), Now);
+        state = reducer.MarkExecuting(state, link.Id, Now);
+        state = reducer.RecordOutcome(state, link.Id, new(DeliveryStatus.Failed), Now);
+        Assert.True(state.Outbox[link.Id].IssueLinkRevocationRequired);
+        // Remove the exact-match success record: only the link's own recorded obligation can justify
+        // publishing an error for a head that a concurrent push has already moved away from.
+        state.Outbox.Remove(success.Id);
+
+        state = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        var revocation = Intent(state);
+        Assert.Equal("error", revocation.RequiredStatus!.State);
+        Assert.Equal(link.Generation, revocation.Generation);
+        Assert.Equal(link.Sha, revocation.Sha);
+        state = reducer.MarkExecuting(state, revocation.Id, Now);
+
+        var store = new Store(state);
+        using var api = new Api { Corruption = "head" };
+        using var client = api.Client();
+        var outcome = await Adapter(client, store).ExecuteAsync(Intent(store.Value), default);
+        state = reducer.RecordOutcome(store.Value, revocation.Id, outcome, Now);
+
+        Assert.Equal(DeliveryStatus.Succeeded, outcome.Status);
+        Assert.Equal(1, api.Posts);
+        Assert.False(state.Outbox[link.Id].IssueLinkRevocationRequired);
+        Assert.False(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+    }
+
+    [Fact]
+    public async Task LinkRevocationPublishesToOriginalShaAfterHeadAndGenerationChange()
+    {
+        var reducer = new OrchestrationReducer(new Allow(), requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var link = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        var success = Intent(state);
+        state = reducer.MarkExecuting(state, success.Id, Now);
+        state = reducer.RecordOutcome(state, success.Id, new(DeliveryStatus.Succeeded, "success-receipt"), Now);
+        state = reducer.MarkExecuting(state, link.Id, Now);
+        state = reducer.RecordOutcome(state, link.Id, new(DeliveryStatus.Failed), Now);
+        state.Issues[7].Generation = 2;
+        state.Issues[7].HeadSha = new('c', 40);
+        var laterHead = Live();
+        laterHead.Issues[7].HeadSha = state.Issues[7].HeadSha;
+        state = reducer.Reconcile(state, laterHead).State;
+        var currentError = Intent(state);
+        Assert.Equal(2, currentError.Generation);
+        Assert.Equal(state.Issues[7].HeadSha, currentError.Sha);
+        Assert.Equal("error", currentError.RequiredStatus!.State);
+        state = reducer.MarkExecuting(state, currentError.Id, Now);
+        state = reducer.RecordOutcome(state, currentError.Id, new(DeliveryStatus.Succeeded, "later-error-receipt"), Now);
+        Assert.True(state.Outbox[link.Id].IssueLinkRevocationRequired);
+
+        state = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        var revocation = Intent(state);
+        Assert.NotEqual(currentError.Id, revocation.Id);
+        state = reducer.MarkExecuting(state, revocation.Id, Now);
+
+        var store = new Store(state);
+        using var api = new Api();
+        using var client = api.Client();
+        var outcome = await Adapter(client, store).ExecuteAsync(Intent(store.Value), default);
+        state = reducer.RecordOutcome(store.Value, revocation.Id, outcome, Now);
+
+        Assert.Equal(DeliveryStatus.Succeeded, outcome.Status);
+        Assert.Equal(1, api.Posts);
+        Assert.Equal(Sha, state.Outbox[revocation.Id].Sha);
+        Assert.False(state.Outbox[link.Id].IssueLinkRevocationRequired);
+        Assert.False(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+    }
+
+    [Theory]
+    [InlineData("unmerged")]
+    [InlineData("unknown")]
+    [InlineData("missing-record")]
+    [InlineData("record-sha")]
+    [InlineData("record-pr")]
+    [InlineData("record-generation")]
+    [InlineData("ci-failed")]
+    [InlineData("review-missing")]
+    [InlineData("review-failed")]
+    [InlineData("unresolved-finding")]
+    [InlineData("paused")]
+    [InlineData("feedback")]
+    [InlineData("uncertain-effect")]
+    [InlineData("feedback-proof")]
+    [InlineData("approval-proof")]
+    [InlineData("handoff")]
+    [InlineData("shared-sha")]
+    [InlineData("shared-pr")]
+    public void ClosedWorkCannotClaimVerifiedMergeWithMissingOrConflictingEvidence(string corruption)
+    {
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        var state = new OrchestrationReducer().Reconcile(MergeReady(), live).State;
+        var issue = state.Issues[7];
+        switch (corruption)
+        {
+            case "unmerged": issue.TerminalOutcome = TerminalOutcome.Unmerged; break;
+            case "unknown": issue.TerminalOutcome = TerminalOutcome.Unknown; break;
+            case "missing-record": issue.TerminalHistory.Clear(); break;
+            case "record-sha": issue.TerminalHistory[0] = issue.TerminalHistory[0] with { Sha = Definition }; break;
+            case "record-pr": issue.TerminalHistory[0] = issue.TerminalHistory[0] with { PullRequest = 18 }; break;
+            case "record-generation": issue.TerminalHistory[0] = issue.TerminalHistory[0] with { Generation = 2 }; break;
+            case "ci-failed": issue.Ci!.Green = false; break;
+            case "review-missing": issue.Review = null; break;
+            case "review-failed": issue.Review!.LifecycleState = ReviewLifecycleState.Failed; break;
+            case "unresolved-finding": issue.Review!.Findings.Add(new("open", "Needs fix", "evidence")); break;
+            case "paused": issue.Paused = true; break;
+            case "feedback": issue.PendingFeedbackEventIds.Add("new-feedback"); break;
+            case "feedback-proof": issue.MergeFeedback = null; break;
+            case "approval-proof":
+                issue.TerminalHistory[0] = issue.TerminalHistory[0] with { Approval = null }; break;
+            case "handoff": issue.CurrentHandoffId = null; break;
+            case "shared-sha": state.Issues[8] = new() { Number = 8, HeadSha = Sha, Phase = Phase.BLOCKED }; break;
+            case "shared-pr": state.Issues[8] = new() { Number = 8, PullRequest = 17, Phase = Phase.BLOCKED }; break;
+            case "uncertain-effect":
+                state.Outbox["unknown"] = new() { Id = "unknown", IssueNumber = 7, Generation = 1,
+                    Kind = EffectKind.LinkIssue, Status = DeliveryStatus.Unknown, Sha = Sha,
+                    IssueLink = new(1, 17) };
+                break;
+        }
+
+        Assert.Equal("error", RequiredStatusPolicy.Desired(state, issue).State);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MergeCannotRestoreEligibilityAfterHeadDriftAndRestoration(bool mergeFirst)
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = MergeReady();
+        var live = Live();
+        if (mergeFirst)
+        {
+            live.Issues[7].Closed = true;
+            live.Issues[7].PullRequestMerged = true;
+            live.Issues[7].PullRequestMergedAt = Now;
+            state = reducer.Reconcile(state, live).State;
+            Assert.Equal("success", RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+        }
+        live.Issues[7].HeadSha = Definition;
+        state = reducer.Reconcile(state, live).State;
+        live.Issues[7].HeadSha = Sha;
+        state = reducer.Reconcile(state, live).State;
+        var hold = state.Issues[7].HoldReason;
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        state = reducer.Reconcile(state, live).State;
+
+        Assert.Null(state.Issues[7].TerminalHistory.Last().Approval);
+        Assert.Equal(hold, state.Issues[7].HoldReason);
+        Assert.Equal("error", RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+    }
+
+    [Theory]
+    [InlineData("safety-hold")]
+    [InlineData("missing-handoff")]
+    [InlineData("pause")]
+    [InlineData("feedback")]
+    public void ClosureDoesNotFabricateFinalApprovalOrEraseSafetyHold(string change)
+    {
+        var state = MergeReady();
+        var issue = state.Issues[7];
+        switch (change)
+        {
+            case "safety-hold": issue.Phase = Phase.BLOCKED; issue.HoldReason = "Safety requires reactivation."; break;
+            case "missing-handoff": issue.CurrentHandoffId = null; break;
+            case "pause": issue.Paused = true; break;
+            case "feedback": issue.PendingFeedbackEventIds.Add("feedback"); break;
+        }
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        state = new OrchestrationReducer(requiredStatusEnabled: true).Reconcile(state, live).State;
+
+        Assert.Null(state.Issues[7].TerminalHistory.Last().Approval);
+        if (change == "safety-hold") Assert.Equal("Safety requires reactivation.", state.Issues[7].HoldReason);
+        Assert.Equal("error", RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+    }
+
+    [Theory]
+    [InlineData("none")]
+    [InlineData("issue")]
+    [InlineData("pull")]
+    [InlineData("edited-after-merge")]
+    [InlineData("postmerge-only")]
+    public async Task ClosedIssueReadsFeedbackThroughMergeBeforeGrantingTerminalSuccess(string feedback)
+    {
+        var reducer = new OrchestrationReducer(new Allow(), requiredStatusEnabled: true);
+        var state = reducer.ConfirmFinalApprovals(State(), Now.AddSeconds(-1));
+        state.Issues[7].ReadyAt = Now.AddMinutes(-1);
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestClosed = false;
+        live.Issues[7].PullRequestMerged = false;
+        state = reducer.Reconcile(state, live).State;
+        Assert.NotNull(state.Issues[7].TerminalHistory.Last().Approval);
+        using var api = new Api { Corruption = "issue-closed" };
+        using var client = api.Client();
+        var source = new GitHubFeedbackSource(new(client, "owner/repo", 1), clock: new Clock(Now.AddMinutes(1)));
+        Assert.Empty(await source.ReadAsync(state, default));
+        api.Merged = true;
+        if (feedback != "none")
+        {
+            var comment = JsonSerializer.SerializeToElement(new { id = 1, body = "Additional human instruction",
+                created_at = feedback == "postmerge-only" ? Now.AddSeconds(1) : Now.AddSeconds(-30),
+                updated_at = feedback == "edited-after-merge" ? Now.AddSeconds(1) : Now.AddSeconds(-10),
+                user = new { id = 55, login = "maintainer", type = "User" } });
+            (feedback == "pull" ? api.PullComments : api.IssueComments).Add(comment);
+        }
+        var messages = await source.ReadAsync(state, default);
+        Assert.Single(messages, message => message.Data is MergeFeedbackObserved);
+        var clean = feedback is "none" or "postmerge-only";
+        Assert.Equal(clean ? 0 : 1, messages.Count(message => message.Data is HumanFeedback));
+        foreach (var message in messages) state = reducer.Apply(state, message);
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestClosed = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        state = reducer.Reconcile(state, live).State;
+
+        Assert.Equal(clean ? "success" : "error",
+            RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+        var commentReads = api.Requests.Count(path => path.EndsWith("/comments", StringComparison.Ordinal));
+        Assert.Empty(await source.ReadAsync(state, default));
+        Assert.Equal(commentReads, api.Requests.Count(path => path.EndsWith("/comments", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task IncompleteFeedbackReadCannotSealMergeBoundary()
+    {
+        var state = State();
+        state.Issues[7].ReadyAt = Now.AddMinutes(-1);
+        using var api = new Api { Merged = true, ForbiddenSuffix = "/issues/17/comments" };
+        using var client = api.Client();
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            new GitHubFeedbackSource(new(client, "owner/repo", 1), clock: new Clock()).ReadAsync(state, default));
+        Assert.Null(state.Issues[7].MergeFeedback);
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        state = new OrchestrationReducer(requiredStatusEnabled: true).Reconcile(state, live).State;
+        Assert.Equal("error", RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+    }
+
+    [Theory]
+    [InlineData(-1, "success")]
+    [InlineData(0, "error")]
+    [InlineData(1, "error")]
+    public async Task DurableHandoffConfirmationMustStrictlyPrecedeMerge(int seconds, string expected)
+    {
+        var state = State();
+        var store = new Store(state);
+        await new OrchestrationReconciler().ConfirmFinalApprovalsAsync(store, new Clock(Now.AddSeconds(seconds)), default);
+        var issue = store.Value.Issues[7];
+        Assert.Equal(Now.AddSeconds(seconds), issue.Handoffs[issue.CurrentHandoffId!].PublicationConfirmedAt);
+        issue.MergeFeedback = new(1, 17, Sha, Now, Now.AddMinutes(1));
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        state = new OrchestrationReducer(requiredStatusEnabled: true).Reconcile(store.Value, live).State;
+
+        Assert.Equal(expected, RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+        if (seconds >= 0) Assert.Null(state.Issues[7].TerminalHistory.Last().Approval);
+    }
+
+    [Fact]
+    public async Task MergeDuringCommentCollectionExcludesCommentsCreatedAfterMerge()
+    {
+        var state = MergeReady();
+        state.Issues[7].ReadyAt = Now.AddMinutes(-1);
+        using var api = new Api();
+        api.BeforeComments = () => api.Merged = true;
+        api.IssueComments.Add(JsonSerializer.SerializeToElement(new { id = 1, body = "Post-merge note",
+            created_at = Now.AddSeconds(1), updated_at = Now.AddSeconds(1),
+            user = new { id = 55, login = "maintainer", type = "User" } }));
+        using var client = api.Client();
+        var messages = await new GitHubFeedbackSource(new(client, "owner/repo", 1),
+            clock: new Clock(Now.AddMinutes(1))).ReadAsync(state, default);
+
+        Assert.Single(messages, message => message.Data is MergeFeedbackObserved);
+        Assert.DoesNotContain(messages, message => message.Data is HumanFeedback);
+        var pullRead = api.Requests.FindLastIndex(path => path == "/pulls/17");
+        Assert.True(pullRead > api.Requests.FindLastIndex(path => path.EndsWith("/comments", StringComparison.Ordinal)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FeedbackPostedBetweenInitialListAndMergeObservationCannotBeSealedAway(bool onPull)
+    {
+        var state = MergeReady();
+        state.Issues[7].ReadyAt = Now.AddMinutes(-1);
+        using var api = new Api { Merged = true };
+        api.AfterPullRead = () =>
+        {
+            (onPull ? api.PullComments : api.IssueComments).Add(JsonSerializer.SerializeToElement(new
+            {
+                id = 1, body = "Instruction posted just before merge",
+                created_at = Now.AddSeconds(-1), updated_at = Now.AddSeconds(-1),
+                user = new { id = 55, login = "maintainer", type = "User" }
+            }));
+            api.AfterPullRead = null;
+        };
+        using var client = api.Client();
+        var messages = await new GitHubFeedbackSource(new(client, "owner/repo", 1),
+            clock: new Clock(Now.AddMinutes(1))).ReadAsync(state, default);
+        Assert.Single(messages, message => message.Data is HumanFeedback);
+        Assert.Single(messages, message => message.Data is MergeFeedbackObserved);
+        var reducer = new OrchestrationReducer(new Allow());
+        foreach (var message in messages) state = reducer.Apply(state, message);
+
+        Assert.Single(state.Issues[7].PendingFeedbackEventIds);
+        Assert.Equal("error", RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+    }
+
+    [Theory]
+    [InlineData("head")]
+    [InlineData("unmerged")]
+    [InlineData("timestamp")]
+    [InlineData("read-failure")]
+    public async Task PostMergeFeedbackReadMustCompleteAndRevalidateSameBoundary(string change)
+    {
+        var state = MergeReady();
+        state.Issues[7].ReadyAt = Now.AddMinutes(-1);
+        using var api = new Api { Merged = true };
+        var reads = 0;
+        api.BeforeComments = () =>
+        {
+            if (++reads != 2) return;
+            switch (change)
+            {
+                case "head": api.Corruption = "head"; break;
+                case "unmerged": api.Merged = false; break;
+                case "timestamp": api.MergeTime = Now.AddSeconds(1); break;
+                case "read-failure": api.ForbiddenSuffix = "/issues/17/comments"; break;
+            }
+        };
+        using var client = api.Client();
+        var source = new GitHubFeedbackSource(new(client, "owner/repo", 1), clock: new Clock(Now.AddMinutes(1)));
+        if (change == "read-failure")
+            await Assert.ThrowsAsync<HttpRequestException>(() => source.ReadAsync(state, default));
+        else
+            await Assert.ThrowsAsync<InvalidDataException>(() => source.ReadAsync(state, default));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(7)]
+    [InlineData(8)]
+    [InlineData(-1)]
+    public async Task SharedPullFeedbackHasPerIssueIdentityAndLegacyDeduplicationIsOwnerScoped(int legacyOwner)
+    {
+        var state = State();
+        state.Issues[7].ReadyAt = Now.AddMinutes(-1);
+        state.Issues[8] = StateJson.Clone(state).Issues[7];
+        state.Issues[8].Number = 8;
+        var updated = Now.AddSeconds(-1);
+        if (legacyOwner != 0)
+        {
+            var legacy = new OrchestrationEvent($"feedback:1:1:17:1:{updated:O}", "owner/repo",
+                legacyOwner == -1 ? 7 : legacyOwner, state.Generation, 1,
+                new("maintainer", ActorKind.Human, 55), updated, new HumanFeedback("Shared PR instruction"));
+            state.Inbox[legacy.Id] = new(legacy.Id, legacy.Digest, DeliveryStatus.Succeeded, updated, updated,
+                legacyOwner == -1 ? null : StateJson.SerializeEvent(legacy));
+        }
+        using var api = new Api();
+        api.PullComments.Add(JsonSerializer.SerializeToElement(new
+        {
+            id = 1, body = "Shared PR instruction", created_at = updated, updated_at = updated,
+            user = new { id = 55, login = "maintainer", type = "User" }
+        }));
+        using var client = api.Client();
+        var source = new GitHubFeedbackSource(new(client, "owner/repo", 1));
+        var messages = await source.ReadAsync(state, default);
+        Assert.Equal(legacyOwner > 0 ? 1 : 2, messages.Count);
+        Assert.Equal(messages.Count, messages.Select(message => message.Id).Distinct().Count());
+        Assert.All(messages, message =>
+        {
+            Assert.IsType<HumanFeedback>(message.Data);
+            Assert.NotEqual(legacyOwner, message.IssueNumber);
+        });
+        var reducer = new OrchestrationReducer(new Allow());
+        foreach (var message in messages) state = reducer.Apply(state, message);
+        Assert.Empty(await source.ReadAsync(state, default));
+    }
+
+    [Fact]
+    public async Task SharedPullProducesDistinctMergeFeedbackEvidenceForEachCanonicalIssue()
+    {
+        var state = MergeReady();
+        state.Issues[7].ReadyAt = Now.AddMinutes(-1);
+        state.Issues[8] = StateJson.Clone(state).Issues[7];
+        state.Issues[8].Number = 8;
+        using var api = new Api { Merged = true };
+        using var client = api.Client();
+        var source = new GitHubFeedbackSource(new(client, "owner/repo", 1), clock: new Clock());
+        var messages = await source.ReadAsync(state, default);
+
+        Assert.Equal(2, messages.Count);
+        Assert.Equal(2, messages.Select(message => message.Id).Distinct().Count());
+        var reducer = new OrchestrationReducer(new Allow());
+        foreach (var message in messages) state = reducer.Apply(state, message);
+        Assert.NotNull(state.Issues[7].MergeFeedback);
+        Assert.NotNull(state.Issues[8].MergeFeedback);
+        Assert.Empty(await source.ReadAsync(state, default));
+    }
+
+    [Fact]
+    public async Task ErrorRevokesPublishedTestedHeadEvenIfLiveHeadHasMoved()
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = Planned();
+        var success = Intent(state);
+        state = reducer.RecordOutcome(state, success.Id, new(DeliveryStatus.Succeeded, "100"), Now);
+        state.Issues[7].Phase = Phase.BLOCKED;
+        state.Issues[7].HoldReason = "Link preflight observed changed live head.";
+        var store = new Store(state);
+        using var api = new Api { Corruption = "head" };
+        using var client = api.Client();
+        var result = await new OrchestrationReconciler().RevokeRequiredStatusAsync(store, 7, Adapter(client, store), Now);
+
+        Assert.Equal(1, api.Posts);
+        Assert.Contains("/statuses/" + Sha, api.Requests);
+        Assert.Equal("error", Intent(result).RequiredStatus!.State);
+        Assert.Equal(DeliveryStatus.Succeeded, Intent(result).Status);
+        Assert.NotNull(Intent(result).RequiredStatusBoundary);
+    }
+
+    [Fact]
+    public async Task DryRunCannotUseEarlyIndependentRevocationForUncertainLink()
+    {
+        var state = State();
+        state.Issues[7].Phase = Phase.BLOCKED;
+        state.Issues[7].HoldReason = "Link interrupted.";
+        state.Outbox["link"] = new() { Id = "link", IssueNumber = 7, Generation = 1,
+            Kind = EffectKind.LinkIssue, Status = DeliveryStatus.Unknown, Sha = Sha, IssueLink = new(1, 17) };
+        var store = new Store(state);
+        var before = StateJson.Serialize(state);
+        var result = await new OrchestrationWorker().RunAsync(store, new EmptyEvents(), new Observations(),
+            new ForbiddenEffects(), new(true, true, true, true));
+
+        Assert.Equal(WorkerStopReason.DryRun, result.Reason);
+        Assert.Equal(before, StateJson.Serialize(store.Value));
+    }
+
+    [Theory]
+    [InlineData("closed-unmerged")]
+    [InlineData("mapping")]
+    [InlineData("head")]
+    public void ClosedIssueCannotCarryApprovalAcrossUnmergedClosureOrConflictingMapping(string change)
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = MergeReady();
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestClosed = false;
+        live.Issues[7].PullRequestMerged = false;
+        state = reducer.Reconcile(state, live).State;
+        Assert.NotNull(state.Issues[7].TerminalHistory.Last().Approval);
+        switch (change)
+        {
+            case "closed-unmerged": live.Issues[7].PullRequestClosed = true; break;
+            case "mapping": live.Issues[7].PullRequest = 18; break;
+            case "head": live.Issues[7].HeadSha = Definition; break;
+        }
+        state = reducer.Reconcile(state, live).State;
+        Assert.Null(state.Issues[7].TerminalHistory.Last().Approval);
+        live.Issues[7].PullRequest = 17;
+        live.Issues[7].HeadSha = Sha;
+        live.Issues[7].PullRequestClosed = true;
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        state = reducer.Reconcile(state, live).State;
+
+        Assert.Null(state.Issues[7].TerminalHistory.Last().Approval);
+        Assert.Equal("error", RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+    }
+
+    [Fact]
+    public async Task RecordedMergeCannotPublishSuccessIfLivePullWasClosedWithoutMerging()
+    {
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = reducer.Reconcile(MergeReady(), live).State;
+        var store = new Store(reducer.MarkExecuting(state, Intent(state).Id, Now));
+        using var api = new Api { Corruption = "pull-closed" };
+        using var client = api.Client();
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => Adapter(client, store).ExecuteAsync(Intent(store.Value), default));
+
+        Assert.Equal(0, api.Posts);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MergedSuccessCannotOverwriteStatusForAnotherCanonicalOwner(bool samePull)
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        var state = reducer.Reconcile(MergeReady(), live).State;
+        Assert.Equal("success", Intent(state).RequiredStatus!.State);
+        state = reducer.MarkExecuting(state, Intent(state).Id, Now);
+        state.Issues[8] = new() { Number = 8, Phase = Phase.BLOCKED,
+            HeadSha = samePull ? Definition : Sha, PullRequest = samePull ? 17 : 18 };
+        var store = new Store(state);
+        using var api = new Api { Merged = true };
+        using var client = api.Client();
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => Adapter(client, store).ExecuteAsync(Intent(store.Value), default));
+
+        Assert.Equal(0, api.Posts);
+        Assert.Equal("error", RequiredStatusPolicy.Desired(store.Value, store.Value.Issues[7]).State);
+    }
+
+    [Theory]
     [InlineData("pause")]
     [InlineData("feedback")]
     [InlineData("head")]
@@ -1141,6 +2002,13 @@ public sealed class GitHubRequiredStatusTests
     }
     private static LiveObservation Live() => new() { ObservedAt = Now,
         Issues = new() { [7] = new() { PullRequest = 17, HeadSha = Sha, Ready = true, Labels = ["agent:review"] } } };
+    private static RepositoryState MergeReady()
+    {
+        var state = new OrchestrationReducer().ConfirmFinalApprovals(State(), Now.AddSeconds(-1));
+        state.Issues[7].MergeFeedback = new(1, 17, Sha, Now, Now);
+        return state;
+    }
+
     private static RepositoryState State()
     {
         var state = RepositoryState.Create("owner/repo");
@@ -1162,10 +2030,13 @@ public sealed class GitHubRequiredStatusTests
     }
 
     private sealed class Allow : IAuthorizationPolicy { public bool IsAuthorized(OrchestrationEvent message) => true; }
-    private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now; }
-    private sealed class Observations : IObservationSource
+    private sealed class Clock(DateTimeOffset? now = null) : TimeProvider
     {
-        public Task<LiveObservation> ObserveAsync(RepositoryState state, CancellationToken token) => Task.FromResult(Live());
+        public override DateTimeOffset GetUtcNow() => now ?? Now;
+    }
+    private sealed class Observations(LiveObservation? observation = null) : IObservationSource
+    {
+        public Task<LiveObservation> ObserveAsync(RepositoryState state, CancellationToken token) => Task.FromResult(observation ?? Live());
     }
     private sealed class FeedbackEvents : IWorkerEventSource
     {
@@ -1179,6 +2050,17 @@ public sealed class GitHubRequiredStatusTests
         public Task<WorkerEventBatch> ReadAsync(RepositoryState state, CancellationToken token) =>
             Task.FromResult(new WorkerEventBatch([]));
     }
+    private sealed class ForbiddenEffects : IEffectAdapter, IIndependentStatusRevocation
+    {
+        public Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken token) =>
+            throw new InvalidOperationException("Dry run cannot execute.");
+        public Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken token) =>
+            throw new InvalidOperationException("Dry run cannot recover external effects.");
+        public Task<RepositoryState> RevokeRequiredStatusesAsync(IStateStore store, ReconcileOptions options,
+            DateTimeOffset now, CancellationToken token) =>
+            throw new InvalidOperationException("Dry run cannot revoke.");
+    }
+
     private sealed class RecordingEffects(GitHubRequiredStatusAdapter adapter) : IEffectAdapter
     {
         public List<EffectIntent> Executed { get; } = [];
@@ -1186,7 +2068,7 @@ public sealed class GitHubRequiredStatusTests
         {
             Executed.Add(intent);
             return intent.Kind == EffectKind.PublishRequiredStatus ? adapter.ExecuteAsync(intent, token) :
-                intent.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus
+                intent.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus or EffectKind.LinkIssue
                     ? Task.FromResult(new EffectOutcome(DeliveryStatus.Succeeded, "offline-projection")) :
                     throw new InvalidOperationException("New automated work must not execute.");
         }
@@ -1211,12 +2093,16 @@ public sealed class GitHubRequiredStatusTests
 
     private sealed class Api : HttpMessageHandler
     {
+        public List<JsonElement> IssueComments { get; } = [];
+        public List<JsonElement> PullComments { get; } = [];
         public List<string> Requests { get; } = [];
         public int Posts { get; private set; }
         public string? Body { get; private set; }
         public string? Corruption { get; set; }
         public string? ForbiddenSuffix { get; set; }
         public bool LostResponse { get; set; }
+        public bool Merged { get; set; }
+        public DateTimeOffset MergeTime { get; set; } = Now;
         public bool CancelAfterPost { get; set; }
         public bool SynchronizePreparation { get; set; }
         public bool HideCreatedStatus { get; set; }
@@ -1224,6 +2110,7 @@ public sealed class GitHubRequiredStatusTests
         public Action? BeforePost { get; set; }
         public Func<Task>? BeforePostAsync { get; set; }
         public Action? AfterPullRead { get; set; }
+        public Action? BeforeComments { get; set; }
         public Func<Task>? OnPullRead { get; set; }
         private object? created;
         private readonly List<(string Body, string Sha)> createdStatuses = [];
@@ -1259,14 +2146,22 @@ public sealed class GitHubRequiredStatusTests
                     actor = new { id = 55 } };
             else if (path == "/users/maintainer") value = new { id = 55, login = "maintainer", type = "User" };
             else if (path.EndsWith("/collaborators/maintainer/permission", StringComparison.Ordinal))
-                value = new { permission = "write", user = new { id = 55 } };
+                value = new { permission = "write", user = new { id = 55, login = "maintainer", type = "User" } };
             else if (path.StartsWith("/users/", StringComparison.Ordinal)) value = Actor();
             else if (path.EndsWith("/issues/7", StringComparison.Ordinal))
                 value = new { id = 70, number = 7, state = Corruption == "issue-closed" ? "closed" : "open",
                     labels = Array.Empty<object>() };
+            else if (path.EndsWith("/issues/7/comments", StringComparison.Ordinal))
+            {
+                BeforeComments?.Invoke();
+                value = IssueComments;
+            }
+            else if (path.EndsWith("/issues/8/comments", StringComparison.Ordinal)) value = Array.Empty<object>();
+            else if (path.EndsWith("/issues/17/comments", StringComparison.Ordinal)) value = PullComments;
             else if (path.EndsWith("/pulls/17", StringComparison.Ordinal))
             {
-                value = new { number = 17, state = Corruption == "pull-closed" ? "closed" : "open",
+                value = new { number = 17, state = Merged || Corruption == "pull-closed" ? "closed" : "open", merged = Merged,
+                    merged_at = Merged ? MergeTime : (DateTimeOffset?)null,
                     @base = new { repo = new { id = 1 } },
                     head = new { sha = Corruption == "head" ? Definition : Sha, repo = new { id = 1 } } };
                 AfterPullRead?.Invoke();

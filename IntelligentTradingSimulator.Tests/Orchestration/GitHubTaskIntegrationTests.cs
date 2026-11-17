@@ -1110,7 +1110,7 @@ public sealed class GitHubTaskIntegrationTests
                 else throw new InvalidOperationException("Unexpected mutation.");
                 return Response(labels.Distinct().Select(name => new { name }).ToArray());
             }
-            if (path == "/repos/owner/repo") result = new { id = 1, full_name = "owner/repo" };
+            if (path == "/repos/owner/repo") result = new { id = 1, full_name = "owner/repo", default_branch = "master" };
             else if (path == prefix + "actions/runs/44")
                 result = new { @event = RunEvent, path = WorkflowPath, actor = new { id = 55 } };
             else if (path == "/users/maintainer") result = new { id = 55, login = "maintainer", type = "User" };
@@ -1121,7 +1121,7 @@ public sealed class GitHubTaskIntegrationTests
                     user = new { id = PermissionMismatch ? 66 : 55, login, type = "User" } };
             }
             else if (path == prefix + "issues/7")
-                result = new { id = 70, number = 7, state = "open", labels = labels.Distinct().Select(name => new { name }) };
+                result = new { id = 70, node_id = "I_7", number = 7, state = "open", labels = labels.Distinct().Select(name => new { name }) };
             else if (path == prefix + "issues/237")
                 result = new { id = 2370, number = 237, state = "open", labels = labels.Distinct().Select(name => new { name }) };
             else if (path.EndsWith("/comments"))
@@ -1196,7 +1196,7 @@ public sealed class GitHubTaskIntegrationTests
         }
         private object Pull(int number) => new
         {
-            id = Corruption == "rest-database" ? ArtifactDatabaseId + 1 : ArtifactDatabaseId, number,
+            id = Corruption == "rest-database" ? ArtifactDatabaseId + 1 : ArtifactDatabaseId, node_id = "PR_node", number,
             state = Corruption == "closed-pr" ? "closed" : "open", merged = false, draft = Draft,
             head = new { sha = Corruption == "sha" ? "invalid" : Corruption == "later-push" ? new string('b', 40) : HeadSha,
                 @ref = Corruption == "head-ref" ? "other" : "coding",

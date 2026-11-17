@@ -2202,16 +2202,91 @@ human review. Replaying the same command does not create another task. This is
 an explicit manual dispatch, not automatic handling of GitHub's "Request changes"
 review button. Final approval/merge remains a human action in GitHub.
 
-For a mapped `HUMAN_REVIEW` handoff, the status comment suggests verifying the
-live PR/Issue mapping and existing links before a human adds `Closes #<issue>`
-to the PR description or links the Issue through GitHub's Development sidebar.
-Closing keywords in a PR description are effective only when the PR targets
-the repository's default branch. The suggestion is not proof of a link or
-authority to close an Issue. The orchestrator does not edit the PR body: GitHub
-does not document conditional PATCH support for that endpoint, so a read-then-
-write cannot reliably protect a concurrent human edit. See GitHub's
+For a settled, accepted `HUMAN_REVIEW` handoff with verified exact-head CI, a
+durable `LinkIssue` projection adds the closing relationship through GraphQL
+`addCloseIssueReferences`. It verifies the unique canonical PR/Issue mapping,
+live open Issue and PR, same-repository head and base, exact head SHA and the
+repository's current default target branch. An existing correct link is a no-op;
+other closing Issues, incomplete pagination or GraphQL errors stop the projection
+for reconciliation without changing those links. The isolated status-test profile
+does not plan this effect. If that Issue has any required-status history, an
+approved revocation publisher is required before a pending link effect can start.
+The adapter rechecks this prerequisite before mutation. A statusless profile
+without status history can still link Issues. No PR description is overwritten, no Issue is directly
+closed and no PR is approved or merged. The separate human merge closes the linked
+Issue through GitHub. Versioned link intents persist the original Issue/PR node
+identities and an exclusively owned mutation boundary before sending the request.
+Proven pre-mutation refusals carry the observed boundary as evidence. Outcome
+publication rechecks its absence or exact ownership in the same CAS that records
+the failure; a competing boundary instead preserves uncertainty. Once a request
+may have been sent, recovery looks up those saved nodes,
+even after a push, retarget or canonical lifecycle change; an absent read result
+never authorizes another mutation. Legacy intents without this protocol remain
+uncertain. Before the worker stops on a failed or uncertain link, an independently
+approved, status-only revocation path publishes the held head's error without
+replaying link or agent effects or clearing the hold. Recovery performs this
+revocation before unrelated event/API reads can fail. A failed or uncertain link
+durably records `IssueLinkRevocationRequired`. The obligation remains until the
+matching generation/SHA error is confirmed, even if lookup recovery later confirms
+the link succeeded: a link receipt does not clear the Issue's safety hold or its
+revocation obligation. Legacy failed/unknown links without the marker are treated
+as outstanding until confirmed revocation, including during receipt recovery.
+A healthy successful link never creates this obligation merely because a normal
+merge sends a closure notification; merge evidence is read before terminal status
+projection instead of attempting an unnecessary early error publication.
+Error-only revocation may
+target the previously published tested SHA even if the live head has moved; this
+exception never authorizes a stale-head success or skips repository/publisher checks.
+Cancellation preserves executing links as uncertain and attempts approved revocation
+with a separate 45-second cleanup token before releasing the lease. Failure to
+persist cleanup state retains the lease for explicit recovery/expiry; uncertain
+status delivery remains lookup-only.
+Linking and merge are not transactional: verify the link in Development before
+the manual merge, especially if a concurrent edit or merge
+interrupts projection. This does not retrofit already-merged PRs or close old
+unlinked Issues.
+
+The handoff comment describes the separate projection, not confirmed delivery.
+An authorized human can reconcile a missing link by inspecting the live mapping
+and adding `Closes #<issue>` or using Development. The orchestrator does not edit
+the PR body: GitHub does not document conditional PATCH support for that endpoint,
+so a read-then-write cannot reliably protect a concurrent human edit. See GitHub's
 [conditional request guidance](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#use-conditional-requests)
 and [linking documentation](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue).
+
+After a confirmed merge, `Agent managed CI` reports terminal success only when
+the latest terminal record matches the current generation, PR and head, the
+recorded final-approval handoff was eligible before closure, the
+completed task and exact-head CI evidence still match, the review is accepted
+with all findings resolved, and no pause, pending feedback or uncertain
+non-status effect remains, and no other canonical Issue owns that PR or SHA.
+The worker confirms the handoff's publication only after loading it from durable
+state, using the injected orchestration clock rather than the command/review event
+timestamp. This durable-publication upper bound must strictly precede the live
+merge timestamp; missing, equal or later confirmation fails closed.
+Closing or merging never clears an earlier safety hold or restores invalidated
+approval evidence after head drift. An otherwise eligible closed Issue with a
+still-open PR continues to collect authorized Issue/PR feedback. Terminal success
+also requires a complete feedback read through the live merge timestamp, recorded
+durably before projection. After observing a merge, both complete comment lists
+are read again and the same merged head/timestamp is revalidated before sealing
+the boundary. This includes comments created between the initial lists and merge;
+comments created after merge are excluded. Human-feedback and merge-feedback
+event identities include the canonical Issue number as well as PR/head. Legacy
+human-feedback IDs suppress only their original Issue's revision when its saved
+event identifies that Issue; unattributed legacy entries cannot suppress feedback.
+Partial or inconsistent reads cannot seal that boundary. Current revisions of comments created
+before merge are treated conservatively as feedback, including edits after merge.
+This is not a lossless history of deleted comments or earlier revisions. A sealed
+closed lifecycle is not polled indefinitely for post-merge comments. Historical
+records without the new evidence fail closed, without fabricated approval.
+Publication rechecks that the live PR is closed and actually merged at the
+recorded boundary, and revalidates the trusted CI run. Its description reports a
+verified merge rather than asking for human approval again. Unmerged/unknown
+closures and missing or contradictory evidence remain errors. The terminal
+projection barrier accepts this verified merged result without reopening work.
+This status is retrospective evidence, not permission to merge or a replacement
+for branch protection; the manual merge gate is unchanged.
 
 Duplicate ready notifications do not launch another task. Withdrawal prevents
 admission of queued, unstarted work. Withdrawal during active work must stop new

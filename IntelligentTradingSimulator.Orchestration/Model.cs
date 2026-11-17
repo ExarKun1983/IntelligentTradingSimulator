@@ -9,7 +9,7 @@ public enum Phase { READY, CODING, CI_PENDING, REVIEW_PENDING, FIX_PENDING, HUMA
 public enum TaskKind { Coding, CiRepair, ReviewRepair, FeedbackRepair }
 public enum TaskLaunchSource { PullRequestHead, UnmappedIssue }
 public enum TaskStatus { Intended, Executing, Running, AwaitingHeadConfirmation, Completed, Failed, Unknown }
-public enum EffectKind { LaunchTask, RunCi, RequestReview, ProjectLabels, ProjectStatus, PublishRequiredStatus }
+public enum EffectKind { LaunchTask, RunCi, RequestReview, ProjectLabels, ProjectStatus, PublishRequiredStatus, LinkIssue }
 public enum DeliveryStatus { Pending, Executing, Succeeded, Failed, Unknown, Cancelled }
 public enum ReviewClassification { Accepted, Blocking, NeedsHuman }
 public enum ReviewLifecycleState { NotRequested, Requesting, RequestUnknown, Requested, Pending, Completed, Failed, TimedOut }
@@ -87,6 +87,8 @@ public sealed class IssueState
     public string? StatusProjectionDigest { get; set; }
     public long RequiredStatusSequence { get; set; }
     public string? RequiredStatusIntentId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MergeFeedbackEvidence? MergeFeedback { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ContinuationHoldBarrier? ContinuationHoldBarrier { get; set; }
 }
@@ -171,7 +173,11 @@ public sealed record InboxEntry(string Id, string Digest, DeliveryStatus Status,
     public OrchestrationEvent? Event => PayloadJson is null ? null : StateJson.DeserializeEvent(PayloadJson);
 }
 public sealed record HumanHandoff(string Id, long Generation, string? ReviewId, string? TaskId,
-    int Round, string? Sha, string Reason, DateTimeOffset CreatedAt, string? ClassificationEventId = null);
+    int Round, string? Sha, string Reason, DateTimeOffset CreatedAt, string? ClassificationEventId = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? PublicationConfirmedAt { get; init; }
+}
 public sealed record FeedbackRecord(string EventId, string Text, Actor Author, DateTimeOffset OccurredAt,
     long Generation, string? HandoffId, int Round, string? Sha, string? PlannedTaskId = null,
     string? HandedOffTaskId = null, DateTimeOffset? HandedOffAt = null);
@@ -181,7 +187,25 @@ public sealed record HumanClassificationRecord(string EventId, string HandoffId,
     int Round, string Sha, ReviewClassification Classification, List<Finding> Findings,
     List<FindingResponse> Responses, DateTimeOffset OccurredAt);
 public sealed record TerminalRecord(long Generation, TerminalOutcome Outcome, int? PullRequest,
-    string? Sha, DateTimeOffset ObservedAt);
+    string? Sha, DateTimeOffset ObservedAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public FinalApprovalEvidence? Approval { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PreviousHoldReason { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? MergedAt { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool PullRequestWasOpen { get; init; }
+}
+public sealed record FinalApprovalEvidence(string HandoffId, string TaskId, string ReviewId,
+    string CiIntentId, string CiRunId, int Round, string Sha)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? PublicationConfirmedAt { get; init; }
+}
+public sealed record MergeFeedbackEvidence(long Generation, int PullRequest, string Sha,
+    DateTimeOffset MergedAt, DateTimeOffset ObservedAt);
 public sealed record TaskSessionTerminalEvidence(string Id, string ExternalTaskId, long RepositoryId,
     string State, DateTimeOffset CompletedAt);
 public sealed record TaskTerminalEvidence(string LaunchIntentId, string ExternalTaskId, string Repository,
@@ -218,6 +242,14 @@ public sealed class EffectIntent
     public RequiredStatusPayload? RequiredStatus { get; set; }
     public RequiredStatusBoundary? RequiredStatusBoundary { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IssueLinkPayload? IssueLink { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IssueLinkBoundary? IssueLinkBoundary { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? IssueLinkRevocationRequired { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IssueLinkRevocationDischargedBy { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public EffectFailureCode? FailureCode { get; set; }
 }
 
@@ -225,6 +257,9 @@ public sealed record RequiredStatusPayload(string Context, string State, string 
     string? CiIntentId, string? CiRunId);
 public sealed record RequiredStatusBoundary(long ActorId, string ActorLogin, string ActorNodeId, string ActorType,
     DateTimeOffset PreparedAt, List<long> ExistingStatusIds, long? StatusId = null);
+public sealed record IssueLinkPayload(int Version, int PullRequest);
+public sealed record IssueLinkBoundary(long RepositoryId, int Issue, int PullRequest,
+    string IssueNodeId, string PullNodeId, DateTimeOffset PreparedAt, string OwnerId);
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(Ready), "ready")]
@@ -245,6 +280,7 @@ public sealed record RequiredStatusBoundary(long ActorId, string ActorLogin, str
 [JsonDerivedType(typeof(ReviewPending), "review-pending")]
 [JsonDerivedType(typeof(ReviewTimedOut), "review-timed-out")]
 [JsonDerivedType(typeof(HumanFeedback), "human-feedback")]
+[JsonDerivedType(typeof(MergeFeedbackObserved), "merge-feedback-observed")]
 [JsonDerivedType(typeof(HumanClassification), "human-classification")]
 [JsonDerivedType(typeof(RequestChanges), "request-changes")]
 [JsonDerivedType(typeof(AbandonUncertainReview), "abandon-uncertain-review")]
@@ -252,6 +288,8 @@ public sealed record RequiredStatusBoundary(long ActorId, string ActorLogin, str
 [JsonDerivedType(typeof(Closure), "closure")]
 [JsonDerivedType(typeof(Reopen), "reopen")]
 public abstract record EventData;
+public sealed record MergeFeedbackObserved(int PullRequest, string Sha, DateTimeOffset MergedAt,
+    DateTimeOffset ObservedAt) : EventData;
 public sealed record Ready([property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     int? MaxRepairTasks = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -401,6 +439,8 @@ public sealed class LiveIssueObservation
     public string? HeadSha { get; set; }
     public string? CompletedTaskId { get; set; }
     public bool? PullRequestMerged { get; set; }
+    public bool? PullRequestClosed { get; set; }
+    public DateTimeOffset? PullRequestMergedAt { get; set; }
     public List<string> Labels { get; set; } = [];
 }
 

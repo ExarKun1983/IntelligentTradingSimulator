@@ -11,11 +11,15 @@ public enum EffectFailureCode
     OperatorAbandonedUnknownReview,
     OperatorAbandonedUnknownTaskLaunch,
     ExecutionException,
-    RecoveryException
+    RecoveryException,
+    IssueLinkNotStarted,
+    IssueLinkBoundaryChanged,
+    Interrupted
 }
 
 public sealed record EffectOutcome(DeliveryStatus Status, string? ExternalId = null,
-    EffectFailureCode? FailureCode = null);
+    EffectFailureCode? FailureCode = null, IssueLinkFailureEvidence? IssueLinkFailure = null);
+public sealed record IssueLinkFailureEvidence(IssueLinkBoundary? Boundary);
 
 public interface IObservationSource
 {
@@ -27,6 +31,12 @@ public interface IEffectAdapter
     Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken cancellationToken);
     // Must look up the persisted idempotency key and operation identity, never launch a replacement.
     Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken cancellationToken);
+}
+
+public interface IIndependentStatusRevocation
+{
+    Task<RepositoryState> RevokeRequiredStatusesAsync(IStateStore store, ReconcileOptions options, DateTimeOffset now,
+        CancellationToken token);
 }
 
 // Only deliberately injected offline fakes may simulate agent launch effects.
@@ -50,9 +60,10 @@ public sealed record ReconcileOptions(
 {
     internal int? ProjectionIssueNumber { get; init; }
     internal bool PrioritizeAdmittedWork { get; init; }
+    internal bool IssueLinkRevocationApproved { get; init; } = true;
 
     public bool AllowsEffect(EffectIntent effect) =>
-        (!ProjectionOnly || effect.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus or EffectKind.PublishRequiredStatus) &&
+        (!ProjectionOnly || effect.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus or EffectKind.PublishRequiredStatus or EffectKind.LinkIssue) &&
         (ProjectionIssueNumber is null || effect.IssueNumber == ProjectionIssueNumber) &&
         (AllowedEffectKinds is null || AllowedEffectKinds.Contains(effect.Kind)) &&
         (effect.Kind != EffectKind.PublishRequiredStatus || AllowedRequiredStatusStates is null ||
@@ -189,6 +200,9 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                 !snapshot.State.Outbox.Values.Any(IsExclusiveUncertain) &&
                 IsSafeToExecute(snapshot.State, e, live));
             if (pending is null) return new(snapshot.State, decision.PendingEffects, false);
+            if (pending.Kind == EffectKind.LinkIssue &&
+                !IssueLinkPolicy.CanWrite(snapshot.State, pending.IssueNumber, options.IssueLinkRevocationApproved))
+                throw new InvalidOperationException("Issue-link writes with required-status history require an approved revocation publisher.");
             var marked = reducer.MarkExecuting(snapshot.State, pending.Id, live.ObservedAt);
             diagnostics?.Mark(GitHubLiveStage.ReconcileStateSave);
             if (!await store.TrySaveAsync(snapshot, marked, cancellationToken)) continue;
@@ -200,8 +214,12 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                diagnostics?.ReportEffectFailure(pending.Kind, EffectFailureCode.ExecutionException, exception);
-                outcome = new(DeliveryStatus.Unknown, FailureCode: EffectFailureCode.ExecutionException);
+                var notStarted = exception is IssueLinkNotStartedException;
+                var code = notStarted ? EffectFailureCode.IssueLinkNotStarted : EffectFailureCode.ExecutionException;
+                diagnostics?.ReportEffectFailure(pending.Kind, code,
+                    notStarted ? exception.InnerException! : exception);
+                outcome = new(notStarted ? DeliveryStatus.Failed : DeliveryStatus.Unknown, FailureCode: code,
+                    IssueLinkFailure: (exception as IssueLinkNotStartedException)?.Evidence);
             }
             // Once execution started, a lost result must never cause another Execute call.
             diagnostics?.Mark(GitHubLiveStage.EffectOutcomeSave);
@@ -215,6 +233,37 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
     private static bool EffectsEnabled(ReconcileOptions options) =>
         !options.DryRun && options.LiveEffectsEnabled && options.PrerequisiteCapabilitiesVerified && options.CostApproved;
 
+    internal async Task<RepositoryState> ConfirmFinalApprovalsAsync(IStateStore store, TimeProvider clock,
+        CancellationToken token)
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var snapshot = await store.LoadAsync(token);
+            var next = reducer.ConfirmFinalApprovals(snapshot.State, clock.GetUtcNow());
+            if (next.Version == snapshot.State.Version) return snapshot.State;
+            if (await store.TrySaveAsync(snapshot, next, token)) return next;
+        }
+        throw new InvalidOperationException("Final-approval publication confirmation conflict.");
+    }
+
+    internal async Task<RepositoryState> InterruptIssueLinksAsync(IStateStore store, ReconcileOptions options,
+        DateTimeOffset now, CancellationToken token)
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var snapshot = await store.LoadAsync(token);
+            var next = snapshot.State;
+            foreach (var intent in snapshot.State.Outbox.Values.Where(effect => effect.Kind == EffectKind.LinkIssue &&
+                         effect.Status == DeliveryStatus.Executing &&
+                         (options.ProjectionIssueNumber is null || options.ProjectionIssueNumber == effect.IssueNumber)))
+                next = reducer.RecordOutcome(next, intent.Id,
+                    new(DeliveryStatus.Unknown, FailureCode: EffectFailureCode.Interrupted), now);
+            if (next.Version == snapshot.State.Version) return snapshot.State;
+            if (await store.TrySaveAsync(snapshot, next, token)) return next;
+        }
+        throw new InvalidOperationException("Interrupted Issue-link outcome publication conflict.");
+    }
+
     public static bool IsExclusiveUncertain(EffectIntent effect) =>
         effect.Status == DeliveryStatus.Unknown && effect.Kind != EffectKind.PublishRequiredStatus;
 
@@ -227,6 +276,14 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
     private async Task<RepositoryState> RecoverIntentAsync(IStateStore store, IEffectAdapter effects,
         EffectIntent intent, DateTimeOffset observedAt, int maximumConflicts, CancellationToken cancellationToken)
     {
+        if (intent.Kind == EffectKind.LinkIssue && intent.Status == DeliveryStatus.Executing)
+        {
+            var interrupted = await PublishOutcomeAsync(store, intent.Id, intent.Digest,
+                new(DeliveryStatus.Unknown, FailureCode: EffectFailureCode.Interrupted), observedAt,
+                maximumConflicts, cancellationToken);
+            intent = interrupted.Outbox[intent.Id];
+        }
+
         EffectOutcome recovered;
         try
         {
@@ -270,7 +327,11 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
         if (intent.Kind == EffectKind.PublishRequiredStatus)
             return RequiredStatusPolicy.Matches(state, issue, intent) && issue.PullRequest == live.PullRequest &&
                 issue.HeadSha == live.HeadSha &&
-                (intent.RequiredStatus?.State != "success" || !live.Closed);
+                (intent.RequiredStatus?.State != "success" || !live.Closed ||
+                    RequiredStatusPolicy.IsRecordedMerge(issue) && live.PullRequestMerged == true);
+        if (intent.Kind == EffectKind.LinkIssue)
+            return IssueLinkPolicy.Matches(state, issue, intent) &&
+                issue.PullRequest == live.PullRequest && intent.Sha == live.HeadSha && !live.Closed;
         if (intent.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus)
             return (state.AdmittedIssue == issue.Number ||
                     OrchestrationReducer.IsCurrentIndependentProjection(state, issue, intent)) &&

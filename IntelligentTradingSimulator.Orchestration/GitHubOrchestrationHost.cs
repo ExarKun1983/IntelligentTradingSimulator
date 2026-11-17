@@ -235,11 +235,13 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         }
         var ci = ciRoute is null ? null : new GitHubCiAdapter(api, stateStore, ciRoute, clock, ciApproval, tasks, liveDiagnostics);
         var events = new ProductionEvents(message, api, tasks, reviews, ci, authorization, projectionActorId,
-            excludedIssueNumber, !isolatedStatusTest, liveDiagnostics);
+            excludedIssueNumber, clock, !isolatedStatusTest, liveDiagnostics);
         var statuses = statusPublisher is null ? null : new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher,
             statusApproval, clock, liveDiagnostics);
+        var statusPublicationEnabled = statuses is not null && statusApproval?.AllowsPublication == true;
         IVerifiedAgentEffectAdapter effects = new ProductionEffects(tasks, reviews, ci, statuses,
-            new GitHubProjectionAdapter(api, projectionActorId, true));
+            new GitHubProjectionAdapter(api, projectionActorId, true),
+            new GitHubIssueLinkAdapter(api, stateStore, true, clock, statusPublicationEnabled), statusPublicationEnabled);
         if (beforeEffect is not null) effects = new GuardedEffects(effects, beforeEffect);
         var reducer = new OrchestrationReducer(authorization, statuses is not null &&
             statusApproval?.AllowsPublication == true, excludedIssueNumber, reviewRequestsEnabled: !isolatedStatusTest,
@@ -250,7 +252,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         var reconcile = new ReconcileOptions(false, true, true, true,
             AllowedEffectKinds: allowedEffects,
             AllowedRequiredStatusStates: isolatedStatusTest ? new HashSet<string>(["success"], StringComparer.Ordinal) : null,
-            MaximumEffectExecutions: isolatedStatusTest ? 3 : null);
+            MaximumEffectExecutions: isolatedStatusTest ? 3 : null)
+            { IssueLinkRevocationApproved = statusPublicationEnabled };
         var worker = new OrchestrationWorker(reducer, clock, liveDiagnostics);
         var observations = new TaskObservations(tasks, clock, excludedIssueNumber);
         var workerOptions = isolatedStatusTest
@@ -462,7 +465,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
     private sealed class ProductionEvents(OrchestrationEvent? command, GitHubRepositoryApi api,
         GitHubTaskAdapter tasks, GitHubReviewAdapter reviews, GitHubCiAdapter? ci,
         VerifiedEvents authorization, long projectionActorId, int? excludedIssueNumber,
-        bool readReviewEvents = true, GitHubLiveDiagnostics? diagnostics = null) : IWorkerEventSource
+        TimeProvider clock, bool readReviewEvents = true, GitHubLiveDiagnostics? diagnostics = null) : IWorkerEventSource
     {
         private readonly Dictionary<string, OrchestrationEvent> acceptedObservations = [];
         private bool reactivationBoundaryPending = command?.Data is Reactivate;
@@ -502,7 +505,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             // Fetch newly verified PR feedback before applying completion or authorizing downstream effects.
             messages.AddRange(mappings);
             diagnostics?.Mark(GitHubLiveStage.Feedback);
-            messages.AddRange(await new GitHubFeedbackSource(api, projectionActorId)
+            messages.AddRange(await new GitHubFeedbackSource(api, projectionActorId, clock)
                 .ReadAsync(feedbackState, token, excludedIssueNumber));
             messages.AddRange(completions);
             if (ci is not null)
@@ -543,15 +546,38 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
     }
 
     private sealed class ProductionEffects(GitHubTaskAdapter tasks, GitHubReviewAdapter reviews,
-        GitHubCiAdapter? ci, GitHubRequiredStatusAdapter? statuses, GitHubProjectionAdapter projections) : IVerifiedAgentEffectAdapter
+        GitHubCiAdapter? ci, GitHubRequiredStatusAdapter? statuses, GitHubProjectionAdapter projections,
+        GitHubIssueLinkAdapter links, bool statusPublicationEnabled) :
+        IVerifiedAgentEffectAdapter, IIndependentStatusRevocation
     {
         public bool AgentEffectsAuthorized => tasks.AgentEffectsAuthorized;
+        public async Task<RepositoryState> RevokeRequiredStatusesAsync(IStateStore store, ReconcileOptions options, DateTimeOffset now,
+            CancellationToken token)
+        {
+            var state = (await store.LoadAsync(token)).State;
+            var held = state.Issues.Values.Where(issue =>
+                (options.ProjectionIssueNumber is null || options.ProjectionIssueNumber == issue.Number) &&
+                RequiredStatusPolicy.RequiresIssueLinkRevocation(state, issue)).Select(issue => issue.Number).ToList();
+            foreach (var number in held)
+            {
+                if (statuses is null || !statusPublicationEnabled)
+                {
+                    if (state.Outbox.Values.Any(effect => effect.IssueNumber == number &&
+                        effect.Kind == EffectKind.PublishRequiredStatus))
+                        throw new InvalidOperationException("Issue-link failure requires status revocation, but publisher approval is unavailable.");
+                    continue;
+                }
+                state = await new OrchestrationReconciler().RevokeRequiredStatusAsync(store, number, statuses, now, token);
+            }
+            return state;
+        }
         public Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken token) => intent.Kind switch
         {
             EffectKind.LaunchTask => tasks.ExecuteAsync(intent, token),
             EffectKind.RequestReview => reviews.ExecuteAsync(intent, token),
             EffectKind.RunCi when ci is not null => ci.ExecuteAsync(intent, token),
             EffectKind.PublishRequiredStatus when statuses is not null => statuses.ExecuteAsync(intent, token),
+            EffectKind.LinkIssue => links.ExecuteAsync(intent, token),
             EffectKind.ProjectLabels or EffectKind.ProjectStatus => projections.ExecuteAsync(intent, token),
             // Missing adapters/capabilities must never issue speculative effects.
             _ => Task.FromResult(new EffectOutcome(DeliveryStatus.Unknown))
@@ -562,15 +588,24 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             EffectKind.RequestReview => reviews.ReconcileAsync(intent, token),
             EffectKind.RunCi when ci is not null => ci.ReconcileAsync(intent, token),
             EffectKind.PublishRequiredStatus when statuses is not null => statuses.ReconcileAsync(intent, token),
+            EffectKind.LinkIssue => links.ReconcileAsync(intent, token),
             EffectKind.ProjectLabels or EffectKind.ProjectStatus => projections.ReconcileAsync(intent, token),
             _ => Task.FromResult(new EffectOutcome(DeliveryStatus.Unknown))
         };
     }
 
     private sealed class GuardedEffects(IVerifiedAgentEffectAdapter inner,
-        Func<CancellationToken, Task> beforeEffect) : IVerifiedAgentEffectAdapter
+        Func<CancellationToken, Task> beforeEffect) : IVerifiedAgentEffectAdapter, IIndependentStatusRevocation
     {
         public bool AgentEffectsAuthorized => inner.AgentEffectsAuthorized;
+        public async Task<RepositoryState> RevokeRequiredStatusesAsync(IStateStore store, ReconcileOptions options, DateTimeOffset now,
+            CancellationToken token)
+        {
+            if (inner is not IIndependentStatusRevocation revocation)
+                throw new InvalidOperationException("Independent status revocation is unavailable.");
+            await beforeEffect(token);
+            return await revocation.RevokeRequiredStatusesAsync(store, options, now, token);
+        }
 
         public async Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken token)
         {

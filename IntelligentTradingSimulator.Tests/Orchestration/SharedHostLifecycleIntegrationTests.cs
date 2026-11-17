@@ -126,7 +126,7 @@ public sealed class SharedHostLifecycleIntegrationTests
 
             var classification = Classification(held);
             await host.ReconcileAsync(classification, "workflow_dispatch", "91", 1, 1, Now.AddMinutes(3), [],
-                99, "master", 55, TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(),
+                99, "master", 55, TaskApproval, Bounded with { MaximumIterations = 4 }, new GitHubTaskIntegrationTests.FinalHead(),
                 reviewApproval: ReviewApproval, ciRoute: CiRoute, ciApproval: CiApproval,
                 statusPublisher: Publisher, statusApproval: StatusApproval);
         }
@@ -141,6 +141,10 @@ public sealed class SharedHostLifecycleIntegrationTests
         Assert.Equal(ReviewClassification.Accepted, accepted.Review!.Classification);
         Assert.True(accepted.ReactivationRequired);
         Assert.Null(store.State.AdmittedIssue);
+        Assert.True(fixture.IssueLinked);
+        Assert.Equal(1, fixture.LinkMutations);
+        Assert.Equal(DeliveryStatus.Succeeded,
+            Assert.Single(store.State.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue).Status);
         var success = fixture.Statuses.Last();
         Assert.Equal("success", success.GetProperty("state").GetString());
         Assert.Equal(RequiredStatusPolicy.Context, success.GetProperty("context").GetString());
@@ -708,15 +712,294 @@ public sealed class SharedHostLifecycleIntegrationTests
         WorkflowExecutionSha = Definition
     };
 
+    [Theory]
+    [InlineData("preflight")]
+    [InlineData("lost-linked")]
+    [InlineData("lost-unlinked")]
+    public async Task LinkFailureRevokesGreenStatusBeforeWorkerStopsWithoutReplayingMutation(string failure)
+    {
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
+        using var fixture = new PipelineApi(taskApi);
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        await host.ReconcileAsync(taskApi.Notification(), "issues", "44", 1, 1, Now, [], 99, "master", 55,
+            TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(), reviewApproval: ReviewApproval,
+            ciRoute: CiRoute, ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
+        taskApi.RemoteState = "completed";
+        await Wake(host);
+        fixture.CiCompleted = true;
+        await Wake(host);
+        Assert.Equal("success", fixture.Statuses.Last().GetProperty("state").GetString());
+        fixture.LinkFailure = failure;
+        fixture.ReviewSubmitted = true;
+        var result = await Wake(host, autoAccept: true);
+
+        var link = Assert.Single(store.State.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        Assert.Equal(failure == "preflight" ? DeliveryStatus.Failed : DeliveryStatus.Unknown, link.Status);
+        Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
+        Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+        Assert.Equal(failure == "preflight" ? 0 : 1, fixture.LinkMutations);
+        Assert.Single(taskApi.Writes, write => write.Path.StartsWith("/agents/"));
+        Assert.Null(store.State.WorkerLease);
+        if (failure != "preflight") Assert.Equal(WorkerStopReason.Blocked, result!.Reason);
+
+        fixture.LinkFailure = null;
+        await Wake(host);
+        Assert.Equal(failure == "preflight" ? DeliveryStatus.Failed :
+            failure == "lost-linked" ? DeliveryStatus.Succeeded : DeliveryStatus.Unknown,
+            store.State.Outbox[link.Id].Status);
+        Assert.Equal(failure == "preflight" ? 0 : 1, fixture.LinkMutations);
+        Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+        Assert.Single(taskApi.Writes, write => write.Path.StartsWith("/agents/"));
+    }
+
     private static Task<WorkerResult?> Wake(GitHubOrchestrationHost host, string eventName = "schedule",
-        string? finalHeadSha = null, bool autoRepair = false, bool autoAccept = false) =>
+        string? finalHeadSha = null, bool autoRepair = false, bool autoAccept = false,
+        WorkerOptions? options = null, CancellationToken token = default,
+        bool statusApproved = true, bool publisherAvailable = true) =>
         host.ReconcileWakeAsync(JsonSerializer.SerializeToElement(new
             { repository = new { id = 1, full_name = "owner/repo" },
                 pull_request = new { head = new { sha = ChangedHead } } }), eventName, "90",
-            TrustedWakeRoute, new(true, true, true, true), 99, "master", 55, TaskApproval, Bounded,
-            new GitHubTaskIntegrationTests.FinalHead(finalHeadSha),
+            TrustedWakeRoute, new(true, true, true, true), 99, "master", 55, TaskApproval, options ?? Bounded,
+            new GitHubTaskIntegrationTests.FinalHead(finalHeadSha), token,
             reviewApproval: ReviewApproval with { AutoRepairFindings = autoRepair, AutoAcceptCleanReviews = autoAccept }, ciRoute: CiRoute,
-            ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
+            ciApproval: CiApproval, statusPublisher: publisherAvailable ? Publisher : null,
+            statusApproval: StatusApproval with { ActivationApproved = statusApproved });
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task RecoveredUncertainLinkRevokesStatusBeforeFailingFeedbackRead(bool hideReceipt, bool alreadyHeld)
+    {
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
+        using var fixture = new PipelineApi(taskApi);
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        await host.ReconcileAsync(taskApi.Notification(), "issues", "44", 1, 1, Now, [], 99, "master", 55,
+            TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(), reviewApproval: ReviewApproval,
+            ciRoute: CiRoute, ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
+        taskApi.RemoteState = "completed";
+        await Wake(host);
+        fixture.CiCompleted = true;
+        await Wake(host);
+        fixture.ReviewSubmitted = true;
+        await Wake(host, autoAccept: true);
+        var snapshot = await store.LoadAsync(default);
+        var interrupted = StateJson.Clone(snapshot.State);
+        var link = Assert.Single(interrupted.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        link.Status = alreadyHeld ? DeliveryStatus.Unknown : DeliveryStatus.Executing;
+        link.ExternalId = null;
+        link.CompletedAt = null;
+        if (alreadyHeld)
+        {
+            link.IssueLinkRevocationRequired = true;
+            interrupted.Issues[7].Phase = Phase.BLOCKED;
+            interrupted.Issues[7].HoldReason = "Effect outcome is ambiguous.";
+        }
+        interrupted.Version++;
+        Assert.True(await store.TrySaveAsync(snapshot, interrupted, default));
+        fixture.HideLinkReceipt = hideReceipt;
+        fixture.FailFeedbackRead = true;
+        fixture.OnStatusWrite = status => { if (status == "error") Assert.NotNull(store.State.WorkerLease); };
+        if (!alreadyHeld)
+            fixture.OnLinkLookup = () =>
+            {
+                Assert.Equal(DeliveryStatus.Unknown, store.State.Outbox[link.Id].Status);
+                Assert.True(store.State.Outbox[link.Id].IssueLinkRevocationRequired);
+                Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
+            };
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => Wake(host));
+
+        Assert.Equal(hideReceipt ? DeliveryStatus.Unknown : DeliveryStatus.Succeeded, store.State.Outbox[link.Id].Status);
+        Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
+        Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+        Assert.False(store.State.Outbox[link.Id].IssueLinkRevocationRequired);
+        Assert.Equal(1, fixture.LinkMutations);
+        Assert.Null(store.State.WorkerLease);
+    }
+
+    [Fact]
+    public async Task NormalLinkedMergeReadsEvidenceWithoutAttemptingEarlyErrorRevocation()
+    {
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
+        using var fixture = new PipelineApi(taskApi);
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store();
+        var clock = new Clock();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, clock);
+        await host.ReconcileAsync(taskApi.Notification(), "issues", "44", 1, 1, Now, [], 99, "master", 55,
+            TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(), reviewApproval: ReviewApproval,
+            ciRoute: CiRoute, ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
+        taskApi.RemoteState = "completed";
+        await Wake(host);
+        fixture.CiCompleted = true;
+        await Wake(host);
+        fixture.ReviewSubmitted = true;
+        await Wake(host, autoAccept: true);
+        Assert.True(fixture.IssueLinked);
+        Assert.Equal("success", fixture.Statuses.Last().GetProperty("state").GetString());
+        clock.UtcNow = Now.AddMinutes(4);
+        fixture.MergedAt = clock.UtcNow;
+        var errorAttempts = 0;
+        fixture.OnStatusWrite = status =>
+        {
+            if (status != "error") return;
+            errorAttempts++;
+            throw new HttpRequestException("An unnecessary revocation would lose its acknowledgement.");
+        };
+        var closed = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            sender = new { id = 55, login = "maintainer", type = "User" },
+            issue = new { id = 70, number = 7 }, action = "closed"
+        });
+
+        await host.ReconcileAsync(closed, "issues", "94", 1, 1, clock.UtcNow, [], 99, "master", 55,
+            TaskApproval, Bounded with { MaximumIterations = 8 }, new GitHubTaskIntegrationTests.FinalHead(),
+            reviewApproval: ReviewApproval, ciRoute: CiRoute, ciApproval: CiApproval,
+            statusPublisher: Publisher, statusApproval: StatusApproval);
+
+        var issue = store.State.Issues[7];
+        Assert.Equal(0, errorAttempts);
+        Assert.Equal(Phase.CLOSED, issue.Phase);
+        Assert.Equal(TerminalOutcome.Merged, issue.TerminalOutcome);
+        Assert.NotNull(issue.TerminalHistory.Last().Approval);
+        Assert.NotNull(issue.MergeFeedback);
+        Assert.Equal("success", fixture.Statuses.Last().GetProperty("state").GetString());
+        Assert.Equal("Merged; exact tested head CI and accepted review verified.",
+            fixture.Statuses.Last().GetProperty("description").GetString());
+        Assert.Equal(1, fixture.LinkMutations);
+        Assert.Single(taskApi.Writes, write => write.Path.StartsWith("/agents/"));
+        Assert.Null(store.State.WorkerLease);
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task ExistingStatusHistoryPreventsLinkExecutionWithoutApprovedRevocation(bool statusApproved,
+        bool publisherAvailable)
+    {
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
+        using var fixture = new PipelineApi(taskApi);
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        await host.ReconcileAsync(taskApi.Notification(), "issues", "44", 1, 1, Now, [], 99, "master", 55,
+            TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(), reviewApproval: ReviewApproval,
+            ciRoute: CiRoute, ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
+        taskApi.RemoteState = "completed";
+        await Wake(host);
+        fixture.CiCompleted = true;
+        await Wake(host);
+        fixture.ReviewSubmitted = true;
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => Wake(host, autoAccept: true,
+            statusApproved: statusApproved, publisherAvailable: publisherAvailable));
+
+        Assert.Contains("approved revocation publisher", failure.Message);
+        var link = Assert.Single(store.State.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        Assert.Equal(DeliveryStatus.Pending, link.Status);
+        Assert.Null(link.IssueLinkBoundary);
+        Assert.Equal(0, fixture.LinkMutations);
+        Assert.Equal(Phase.HUMAN_REVIEW, store.State.Issues[7].Phase);
+        Assert.Equal("success", fixture.Statuses.Last().GetProperty("state").GetString());
+        Assert.Null(store.State.WorkerLease);
+    }
+
+    [Fact]
+    public async Task StatuslessProfileWithoutStatusHistoryCanStillLinkIssue()
+    {
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
+        using var fixture = new PipelineApi(taskApi);
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        await host.ReconcileAsync(taskApi.Notification(), "issues", "44", 1, 1, Now, [], 99, "master", 55,
+            TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(), reviewApproval: ReviewApproval,
+            ciRoute: CiRoute, ciApproval: CiApproval);
+        taskApi.RemoteState = "completed";
+        await Wake(host, publisherAvailable: false);
+        fixture.CiCompleted = true;
+        await Wake(host, publisherAvailable: false);
+        fixture.ReviewSubmitted = true;
+        await Wake(host, autoAccept: true, publisherAvailable: false);
+
+        Assert.Equal(DeliveryStatus.Succeeded,
+            Assert.Single(store.State.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue).Status);
+        Assert.True(fixture.IssueLinked);
+        Assert.Equal(1, fixture.LinkMutations);
+        Assert.Empty(fixture.Statuses);
+        Assert.DoesNotContain(store.State.Outbox.Values, effect => effect.Kind == EffectKind.PublishRequiredStatus);
+    }
+
+    [Theory]
+    [InlineData("caller")]
+    [InlineData("deadline")]
+    [InlineData("request")]
+    [InlineData("cleanup-persistence")]
+    public async Task InterruptedLinkPersistsUncertaintyAndRevokesWithIndependentCleanupToken(string interruption)
+    {
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
+        using var fixture = new PipelineApi(taskApi);
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        using var cancellation = new CancellationTokenSource();
+        var store = new GitHubTaskIntegrationTests.Store();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        await host.ReconcileAsync(taskApi.Notification(), "issues", "44", 1, 1, Now, [], 99, "master", 55,
+            TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(), reviewApproval: ReviewApproval,
+            ciRoute: CiRoute, ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
+        taskApi.RemoteState = "completed";
+        await Wake(host);
+        fixture.CiCompleted = true;
+        await Wake(host);
+        Assert.Equal("success", fixture.Statuses.Last().GetProperty("state").GetString());
+        fixture.ReviewSubmitted = true;
+        fixture.AwaitLinkCancellation = interruption == "deadline";
+        fixture.CancelLink = interruption is "caller" or "cleanup-persistence" ? () =>
+        {
+            if (interruption == "cleanup-persistence") store.FailWrites = true;
+            cancellation.Cancel();
+        } :
+            interruption == "request" ? () => throw new OperationCanceledException("offline transport cancellation") : null;
+        fixture.OnStatusWrite = status =>
+        {
+            if (status == "error") Assert.NotNull(store.State.WorkerLease);
+        };
+        if (interruption == "deadline")
+        {
+            var result = await Wake(host, autoAccept: true,
+                options: Bounded with { MaximumDuration = TimeSpan.FromSeconds(1) });
+            Assert.Equal(WorkerStopReason.TimeLimit, result!.Reason);
+        }
+        else if (interruption == "cleanup-persistence")
+            await Assert.ThrowsAsync<IOException>(() => Wake(host, autoAccept: true, token: cancellation.Token));
+        else
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                Wake(host, autoAccept: true, token: cancellation.Token));
+
+        var link = Assert.Single(store.State.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        if (interruption == "cleanup-persistence")
+        {
+            Assert.Equal(DeliveryStatus.Executing, link.Status);
+            Assert.NotNull(store.State.WorkerLease);
+        }
+        else
+        {
+            Assert.Equal(DeliveryStatus.Unknown, link.Status);
+            Assert.Equal(EffectFailureCode.Interrupted, link.FailureCode);
+            Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
+            Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+            Assert.Null(store.State.WorkerLease);
+        }
+        Assert.NotNull(link.IssueLinkBoundary);
+        Assert.Equal(1, fixture.LinkMutations);
+        Assert.Single(taskApi.Writes, write => write.Path.StartsWith("/agents/"));
+    }
     private static JsonElement Classification(IssueState issue, string responses = "[]",
         string classification = "accepted", string findings = "[]", string? sha = null) => JsonSerializer.SerializeToElement(new
     {
@@ -726,7 +1009,11 @@ public sealed class SharedHostLifecycleIntegrationTests
             handoff = issue.CurrentHandoffId, round = issue.Round.ToString(), pull = "17",
             sha = sha ?? issue.HeadSha ?? Head, classification, findings, responses }
     });
-    private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now.AddMinutes(3); }
+    private sealed class Clock : TimeProvider
+    {
+        public DateTimeOffset UtcNow { get; set; } = Now.AddMinutes(3);
+        public override DateTimeOffset GetUtcNow() => UtcNow;
+    }
 
     private sealed class ChangingRevisionStore(IStateStore inner) : IStateStore
     {
@@ -749,6 +1036,7 @@ public sealed class SharedHostLifecycleIntegrationTests
         private readonly GitHubTaskIntegrationTests.ApiFixture taskApi;
         public bool CiCompleted { get; set; }
         public bool ReviewSubmitted { get; set; }
+        public DateTimeOffset? MergedAt { get; set; }
         public bool FailReviewRead { get; set; }
         public bool InlineFinding { get; init; }
         public bool LateInlineFinding { get; set; }
@@ -760,6 +1048,15 @@ public sealed class SharedHostLifecycleIntegrationTests
         public string DefinitionSha { get; set; } = Definition;
         public int CiDispatches { get; private set; }
         public int ReviewRequests { get; private set; }
+        public int LinkMutations { get; private set; }
+        public bool IssueLinked { get; private set; }
+        public string? LinkFailure { get; set; }
+        public bool FailFeedbackRead { get; set; }
+        public bool HideLinkReceipt { get; set; }
+        public bool AwaitLinkCancellation { get; set; }
+        public Action? CancelLink { get; set; }
+        public Action? OnLinkLookup { get; set; }
+        public Action<string?>? OnStatusWrite { get; set; }
         public List<JsonElement> Statuses { get; } = [];
         public List<string> StatusWrites { get; } = [];
         private readonly Dictionary<int, (string Correlation, string Sha)> ciRuns = [];
@@ -781,15 +1078,58 @@ public sealed class SharedHostLifecycleIntegrationTests
             if (FailReviewRead && path == prefix + "pulls/17/reviews")
                 return new(HttpStatusCode.Forbidden)
                     { Content = new StringContent("private response", Encoding.UTF8, "text/plain") };
+            if (FailFeedbackRead && path == prefix + "issues/7/comments")
+                return new(HttpStatusCode.Forbidden) { Content = new StringContent("offline feedback read failure") };
             object response;
-            if (path == prefix + "actions/runs/90")
+            if (path == "/graphql")
+            {
+                using var payload = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
+                var query = payload.RootElement.GetProperty("query").GetString()!;
+                if (query.Contains("addCloseIssueReferences", StringComparison.Ordinal))
+                {
+                    Assert.Equal("I_7", payload.RootElement.GetProperty("variables").GetProperty("issue").GetString());
+                    Assert.Equal("PR_node", payload.RootElement.GetProperty("variables").GetProperty("pull").GetString());
+                    LinkMutations++;
+                    IssueLinked = LinkFailure != "lost-unlinked";
+                    CancelLink?.Invoke();
+                    if (AwaitLinkCancellation) await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    token.ThrowIfCancellationRequested();
+                    if (LinkFailure is "lost-linked" or "lost-unlinked")
+                        throw new HttpRequestException("offline lost closing-reference response");
+                    response = new { data = new { addCloseIssueReferences = new { issue = new { id = "I_7" } } } };
+                }
+                else if (query.Contains("closingIssuesReferences", StringComparison.Ordinal))
+                {
+                    OnLinkLookup?.Invoke();
+                    response = LinkFailure == "preflight" ? (object)new { errors = new[] { new { message = "offline refusal" } } } :
+                        new { data = new { node = new { id = "PR_node", number = 17,
+                        repository = new { nameWithOwner = "owner/repo" }, closingIssuesReferences = new
+                    {
+                        nodes = IssueLinked && !HideLinkReceipt ? new[] { new { id = "I_7" } } : [],
+                        pageInfo = new { hasNextPage = false }
+                    } } } };
+                }
+                else return await tasks.SendAsync(request, token);
+            }
+            else if (path == prefix + "actions/runs/90")
                 response = new { id = 90, workflow_id = 10, path = taskApi.WorkflowPath,
                     head_sha = WakeEvent == "pull_request_target" ? ChangedHead : Definition,
                     @event = WakeEvent, repository = new { id = 1 }, actor = new { id = 55 } };
             else if (path == prefix + "actions/runs/91" || path == prefix + "actions/runs/92" ||
-                     path == prefix + "actions/runs/93")
-                response = new { @event = "workflow_dispatch", path = taskApi.WorkflowPath,
+                     path == prefix + "actions/runs/93" || path == prefix + "actions/runs/94")
+                response = new { @event = path.EndsWith("/94", StringComparison.Ordinal) ? "issues" : "workflow_dispatch",
+                    path = taskApi.WorkflowPath,
                     actor = new { id = 55 } };
+            else if (MergedAt is not null && path == prefix + "issues/7")
+                response = new { id = 70, node_id = "I_7", number = 7, state = "closed", labels = Array.Empty<object>() };
+            else if (MergedAt is not null && path == prefix + "pulls/17")
+                response = new
+                {
+                    id = taskApi.ArtifactDatabaseId, node_id = "PR_node", number = 17, state = "closed",
+                    merged = true, merged_at = MergedAt, draft = taskApi.Draft,
+                    head = new { sha = taskApi.HeadSha, @ref = "coding", repo = new { id = 1 } },
+                    @base = new { @ref = taskApi.BaseBranch, repo = new { id = 1 } }
+                };
             else if (path == prefix + "actions/workflows/88")
                 response = new { id = 88, path = Route.WorkflowPath, state = "active" };
             else if (path.StartsWith(prefix + "commits/refs"))
@@ -865,6 +1205,7 @@ public sealed class SharedHostLifecycleIntegrationTests
             {
                 using var payload = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
                 var sha = path[(prefix + "statuses/").Length..];
+                OnStatusWrite?.Invoke(payload.RootElement.GetProperty("state").GetString());
                 StatusWrites.Add(path);
                 var status = JsonSerializer.SerializeToElement(new
                 {
@@ -873,7 +1214,7 @@ public sealed class SharedHostLifecycleIntegrationTests
                     context = payload.RootElement.GetProperty("context").GetString(),
                     description = payload.RootElement.GetProperty("description").GetString(),
                     target_url = payload.RootElement.GetProperty("target_url").GetString(),
-                    created_at = Now.AddMinutes(3), creator = StatusActor, sha
+                    created_at = MergedAt ?? Now.AddMinutes(3), creator = StatusActor, sha
                 });
                 Statuses.Add(status);
                 response = status;
