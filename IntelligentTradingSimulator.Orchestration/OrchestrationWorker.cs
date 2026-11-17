@@ -119,6 +119,20 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
         var yielded = false;
         var interrupted = false;
         var holdBarrierReleased = false;
+        var interruptionSaved = false;
+        var interruptionCleanupStarted = false;
+        async Task PreserveInterruptedLinksAsync()
+        {
+            interruptionCleanupStarted = true;
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(45), timeProvider);
+            var state = await reconciler.InterruptIssueLinksAsync(store, reconcileOptions,
+                timeProvider.GetUtcNow(), cleanup.Token);
+            if (CanRevoke(state, reconcileOptions) && effects is IIndependentStatusRevocation revocation)
+                state = await revocation.RevokeRequiredStatusesAsync(store, reconcileOptions,
+                    timeProvider.GetUtcNow(), cleanup.Token);
+            if (last is not null) last = last with { State = state };
+            interruptionSaved = true;
+        }
         WorkerResult Yield(WorkerStopReason reason)
         {
             yielded = true;
@@ -154,6 +168,11 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                     timeProvider.GetUtcNow(), reconcileOptions, token);
                 diagnostics?.Mark(GitHubLiveStage.WorkerStateLoad);
                 var snapshot = await store.LoadAsync(token);
+                if (CanRevoke(snapshot.State, reconcileOptions) && effects is IIndependentStatusRevocation afterRecovery)
+                {
+                    await afterRecovery.RevokeRequiredStatusesAsync(store, reconcileOptions, timeProvider.GetUtcNow(), token);
+                    snapshot = await store.LoadAsync(token);
+                }
                 diagnostics?.Mark(GitHubLiveStage.WorkerEventRead);
                 var batch = await events.ReadAsync(snapshot.State, token);
                 var messages = batch?.Events;
@@ -186,6 +205,10 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                 }
                 // Later pages may contain a pause or feedback; do not authorize an effect on a partial inbox.
                 if (batch!.HasMore) continue;
+                if (current.Issues.Values.Any(issue =>
+                    RequiredStatusPolicy.CaptureFinalApproval(current, issue, requirePublication: false) is
+                        { PublicationConfirmedAt: null }))
+                    current = await reconciler.ConfirmFinalApprovalsAsync(store, timeProvider, token);
                 if (CanRevoke(current, reconcileOptions) && effects is IIndependentStatusRevocation beforeStop)
                     current = await beforeStop.RevokeRequiredStatusesAsync(store, reconcileOptions, timeProvider.GetUtcNow(), token);
                 if (recovered is not null &&
@@ -236,7 +259,7 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
         }
         catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            // In-flight intents remain executing for lookup-only recovery; cancellation never rolls them back.
+            if (ownsLease) await PreserveInterruptedLinksAsync();
             return Yield(WorkerStopReason.TimeLimit);
         }
         catch (Exception exception)
@@ -249,18 +272,23 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
         {
             if (ownsLease)
             {
+                if (!interruptionCleanupStarted && (token.IsCancellationRequested || interrupted))
+                    await PreserveInterruptedLinksAsync();
                 // Cleanup is separately bounded even when the invocation was cancelled. A failed
                 // release leaves a durable lease to expire, never a cleared admission/task intent.
-                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(5), timeProvider);
-                diagnostics?.Mark(GitHubLiveStage.WorkerLeaseRelease);
-                await ReleaseLeaseAsync(store, owner, reconcileOptions,
-                    options.TrackAutomaticContinuations && (yielded || interrupted), cleanup.Token);
+                if (!interruptionCleanupStarted || interruptionSaved)
+                {
+                    using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(5), timeProvider);
+                    diagnostics?.Mark(GitHubLiveStage.WorkerLeaseRelease);
+                    await ReleaseLeaseAsync(store, owner, reconcileOptions,
+                        options.TrackAutomaticContinuations && (yielded || interrupted), cleanup.Token);
+                }
             }
         }
     }
 
     private static bool CanRevoke(RepositoryState state, ReconcileOptions options) =>
-        options.LiveEffectsEnabled && options.PrerequisiteCapabilitiesVerified && options.CostApproved &&
+        !options.DryRun && options.LiveEffectsEnabled && options.PrerequisiteCapabilitiesVerified && options.CostApproved &&
         (options.AllowedEffectKinds is null || options.AllowedEffectKinds.Contains(EffectKind.PublishRequiredStatus)) &&
         (options.AllowedRequiredStatusStates is null || options.AllowedRequiredStatusStates.Contains("error")) &&
         state.Outbox.Values.Any(effect => effect.Kind == EffectKind.LinkIssue &&

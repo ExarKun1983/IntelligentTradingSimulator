@@ -2213,15 +2213,24 @@ does not plan this effect. No PR description is overwritten, no Issue is directl
 closed and no PR is approved or merged. The separate human merge closes the linked
 Issue through GitHub. Versioned link intents persist the original Issue/PR node
 identities and an exclusively owned mutation boundary before sending the request.
-Proven pre-mutation refusals are definite failures, not repository-wide uncertain
-writes. Once a request may have been sent, recovery looks up those saved nodes,
+Proven pre-mutation refusals carry the observed boundary as evidence. Outcome
+publication rechecks its absence or exact ownership in the same CAS that records
+the failure; a competing boundary instead preserves uncertainty. Once a request
+may have been sent, recovery looks up those saved nodes,
 even after a push, retarget or canonical lifecycle change; an absent read result
 never authorizes another mutation. Legacy intents without this protocol remain
 uncertain. Before the worker stops on a failed or uncertain link, an independently
 approved, status-only revocation path publishes the held head's error without
-replaying link or agent effects or clearing the hold. Linking and merge are not
-transactional: verify the link in
-Development before the manual merge, especially if a concurrent edit or merge
+replaying link or agent effects or clearing the hold. Recovery performs this
+revocation before unrelated event/API reads can fail. Error-only revocation may
+target the previously published tested SHA even if the live head has moved; this
+exception never authorizes a stale-head success or skips repository/publisher checks.
+Cancellation preserves executing links as uncertain and attempts approved revocation
+with a separate 45-second cleanup token before releasing the lease. Failure to
+persist cleanup state retains the lease for explicit recovery/expiry; uncertain
+status delivery remains lookup-only.
+Linking and merge are not transactional: verify the link in Development before
+the manual merge, especially if a concurrent edit or merge
 interrupts projection. This does not retrofit already-merged PRs or close old
 unlinked Issues.
 
@@ -2239,11 +2248,17 @@ recorded final-approval handoff was eligible before closure, the
 completed task and exact-head CI evidence still match, the review is accepted
 with all findings resolved, and no pause, pending feedback or uncertain
 non-status effect remains, and no other canonical Issue owns that PR or SHA.
+The worker confirms the handoff's publication only after loading it from durable
+state, using the injected orchestration clock rather than the command/review event
+timestamp. This durable-publication upper bound must strictly precede the live
+merge timestamp; missing, equal or later confirmation fails closed.
 Closing or merging never clears an earlier safety hold or restores invalidated
 approval evidence after head drift. An otherwise eligible closed Issue with a
 still-open PR continues to collect authorized Issue/PR feedback. Terminal success
-also requires a complete
-feedback read through the live merge timestamp, recorded durably before projection;
+also requires a complete feedback read through the live merge timestamp, recorded
+durably before projection. The merge boundary is read after the complete comment
+lists, so comments created after a merge during collection are excluded. Merge
+feedback event identities include the canonical Issue number as well as PR/head;
 partial reads cannot seal that boundary. Current revisions of comments created
 before merge are treated conservatively as feedback, including edits after merge.
 This is not a lossless history of deleted comments or earlier revisions. A sealed

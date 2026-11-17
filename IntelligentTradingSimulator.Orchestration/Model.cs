@@ -173,7 +173,11 @@ public sealed record InboxEntry(string Id, string Digest, DeliveryStatus Status,
     public OrchestrationEvent? Event => PayloadJson is null ? null : StateJson.DeserializeEvent(PayloadJson);
 }
 public sealed record HumanHandoff(string Id, long Generation, string? ReviewId, string? TaskId,
-    int Round, string? Sha, string Reason, DateTimeOffset CreatedAt, string? ClassificationEventId = null);
+    int Round, string? Sha, string Reason, DateTimeOffset CreatedAt, string? ClassificationEventId = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? PublicationConfirmedAt { get; init; }
+}
 public sealed record FeedbackRecord(string EventId, string Text, Actor Author, DateTimeOffset OccurredAt,
     long Generation, string? HandoffId, int Round, string? Sha, string? PlannedTaskId = null,
     string? HandedOffTaskId = null, DateTimeOffset? HandedOffAt = null);
@@ -195,7 +199,11 @@ public sealed record TerminalRecord(long Generation, TerminalOutcome Outcome, in
     public bool PullRequestWasOpen { get; init; }
 }
 public sealed record FinalApprovalEvidence(string HandoffId, string TaskId, string ReviewId,
-    string CiIntentId, string CiRunId, int Round, string Sha);
+    string CiIntentId, string CiRunId, int Round, string Sha)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? PublicationConfirmedAt { get; init; }
+}
 public sealed record MergeFeedbackEvidence(long Generation, int PullRequest, string Sha,
     DateTimeOffset MergedAt, DateTimeOffset ObservedAt);
 public sealed record TaskSessionTerminalEvidence(string Id, string ExternalTaskId, long RepositoryId,

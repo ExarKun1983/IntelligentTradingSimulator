@@ -124,6 +124,11 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
         using var liveIssue = await api.GetAsync($"issues/{issue.Number}", token);
         using var pull = await api.GetAsync($"pulls/{issue.PullRequest}", token);
         var pr = pull.RootElement;
+        var revokingPublishedHead = intent.RequiredStatus!.State == "error" &&
+            state.Outbox.Values.Any(previous => previous.Kind == EffectKind.PublishRequiredStatus &&
+                previous.IssueNumber == intent.IssueNumber && previous.Generation == intent.Generation &&
+                previous.Sha == intent.Sha && previous.RequiredStatus?.State == "success" &&
+                (previous.Status == DeliveryStatus.Succeeded || previous.RequiredStatusBoundary is not null));
         if (liveIssue.RootElement.GetProperty("number").GetInt32() != issue.Number ||
             pr.GetProperty("number").GetInt32() != issue.PullRequest ||
             pr.GetProperty("base").GetProperty("repo").GetProperty("id").GetInt64() != api.RepositoryId ||
@@ -131,7 +136,7 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
             state.IsolatedTestManifestDigest is not null &&
                 (!pr.GetProperty("draft").GetBoolean() ||
                  pr.GetProperty("base").GetProperty("ref").GetString() != GitHubIsolatedStatusTestSettings.BaseBranch) ||
-            pr.GetProperty("head").GetProperty("sha").GetString() != intent.Sha)
+            !revokingPublishedHead && pr.GetProperty("head").GetProperty("sha").GetString() != intent.Sha)
             throw new InvalidDataException("Required-status live head/repository mapping changed.");
         if (intent.RequiredStatus!.State == "success")
         {

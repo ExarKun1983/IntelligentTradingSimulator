@@ -12,11 +12,14 @@ public enum EffectFailureCode
     OperatorAbandonedUnknownTaskLaunch,
     ExecutionException,
     RecoveryException,
-    IssueLinkNotStarted
+    IssueLinkNotStarted,
+    IssueLinkBoundaryChanged,
+    Interrupted
 }
 
 public sealed record EffectOutcome(DeliveryStatus Status, string? ExternalId = null,
-    EffectFailureCode? FailureCode = null);
+    EffectFailureCode? FailureCode = null, IssueLinkFailureEvidence? IssueLinkFailure = null);
+public sealed record IssueLinkFailureEvidence(IssueLinkBoundary? Boundary);
 
 public interface IObservationSource
 {
@@ -211,7 +214,8 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                 var code = notStarted ? EffectFailureCode.IssueLinkNotStarted : EffectFailureCode.ExecutionException;
                 diagnostics?.ReportEffectFailure(pending.Kind, code,
                     notStarted ? exception.InnerException! : exception);
-                outcome = new(notStarted ? DeliveryStatus.Failed : DeliveryStatus.Unknown, FailureCode: code);
+                outcome = new(notStarted ? DeliveryStatus.Failed : DeliveryStatus.Unknown, FailureCode: code,
+                    IssueLinkFailure: (exception as IssueLinkNotStartedException)?.Evidence);
             }
             // Once execution started, a lost result must never cause another Execute call.
             diagnostics?.Mark(GitHubLiveStage.EffectOutcomeSave);
@@ -224,6 +228,37 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
 
     private static bool EffectsEnabled(ReconcileOptions options) =>
         !options.DryRun && options.LiveEffectsEnabled && options.PrerequisiteCapabilitiesVerified && options.CostApproved;
+
+    internal async Task<RepositoryState> ConfirmFinalApprovalsAsync(IStateStore store, TimeProvider clock,
+        CancellationToken token)
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var snapshot = await store.LoadAsync(token);
+            var next = reducer.ConfirmFinalApprovals(snapshot.State, clock.GetUtcNow());
+            if (next.Version == snapshot.State.Version) return snapshot.State;
+            if (await store.TrySaveAsync(snapshot, next, token)) return next;
+        }
+        throw new InvalidOperationException("Final-approval publication confirmation conflict.");
+    }
+
+    internal async Task<RepositoryState> InterruptIssueLinksAsync(IStateStore store, ReconcileOptions options,
+        DateTimeOffset now, CancellationToken token)
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var snapshot = await store.LoadAsync(token);
+            var next = snapshot.State;
+            foreach (var intent in snapshot.State.Outbox.Values.Where(effect => effect.Kind == EffectKind.LinkIssue &&
+                         effect.Status == DeliveryStatus.Executing &&
+                         (options.ProjectionIssueNumber is null || options.ProjectionIssueNumber == effect.IssueNumber)))
+                next = reducer.RecordOutcome(next, intent.Id,
+                    new(DeliveryStatus.Unknown, FailureCode: EffectFailureCode.Interrupted), now);
+            if (next.Version == snapshot.State.Version) return snapshot.State;
+            if (await store.TrySaveAsync(snapshot, next, token)) return next;
+        }
+        throw new InvalidOperationException("Interrupted Issue-link outcome publication conflict.");
+    }
 
     public static bool IsExclusiveUncertain(EffectIntent effect) =>
         effect.Status == DeliveryStatus.Unknown && effect.Kind != EffectKind.PublishRequiredStatus;

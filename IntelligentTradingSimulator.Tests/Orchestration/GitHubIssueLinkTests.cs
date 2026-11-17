@@ -247,6 +247,31 @@ public sealed class GitHubIssueLinkTests
         Assert.Equal(1, api.Mutations);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OutcomePublicationRechecksUnsentEvidenceAfterCompetingBoundaryCommit(bool recovery)
+    {
+        var reducer = new OrchestrationReducer();
+        var inner = recovery ? Executing() :
+            new GitHubTaskIntegrationTests.Store(reducer.Reconcile(State(), Live()).State);
+        var store = new OutcomeRaceStore(inner);
+        using var api = new Api { Corruption = recovery ? null : "head" };
+        using var client = api.Client();
+        var adapter = new GitHubIssueLinkAdapter(new(client, "owner/repo", 1), store, true);
+        var reconciler = new OrchestrationReconciler();
+        if (recovery)
+            await reconciler.RecoverInFlightAsync(store, adapter, Now, new(false, true, true, true));
+        else
+            await reconciler.RunAsync(store, new Observations(), adapter, new(false, true, true, true));
+
+        Assert.True(store.Raced);
+        Assert.Equal(DeliveryStatus.Unknown, Intent(inner.State).Status);
+        Assert.Equal(EffectFailureCode.IssueLinkBoundaryChanged, Intent(inner.State).FailureCode);
+        Assert.Equal("competing-executor", Intent(inner.State).IssueLinkBoundary!.OwnerId);
+        Assert.Equal(Phase.BLOCKED, inner.State.Issues[7].Phase);
+    }
+
     [Fact]
     public void ProjectionIsStableDoesNotStealAdmissionAndIsCancelledOnFeedback()
     {
@@ -333,6 +358,24 @@ public sealed class GitHubIssueLinkTests
                 failed = true;
                 if (committed) Assert.True(await inner.TrySaveAsync(expected, state, token));
                 throw new IOException("offline boundary acknowledgement failure");
+            }
+            return await inner.TrySaveAsync(expected, state, token);
+        }
+    }
+
+    private sealed class OutcomeRaceStore(IStateStore inner) : IStateStore
+    {
+        public bool Raced { get; private set; }
+        public Task<StateSnapshot> LoadAsync(CancellationToken token) => inner.LoadAsync(token);
+        public async Task<bool> TrySaveAsync(StateSnapshot expected, RepositoryState state, CancellationToken token)
+        {
+            if (!Raced && Intent(state).Status == DeliveryStatus.Failed)
+            {
+                Raced = true;
+                var concurrent = await inner.LoadAsync(token);
+                var next = new OrchestrationReducer().RecordIssueLinkBoundary(concurrent.State,
+                    Intent(concurrent.State).Id, new(1, 7, 17, "I_7", "PR_17", Now, "competing-executor"));
+                Assert.True(await inner.TrySaveAsync(concurrent, next, token));
             }
             return await inner.TrySaveAsync(expected, state, token);
         }

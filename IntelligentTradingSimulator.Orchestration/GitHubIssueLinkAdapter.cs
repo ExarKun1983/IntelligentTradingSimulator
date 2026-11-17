@@ -22,8 +22,11 @@ public static class IssueLinkPolicy
         Eligible(state, issue);
 }
 
-internal sealed class IssueLinkNotStartedException(Exception inner) :
-    Exception("Issue-link mutation was not sent.", inner);
+internal sealed class IssueLinkNotStartedException(Exception inner, IssueLinkFailureEvidence evidence) :
+    Exception("Issue-link mutation was not sent.", inner)
+{
+    public IssueLinkFailureEvidence Evidence { get; } = evidence;
+}
 
 /// <summary>Adds an atomic closing relationship, never rewrites a PR body or merges a PR.
 /// Interrupted mutations are lookup-only, like other durable orchestration effects.</summary>
@@ -57,7 +60,7 @@ public sealed class GitHubIssueLinkAdapter(GitHubRepositoryApi api, IStateStore 
             var boundary = Saved((await store.LoadAsync(token)).State, intent).IssueLinkBoundary;
             // Another executor's boundary cannot prove that the shared operation was not sent.
             if (boundary is not null && boundary.OwnerId != owner) throw;
-            throw new IssueLinkNotStartedException(exception);
+            throw new IssueLinkNotStartedException(exception, new(boundary));
         }
         if (linked) return new(DeliveryStatus.Succeeded, scope.PullId);
         const string mutation = """
@@ -83,7 +86,8 @@ public sealed class GitHubIssueLinkAdapter(GitHubRepositoryApi api, IStateStore 
         var saved = Saved((await store.LoadAsync(token)).State, intent);
         if (saved.IssueLinkBoundary is not { } boundary)
             return saved.IssueLink is { Version: 1 }
-                ? new(DeliveryStatus.Failed, FailureCode: EffectFailureCode.IssueLinkNotStarted)
+                ? new(DeliveryStatus.Failed, FailureCode: EffectFailureCode.IssueLinkNotStarted,
+                    IssueLinkFailure: new(null))
                 : new(DeliveryStatus.Unknown);
         if (boundary.RepositoryId != api.RepositoryId || boundary.Issue != saved.IssueNumber ||
             saved.IssueLink is not { Version: 1 } payload || payload.PullRequest != boundary.PullRequest ||

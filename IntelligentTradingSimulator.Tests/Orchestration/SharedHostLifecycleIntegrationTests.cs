@@ -755,14 +755,117 @@ public sealed class SharedHostLifecycleIntegrationTests
     }
 
     private static Task<WorkerResult?> Wake(GitHubOrchestrationHost host, string eventName = "schedule",
-        string? finalHeadSha = null, bool autoRepair = false, bool autoAccept = false) =>
+        string? finalHeadSha = null, bool autoRepair = false, bool autoAccept = false,
+        WorkerOptions? options = null, CancellationToken token = default) =>
         host.ReconcileWakeAsync(JsonSerializer.SerializeToElement(new
             { repository = new { id = 1, full_name = "owner/repo" },
                 pull_request = new { head = new { sha = ChangedHead } } }), eventName, "90",
-            TrustedWakeRoute, new(true, true, true, true), 99, "master", 55, TaskApproval, Bounded,
-            new GitHubTaskIntegrationTests.FinalHead(finalHeadSha),
+            TrustedWakeRoute, new(true, true, true, true), 99, "master", 55, TaskApproval, options ?? Bounded,
+            new GitHubTaskIntegrationTests.FinalHead(finalHeadSha), token,
             reviewApproval: ReviewApproval with { AutoRepairFindings = autoRepair, AutoAcceptCleanReviews = autoAccept }, ciRoute: CiRoute,
             ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
+
+    [Fact]
+    public async Task RecoveredUncertainLinkRevokesStatusBeforeFailingFeedbackRead()
+    {
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
+        using var fixture = new PipelineApi(taskApi);
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        await host.ReconcileAsync(taskApi.Notification(), "issues", "44", 1, 1, Now, [], 99, "master", 55,
+            TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(), reviewApproval: ReviewApproval,
+            ciRoute: CiRoute, ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
+        taskApi.RemoteState = "completed";
+        await Wake(host);
+        fixture.CiCompleted = true;
+        await Wake(host);
+        fixture.ReviewSubmitted = true;
+        await Wake(host, autoAccept: true);
+        var snapshot = await store.LoadAsync(default);
+        var interrupted = StateJson.Clone(snapshot.State);
+        var link = Assert.Single(interrupted.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        link.Status = DeliveryStatus.Executing;
+        link.ExternalId = null;
+        link.CompletedAt = null;
+        interrupted.Version++;
+        Assert.True(await store.TrySaveAsync(snapshot, interrupted, default));
+        fixture.HideLinkReceipt = true;
+        fixture.FailFeedbackRead = true;
+        fixture.OnStatusWrite = status => { if (status == "error") Assert.NotNull(store.State.WorkerLease); };
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => Wake(host));
+
+        Assert.Equal(DeliveryStatus.Unknown, store.State.Outbox[link.Id].Status);
+        Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
+        Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+        Assert.Equal(1, fixture.LinkMutations);
+        Assert.Null(store.State.WorkerLease);
+    }
+
+    [Theory]
+    [InlineData("caller")]
+    [InlineData("deadline")]
+    [InlineData("request")]
+    [InlineData("cleanup-persistence")]
+    public async Task InterruptedLinkPersistsUncertaintyAndRevokesWithIndependentCleanupToken(string interruption)
+    {
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
+        using var fixture = new PipelineApi(taskApi);
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        using var cancellation = new CancellationTokenSource();
+        var store = new GitHubTaskIntegrationTests.Store();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        await host.ReconcileAsync(taskApi.Notification(), "issues", "44", 1, 1, Now, [], 99, "master", 55,
+            TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(), reviewApproval: ReviewApproval,
+            ciRoute: CiRoute, ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
+        taskApi.RemoteState = "completed";
+        await Wake(host);
+        fixture.CiCompleted = true;
+        await Wake(host);
+        Assert.Equal("success", fixture.Statuses.Last().GetProperty("state").GetString());
+        fixture.ReviewSubmitted = true;
+        fixture.AwaitLinkCancellation = interruption == "deadline";
+        fixture.CancelLink = interruption is "caller" or "cleanup-persistence" ? () =>
+        {
+            if (interruption == "cleanup-persistence") store.FailWrites = true;
+            cancellation.Cancel();
+        } :
+            interruption == "request" ? () => throw new OperationCanceledException("offline transport cancellation") : null;
+        fixture.OnStatusWrite = status =>
+        {
+            if (status == "error") Assert.NotNull(store.State.WorkerLease);
+        };
+        if (interruption == "deadline")
+        {
+            var result = await Wake(host, autoAccept: true,
+                options: Bounded with { MaximumDuration = TimeSpan.FromSeconds(1) });
+            Assert.Equal(WorkerStopReason.TimeLimit, result!.Reason);
+        }
+        else if (interruption == "cleanup-persistence")
+            await Assert.ThrowsAsync<IOException>(() => Wake(host, autoAccept: true, token: cancellation.Token));
+        else
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                Wake(host, autoAccept: true, token: cancellation.Token));
+
+        var link = Assert.Single(store.State.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        if (interruption == "cleanup-persistence")
+        {
+            Assert.Equal(DeliveryStatus.Executing, link.Status);
+            Assert.NotNull(store.State.WorkerLease);
+        }
+        else
+        {
+            Assert.Equal(DeliveryStatus.Unknown, link.Status);
+            Assert.Equal(EffectFailureCode.Interrupted, link.FailureCode);
+            Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
+            Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+            Assert.Null(store.State.WorkerLease);
+        }
+        Assert.NotNull(link.IssueLinkBoundary);
+        Assert.Equal(1, fixture.LinkMutations);
+        Assert.Single(taskApi.Writes, write => write.Path.StartsWith("/agents/"));
+    }
     private static JsonElement Classification(IssueState issue, string responses = "[]",
         string classification = "accepted", string findings = "[]", string? sha = null) => JsonSerializer.SerializeToElement(new
     {
@@ -809,6 +912,11 @@ public sealed class SharedHostLifecycleIntegrationTests
         public int LinkMutations { get; private set; }
         public bool IssueLinked { get; private set; }
         public string? LinkFailure { get; set; }
+        public bool FailFeedbackRead { get; set; }
+        public bool HideLinkReceipt { get; set; }
+        public bool AwaitLinkCancellation { get; set; }
+        public Action? CancelLink { get; set; }
+        public Action<string?>? OnStatusWrite { get; set; }
         public List<JsonElement> Statuses { get; } = [];
         public List<string> StatusWrites { get; } = [];
         private readonly Dictionary<int, (string Correlation, string Sha)> ciRuns = [];
@@ -830,6 +938,8 @@ public sealed class SharedHostLifecycleIntegrationTests
             if (FailReviewRead && path == prefix + "pulls/17/reviews")
                 return new(HttpStatusCode.Forbidden)
                     { Content = new StringContent("private response", Encoding.UTF8, "text/plain") };
+            if (FailFeedbackRead && path == prefix + "issues/7/comments")
+                return new(HttpStatusCode.Forbidden) { Content = new StringContent("offline feedback read failure") };
             object response;
             if (path == "/graphql")
             {
@@ -841,6 +951,9 @@ public sealed class SharedHostLifecycleIntegrationTests
                     Assert.Equal("PR_node", payload.RootElement.GetProperty("variables").GetProperty("pull").GetString());
                     LinkMutations++;
                     IssueLinked = LinkFailure != "lost-unlinked";
+                    CancelLink?.Invoke();
+                    if (AwaitLinkCancellation) await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    token.ThrowIfCancellationRequested();
                     if (LinkFailure is "lost-linked" or "lost-unlinked")
                         throw new HttpRequestException("offline lost closing-reference response");
                     response = new { data = new { addCloseIssueReferences = new { issue = new { id = "I_7" } } } };
@@ -850,7 +963,7 @@ public sealed class SharedHostLifecycleIntegrationTests
                         new { data = new { node = new { id = "PR_node", number = 17,
                         repository = new { nameWithOwner = "owner/repo" }, closingIssuesReferences = new
                     {
-                        nodes = IssueLinked ? new[] { new { id = "I_7" } } : [],
+                        nodes = IssueLinked && !HideLinkReceipt ? new[] { new { id = "I_7" } } : [],
                         pageInfo = new { hasNextPage = false }
                     } } } };
                 else return await tasks.SendAsync(request, token);
@@ -938,6 +1051,7 @@ public sealed class SharedHostLifecycleIntegrationTests
             {
                 using var payload = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
                 var sha = path[(prefix + "statuses/").Length..];
+                OnStatusWrite?.Invoke(payload.RootElement.GetProperty("state").GetString());
                 StatusWrites.Add(path);
                 var status = JsonSerializer.SerializeToElement(new
                 {

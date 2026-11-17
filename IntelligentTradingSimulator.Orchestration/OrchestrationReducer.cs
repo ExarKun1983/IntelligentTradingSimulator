@@ -525,6 +525,9 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 var liveApprovalEligible = live.PullRequest is > 0 && live.PullRequest == issue.PullRequest &&
                     live.HeadSha == issue.HeadSha && (live.PullRequestMerged == true || live.PullRequestClosed == false);
                 var approval = liveApprovalEligible ? RequiredStatusPolicy.CaptureFinalApproval(state, issue) : null;
+                if (live.PullRequestMerged == true &&
+                    (live.PullRequestMergedAt is not { } mergeTime || approval?.PublicationConfirmedAt >= mergeTime))
+                    approval = null;
                 var terminalOutcome = (issue.PullRequest is not null && live.PullRequest != issue.PullRequest)
                     ? TerminalOutcome.Unknown : live.PullRequestMerged switch
                 {
@@ -538,6 +541,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     (previousTerminal.Outcome == TerminalOutcome.Merged || previousTerminal.PullRequestWasOpen) &&
                     previousTerminal.Generation == issue.Generation && previousTerminal.PullRequest == live.PullRequest &&
                     previousTerminal.Sha == live.HeadSha &&
+                    (live.PullRequestMerged != true ||
+                     live.PullRequestMergedAt is { } mergedAt && savedApproval.PublicationConfirmedAt < mergedAt) &&
                     RequiredStatusPolicy.FinalApprovalMatches(state, issue, savedApproval))
                     approval = savedApproval;
                 if (issue.Phase != Phase.CLOSED || issue.TerminalOutcome != terminalOutcome ||
@@ -808,6 +813,11 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         if (outcome.Status is not (DeliveryStatus.Succeeded or DeliveryStatus.Failed or DeliveryStatus.Unknown))
             throw new InvalidOperationException("Invalid effect outcome.");
         var existing = input.Outbox[id];
+        if (existing.Kind == EffectKind.LinkIssue && outcome.Status == DeliveryStatus.Failed &&
+            outcome.FailureCode == EffectFailureCode.IssueLinkNotStarted &&
+            (outcome.IssueLinkFailure is not { } proof || existing.IssueLink is not { Version: 1 } ||
+             existing.IssueLinkBoundary != proof.Boundary))
+            outcome = outcome with { Status = DeliveryStatus.Unknown, FailureCode = EffectFailureCode.IssueLinkBoundaryChanged };
         if (existing.Kind == EffectKind.RequestReview && outcome.Status == DeliveryStatus.Failed &&
             outcome.FailureCode is EffectFailureCode.ReviewPrerequisitesUnverified or
                 EffectFailureCode.ReviewPreflightRejected or EffectFailureCode.ReviewIdentityMismatch &&
@@ -840,6 +850,22 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 string.IsNullOrWhiteSpace(outcome.ExternalId))
                 throw new InvalidOperationException("Successful remote operation requires an identity.");
         }, outcome);
+    }
+
+    internal RepositoryState ConfirmFinalApprovals(RepositoryState input, DateTimeOffset confirmedAt)
+    {
+        if (confirmedAt == default) throw new InvalidOperationException("Final-approval confirmation time is required.");
+        var state = StateJson.Clone(input);
+        foreach (var issue in state.Issues.Values)
+        {
+            if (RequiredStatusPolicy.CaptureFinalApproval(state, issue, requirePublication: false) is not { } approval ||
+                issue.Handoffs[approval.HandoffId].PublicationConfirmedAt is not null)
+                continue;
+            issue.Handoffs[approval.HandoffId] = issue.Handoffs[approval.HandoffId] with
+                { PublicationConfirmedAt = confirmedAt };
+            Touch(state, issue, state.LastEventId);
+        }
+        return state;
     }
 
     public RepositoryState RecordReviewBoundary(RepositoryState input, string id, ReviewRequestBoundary boundary)

@@ -362,7 +362,7 @@ public sealed class GitHubRequiredStatusTests
     [InlineData("lost-response")]
     [InlineData("publisher")]
     [InlineData("head")]
-    public async Task CommandOnlyRevocationFailurePreservesPauseAndNeverBlindlyRepeatsPost(string failure)
+    public async Task CommandOnlyRevocationPreservesPauseAndNeverBlindlyRepeatsPost(string failure)
     {
         var store = new Store(Planned());
         var api = new Api();
@@ -376,12 +376,18 @@ public sealed class GitHubRequiredStatusTests
 
         var result = await PauseCommandOnlyAsync(client, store, Approved);
 
-        Assert.Equal(WorkerStopReason.Blocked, result.Reason);
+        Assert.Equal(failure == "head" ? WorkerStopReason.EffectsDisabled : WorkerStopReason.Blocked, result.Reason);
         Assert.True(store.Value.Issues[7].Paused);
         Assert.Empty(store.Value.Issues[8].Tasks);
-        Assert.Equal(DeliveryStatus.Unknown, Intent(store.Value).Status);
+        Assert.Equal(failure == "head" ? DeliveryStatus.Succeeded : DeliveryStatus.Unknown, Intent(store.Value).Status);
         Assert.Equal("error", Intent(store.Value).RequiredStatus!.State);
         var posts = api.Posts;
+        if (failure == "head")
+        {
+            Assert.Equal(2, posts);
+            Assert.Equal(Sha, Intent(store.Value).Sha);
+            Assert.NotNull(Intent(store.Value).RequiredStatusBoundary);
+        }
         await PauseCommandOnlyAsync(client, store, Approved);
         Assert.Equal(posts, api.Posts);
         if (failure == "lost-response")
@@ -947,7 +953,7 @@ public sealed class GitHubRequiredStatusTests
     public async Task ClosedIssueReadsFeedbackThroughMergeBeforeGrantingTerminalSuccess(string feedback)
     {
         var reducer = new OrchestrationReducer(new Allow(), requiredStatusEnabled: true);
-        var state = State();
+        var state = reducer.ConfirmFinalApprovals(State(), Now.AddSeconds(-1));
         state.Issues[7].ReadyAt = Now.AddMinutes(-1);
         var live = Live();
         live.Issues[7].Closed = true;
@@ -1001,6 +1007,107 @@ public sealed class GitHubRequiredStatusTests
         live.Issues[7].PullRequestMergedAt = Now;
         state = new OrchestrationReducer(requiredStatusEnabled: true).Reconcile(state, live).State;
         Assert.Equal("error", RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+    }
+
+    [Theory]
+    [InlineData(-1, "success")]
+    [InlineData(0, "error")]
+    [InlineData(1, "error")]
+    public async Task DurableHandoffConfirmationMustStrictlyPrecedeMerge(int seconds, string expected)
+    {
+        var state = State();
+        var store = new Store(state);
+        await new OrchestrationReconciler().ConfirmFinalApprovalsAsync(store, new Clock(Now.AddSeconds(seconds)), default);
+        var issue = store.Value.Issues[7];
+        Assert.Equal(Now.AddSeconds(seconds), issue.Handoffs[issue.CurrentHandoffId!].PublicationConfirmedAt);
+        issue.MergeFeedback = new(1, 17, Sha, Now, Now.AddMinutes(1));
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        state = new OrchestrationReducer(requiredStatusEnabled: true).Reconcile(store.Value, live).State;
+
+        Assert.Equal(expected, RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+        if (seconds >= 0) Assert.Null(state.Issues[7].TerminalHistory.Last().Approval);
+    }
+
+    [Fact]
+    public async Task MergeDuringCommentCollectionExcludesCommentsCreatedAfterMerge()
+    {
+        var state = MergeReady();
+        state.Issues[7].ReadyAt = Now.AddMinutes(-1);
+        using var api = new Api();
+        api.BeforeComments = () => api.Merged = true;
+        api.IssueComments.Add(JsonSerializer.SerializeToElement(new { id = 1, body = "Post-merge note",
+            created_at = Now.AddSeconds(1), updated_at = Now.AddSeconds(1),
+            user = new { id = 55, login = "maintainer", type = "User" } }));
+        using var client = api.Client();
+        var messages = await new GitHubFeedbackSource(new(client, "owner/repo", 1),
+            clock: new Clock(Now.AddMinutes(1))).ReadAsync(state, default);
+
+        Assert.Single(messages, message => message.Data is MergeFeedbackObserved);
+        Assert.DoesNotContain(messages, message => message.Data is HumanFeedback);
+        var pullRead = api.Requests.FindIndex(path => path == "/pulls/17");
+        Assert.True(pullRead > api.Requests.FindLastIndex(path => path.EndsWith("/comments", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task SharedPullProducesDistinctMergeFeedbackEvidenceForEachCanonicalIssue()
+    {
+        var state = MergeReady();
+        state.Issues[7].ReadyAt = Now.AddMinutes(-1);
+        state.Issues[8] = StateJson.Clone(state).Issues[7];
+        state.Issues[8].Number = 8;
+        using var api = new Api { Merged = true };
+        using var client = api.Client();
+        var source = new GitHubFeedbackSource(new(client, "owner/repo", 1), clock: new Clock());
+        var messages = await source.ReadAsync(state, default);
+
+        Assert.Equal(2, messages.Count);
+        Assert.Equal(2, messages.Select(message => message.Id).Distinct().Count());
+        var reducer = new OrchestrationReducer(new Allow());
+        foreach (var message in messages) state = reducer.Apply(state, message);
+        Assert.NotNull(state.Issues[7].MergeFeedback);
+        Assert.NotNull(state.Issues[8].MergeFeedback);
+        Assert.Empty(await source.ReadAsync(state, default));
+    }
+
+    [Fact]
+    public async Task ErrorRevokesPublishedTestedHeadEvenIfLiveHeadHasMoved()
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = Planned();
+        var success = Intent(state);
+        state = reducer.RecordOutcome(state, success.Id, new(DeliveryStatus.Succeeded, "100"), Now);
+        state.Issues[7].Phase = Phase.BLOCKED;
+        state.Issues[7].HoldReason = "Link preflight observed changed live head.";
+        var store = new Store(state);
+        using var api = new Api { Corruption = "head" };
+        using var client = api.Client();
+        var result = await new OrchestrationReconciler().RevokeRequiredStatusAsync(store, 7, Adapter(client, store), Now);
+
+        Assert.Equal(1, api.Posts);
+        Assert.Contains("/statuses/" + Sha, api.Requests);
+        Assert.Equal("error", Intent(result).RequiredStatus!.State);
+        Assert.Equal(DeliveryStatus.Succeeded, Intent(result).Status);
+        Assert.NotNull(Intent(result).RequiredStatusBoundary);
+    }
+
+    [Fact]
+    public async Task DryRunCannotUseEarlyIndependentRevocationForUncertainLink()
+    {
+        var state = State();
+        state.Issues[7].Phase = Phase.BLOCKED;
+        state.Issues[7].HoldReason = "Link interrupted.";
+        state.Outbox["link"] = new() { Id = "link", IssueNumber = 7, Generation = 1,
+            Kind = EffectKind.LinkIssue, Status = DeliveryStatus.Unknown };
+        var store = new Store(state);
+        var before = StateJson.Serialize(state);
+        var result = await new OrchestrationWorker().RunAsync(store, new EmptyEvents(), new Observations(),
+            new ForbiddenEffects(), new(true, true, true, true));
+
+        Assert.Equal(WorkerStopReason.DryRun, result.Reason);
+        Assert.Equal(before, StateJson.Serialize(store.Value));
     }
 
     [Theory]
@@ -1430,7 +1537,7 @@ public sealed class GitHubRequiredStatusTests
         Issues = new() { [7] = new() { PullRequest = 17, HeadSha = Sha, Ready = true, Labels = ["agent:review"] } } };
     private static RepositoryState MergeReady()
     {
-        var state = State();
+        var state = new OrchestrationReducer().ConfirmFinalApprovals(State(), Now.AddSeconds(-1));
         state.Issues[7].MergeFeedback = new(1, 17, Sha, Now, Now);
         return state;
     }
@@ -1476,6 +1583,17 @@ public sealed class GitHubRequiredStatusTests
         public Task<WorkerEventBatch> ReadAsync(RepositoryState state, CancellationToken token) =>
             Task.FromResult(new WorkerEventBatch([]));
     }
+    private sealed class ForbiddenEffects : IEffectAdapter, IIndependentStatusRevocation
+    {
+        public Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken token) =>
+            throw new InvalidOperationException("Dry run cannot execute.");
+        public Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken token) =>
+            throw new InvalidOperationException("Dry run cannot recover external effects.");
+        public Task<RepositoryState> RevokeRequiredStatusesAsync(IStateStore store, ReconcileOptions options,
+            DateTimeOffset now, CancellationToken token) =>
+            throw new InvalidOperationException("Dry run cannot revoke.");
+    }
+
     private sealed class RecordingEffects(GitHubRequiredStatusAdapter adapter) : IEffectAdapter
     {
         public List<EffectIntent> Executed { get; } = [];
@@ -1524,6 +1642,7 @@ public sealed class GitHubRequiredStatusTests
         public Action? BeforePost { get; set; }
         public Func<Task>? BeforePostAsync { get; set; }
         public Action? AfterPullRead { get; set; }
+        public Action? BeforeComments { get; set; }
         public Func<Task>? OnPullRead { get; set; }
         private object? created;
         private readonly List<(string Body, string Sha)> createdStatuses = [];
@@ -1564,7 +1683,12 @@ public sealed class GitHubRequiredStatusTests
             else if (path.EndsWith("/issues/7", StringComparison.Ordinal))
                 value = new { id = 70, number = 7, state = Corruption == "issue-closed" ? "closed" : "open",
                     labels = Array.Empty<object>() };
-            else if (path.EndsWith("/issues/7/comments", StringComparison.Ordinal)) value = IssueComments;
+            else if (path.EndsWith("/issues/7/comments", StringComparison.Ordinal))
+            {
+                BeforeComments?.Invoke();
+                value = IssueComments;
+            }
+            else if (path.EndsWith("/issues/8/comments", StringComparison.Ordinal)) value = Array.Empty<object>();
             else if (path.EndsWith("/issues/17/comments", StringComparison.Ordinal)) value = PullComments;
             else if (path.EndsWith("/pulls/17", StringComparison.Ordinal))
             {
