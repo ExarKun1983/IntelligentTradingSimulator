@@ -151,4 +151,22 @@ public sealed class RelativeStrengthCalculatorTests
             [Candle(0, 100), Candle(3, 110)],
             Start, Start.AddDays(3)));
     }
+
+    [Fact]
+    public void Calculate_ReturnsNull_WhenBenchmarkPercentageScalingOverflows()
+    {
+        Assert.Null(_calculator.Calculate(
+            [Candle(0, 100), Candle(3, 120)],
+            [Candle(0, 1), Candle(3, decimal.MaxValue)],
+            Start, Start.AddDays(3)));
+    }
+
+    [Fact]
+    public void Calculate_ReturnsNull_WhenBenchmarkDivisionOverflows()
+    {
+        Assert.Null(_calculator.Calculate(
+            [Candle(0, 100), Candle(3, 120)],
+            [Candle(0, 0.0000000000000000000000000001m), Candle(3, 10)],
+            Start, Start.AddDays(3)));
+    }
 }
