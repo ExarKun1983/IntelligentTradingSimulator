@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 547,
+  "Version": 548,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "actions:1277929203:43991540086",
@@ -976,7 +976,7 @@
       "SchemaVersion": 1,
       "Number": 304,
       "Generation": 3,
-      "Version": 52,
+      "Version": 53,
       "LastEventId": "actions:1277929203:43991540086",
       "Phase": "BLOCKED",
       "Ready": false,
@@ -1083,8 +1083,8 @@
       "ProjectionDigest": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
       "ObservedProjectionDigest": "0C6FB4E07CCDF772ED6952443013494B821B7F84127D4AA2CB643AC48E54DF51",
       "StatusProjectionDigest": "315848286D0D50C2C41C62DF8F2E2CF973D7444EDA5B8A5F059B11494BEDACBB",
-      "RequiredStatusSequence": 5,
-      "RequiredStatusIntentId": "required-status:304:3:5"
+      "RequiredStatusSequence": 6,
+      "RequiredStatusIntentId": "required-status:304:3:6"
     }
   },
   "Inbox": {
@@ -5449,6 +5449,34 @@
       "StatusBody": null,
       "TaskPrompt": null,
       "RequiredStatus": null,
+      "RequiredStatusBoundary": null
+    },
+    "required-status:304:3:6": {
+      "Id": "required-status:304:3:6",
+      "Digest": "F5C6B41CF8CC50395AB8141E4A70CE2CD499982DCD97BBA7EE3D79DEEDA56B45",
+      "IssueNumber": 304,
+      "Generation": 3,
+      "Kind": "PublishRequiredStatus",
+      "Status": "Pending",
+      "TaskId": null,
+      "Round": 1,
+      "Sha": "ce246a9583982114e968500efc46028d3bd830ec",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-17T01:09:42.7721453+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": {
+        "Context": "Agent managed CI",
+        "State": "error",
+        "Description": "Automation stopped or feedback pending; not eligible.",
+        "TargetUrl": "https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/305#agent-status-0ab14296382abab0a57fa6a1898d024a514b9288a65c05381b9985ef11961621",
+        "CiIntentId": null,
+        "CiRunId": null
+      },
       "RequiredStatusBoundary": null
     }
   }
