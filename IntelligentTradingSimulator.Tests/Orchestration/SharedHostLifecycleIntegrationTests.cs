@@ -60,13 +60,18 @@ public sealed class SharedHostLifecycleIntegrationTests
     }
 
     [Theory]
-    [InlineData("unchanged")]
-    [InlineData("feedback")]
-    [InlineData("scheduled-feedback-contention")]
-    [InlineData("head-changed")]
-    [InlineData("request-changes")]
-    [InlineData("request-changes-stale")]
-    public async Task SharedHostWakeDrainsTaskCiReviewHumanClassificationAndPublishesOnlyExactSafeStatus(string afterApproval)
+    [InlineData("unchanged", false)]
+    [InlineData("feedback", false)]
+    [InlineData("scheduled-feedback-contention", false)]
+    [InlineData("head-changed", false)]
+    [InlineData("request-changes", false)]
+    [InlineData("request-changes-stale", false)]
+    [InlineData("unchanged", true)]
+    [InlineData("feedback", true)]
+    [InlineData("head-changed", true)]
+    [InlineData("request-changes", true)]
+    public async Task SharedHostWakeDrainsTaskCiReviewClassificationAndPublishesOnlyExactSafeStatus(
+        string afterApproval, bool autoAccept)
     {
         using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
         using var fixture = new PipelineApi(taskApi) { VerifyCredentials = true };
@@ -105,23 +110,32 @@ public sealed class SharedHostLifecycleIntegrationTests
         Assert.Equal("success", fixture.Statuses.Last().GetProperty("state").GetString());
 
         fixture.ReviewSubmitted = true;
-        await Wake(host);
+        await Wake(host, autoAccept: autoAccept);
         var held = store.State.Issues[7];
-        Assert.Equal(ReviewClassification.NeedsHuman, held.Review!.Classification);
-        Assert.Equal(Phase.BLOCKED, held.Phase);
-        Assert.True(held.ReactivationRequired);
-        Assert.Null(store.State.AdmittedIssue);
-        Assert.Equal("pending", fixture.Statuses.Last().GetProperty("state").GetString());
-        Assert.Equal("Exact tested head CI passed; review classification required.",
-            fixture.Statuses.Last().GetProperty("description").GetString());
-        Assert.NotNull(held.Review.SourceEvidence);
-
         taskApi.RunEvent = "workflow_dispatch";
-        var classification = Classification(held);
-        await host.ReconcileAsync(classification, "workflow_dispatch", "91", 1, 1, Now.AddMinutes(3), [],
-            99, "master", 55, TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(),
-            reviewApproval: ReviewApproval, ciRoute: CiRoute, ciApproval: CiApproval,
-            statusPublisher: Publisher, statusApproval: StatusApproval);
+        if (!autoAccept)
+        {
+            Assert.Equal(ReviewClassification.NeedsHuman, held.Review!.Classification);
+            Assert.Equal(Phase.BLOCKED, held.Phase);
+            Assert.True(held.ReactivationRequired);
+            Assert.Null(store.State.AdmittedIssue);
+            Assert.Equal("pending", fixture.Statuses.Last().GetProperty("state").GetString());
+            Assert.Equal("Exact tested head CI passed; review classification required.",
+                fixture.Statuses.Last().GetProperty("description").GetString());
+            Assert.NotNull(held.Review.SourceEvidence);
+
+            var classification = Classification(held);
+            await host.ReconcileAsync(classification, "workflow_dispatch", "91", 1, 1, Now.AddMinutes(3), [],
+                99, "master", 55, TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(),
+                reviewApproval: ReviewApproval, ciRoute: CiRoute, ciApproval: CiApproval,
+                statusPublisher: Publisher, statusApproval: StatusApproval);
+        }
+        else
+        {
+            Assert.Empty(held.Classifications);
+            using var evidence = JsonDocument.Parse(held.Review!.SourceEvidence!);
+            Assert.Equal("exact-head-clean-review-v1", evidence.RootElement.GetProperty("policy").GetString());
+        }
         var accepted = store.State.Issues[7];
         Assert.Equal(Phase.HUMAN_REVIEW, accepted.Phase);
         Assert.Equal(ReviewClassification.Accepted, accepted.Review!.Classification);
@@ -146,6 +160,22 @@ public sealed class SharedHostLifecycleIntegrationTests
             Assert.False(result.AtomicOrEnforced);
             Assert.Contains(result.ManualChecks, item => item.Contains("trusted publisher"));
             Assert.Equal(writes, fixture.StatusWrites.Count + taskApi.Writes.Count);
+            if (autoAccept)
+            {
+                fixture.LateInlineFinding = true;
+                await Assert.ThrowsAsync<PreMergeCheckException>(() => check.CheckAsync(7));
+                fixture.LateInlineFinding = false;
+                fixture.ReviewStateOverride = "CHANGES_REQUESTED";
+                await Assert.ThrowsAsync<PreMergeCheckException>(() => check.CheckAsync(7));
+                fixture.ReviewStateOverride = null;
+
+                var invalid = StateJson.Clone(store.State);
+                invalid.Issues[7].Review!.SourceEvidence = invalid.Issues[7].Review!.SourceEvidence!
+                    .Replace("exact-head-clean-review-v1", "human-classification", StringComparison.Ordinal);
+                var invalidCheck = new GitHubPreMergeCheck(api, new GitHubTaskIntegrationTests.Store(invalid),
+                    new GitHubTaskAdapter(api, store, "master", 55, taskApi: new(userClient, "owner/repo", 1)));
+                await Assert.ThrowsAsync<PreMergeCheckException>(() => invalidCheck.CheckAsync(7));
+            }
 
             var staleState = StateJson.Clone(store.State);
             staleState.Issues[7].Phase = Phase.REVIEW_PENDING;
@@ -679,13 +709,13 @@ public sealed class SharedHostLifecycleIntegrationTests
     };
 
     private static Task<WorkerResult?> Wake(GitHubOrchestrationHost host, string eventName = "schedule",
-        string? finalHeadSha = null, bool autoRepair = false) =>
+        string? finalHeadSha = null, bool autoRepair = false, bool autoAccept = false) =>
         host.ReconcileWakeAsync(JsonSerializer.SerializeToElement(new
             { repository = new { id = 1, full_name = "owner/repo" },
                 pull_request = new { head = new { sha = ChangedHead } } }), eventName, "90",
             TrustedWakeRoute, new(true, true, true, true), 99, "master", 55, TaskApproval, Bounded,
             new GitHubTaskIntegrationTests.FinalHead(finalHeadSha),
-            reviewApproval: ReviewApproval with { AutoRepairFindings = autoRepair }, ciRoute: CiRoute,
+            reviewApproval: ReviewApproval with { AutoRepairFindings = autoRepair, AutoAcceptCleanReviews = autoAccept }, ciRoute: CiRoute,
             ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
     private static JsonElement Classification(IssueState issue, string responses = "[]",
         string classification = "accepted", string findings = "[]", string? sha = null) => JsonSerializer.SerializeToElement(new
@@ -721,6 +751,8 @@ public sealed class SharedHostLifecycleIntegrationTests
         public bool ReviewSubmitted { get; set; }
         public bool FailReviewRead { get; set; }
         public bool InlineFinding { get; init; }
+        public bool LateInlineFinding { get; set; }
+        public string? ReviewStateOverride { get; set; }
         public int ReviewSubmittedCount { get; set; }
         public bool VerifyCredentials { get; init; }
         public GitHubCiRoute Route { get; init; } = CiRoute;
@@ -806,13 +838,13 @@ public sealed class SharedHostLifecycleIntegrationTests
                 response = Enumerable.Range(0, Math.Min(reviewShas.Count,
                         ReviewSubmittedCount > 0 ? ReviewSubmittedCount : ReviewSubmitted ? reviewShas.Count : 0))
                     .Select(index => new { id = 501 + index, user = ReviewActor, commit_id = reviewShas[index],
-                        state = InlineFinding && index == 0 ? "COMMENTED" : "APPROVED",
+                        state = ReviewStateOverride ?? (InlineFinding && index == 0 ? "COMMENTED" : "APPROVED"),
                         is_copilot_code_review = true,
                         body = "approved green done (untrusted prose)", submitted_at = Now.AddMinutes(3),
                         pull_request_url = "https://api.github.com/repos/owner/repo/pulls/17" }).ToArray();
             else if (path.StartsWith(prefix + "pulls/17/reviews/", StringComparison.Ordinal) &&
                 path.EndsWith("/comments", StringComparison.Ordinal))
-                response = InlineFinding && path == prefix + "pulls/17/reviews/501/comments" ? new object[] { new
+                response = (InlineFinding || LateInlineFinding) && path == prefix + "pulls/17/reviews/501/comments" ? new object[] { new
                 {
                     id = 601, pull_request_review_id = 501, user = ReviewActor,
                     pull_request_url = "https://api.github.com/repos/owner/repo/pulls/17",

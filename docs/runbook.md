@@ -1607,8 +1607,46 @@ is a separate, currently stopped test, not the main workflow or its activation
 procedure.
 
 By default, the Copilot review API adapter records submitted output as
-`NeedsHuman`. It never infers acceptance from "no issues", `COMMENTED`, or the
-absence of inline comments. Final acceptance still requires `classify-review`.
+`NeedsHuman`. With automatic classification disabled, acceptance requires
+`classify-review`; prose such as "no issues" or an empty comment list alone
+never authorizes acceptance.
+
+For the production `agent-state-machine.yml` workflow, the optional repository
+variable `ORCHESTRATION_AUTO_ACCEPT_CLEAN_REVIEWS=true` enables
+`exact-head-clean-review-v1`. Configure it once per repository, together with a
+separately approved deployment of the reviewed definition SHA, not per Issue.
+A qualifying result automatically records machine `Accepted` and enters
+`HUMAN_REVIEW` / `Awaiting human approval.` with the exact-head required context
+eligible for success. It does not create a `HumanClassification`, mark the PR
+ready, approve a GitHub review or merge. No generation, handoff, round or SHA
+needs to be copied into a manual classification for this path.
+
+Eligibility requires completed coding and matching green CI; an active,
+unpaused review with no feedback, closure or previous unresolved findings; and
+a confirmed new request with its node ID, baseline and acceptance/deadline
+timestamps (not `409` already-pending). There must be exactly one new submitted
+review by the pinned Copilot identity, on the mapped PR and exact task head,
+within that request's window, with `is_copilot_code_review=true`, no pending
+Copilot submission and a completely fetched empty review-scoped comment list.
+The live candidate and PR/head are rechecked before accepting.
+
+The submission must be `APPROVED`, or `COMMENTED` with the observed
+`ccr-overview-v2` summary beginning with the green "Approval recommended"
+heading and an explicit "No open issues" line, without another level-three
+heading. This is a conservative template allowlist, not semantic severity
+analysis or a stable GitHub API classification contract. Unknown, quoted or
+contradictory templates, `CHANGES_REQUESTED`, dismissed output, missing metadata,
+multiple submissions, old findings and timeout remain human-gated. Failed or
+incomplete API reads cannot become an empty-list success.
+
+The policy and classification timestamp are retained with the raw review/comment
+evidence. REST still does not prove request-to-submission round correlation;
+the bounded policy is an explicit operator choice, not a claim of that proof.
+The final human must inspect the PR and current feedback before approving and
+merging. Existing persisted `NeedsHuman` results and other holds are **not**
+reclassified or cleared when the flag is enabled; this is not a state migration
+or a recovery command. The separately configured PoC profile retains its
+existing manual-acceptance behavior.
 
 The repository variable `ORCHESTRATION_AUTO_REPAIR_REVIEW_FINDINGS=true` opts
 into the narrower `exact-head-inline-findings-v1` policy. A confirmed fresh
@@ -1630,12 +1668,16 @@ Existing unresolved findings are retained. The usual task budgets, single-pass
 limits, human holds and no-merge boundary still apply.
 
 Missing metadata, replies, outdated/left-side comments, edited comments,
-multiple submissions, timeout or a no-finding result remain human-gated.
+multiple submissions and timeout remain human-gated. A no-finding result
+requires human classification unless it independently satisfies the clean-review
+policy above.
 Malformed identities stop observation rather than authorizing work. Never use
-this policy to infer acceptance, issue another uncertain review POST, or
+the inline-findings policy to infer acceptance, issue another uncertain review POST, or
 silently resolve previous findings. A repair-capable profile can launch the
-next coding task without a human `blocking` command, but the complete lifecycle
-is not fully automatic: final acceptance and merge remain human decisions.
+next coding task without a human `blocking` command and can automate qualifying
+clean reviews when the separate clean-review policy is also enabled.
+Finding-specific resolution of earlier blockers and final PR approval/merge
+remain human decisions.
 
 After exact-head green CI, the adapter uses `GITHUB_TOKEN` and REST API version
 `2026-03-10` to call
@@ -1646,8 +1688,8 @@ not review completion. `409` means an existing review is pending on the PR;
 it does not identify that review's commit or prove this workflow requested it.
 The adapter records that distinction and does not issue another request.
 The result must independently match the mapped PR, exact head SHA and pinned
-Copilot author, and be newer than the saved baseline. Unless it meets the opt-in
-inline-findings policy, it awaits human classification.
+Copilot author, and be newer than the saved baseline. Unless it meets an opt-in
+inline-findings or clean-review policy, it awaits human classification.
 The REST review list does not expose a proven request-to-submission round token.
 An earlier executing, uncertain or successful request in canonical state for
 the same PR and commit prevents a new POST; a definitive rejection can be
@@ -2463,13 +2505,16 @@ post-boundary submission time. Review comments must match the API review/author/
 identities. Pagination and total evidence size are bounded; API or malformed
 identity failures fail the invocation without promoting or requesting again.
 
-**All captured REST output returns `needs-human`, including `APPROVED`.** GitHub
+**Without an eligible opt-in policy, captured REST output returns `needs-human`,
+including `APPROVED`.** GitHub
 does not return a request-to-submission round token, so time/actor/SHA alone cannot
 prove that output belongs to this request rather than concurrent human/automatic
 requests. `COMMENTED` prose is also not reliable blocker/acceptance classification.
 Raw review/comment JSON and the uncertainty reason are durably retained with the
 typed result and human handoff. No suggestion is silently called a blocker and no
-old blocker is cleared. The existing authorized human classification reducer can
+old blocker is cleared without finding-specific resolution. Opt-in policies
+and their limitations are described under Main workflow and configuration ownership.
+The existing authorized human classification reducer can
 then accept/classify/reject the exact handoff and assemble eligible repair prompts.
 REST observation plus mocked classification is not production correlation proof.
 
@@ -2478,9 +2523,10 @@ live identities, intent/boundary/receipt ordering, lost responses and writes,
 lookup-only recovery, submitted states and raw evidence, stale/pending/other actors,
 malformed scope, paginated-result failures, concurrent executors, replay and
 shared-worker feedback precedence. Closed/changed-head live PRs stop review
-polling without preventing shared closure/head reconciliation. Full automatic
-approval/repair remains blocked pending either a supported trustworthy round and
-classification contract or authorized human classification. CLI and workflow
+polling without preventing shared closure/head reconciliation. Bounded automatic
+classification is available under the opt-in policies, without claiming trustworthy
+provider request-round correlation or automated resolution of earlier findings.
+Final GitHub approval and merge remain human decisions. CLI and workflow
 execution require explicit runtime approvals; this library wiring cannot resolve the separate
 task-final-SHA blocker. Required-status publication, the read-only push-routing
 command and cross-invocation wake-up wiring are implemented below. The ordinary
@@ -2886,7 +2932,11 @@ dotnet run --project IntelligentTradingSimulator.Orchestration -- \
 ```
 
 It rechecks the open Issue and PR/head, completed task mapping, exact managed CI
-run, accepted human classification and the recorded review submissions; it also
+run, accepted classification and the recorded review submissions. Acceptance must
+have either a unique exact human classification or saved `exact-head-clean-review-v1`
+evidence that still satisfies the policy. For automatic acceptance, it fetches
+current submissions and review-scoped comments again: new ambiguity, a changed
+recommendation or late inline findings stop the check. It also
 detects a state revision or head change during the check. It reports remaining
 manual checks explicitly: ordinary CI, the latest trusted managed status, current
 threads/findings and feedback, ownership or late-write ambiguity outside the
@@ -3303,7 +3353,7 @@ refer to `IntelligentTradingSimulator.Tests/Orchestration`.
 | 3 Intent/effect crash boundaries | Persistence/worker CAS; task/review/CI/status boundary/POST/receipt/outcome failures; ticket-before-work and stable operator evidence replay | No exactly-once upstream guarantee; lost task/review IDs remain human-blocked. |
 | 4 Exact counts/preserved holds | Single-create/concurrent/recovery tests; duplicate wakes keep one launch; operator replay never looks up/relaunches committed resolution | Unknown projection writes require context inspection; no speculative retries. |
 | 5 Coding before exact-SHA CI | Completed task/session and unique PR mapping; versioned bounded candidate-SHA evidence; revalidation at CI dispatch/result and review-result acceptance; exact persisted-SHA checkout/verification; offline head/task/mapping/replay/crash tests | The preview task API cannot attest that the observed candidate commit was produced by the task. Mismatches fail closed or require re-observation; this fallback does not establish final-commit provenance. |
-| 6 Green/review and two repair cycles | Worker multi-repair loops; actual Host task→CI→review→classification→status and repair coverage | Autonomous review correlation/classification unavailable; explicit human classification supported. |
+| 6 Green/review and two repair cycles | Worker multi-repair loops; actual Host task→CI→review→classification→status and repair coverage | Provider request-round correlation is unavailable; opt-in automatic clean classification and explicit human classification are supported. Earlier findings still need finding-specific resolution. |
 | 7 Stale heads/checks/unmanaged compatibility | Exact tested-head status and run/step tests; head/feedback revocation; ordinary CI for all PRs; opt-in interim human merge gate | The interim gate is not branch-enforced; publisher, protection, human approval and cost policy require separate cutover verification. |
 | 8 Feedback priority/distinct identical events | Paged worker, authorized distinct/edit feedback tests; HumanReview feedback ingestion and current-status revocation | No recovery of revisions deleted before observation; API/capture uncertainty escalates. |
 | 9 Productive rounds/no-progress stop | Finding-specific/reintroduced-blocker core tests; Host classification cannot erase unresolved evidence | Provider request-round proof unavailable; humans classify exact handoff, never guessed prose. |

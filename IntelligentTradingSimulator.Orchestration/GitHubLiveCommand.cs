@@ -88,7 +88,8 @@ public sealed record GitHubLiveSettings(string Repository, long RepositoryId, lo
                 Approved("ORCHESTRATION_AUTOMATIC_REVIEWS_DISABLED"))
                 {
                     ReviewTimeout = TimeSpan.FromMinutes(ReviewTimeoutMinutes()),
-                    AutoRepairFindings = Approved("ORCHESTRATION_AUTO_REPAIR_REVIEW_FINDINGS")
+                    AutoRepairFindings = Approved("ORCHESTRATION_AUTO_REPAIR_REVIEW_FINDINGS"),
+                    AutoAcceptCleanReviews = Approved("ORCHESTRATION_AUTO_ACCEPT_CLEAN_REVIEWS")
                 },
             new(activation, credential, Approved("ORCHESTRATION_TRUSTED_CI_VERIFIED"), cost),
             new(Identity("ORCHESTRATION_CI_WORKFLOW_ID"), Required("ORCHESTRATION_CI_REF"),
