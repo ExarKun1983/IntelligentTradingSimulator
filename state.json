@@ -1,10 +1,10 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 544,
+  "Version": 545,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
-  "LastEventId": "actions:1277929203:43986843252",
+  "LastEventId": "actions:1277929203:43991540086",
   "AdmittedIssue": null,
   "WorkerLease": {
     "Owner": "2447477941e345efa580ea0bf5578a35",
@@ -976,16 +976,16 @@
       "SchemaVersion": 1,
       "Number": 304,
       "Generation": 3,
-      "Version": 51,
-      "LastEventId": "actions:1277929203:43986843252",
-      "Phase": "READY",
+      "Version": 52,
+      "LastEventId": "actions:1277929203:43991540086",
+      "Phase": "BLOCKED",
       "Ready": false,
       "ActiveAuthorized": false,
       "ReadyAt": "2026-11-17T00:21:18.9759243+00:00",
       "FeedbackSince": "2026-11-17T00:20:35+00:00",
-      "ReactivationRequired": false,
-      "Paused": false,
-      "HoldReason": null,
+      "ReactivationRequired": true,
+      "Paused": true,
+      "HoldReason": "User requested reactivation of issue 304 after deploying PR 307. First record a controlled pause of the inactive READY generation left by the cancelled old worker. Preserve all history and uncertain effects; wait for the existing lease. No merge.",
       "PullRequest": 305,
       "HeadSha": "ce246a9583982114e968500efc46028d3bd830ec",
       "Round": 1,
@@ -1559,6 +1559,14 @@
       "ReceivedAt": "2026-11-17T00:20:35+00:00",
       "CompletedAt": "2026-11-17T00:20:35+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022actions:1277929203:43986843252\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:304,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:2,\u0022Actor\u0022:{\u0022Login\u0022:\u00226195946\u0022,\u0022Kind\u0022:0,\u0022Id\u0022:6195946,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-17T00:20:35\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022reactivate\u0022,\u0022Reason\u0022:\u0022User approved reactivation after reopening 304. Previous dispatch rejected before publication due to malformed generation arguments; canonical generation unchanged. Prior corrective statuses verified; acknowledge retained unknown-status late-write risk. Preserve historical intents; no merge.\u0022}}"
+    },
+    "actions:1277929203:43991540086": {
+      "Id": "actions:1277929203:43991540086",
+      "Digest": "40A5D719319D5681CB204537989A0DCA0F902AE27C9CE8EA7C7653FAD34E8AFB",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-17T00:55:30+00:00",
+      "CompletedAt": "2026-11-17T00:55:30+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022actions:1277929203:43991540086\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:304,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:3,\u0022Actor\u0022:{\u0022Login\u0022:\u00226195946\u0022,\u0022Kind\u0022:0,\u0022Id\u0022:6195946,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-17T00:55:30\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022pause\u0022,\u0022Reason\u0022:\u0022User requested reactivation of issue 304 after deploying PR 307. First record a controlled pause of the inactive READY generation left by the cancelled old worker. Preserve all history and uncertain effects; wait for the existing lease. No merge.\u0022}}"
     }
   },
   "Outbox": {
