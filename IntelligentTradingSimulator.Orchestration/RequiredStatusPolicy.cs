@@ -8,7 +8,8 @@ public static class RequiredStatusPolicy
     internal static bool RequiresIssueLinkRevocation(RepositoryState state, IssueState issue) =>
         issue.PullRequest is > 0 &&
         state.Outbox.Values.Any(effect => effect.Kind == EffectKind.LinkIssue &&
-            effect.IssueNumber == issue.Number && effect.Generation == issue.Generation) &&
+            effect.IssueNumber == issue.Number && effect.Generation == issue.Generation &&
+            (effect.IssueLinkRevocationRequired ?? effect.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown)) &&
         Desired(state, issue).State == "error" &&
         (issue.RequiredStatusIntentId is null || !state.Outbox.TryGetValue(issue.RequiredStatusIntentId, out var status) ||
          status.Status != DeliveryStatus.Succeeded || !Matches(state, issue, status));

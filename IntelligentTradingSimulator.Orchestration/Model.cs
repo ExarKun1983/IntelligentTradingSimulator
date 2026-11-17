@@ -246,6 +246,8 @@ public sealed class EffectIntent
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IssueLinkBoundary? IssueLinkBoundary { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? IssueLinkRevocationRequired { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public EffectFailureCode? FailureCode { get; set; }
 }
 

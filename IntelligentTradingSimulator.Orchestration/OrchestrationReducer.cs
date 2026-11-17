@@ -841,6 +841,10 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         {
             if (effect.Status is not (DeliveryStatus.Executing or DeliveryStatus.Unknown))
                 throw new InvalidOperationException("Effect is not executing or awaiting reconciliation.");
+            if (effect.Kind == EffectKind.LinkIssue &&
+                (existing.Status == DeliveryStatus.Unknown ||
+                 outcome.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown))
+                effect.IssueLinkRevocationRequired ??= true;
             effect.Status = outcome.Status;
             effect.ExternalId = outcome.ExternalId ?? effect.ExternalId;
             effect.CompletedAt = now;
@@ -1060,6 +1064,11 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             }
             else if (effect.Kind == EffectKind.ProjectStatus && outcome.Status == DeliveryStatus.Succeeded)
                 issue.StatusProjectionDigest = StateJson.Digest(effect.StatusBody!);
+            else if (effect.Kind == EffectKind.PublishRequiredStatus && outcome.Status == DeliveryStatus.Succeeded &&
+                effect.RequiredStatus?.State == "error" && RequiredStatusPolicy.Matches(state, issue, effect))
+                foreach (var link in state.Outbox.Values.Where(link => link.Kind == EffectKind.LinkIssue &&
+                    link.IssueNumber == issue.Number && link.Generation == effect.Generation && link.Sha == effect.Sha))
+                    link.IssueLinkRevocationRequired = false;
             if (outcome.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown)
             {
                 Hold(issue, outcome.Status == DeliveryStatus.Unknown ? "Effect outcome is ambiguous." : "Effect failed.");

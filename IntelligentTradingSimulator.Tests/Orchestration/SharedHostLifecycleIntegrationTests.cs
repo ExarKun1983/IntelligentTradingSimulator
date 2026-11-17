@@ -809,7 +809,63 @@ public sealed class SharedHostLifecycleIntegrationTests
         Assert.Equal(hideReceipt ? DeliveryStatus.Unknown : DeliveryStatus.Succeeded, store.State.Outbox[link.Id].Status);
         Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
         Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+        Assert.False(store.State.Outbox[link.Id].IssueLinkRevocationRequired);
         Assert.Equal(1, fixture.LinkMutations);
+        Assert.Null(store.State.WorkerLease);
+    }
+
+    [Fact]
+    public async Task NormalLinkedMergeReadsEvidenceWithoutAttemptingEarlyErrorRevocation()
+    {
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
+        using var fixture = new PipelineApi(taskApi);
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store();
+        var clock = new Clock();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, clock);
+        await host.ReconcileAsync(taskApi.Notification(), "issues", "44", 1, 1, Now, [], 99, "master", 55,
+            TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(), reviewApproval: ReviewApproval,
+            ciRoute: CiRoute, ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
+        taskApi.RemoteState = "completed";
+        await Wake(host);
+        fixture.CiCompleted = true;
+        await Wake(host);
+        fixture.ReviewSubmitted = true;
+        await Wake(host, autoAccept: true);
+        Assert.True(fixture.IssueLinked);
+        Assert.Equal("success", fixture.Statuses.Last().GetProperty("state").GetString());
+        clock.UtcNow = Now.AddMinutes(4);
+        fixture.MergedAt = clock.UtcNow;
+        var errorAttempts = 0;
+        fixture.OnStatusWrite = status =>
+        {
+            if (status != "error") return;
+            errorAttempts++;
+            throw new HttpRequestException("An unnecessary revocation would lose its acknowledgement.");
+        };
+        var closed = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            sender = new { id = 55, login = "maintainer", type = "User" },
+            issue = new { id = 70, number = 7 }, action = "closed"
+        });
+
+        await host.ReconcileAsync(closed, "issues", "94", 1, 1, clock.UtcNow, [], 99, "master", 55,
+            TaskApproval, Bounded with { MaximumIterations = 8 }, new GitHubTaskIntegrationTests.FinalHead(),
+            reviewApproval: ReviewApproval, ciRoute: CiRoute, ciApproval: CiApproval,
+            statusPublisher: Publisher, statusApproval: StatusApproval);
+
+        var issue = store.State.Issues[7];
+        Assert.Equal(0, errorAttempts);
+        Assert.Equal(Phase.CLOSED, issue.Phase);
+        Assert.Equal(TerminalOutcome.Merged, issue.TerminalOutcome);
+        Assert.NotNull(issue.TerminalHistory.Last().Approval);
+        Assert.NotNull(issue.MergeFeedback);
+        Assert.Equal("success", fixture.Statuses.Last().GetProperty("state").GetString());
+        Assert.Equal("Merged; exact tested head CI and accepted review verified.",
+            fixture.Statuses.Last().GetProperty("description").GetString());
+        Assert.Equal(1, fixture.LinkMutations);
+        Assert.Single(taskApi.Writes, write => write.Path.StartsWith("/agents/"));
         Assert.Null(store.State.WorkerLease);
     }
 
@@ -944,7 +1000,11 @@ public sealed class SharedHostLifecycleIntegrationTests
             handoff = issue.CurrentHandoffId, round = issue.Round.ToString(), pull = "17",
             sha = sha ?? issue.HeadSha ?? Head, classification, findings, responses }
     });
-    private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now.AddMinutes(3); }
+    private sealed class Clock : TimeProvider
+    {
+        public DateTimeOffset UtcNow { get; set; } = Now.AddMinutes(3);
+        public override DateTimeOffset GetUtcNow() => UtcNow;
+    }
 
     private sealed class ChangingRevisionStore(IStateStore inner) : IStateStore
     {
@@ -967,6 +1027,7 @@ public sealed class SharedHostLifecycleIntegrationTests
         private readonly GitHubTaskIntegrationTests.ApiFixture taskApi;
         public bool CiCompleted { get; set; }
         public bool ReviewSubmitted { get; set; }
+        public DateTimeOffset? MergedAt { get; set; }
         public bool FailReviewRead { get; set; }
         public bool InlineFinding { get; init; }
         public bool LateInlineFinding { get; set; }
@@ -1042,9 +1103,20 @@ public sealed class SharedHostLifecycleIntegrationTests
                     head_sha = WakeEvent == "pull_request_target" ? ChangedHead : Definition,
                     @event = WakeEvent, repository = new { id = 1 }, actor = new { id = 55 } };
             else if (path == prefix + "actions/runs/91" || path == prefix + "actions/runs/92" ||
-                     path == prefix + "actions/runs/93")
-                response = new { @event = "workflow_dispatch", path = taskApi.WorkflowPath,
+                     path == prefix + "actions/runs/93" || path == prefix + "actions/runs/94")
+                response = new { @event = path.EndsWith("/94", StringComparison.Ordinal) ? "issues" : "workflow_dispatch",
+                    path = taskApi.WorkflowPath,
                     actor = new { id = 55 } };
+            else if (MergedAt is not null && path == prefix + "issues/7")
+                response = new { id = 70, node_id = "I_7", number = 7, state = "closed", labels = Array.Empty<object>() };
+            else if (MergedAt is not null && path == prefix + "pulls/17")
+                response = new
+                {
+                    id = taskApi.ArtifactDatabaseId, node_id = "PR_node", number = 17, state = "closed",
+                    merged = true, merged_at = MergedAt, draft = taskApi.Draft,
+                    head = new { sha = taskApi.HeadSha, @ref = "coding", repo = new { id = 1 } },
+                    @base = new { @ref = taskApi.BaseBranch, repo = new { id = 1 } }
+                };
             else if (path == prefix + "actions/workflows/88")
                 response = new { id = 88, path = Route.WorkflowPath, state = "active" };
             else if (path.StartsWith(prefix + "commits/refs"))
@@ -1129,7 +1201,7 @@ public sealed class SharedHostLifecycleIntegrationTests
                     context = payload.RootElement.GetProperty("context").GetString(),
                     description = payload.RootElement.GetProperty("description").GetString(),
                     target_url = payload.RootElement.GetProperty("target_url").GetString(),
-                    created_at = Now.AddMinutes(3), creator = StatusActor, sha
+                    created_at = MergedAt ?? Now.AddMinutes(3), creator = StatusActor, sha
                 });
                 Statuses.Add(status);
                 response = status;

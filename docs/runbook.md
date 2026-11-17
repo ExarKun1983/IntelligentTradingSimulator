@@ -2225,9 +2225,15 @@ never authorizes another mutation. Legacy intents without this protocol remain
 uncertain. Before the worker stops on a failed or uncertain link, an independently
 approved, status-only revocation path publishes the held head's error without
 replaying link or agent effects or clearing the hold. Recovery performs this
-revocation before unrelated event/API reads can fail. The obligation remains
-until the matching error is confirmed, even if lookup recovery later confirms
-the link succeeded: a link receipt does not clear the Issue's safety hold.
+revocation before unrelated event/API reads can fail. A failed or uncertain link
+durably records `IssueLinkRevocationRequired`. The obligation remains until the
+matching generation/SHA error is confirmed, even if lookup recovery later confirms
+the link succeeded: a link receipt does not clear the Issue's safety hold or its
+revocation obligation. Legacy failed/unknown links without the marker are treated
+as outstanding until confirmed revocation, including during receipt recovery.
+A healthy successful link never creates this obligation merely because a normal
+merge sends a closure notification; merge evidence is read before terminal status
+projection instead of attempting an unnecessary early error publication.
 Error-only revocation may
 target the previously published tested SHA even if the live head has moved; this
 exception never authorizes a stale-head success or skips repository/publisher checks.

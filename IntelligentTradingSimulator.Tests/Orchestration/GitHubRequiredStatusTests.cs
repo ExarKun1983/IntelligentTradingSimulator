@@ -832,6 +832,44 @@ public sealed class GitHubRequiredStatusTests
     }
 
     [Theory]
+    [InlineData(DeliveryStatus.Failed)]
+    [InlineData(DeliveryStatus.Unknown)]
+    public void LinkRevocationObligationSurvivesPersistenceAndReceiptRecoveryUntilMatchingErrorIsConfirmed(
+        DeliveryStatus outcome)
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = reducer.Reconcile(State(), Live()).State;
+        var linkId = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue).Id;
+        state = reducer.MarkExecuting(state, linkId, Now);
+        state = reducer.RecordOutcome(state, linkId, new(outcome), Now);
+        state = StateJson.Deserialize(StateJson.Serialize(state));
+        Assert.True(state.Outbox[linkId].IssueLinkRevocationRequired);
+        if (outcome == DeliveryStatus.Unknown)
+            state = reducer.RecordOutcome(state, linkId, new(DeliveryStatus.Succeeded, "PR_node"), Now);
+        Assert.True(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+
+        state = reducer.PlanRequiredStatusRevocation(state, 7, Now);
+        var errorId = Intent(state).Id;
+        var unrelated = StateJson.Clone(state).Outbox[errorId];
+        unrelated.Id = "unrelated-error";
+        unrelated.Digest = "unrelated-error";
+        state.Outbox.Add(unrelated.Id, unrelated);
+        state = reducer.MarkExecuting(state, unrelated.Id, Now);
+        state = reducer.RecordOutcome(state, unrelated.Id, new(DeliveryStatus.Succeeded, "other-receipt"), Now);
+        Assert.True(state.Outbox[linkId].IssueLinkRevocationRequired);
+
+        state = reducer.MarkExecuting(state, errorId, Now);
+        state = reducer.RecordOutcome(state, errorId, new(DeliveryStatus.Unknown), Now);
+        Assert.True(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+        state = reducer.RecordOutcome(state, errorId, new(DeliveryStatus.Succeeded, "error-receipt"), Now);
+        state = StateJson.Deserialize(StateJson.Serialize(state));
+
+        Assert.False(state.Outbox[linkId].IssueLinkRevocationRequired);
+        Assert.False(RequiredStatusPolicy.RequiresIssueLinkRevocation(state, state.Issues[7]));
+        Assert.Equal(Phase.BLOCKED, state.Issues[7].Phase);
+    }
+
+    [Theory]
     [InlineData("unmerged")]
     [InlineData("unknown")]
     [InlineData("missing-record")]
