@@ -1,10 +1,10 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 783,
+  "Version": 784,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
-  "LastEventId": "actions:1277929203:44174866747",
+  "LastEventId": "merge-feedback:v2:1277929203:312:1:313:7ba0956d391ffe91e23bbc1c7e0d0df26d9de0ce:2026-11-17T20:58:14.0000000\u002B00:00",
   "AdmittedIssue": null,
   "WorkerLease": {
     "Owner": "7dc15d4277d44dd5aa2a727d21850613",
@@ -1377,8 +1377,8 @@
       "SchemaVersion": 1,
       "Number": 312,
       "Generation": 1,
-      "Version": 64,
-      "LastEventId": "actions:1277929203:44174866747",
+      "Version": 65,
+      "LastEventId": "merge-feedback:v2:1277929203:312:1:313:7ba0956d391ffe91e23bbc1c7e0d0df26d9de0ce:2026-11-17T20:58:14.0000000\u002B00:00",
       "Phase": "HUMAN_REVIEW",
       "Ready": false,
       "ActiveAuthorized": false,
@@ -1506,7 +1506,14 @@
       "ObservedProjectionDigest": "6AD23EA4B7B12BC6F254EB7F202DDDC4D9FA4092112F745901199F19496FA8AB",
       "StatusProjectionDigest": "763095AA7046403DA5C380EE6439585B0809F1D2B23CFDB85A1377E4E480BE36",
       "RequiredStatusSequence": 5,
-      "RequiredStatusIntentId": "required-status:312:1:5"
+      "RequiredStatusIntentId": "required-status:312:1:5",
+      "MergeFeedback": {
+        "Generation": 1,
+        "PullRequest": 313,
+        "Sha": "7ba0956d391ffe91e23bbc1c7e0d0df26d9de0ce",
+        "MergedAt": "2026-11-17T20:58:14+00:00",
+        "ObservedAt": "2026-11-17T20:59:08.9709363+00:00"
+      }
     }
   },
   "Inbox": {
@@ -2149,6 +2156,14 @@
       "ReceivedAt": "2026-11-17T20:58:19+00:00",
       "CompletedAt": "2026-11-17T20:58:19+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022actions:1277929203:44174866747\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:312,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u00226195946\u0022,\u0022Kind\u0022:0,\u0022Id\u0022:6195946,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-17T20:58:19\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022closure\u0022}}"
+    },
+    "merge-feedback:v2:1277929203:312:1:313:7ba0956d391ffe91e23bbc1c7e0d0df26d9de0ce:2026-11-17T20:58:14.0000000\u002B00:00": {
+      "Id": "merge-feedback:v2:1277929203:312:1:313:7ba0956d391ffe91e23bbc1c7e0d0df26d9de0ce:2026-11-17T20:58:14.0000000\u002B00:00",
+      "Digest": "2CF4FE1EF615A968073AE2769192049B52353CE78572E339AA92992D369E47F2",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-17T20:59:08.9709363+00:00",
+      "CompletedAt": "2026-11-17T20:59:08.9709363+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022merge-feedback:v2:1277929203:312:1:313:7ba0956d391ffe91e23bbc1c7e0d0df26d9de0ce:2026-11-17T20:58:14.0000000\\u002B00:00\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:312,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022github-feedback-api\u0022,\u0022Kind\u0022:1,\u0022Id\u0022:null,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-17T20:59:08.9709363\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022merge-feedback-observed\u0022,\u0022PullRequest\u0022:313,\u0022Sha\u0022:\u00227ba0956d391ffe91e23bbc1c7e0d0df26d9de0ce\u0022,\u0022MergedAt\u0022:\u00222026-11-17T20:58:14\u002B00:00\u0022,\u0022ObservedAt\u0022:\u00222026-11-17T20:59:08.9709363\u002B00:00\u0022}}"
     }
   },
   "Outbox": {
