@@ -1047,8 +1047,109 @@ public sealed class GitHubRequiredStatusTests
 
         Assert.Single(messages, message => message.Data is MergeFeedbackObserved);
         Assert.DoesNotContain(messages, message => message.Data is HumanFeedback);
-        var pullRead = api.Requests.FindIndex(path => path == "/pulls/17");
+        var pullRead = api.Requests.FindLastIndex(path => path == "/pulls/17");
         Assert.True(pullRead > api.Requests.FindLastIndex(path => path.EndsWith("/comments", StringComparison.Ordinal)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FeedbackPostedBetweenInitialListAndMergeObservationCannotBeSealedAway(bool onPull)
+    {
+        var state = MergeReady();
+        state.Issues[7].ReadyAt = Now.AddMinutes(-1);
+        using var api = new Api { Merged = true };
+        api.AfterPullRead = () =>
+        {
+            (onPull ? api.PullComments : api.IssueComments).Add(JsonSerializer.SerializeToElement(new
+            {
+                id = 1, body = "Instruction posted just before merge",
+                created_at = Now.AddSeconds(-1), updated_at = Now.AddSeconds(-1),
+                user = new { id = 55, login = "maintainer", type = "User" }
+            }));
+            api.AfterPullRead = null;
+        };
+        using var client = api.Client();
+        var messages = await new GitHubFeedbackSource(new(client, "owner/repo", 1),
+            clock: new Clock(Now.AddMinutes(1))).ReadAsync(state, default);
+        Assert.Single(messages, message => message.Data is HumanFeedback);
+        Assert.Single(messages, message => message.Data is MergeFeedbackObserved);
+        var reducer = new OrchestrationReducer(new Allow());
+        foreach (var message in messages) state = reducer.Apply(state, message);
+
+        Assert.Single(state.Issues[7].PendingFeedbackEventIds);
+        Assert.Equal("error", RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+    }
+
+    [Theory]
+    [InlineData("head")]
+    [InlineData("unmerged")]
+    [InlineData("timestamp")]
+    [InlineData("read-failure")]
+    public async Task PostMergeFeedbackReadMustCompleteAndRevalidateSameBoundary(string change)
+    {
+        var state = MergeReady();
+        state.Issues[7].ReadyAt = Now.AddMinutes(-1);
+        using var api = new Api { Merged = true };
+        var reads = 0;
+        api.BeforeComments = () =>
+        {
+            if (++reads != 2) return;
+            switch (change)
+            {
+                case "head": api.Corruption = "head"; break;
+                case "unmerged": api.Merged = false; break;
+                case "timestamp": api.MergeTime = Now.AddSeconds(1); break;
+                case "read-failure": api.ForbiddenSuffix = "/issues/17/comments"; break;
+            }
+        };
+        using var client = api.Client();
+        var source = new GitHubFeedbackSource(new(client, "owner/repo", 1), clock: new Clock(Now.AddMinutes(1)));
+        if (change == "read-failure")
+            await Assert.ThrowsAsync<HttpRequestException>(() => source.ReadAsync(state, default));
+        else
+            await Assert.ThrowsAsync<InvalidDataException>(() => source.ReadAsync(state, default));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(7)]
+    [InlineData(8)]
+    [InlineData(-1)]
+    public async Task SharedPullFeedbackHasPerIssueIdentityAndLegacyDeduplicationIsOwnerScoped(int legacyOwner)
+    {
+        var state = State();
+        state.Issues[7].ReadyAt = Now.AddMinutes(-1);
+        state.Issues[8] = StateJson.Clone(state).Issues[7];
+        state.Issues[8].Number = 8;
+        var updated = Now.AddSeconds(-1);
+        if (legacyOwner != 0)
+        {
+            var legacy = new OrchestrationEvent($"feedback:1:1:17:1:{updated:O}", "owner/repo",
+                legacyOwner == -1 ? 7 : legacyOwner, state.Generation, 1,
+                new("maintainer", ActorKind.Human, 55), updated, new HumanFeedback("Shared PR instruction"));
+            state.Inbox[legacy.Id] = new(legacy.Id, legacy.Digest, DeliveryStatus.Succeeded, updated, updated,
+                legacyOwner == -1 ? null : StateJson.SerializeEvent(legacy));
+        }
+        using var api = new Api();
+        api.PullComments.Add(JsonSerializer.SerializeToElement(new
+        {
+            id = 1, body = "Shared PR instruction", created_at = updated, updated_at = updated,
+            user = new { id = 55, login = "maintainer", type = "User" }
+        }));
+        using var client = api.Client();
+        var source = new GitHubFeedbackSource(new(client, "owner/repo", 1));
+        var messages = await source.ReadAsync(state, default);
+        Assert.Equal(legacyOwner > 0 ? 1 : 2, messages.Count);
+        Assert.Equal(messages.Count, messages.Select(message => message.Id).Distinct().Count());
+        Assert.All(messages, message =>
+        {
+            Assert.IsType<HumanFeedback>(message.Data);
+            Assert.NotEqual(legacyOwner, message.IssueNumber);
+        });
+        var reducer = new OrchestrationReducer(new Allow());
+        foreach (var message in messages) state = reducer.Apply(state, message);
+        Assert.Empty(await source.ReadAsync(state, default));
     }
 
     [Fact]
@@ -1635,6 +1736,7 @@ public sealed class GitHubRequiredStatusTests
         public string? ForbiddenSuffix { get; set; }
         public bool LostResponse { get; set; }
         public bool Merged { get; set; }
+        public DateTimeOffset MergeTime { get; set; } = Now;
         public bool CancelAfterPost { get; set; }
         public bool SynchronizePreparation { get; set; }
         public bool HideCreatedStatus { get; set; }
@@ -1693,7 +1795,7 @@ public sealed class GitHubRequiredStatusTests
             else if (path.EndsWith("/pulls/17", StringComparison.Ordinal))
             {
                 value = new { number = 17, state = Merged || Corruption == "pull-closed" ? "closed" : "open", merged = Merged,
-                    merged_at = Merged ? Now : (DateTimeOffset?)null,
+                    merged_at = Merged ? MergeTime : (DateTimeOffset?)null,
                     @base = new { repo = new { id = 1 } },
                     head = new { sha = Corruption == "head" ? Definition : Sha, repo = new { id = 1 } } };
                 AfterPullRead?.Invoke();

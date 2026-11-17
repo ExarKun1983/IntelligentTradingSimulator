@@ -238,9 +238,10 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             excludedIssueNumber, clock, !isolatedStatusTest, liveDiagnostics);
         var statuses = statusPublisher is null ? null : new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher,
             statusApproval, clock, liveDiagnostics);
+        var statusPublicationEnabled = statuses is not null && statusApproval?.AllowsPublication == true;
         IVerifiedAgentEffectAdapter effects = new ProductionEffects(tasks, reviews, ci, statuses,
-            new GitHubProjectionAdapter(api, projectionActorId, true), new GitHubIssueLinkAdapter(api, stateStore, true, clock),
-            statusApproval?.AllowsPublication == true);
+            new GitHubProjectionAdapter(api, projectionActorId, true),
+            new GitHubIssueLinkAdapter(api, stateStore, true, clock, statusPublicationEnabled), statusPublicationEnabled);
         if (beforeEffect is not null) effects = new GuardedEffects(effects, beforeEffect);
         var reducer = new OrchestrationReducer(authorization, statuses is not null &&
             statusApproval?.AllowsPublication == true, excludedIssueNumber, reviewRequestsEnabled: !isolatedStatusTest,
@@ -251,7 +252,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         var reconcile = new ReconcileOptions(false, true, true, true,
             AllowedEffectKinds: allowedEffects,
             AllowedRequiredStatusStates: isolatedStatusTest ? new HashSet<string>(["success"], StringComparer.Ordinal) : null,
-            MaximumEffectExecutions: isolatedStatusTest ? 3 : null);
+            MaximumEffectExecutions: isolatedStatusTest ? 3 : null)
+            { IssueLinkRevocationApproved = statusPublicationEnabled };
         var worker = new OrchestrationWorker(reducer, clock, liveDiagnostics);
         var observations = new TaskObservations(tasks, clock, excludedIssueNumber);
         var workerOptions = isolatedStatusTest
@@ -553,12 +555,9 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             CancellationToken token)
         {
             var state = (await store.LoadAsync(token)).State;
-            var held = state.Issues.Values.Where(issue => issue.PullRequest is > 0 &&
+            var held = state.Issues.Values.Where(issue =>
                 (options.ProjectionIssueNumber is null || options.ProjectionIssueNumber == issue.Number) &&
-                state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number &&
-                    effect.Generation == issue.Generation && effect.Kind == EffectKind.LinkIssue &&
-                    effect.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown) &&
-                RequiredStatusPolicy.Desired(state, issue).State == "error").Select(issue => issue.Number).ToList();
+                RequiredStatusPolicy.RequiresIssueLinkRevocation(state, issue)).Select(issue => issue.Number).ToList();
             foreach (var number in held)
             {
                 if (statuses is null || !statusPublicationEnabled)

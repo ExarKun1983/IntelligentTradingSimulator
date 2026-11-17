@@ -60,6 +60,7 @@ public sealed record ReconcileOptions(
 {
     internal int? ProjectionIssueNumber { get; init; }
     internal bool PrioritizeAdmittedWork { get; init; }
+    internal bool IssueLinkRevocationApproved { get; init; } = true;
 
     public bool AllowsEffect(EffectIntent effect) =>
         (!ProjectionOnly || effect.Kind is EffectKind.ProjectLabels or EffectKind.ProjectStatus or EffectKind.PublishRequiredStatus or EffectKind.LinkIssue) &&
@@ -199,6 +200,9 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                 !snapshot.State.Outbox.Values.Any(IsExclusiveUncertain) &&
                 IsSafeToExecute(snapshot.State, e, live));
             if (pending is null) return new(snapshot.State, decision.PendingEffects, false);
+            if (pending.Kind == EffectKind.LinkIssue &&
+                !IssueLinkPolicy.CanWrite(snapshot.State, pending.IssueNumber, options.IssueLinkRevocationApproved))
+                throw new InvalidOperationException("Issue-link writes with required-status history require an approved revocation publisher.");
             var marked = reducer.MarkExecuting(snapshot.State, pending.Id, live.ObservedAt);
             diagnostics?.Mark(GitHubLiveStage.ReconcileStateSave);
             if (!await store.TrySaveAsync(snapshot, marked, cancellationToken)) continue;

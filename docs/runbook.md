@@ -2209,7 +2209,10 @@ live open Issue and PR, same-repository head and base, exact head SHA and the
 repository's current default target branch. An existing correct link is a no-op;
 other closing Issues, incomplete pagination or GraphQL errors stop the projection
 for reconciliation without changing those links. The isolated status-test profile
-does not plan this effect. No PR description is overwritten, no Issue is directly
+does not plan this effect. If that Issue has any required-status history, an
+approved revocation publisher is required before a pending link effect can start.
+The adapter rechecks this prerequisite before mutation. A statusless profile
+without status history can still link Issues. No PR description is overwritten, no Issue is directly
 closed and no PR is approved or merged. The separate human merge closes the linked
 Issue through GitHub. Versioned link intents persist the original Issue/PR node
 identities and an exclusively owned mutation boundary before sending the request.
@@ -2222,7 +2225,10 @@ never authorizes another mutation. Legacy intents without this protocol remain
 uncertain. Before the worker stops on a failed or uncertain link, an independently
 approved, status-only revocation path publishes the held head's error without
 replaying link or agent effects or clearing the hold. Recovery performs this
-revocation before unrelated event/API reads can fail. Error-only revocation may
+revocation before unrelated event/API reads can fail. The obligation remains
+until the matching error is confirmed, even if lookup recovery later confirms
+the link succeeded: a link receipt does not clear the Issue's safety hold.
+Error-only revocation may
 target the previously published tested SHA even if the live head has moved; this
 exception never authorizes a stale-head success or skips repository/publisher checks.
 Cancellation preserves executing links as uncertain and attempts approved revocation
@@ -2256,10 +2262,14 @@ Closing or merging never clears an earlier safety hold or restores invalidated
 approval evidence after head drift. An otherwise eligible closed Issue with a
 still-open PR continues to collect authorized Issue/PR feedback. Terminal success
 also requires a complete feedback read through the live merge timestamp, recorded
-durably before projection. The merge boundary is read after the complete comment
-lists, so comments created after a merge during collection are excluded. Merge
-feedback event identities include the canonical Issue number as well as PR/head;
-partial reads cannot seal that boundary. Current revisions of comments created
+durably before projection. After observing a merge, both complete comment lists
+are read again and the same merged head/timestamp is revalidated before sealing
+the boundary. This includes comments created between the initial lists and merge;
+comments created after merge are excluded. Human-feedback and merge-feedback
+event identities include the canonical Issue number as well as PR/head. Legacy
+human-feedback IDs suppress only their original Issue's revision when its saved
+event identifies that Issue; unattributed legacy entries cannot suppress feedback.
+Partial or inconsistent reads cannot seal that boundary. Current revisions of comments created
 before merge are treated conservatively as feedback, including edits after merge.
 This is not a lossless history of deleted comments or earlier revisions. A sealed
 closed lifecycle is not polled indefinitely for post-merge comments. Historical

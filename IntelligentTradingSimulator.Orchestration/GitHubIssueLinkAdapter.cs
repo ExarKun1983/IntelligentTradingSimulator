@@ -7,6 +7,10 @@ public static class IssueLinkPolicy
     public static string IntentId(IssueState issue) =>
         $"issue-link:v1:{issue.Number}:{issue.Generation}:{issue.PullRequest}:{issue.ActiveTaskId}:{issue.Round}:{issue.HeadSha}";
 
+    internal static bool CanWrite(RepositoryState state, int issueNumber, bool statusRevocationApproved) =>
+        statusRevocationApproved || !state.Outbox.Values.Any(effect =>
+            effect.IssueNumber == issueNumber && effect.Kind == EffectKind.PublishRequiredStatus);
+
     public static bool Eligible(RepositoryState state, IssueState issue) =>
         state.IsolatedTestManifestDigest is null && issue.Phase == Phase.HUMAN_REVIEW &&
         issue.ReactivationRequired && !issue.ActiveAuthorized &&
@@ -31,7 +35,7 @@ internal sealed class IssueLinkNotStartedException(Exception inner, IssueLinkFai
 /// <summary>Adds an atomic closing relationship, never rewrites a PR body or merges a PR.
 /// Interrupted mutations are lookup-only, like other durable orchestration effects.</summary>
 public sealed class GitHubIssueLinkAdapter(GitHubRepositoryApi api, IStateStore store,
-    bool allowMutations = false, TimeProvider? clock = null) : IEffectAdapter
+    bool allowMutations = false, TimeProvider? clock = null, bool statusRevocationApproved = true) : IEffectAdapter
 {
     private readonly TimeProvider clock = clock ?? TimeProvider.System;
 
@@ -119,6 +123,8 @@ public sealed class GitHubIssueLinkAdapter(GitHubRepositoryApi api, IStateStore 
             !state.Issues.TryGetValue(intent.IssueNumber, out var issue) ||
             !IssueLinkPolicy.Matches(state, issue, intent))
             throw new InvalidDataException("Closing reference is not a canonical eligible intent.");
+        if (!IssueLinkPolicy.CanWrite(state, issue.Number, statusRevocationApproved))
+            throw new InvalidOperationException("Issue-link writes with required-status history require an approved revocation publisher.");
         using var repository = await api.GetAsync("", token);
         var repo = repository.RootElement;
         if (repo.GetProperty("id").GetInt64() != api.RepositoryId ||
@@ -142,7 +148,8 @@ public sealed class GitHubIssueLinkAdapter(GitHubRepositoryApi api, IStateStore 
         if (string.IsNullOrWhiteSpace(issueId) || string.IsNullOrWhiteSpace(pullId))
             throw new InvalidDataException("Closing-reference node identities are unavailable.");
         state = (await store.LoadAsync(token)).State;
-        if (!IssueLinkPolicy.Matches(state, state.Issues[intent.IssueNumber], intent))
+        if (!IssueLinkPolicy.Matches(state, state.Issues[intent.IssueNumber], intent) ||
+            !IssueLinkPolicy.CanWrite(state, intent.IssueNumber, statusRevocationApproved))
             throw new InvalidDataException("Closing-reference eligibility changed during preflight.");
         return new(issueId, pullId, issue.PullRequest!.Value);
     }

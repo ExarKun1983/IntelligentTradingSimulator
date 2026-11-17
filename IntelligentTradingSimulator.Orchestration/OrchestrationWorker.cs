@@ -291,13 +291,9 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
         !options.DryRun && options.LiveEffectsEnabled && options.PrerequisiteCapabilitiesVerified && options.CostApproved &&
         (options.AllowedEffectKinds is null || options.AllowedEffectKinds.Contains(EffectKind.PublishRequiredStatus)) &&
         (options.AllowedRequiredStatusStates is null || options.AllowedRequiredStatusStates.Contains("error")) &&
-        state.Outbox.Values.Any(effect => effect.Kind == EffectKind.LinkIssue &&
-            (options.ProjectionIssueNumber is null || options.ProjectionIssueNumber == effect.IssueNumber) &&
-            effect.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown &&
-            state.Issues.TryGetValue(effect.IssueNumber, out var issue) && issue.Generation == effect.Generation &&
-            issue.PullRequest is > 0 && RequiredStatusPolicy.Desired(state, issue).State == "error" &&
-            (issue.RequiredStatusIntentId is null || !state.Outbox.TryGetValue(issue.RequiredStatusIntentId, out var status) ||
-             status.Status != DeliveryStatus.Succeeded || !RequiredStatusPolicy.Matches(state, issue, status)));
+        state.Issues.Values.Any(issue =>
+            (options.ProjectionIssueNumber is null || options.ProjectionIssueNumber == issue.Number) &&
+            RequiredStatusPolicy.RequiresIssueLinkRevocation(state, issue));
 
     private async Task<(bool Acquired, bool ContinuationLimitReached, int? AdmittedIssue)> AcquireLeaseAsync(
         IStateStore store, string owner, DateTimeOffset expiresAt,

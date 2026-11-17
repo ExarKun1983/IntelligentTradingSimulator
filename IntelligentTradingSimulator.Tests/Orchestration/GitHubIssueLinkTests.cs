@@ -125,6 +125,28 @@ public sealed class GitHubIssueLinkTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StatusHistoryRequiresRevocationApprovalIncludingDuringPreflight(bool duringLookup)
+    {
+        var store = Executing();
+        void PublishHistory() => store.State.Outbox["status"] = new()
+        {
+            Id = "status", IssueNumber = 7, Kind = EffectKind.PublishRequiredStatus,
+            Status = DeliveryStatus.Succeeded
+        };
+        using var api = new Api { OnLookup = duringLookup ? PublishHistory : null };
+        if (!duringLookup) PublishHistory();
+        using var client = api.Client();
+        await Assert.ThrowsAsync<IssueLinkNotStartedException>(() =>
+            new GitHubIssueLinkAdapter(new(client, "owner/repo", 1), store, true,
+                statusRevocationApproved: false).ExecuteAsync(Intent(store.State), default));
+
+        Assert.Equal(0, api.Mutations);
+        Assert.Null(Intent(store.State).IssueLinkBoundary);
+    }
+
+    [Theory]
     [InlineData("head")]
     [InlineData("feedback")]
     public async Task ProvenPreMutationRefusalFailsWithoutBlockingOtherIssueAdmission(string change)

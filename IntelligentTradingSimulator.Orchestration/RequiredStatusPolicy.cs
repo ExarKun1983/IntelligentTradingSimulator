@@ -5,6 +5,14 @@ public static class RequiredStatusPolicy
 {
     public const string Context = "Agent managed CI";
 
+    internal static bool RequiresIssueLinkRevocation(RepositoryState state, IssueState issue) =>
+        issue.PullRequest is > 0 &&
+        state.Outbox.Values.Any(effect => effect.Kind == EffectKind.LinkIssue &&
+            effect.IssueNumber == issue.Number && effect.Generation == issue.Generation) &&
+        Desired(state, issue).State == "error" &&
+        (issue.RequiredStatusIntentId is null || !state.Outbox.TryGetValue(issue.RequiredStatusIntentId, out var status) ||
+         status.Status != DeliveryStatus.Succeeded || !Matches(state, issue, status));
+
     public static RequiredStatusPayload Desired(RepositoryState state, IssueState issue)
     {
         var ci = issue.Ci;

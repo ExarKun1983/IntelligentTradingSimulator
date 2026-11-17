@@ -756,17 +756,22 @@ public sealed class SharedHostLifecycleIntegrationTests
 
     private static Task<WorkerResult?> Wake(GitHubOrchestrationHost host, string eventName = "schedule",
         string? finalHeadSha = null, bool autoRepair = false, bool autoAccept = false,
-        WorkerOptions? options = null, CancellationToken token = default) =>
+        WorkerOptions? options = null, CancellationToken token = default,
+        bool statusApproved = true, bool publisherAvailable = true) =>
         host.ReconcileWakeAsync(JsonSerializer.SerializeToElement(new
             { repository = new { id = 1, full_name = "owner/repo" },
                 pull_request = new { head = new { sha = ChangedHead } } }), eventName, "90",
             TrustedWakeRoute, new(true, true, true, true), 99, "master", 55, TaskApproval, options ?? Bounded,
             new GitHubTaskIntegrationTests.FinalHead(finalHeadSha), token,
             reviewApproval: ReviewApproval with { AutoRepairFindings = autoRepair, AutoAcceptCleanReviews = autoAccept }, ciRoute: CiRoute,
-            ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
+            ciApproval: CiApproval, statusPublisher: publisherAvailable ? Publisher : null,
+            statusApproval: StatusApproval with { ActivationApproved = statusApproved });
 
-    [Fact]
-    public async Task RecoveredUncertainLinkRevokesStatusBeforeFailingFeedbackRead()
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public async Task RecoveredUncertainLinkRevokesStatusBeforeFailingFeedbackRead(bool hideReceipt, bool alreadyHeld)
     {
         using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
         using var fixture = new PipelineApi(taskApi);
@@ -785,22 +790,86 @@ public sealed class SharedHostLifecycleIntegrationTests
         var snapshot = await store.LoadAsync(default);
         var interrupted = StateJson.Clone(snapshot.State);
         var link = Assert.Single(interrupted.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
-        link.Status = DeliveryStatus.Executing;
+        link.Status = alreadyHeld ? DeliveryStatus.Unknown : DeliveryStatus.Executing;
         link.ExternalId = null;
         link.CompletedAt = null;
+        if (alreadyHeld)
+        {
+            interrupted.Issues[7].Phase = Phase.BLOCKED;
+            interrupted.Issues[7].HoldReason = "Effect outcome is ambiguous.";
+        }
         interrupted.Version++;
         Assert.True(await store.TrySaveAsync(snapshot, interrupted, default));
-        fixture.HideLinkReceipt = true;
+        fixture.HideLinkReceipt = hideReceipt;
         fixture.FailFeedbackRead = true;
         fixture.OnStatusWrite = status => { if (status == "error") Assert.NotNull(store.State.WorkerLease); };
 
         await Assert.ThrowsAsync<HttpRequestException>(() => Wake(host));
 
-        Assert.Equal(DeliveryStatus.Unknown, store.State.Outbox[link.Id].Status);
+        Assert.Equal(hideReceipt ? DeliveryStatus.Unknown : DeliveryStatus.Succeeded, store.State.Outbox[link.Id].Status);
         Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
         Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
         Assert.Equal(1, fixture.LinkMutations);
         Assert.Null(store.State.WorkerLease);
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task ExistingStatusHistoryPreventsLinkExecutionWithoutApprovedRevocation(bool statusApproved,
+        bool publisherAvailable)
+    {
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
+        using var fixture = new PipelineApi(taskApi);
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        await host.ReconcileAsync(taskApi.Notification(), "issues", "44", 1, 1, Now, [], 99, "master", 55,
+            TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(), reviewApproval: ReviewApproval,
+            ciRoute: CiRoute, ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
+        taskApi.RemoteState = "completed";
+        await Wake(host);
+        fixture.CiCompleted = true;
+        await Wake(host);
+        fixture.ReviewSubmitted = true;
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => Wake(host, autoAccept: true,
+            statusApproved: statusApproved, publisherAvailable: publisherAvailable));
+
+        Assert.Contains("approved revocation publisher", failure.Message);
+        var link = Assert.Single(store.State.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        Assert.Equal(DeliveryStatus.Pending, link.Status);
+        Assert.Null(link.IssueLinkBoundary);
+        Assert.Equal(0, fixture.LinkMutations);
+        Assert.Equal(Phase.HUMAN_REVIEW, store.State.Issues[7].Phase);
+        Assert.Equal("success", fixture.Statuses.Last().GetProperty("state").GetString());
+        Assert.Null(store.State.WorkerLease);
+    }
+
+    [Fact]
+    public async Task StatuslessProfileWithoutStatusHistoryCanStillLinkIssue()
+    {
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
+        using var fixture = new PipelineApi(taskApi);
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        await host.ReconcileAsync(taskApi.Notification(), "issues", "44", 1, 1, Now, [], 99, "master", 55,
+            TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(), reviewApproval: ReviewApproval,
+            ciRoute: CiRoute, ciApproval: CiApproval);
+        taskApi.RemoteState = "completed";
+        await Wake(host, publisherAvailable: false);
+        fixture.CiCompleted = true;
+        await Wake(host, publisherAvailable: false);
+        fixture.ReviewSubmitted = true;
+        await Wake(host, autoAccept: true, publisherAvailable: false);
+
+        Assert.Equal(DeliveryStatus.Succeeded,
+            Assert.Single(store.State.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue).Status);
+        Assert.True(fixture.IssueLinked);
+        Assert.Equal(1, fixture.LinkMutations);
+        Assert.Empty(fixture.Statuses);
+        Assert.DoesNotContain(store.State.Outbox.Values, effect => effect.Kind == EffectKind.PublishRequiredStatus);
     }
 
     [Theory]

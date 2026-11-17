@@ -25,22 +25,17 @@ public sealed class GitHubFeedbackSource(GitHubRepositoryApi api, long? projecti
                  sealedFeedback.Sha == issue.HeadSha && sealedFeedback.MergedAt == terminal.MergedAt))
                 continue;
             DateTimeOffset? mergedAt = null;
-            var collected = new List<(int Target, JsonElement Comment)>();
-            foreach (var target in new[] { issue.Number, issue.PullRequest ?? issue.Number }.Distinct())
-            {
-                var comments = await api.ListAsync($"issues/{target}/comments", token);
-                collected.AddRange(comments.Select(comment => (target, comment)));
-            }
+            var collected = await ReadCommentsAsync(issue, token);
             if (issue.PullRequest is { } prNumber && issue.Phase is Phase.HUMAN_REVIEW or Phase.CLOSED)
             {
-                using var pull = await api.GetAsync($"pulls/{prNumber}", token);
-                var pr = pull.RootElement;
-                if (pr.GetProperty("number").GetInt32() != prNumber ||
-                    pr.GetProperty("base").GetProperty("repo").GetProperty("id").GetInt64() != api.RepositoryId)
-                    throw new InvalidDataException("Feedback PR repository mapping changed.");
-                if (pr.GetProperty("merged").GetBoolean() &&
-                    pr.GetProperty("head").GetProperty("sha").GetString() == issue.HeadSha)
-                    mergedAt = pr.GetProperty("merged_at").GetDateTimeOffset();
+                mergedAt = await ReadMergeBoundaryAsync(prNumber, issue.HeadSha, token);
+                if (mergedAt is not null)
+                {
+                    // The initial lists can predate a comment posted just before the observed merge.
+                    collected = await ReadCommentsAsync(issue, token);
+                    if (await ReadMergeBoundaryAsync(prNumber, issue.HeadSha, token) != mergedAt)
+                        throw new InvalidDataException("Feedback merge boundary changed during the post-merge read.");
+                }
             }
             foreach (var (target, comment) in collected)
             {
@@ -55,8 +50,11 @@ public sealed class GitHubFeedbackSource(GitHubRepositoryApi api, long? projecti
                     body.StartsWith(StatusProjection.Marker(issue.Number, issue.Generation) + "\n", StringComparison.Ordinal))
                     continue;
                 if (id <= 0) throw new InvalidDataException("Invalid feedback identity.");
-                var eventId = $"feedback:{api.RepositoryId}:{issue.Generation}:{target}:{id}:{updated:O}";
-                if (updated < since || state.Inbox.ContainsKey(eventId) || string.IsNullOrWhiteSpace(body)) continue;
+                var eventId = $"feedback:v2:{api.RepositoryId}:{issue.Number}:{issue.Generation}:{target}:{id}:{updated:O}";
+                var legacyId = $"feedback:{api.RepositoryId}:{issue.Generation}:{target}:{id}:{updated:O}";
+                if (updated < since || state.Inbox.ContainsKey(eventId) ||
+                    state.Inbox.GetValueOrDefault(legacyId)?.Event?.IssueNumber == issue.Number ||
+                    string.IsNullOrWhiteSpace(body)) continue;
                 using var permission = await api.GetAsync(
                     $"collaborators/{Uri.EscapeDataString(actor.Login)}/permission", token);
                 var user = permission.RootElement.GetProperty("user");
@@ -82,5 +80,28 @@ public sealed class GitHubFeedbackSource(GitHubRepositoryApi api, long? projecti
             }
         }
         return events.OrderBy(message => message.OccurredAt).ThenBy(message => message.Id, StringComparer.Ordinal).ToList();
+    }
+
+    private async Task<List<(int Target, JsonElement Comment)>> ReadCommentsAsync(IssueState issue, CancellationToken token)
+    {
+        var collected = new List<(int Target, JsonElement Comment)>();
+        foreach (var target in new[] { issue.Number, issue.PullRequest ?? issue.Number }.Distinct())
+        {
+            var comments = await api.ListAsync($"issues/{target}/comments", token);
+            collected.AddRange(comments.Select(comment => (target, comment)));
+        }
+        return collected;
+    }
+
+    private async Task<DateTimeOffset?> ReadMergeBoundaryAsync(int prNumber, string? headSha, CancellationToken token)
+    {
+        using var pull = await api.GetAsync($"pulls/{prNumber}", token);
+        var pr = pull.RootElement;
+        if (pr.GetProperty("number").GetInt32() != prNumber ||
+            pr.GetProperty("base").GetProperty("repo").GetProperty("id").GetInt64() != api.RepositoryId)
+            throw new InvalidDataException("Feedback PR repository mapping changed.");
+        return pr.GetProperty("merged").GetBoolean() &&
+            pr.GetProperty("head").GetProperty("sha").GetString() == headSha
+                ? pr.GetProperty("merged_at").GetDateTimeOffset() : null;
     }
 }
