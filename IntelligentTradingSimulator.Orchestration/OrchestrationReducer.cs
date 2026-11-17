@@ -475,6 +475,16 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             case Closure:
                 issue.ClosurePending = true;
                 break;
+            case MergeFeedbackObserved observed:
+                if (message.Actor.Kind != ActorKind.TaskService || message.Actor.Login != "github-feedback-api" ||
+                    observed.PullRequest != issue.PullRequest ||
+                    !IsSha(observed.Sha) || observed.Sha != issue.HeadSha ||
+                    observed.MergedAt == default || observed.ObservedAt < observed.MergedAt ||
+                    observed.ObservedAt != message.OccurredAt)
+                    throw new InvalidOperationException("Merge feedback does not match the observed PR boundary.");
+                issue.MergeFeedback = new(issue.Generation, observed.PullRequest, observed.Sha,
+                    observed.MergedAt, observed.ObservedAt);
+                break;
             case Reopen:
                 issue.ClosurePending = false;
                 issue.Ready = false;
@@ -509,6 +519,12 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             }
             if (live.Closed)
             {
+                var previousTerminal = issue.TerminalHistory.LastOrDefault();
+                var previousHold = issue.HoldReason;
+                issue.ClosurePending = false;
+                var liveApprovalEligible = live.PullRequest is > 0 && live.PullRequest == issue.PullRequest &&
+                    live.HeadSha == issue.HeadSha && (live.PullRequestMerged == true || live.PullRequestClosed == false);
+                var approval = liveApprovalEligible ? RequiredStatusPolicy.CaptureFinalApproval(state, issue) : null;
                 var terminalOutcome = (issue.PullRequest is not null && live.PullRequest != issue.PullRequest)
                     ? TerminalOutcome.Unknown : live.PullRequestMerged switch
                 {
@@ -517,15 +533,31 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     null when issue.PullRequest is null && live.PullRequest is null => TerminalOutcome.Unmerged,
                     _ => TerminalOutcome.Unknown
                 };
-                if (issue.Phase != Phase.CLOSED || issue.TerminalOutcome != terminalOutcome)
+                if (liveApprovalEligible && issue.Phase == Phase.CLOSED && issue.HoldReason == "Closed." &&
+                    previousTerminal is { Approval: { } savedApproval } &&
+                    (previousTerminal.Outcome == TerminalOutcome.Merged || previousTerminal.PullRequestWasOpen) &&
+                    previousTerminal.Generation == issue.Generation && previousTerminal.PullRequest == live.PullRequest &&
+                    previousTerminal.Sha == live.HeadSha &&
+                    RequiredStatusPolicy.FinalApprovalMatches(state, issue, savedApproval))
+                    approval = savedApproval;
+                if (issue.Phase != Phase.CLOSED || issue.TerminalOutcome != terminalOutcome ||
+                    previousTerminal?.Sha != live.HeadSha || previousTerminal?.Approval != approval ||
+                    previousTerminal?.PullRequestWasOpen != (live.PullRequestClosed == false) ||
+                    previousTerminal?.MergedAt != live.PullRequestMergedAt)
                     issue.TerminalHistory.Add(new TerminalRecord(issue.Generation, terminalOutcome,
-                        issue.PullRequest, live.HeadSha ?? issue.HeadSha, observation.ObservedAt));
+                        issue.PullRequest, live.HeadSha ?? issue.HeadSha, observation.ObservedAt)
+                    {
+                        Approval = approval, PreviousHoldReason = previousHold,
+                        PullRequestWasOpen = live.PullRequestClosed == false,
+                        MergedAt = live.PullRequestMergedAt
+                    });
                 issue.TerminalOutcome = terminalOutcome;
                 issue.Phase = Phase.CLOSED;
                 issue.Ready = false;
                 issue.ActiveAuthorized = false;
                 issue.ReactivationRequired = true;
-                issue.HoldReason = "Closed.";
+                issue.HoldReason = previousHold is null or "Closed." or "Awaiting human approval."
+                    ? "Closed." : previousHold;
                 issue.ClosurePending = false;
                 CancelPendingWork(state, issue);
             }
@@ -936,6 +968,24 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         return state;
     }
 
+    public RepositoryState RecordIssueLinkBoundary(RepositoryState input, string id, IssueLinkBoundary boundary)
+    {
+        ValidateState(input);
+        var state = StateJson.Clone(input);
+        var intent = state.Outbox[id];
+        var issue = state.Issues[intent.IssueNumber];
+        if (intent.Status != DeliveryStatus.Executing || !IssueLinkPolicy.Matches(state, issue, intent) ||
+            intent.IssueLinkBoundary is not null || boundary.RepositoryId <= 0 ||
+            boundary.Issue != issue.Number || boundary.PullRequest != intent.IssueLink!.PullRequest ||
+            string.IsNullOrWhiteSpace(boundary.IssueNodeId) || string.IsNullOrWhiteSpace(boundary.PullNodeId) ||
+            string.IsNullOrWhiteSpace(boundary.OwnerId) ||
+            boundary.PreparedAt == default)
+            throw new InvalidOperationException("Invalid Issue-link mutation boundary.");
+        intent.IssueLinkBoundary = boundary;
+        Touch(state, issue, state.LastEventId);
+        return state;
+    }
+
     private static RepositoryState ChangeEffect(RepositoryState input, string id, Action<EffectIntent> change, EffectOutcome? outcome = null)
     {
         var state = StateJson.Clone(input);
@@ -1059,6 +1109,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
         message.Data switch
     {
         TaskCompleted or TaskPrMapped or TaskStopped or TaskTerminalObserved => message.Actor.Kind == ActorKind.TaskService,
+        MergeFeedbackObserved => message.Actor.Kind == ActorKind.TaskService,
         CiResult or CiStopped => message.Actor.Kind == ActorKind.CiService,
         ReviewResult or ReviewPending or ReviewTimedOut => message.Actor.Kind == ActorKind.ReviewService,
         _ => message.Actor.Kind == ActorKind.Human
@@ -1271,6 +1322,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
             Id = id, IssueNumber = issue.Number, Generation = issue.Generation, Kind = kind, Status = DeliveryStatus.Pending,
             TaskId = taskId, Round = issue.Round, Sha = issue.HeadSha, CreatedAt = now, Labels = labels?.ToList() ?? [],
             StatusBody = statusBody,
+            IssueLink = kind == EffectKind.LinkIssue ? new(1, issue.PullRequest!.Value) : null,
             TaskPrompt = kind == EffectKind.LaunchTask
                 ? $"Implement https://github.com/{state.Repository}/issues/{issue.Number}. " +
                   $"Task {taskId}; generation {issue.Generation}; round {issue.Round}. " +

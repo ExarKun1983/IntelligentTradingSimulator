@@ -113,7 +113,10 @@ public sealed partial class GitHubRepositoryApi
                 live.PullRequest = number;
                 live.HeadSha = sha;
                 live.PullRequestMerged = pr.GetProperty("merged").GetBoolean();
-                live.Closed |= pr.GetProperty("state").GetString() == "closed";
+                live.PullRequestClosed = pr.GetProperty("state").GetString() == "closed";
+                if (live.PullRequestMerged == true)
+                    live.PullRequestMergedAt = pr.GetProperty("merged_at").GetDateTimeOffset();
+                live.Closed |= live.PullRequestClosed == true;
             }
             // Deliberately absent: a PR head, draft flag or CI run cannot prove task completion.
             live.CompletedTaskId = null;

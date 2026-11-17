@@ -3,7 +3,8 @@ using System.Text.Json;
 namespace IntelligentTradingSimulator.Orchestration;
 
 /// <summary>Current authorized human comments, not a lossless edited/deleted comment history.</summary>
-public sealed class GitHubFeedbackSource(GitHubRepositoryApi api, long? projectionActorId = null)
+public sealed class GitHubFeedbackSource(GitHubRepositoryApi api, long? projectionActorId = null,
+    TimeProvider? clock = null)
 {
     public async Task<IReadOnlyList<OrchestrationEvent>> ReadAsync(RepositoryState state, CancellationToken token,
         int? excludedIssueNumber = null)
@@ -15,7 +16,26 @@ public sealed class GitHubFeedbackSource(GitHubRepositoryApi api, long? projecti
         {
             if (issue.Number == excludedIssueNumber) continue;
             var since = issue.FeedbackSince ?? issue.ReadyAt;
-            if (since is null || issue.Phase == Phase.CLOSED) continue;
+            if (since is null) continue;
+            var terminal = issue.TerminalHistory.LastOrDefault();
+            if (issue.Phase == Phase.CLOSED &&
+                (terminal?.Approval is null ||
+                 issue.TerminalOutcome == TerminalOutcome.Merged && issue.MergeFeedback is { } sealedFeedback &&
+                 sealedFeedback.Generation == issue.Generation && sealedFeedback.PullRequest == issue.PullRequest &&
+                 sealedFeedback.Sha == issue.HeadSha && sealedFeedback.MergedAt == terminal.MergedAt))
+                continue;
+            DateTimeOffset? mergedAt = null;
+            if (issue.PullRequest is { } prNumber && issue.Phase is Phase.HUMAN_REVIEW or Phase.CLOSED)
+            {
+                using var pull = await api.GetAsync($"pulls/{prNumber}", token);
+                var pr = pull.RootElement;
+                if (pr.GetProperty("number").GetInt32() != prNumber ||
+                    pr.GetProperty("base").GetProperty("repo").GetProperty("id").GetInt64() != api.RepositoryId)
+                    throw new InvalidDataException("Feedback PR repository mapping changed.");
+                if (pr.GetProperty("merged").GetBoolean() &&
+                    pr.GetProperty("head").GetProperty("sha").GetString() == issue.HeadSha)
+                    mergedAt = pr.GetProperty("merged_at").GetDateTimeOffset();
+            }
             var targets = new[] { issue.Number, issue.PullRequest ?? issue.Number }.Distinct();
             foreach (var target in targets)
             {
@@ -25,6 +45,8 @@ public sealed class GitHubFeedbackSource(GitHubRepositoryApi api, long? projecti
                     if (comment.GetProperty("user").GetProperty("type").GetString() == "Bot") continue;
                     var actor = UpstreamIdentity.RestUser(comment, ActorKind.Human);
                     var updated = comment.GetProperty("updated_at").GetDateTimeOffset();
+                    if (mergedAt is { } boundary && comment.GetProperty("created_at").GetDateTimeOffset() > boundary)
+                        continue;
                     var id = comment.GetProperty("id").GetInt64();
                     var body = comment.GetProperty("body").GetString();
                     if (actor.Id == projectionActorId && body is not null &&
@@ -46,6 +68,16 @@ public sealed class GitHubFeedbackSource(GitHubRepositoryApi api, long? projecti
                     if (events.Count > OrchestrationReducer.MaximumIndexEntries)
                         throw new InvalidDataException("Feedback capacity exceeded.");
                 }
+            }
+            if (mergedAt is { } at)
+            {
+                var observedAt = (clock ?? TimeProvider.System).GetUtcNow();
+                if (observedAt < at) throw new InvalidDataException("Feedback merge boundary is in the future.");
+                var id = $"merge-feedback:v1:{api.RepositoryId}:{issue.Generation}:{issue.PullRequest}:{issue.HeadSha}:{at:O}";
+                if (!state.Inbox.ContainsKey(id))
+                    events.Add(new(id, api.Repository, issue.Number, state.Generation, issue.Generation,
+                        new("github-feedback-api", ActorKind.TaskService), observedAt,
+                        new MergeFeedbackObserved(issue.PullRequest!.Value, issue.HeadSha!, at, observedAt)));
             }
         }
         return events.OrderBy(message => message.OccurredAt).ThenBy(message => message.Id, StringComparer.Ordinal).ToList();

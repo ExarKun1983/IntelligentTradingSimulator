@@ -797,11 +797,13 @@ public sealed class GitHubRequiredStatusTests
     [InlineData(true)]
     public async Task VerifiedMergePublishesSuccessAndReleasesTerminalProjectionBarrier(bool issueClosed)
     {
-        var state = State();
+        var state = MergeReady();
         state.Issues[7].ContinuationHoldBarrier = new(1, true);
         var live = Live();
         live.Issues[7].Closed = true;
         live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestClosed = true;
+        live.Issues[7].PullRequestMergedAt = Now;
         live.Issues[7].Labels = [];
         var store = new Store(state);
         using var api = new Api { Merged = true, Corruption = issueClosed ? "issue-closed" : null };
@@ -837,12 +839,18 @@ public sealed class GitHubRequiredStatusTests
     [InlineData("paused")]
     [InlineData("feedback")]
     [InlineData("uncertain-effect")]
+    [InlineData("feedback-proof")]
+    [InlineData("approval-proof")]
+    [InlineData("handoff")]
+    [InlineData("shared-sha")]
+    [InlineData("shared-pr")]
     public void ClosedWorkCannotClaimVerifiedMergeWithMissingOrConflictingEvidence(string corruption)
     {
         var live = Live();
         live.Issues[7].Closed = true;
         live.Issues[7].PullRequestMerged = true;
-        var state = new OrchestrationReducer().Reconcile(State(), live).State;
+        live.Issues[7].PullRequestMergedAt = Now;
+        var state = new OrchestrationReducer().Reconcile(MergeReady(), live).State;
         var issue = state.Issues[7];
         switch (corruption)
         {
@@ -858,6 +866,12 @@ public sealed class GitHubRequiredStatusTests
             case "unresolved-finding": issue.Review!.Findings.Add(new("open", "Needs fix", "evidence")); break;
             case "paused": issue.Paused = true; break;
             case "feedback": issue.PendingFeedbackEventIds.Add("new-feedback"); break;
+            case "feedback-proof": issue.MergeFeedback = null; break;
+            case "approval-proof":
+                issue.TerminalHistory[0] = issue.TerminalHistory[0] with { Approval = null }; break;
+            case "handoff": issue.CurrentHandoffId = null; break;
+            case "shared-sha": state.Issues[8] = new() { Number = 8, HeadSha = Sha, Phase = Phase.BLOCKED }; break;
+            case "shared-pr": state.Issues[8] = new() { Number = 8, PullRequest = 17, Phase = Phase.BLOCKED }; break;
             case "uncertain-effect":
                 state.Outbox["unknown"] = new() { IssueNumber = 7, Kind = EffectKind.LinkIssue, Status = DeliveryStatus.Unknown };
                 break;
@@ -866,14 +880,171 @@ public sealed class GitHubRequiredStatusTests
         Assert.Equal("error", RequiredStatusPolicy.Desired(state, issue).State);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MergeCannotRestoreEligibilityAfterHeadDriftAndRestoration(bool mergeFirst)
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = MergeReady();
+        var live = Live();
+        if (mergeFirst)
+        {
+            live.Issues[7].Closed = true;
+            live.Issues[7].PullRequestMerged = true;
+            live.Issues[7].PullRequestMergedAt = Now;
+            state = reducer.Reconcile(state, live).State;
+            Assert.Equal("success", RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+        }
+        live.Issues[7].HeadSha = Definition;
+        state = reducer.Reconcile(state, live).State;
+        live.Issues[7].HeadSha = Sha;
+        state = reducer.Reconcile(state, live).State;
+        var hold = state.Issues[7].HoldReason;
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        state = reducer.Reconcile(state, live).State;
+
+        Assert.Null(state.Issues[7].TerminalHistory.Last().Approval);
+        Assert.Equal(hold, state.Issues[7].HoldReason);
+        Assert.Equal("error", RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+    }
+
+    [Theory]
+    [InlineData("safety-hold")]
+    [InlineData("missing-handoff")]
+    [InlineData("pause")]
+    [InlineData("feedback")]
+    public void ClosureDoesNotFabricateFinalApprovalOrEraseSafetyHold(string change)
+    {
+        var state = MergeReady();
+        var issue = state.Issues[7];
+        switch (change)
+        {
+            case "safety-hold": issue.Phase = Phase.BLOCKED; issue.HoldReason = "Safety requires reactivation."; break;
+            case "missing-handoff": issue.CurrentHandoffId = null; break;
+            case "pause": issue.Paused = true; break;
+            case "feedback": issue.PendingFeedbackEventIds.Add("feedback"); break;
+        }
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        state = new OrchestrationReducer(requiredStatusEnabled: true).Reconcile(state, live).State;
+
+        Assert.Null(state.Issues[7].TerminalHistory.Last().Approval);
+        if (change == "safety-hold") Assert.Equal("Safety requires reactivation.", state.Issues[7].HoldReason);
+        Assert.Equal("error", RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+    }
+
+    [Theory]
+    [InlineData("none")]
+    [InlineData("issue")]
+    [InlineData("pull")]
+    [InlineData("edited-after-merge")]
+    [InlineData("postmerge-only")]
+    public async Task ClosedIssueReadsFeedbackThroughMergeBeforeGrantingTerminalSuccess(string feedback)
+    {
+        var reducer = new OrchestrationReducer(new Allow(), requiredStatusEnabled: true);
+        var state = State();
+        state.Issues[7].ReadyAt = Now.AddMinutes(-1);
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestClosed = false;
+        live.Issues[7].PullRequestMerged = false;
+        state = reducer.Reconcile(state, live).State;
+        Assert.NotNull(state.Issues[7].TerminalHistory.Last().Approval);
+        using var api = new Api { Corruption = "issue-closed" };
+        using var client = api.Client();
+        var source = new GitHubFeedbackSource(new(client, "owner/repo", 1), clock: new Clock(Now.AddMinutes(1)));
+        Assert.Empty(await source.ReadAsync(state, default));
+        api.Merged = true;
+        if (feedback != "none")
+        {
+            var comment = JsonSerializer.SerializeToElement(new { id = 1, body = "Additional human instruction",
+                created_at = feedback == "postmerge-only" ? Now.AddSeconds(1) : Now.AddSeconds(-30),
+                updated_at = feedback == "edited-after-merge" ? Now.AddSeconds(1) : Now.AddSeconds(-10),
+                user = new { id = 55, login = "maintainer", type = "User" } });
+            (feedback == "pull" ? api.PullComments : api.IssueComments).Add(comment);
+        }
+        var messages = await source.ReadAsync(state, default);
+        Assert.Single(messages, message => message.Data is MergeFeedbackObserved);
+        var clean = feedback is "none" or "postmerge-only";
+        Assert.Equal(clean ? 0 : 1, messages.Count(message => message.Data is HumanFeedback));
+        foreach (var message in messages) state = reducer.Apply(state, message);
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestClosed = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        state = reducer.Reconcile(state, live).State;
+
+        Assert.Equal(clean ? "success" : "error",
+            RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+        var commentReads = api.Requests.Count(path => path.EndsWith("/comments", StringComparison.Ordinal));
+        Assert.Empty(await source.ReadAsync(state, default));
+        Assert.Equal(commentReads, api.Requests.Count(path => path.EndsWith("/comments", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task IncompleteFeedbackReadCannotSealMergeBoundary()
+    {
+        var state = State();
+        state.Issues[7].ReadyAt = Now.AddMinutes(-1);
+        using var api = new Api { Merged = true, ForbiddenSuffix = "/issues/17/comments" };
+        using var client = api.Client();
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            new GitHubFeedbackSource(new(client, "owner/repo", 1), clock: new Clock()).ReadAsync(state, default));
+        Assert.Null(state.Issues[7].MergeFeedback);
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        state = new OrchestrationReducer(requiredStatusEnabled: true).Reconcile(state, live).State;
+        Assert.Equal("error", RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+    }
+
+    [Theory]
+    [InlineData("closed-unmerged")]
+    [InlineData("mapping")]
+    [InlineData("head")]
+    public void ClosedIssueCannotCarryApprovalAcrossUnmergedClosureOrConflictingMapping(string change)
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = MergeReady();
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestClosed = false;
+        live.Issues[7].PullRequestMerged = false;
+        state = reducer.Reconcile(state, live).State;
+        Assert.NotNull(state.Issues[7].TerminalHistory.Last().Approval);
+        switch (change)
+        {
+            case "closed-unmerged": live.Issues[7].PullRequestClosed = true; break;
+            case "mapping": live.Issues[7].PullRequest = 18; break;
+            case "head": live.Issues[7].HeadSha = Definition; break;
+        }
+        state = reducer.Reconcile(state, live).State;
+        Assert.Null(state.Issues[7].TerminalHistory.Last().Approval);
+        live.Issues[7].PullRequest = 17;
+        live.Issues[7].HeadSha = Sha;
+        live.Issues[7].PullRequestClosed = true;
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        state = reducer.Reconcile(state, live).State;
+
+        Assert.Null(state.Issues[7].TerminalHistory.Last().Approval);
+        Assert.Equal("error", RequiredStatusPolicy.Desired(state, state.Issues[7]).State);
+    }
+
     [Fact]
     public async Task RecordedMergeCannotPublishSuccessIfLivePullWasClosedWithoutMerging()
     {
         var live = Live();
         live.Issues[7].Closed = true;
         live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestMergedAt = Now;
         var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
-        var state = reducer.Reconcile(State(), live).State;
+        var state = reducer.Reconcile(MergeReady(), live).State;
         var store = new Store(reducer.MarkExecuting(state, Intent(state).Id, Now));
         using var api = new Api { Corruption = "pull-closed" };
         using var client = api.Client();
@@ -881,6 +1052,31 @@ public sealed class GitHubRequiredStatusTests
         await Assert.ThrowsAsync<InvalidDataException>(() => Adapter(client, store).ExecuteAsync(Intent(store.Value), default));
 
         Assert.Equal(0, api.Posts);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MergedSuccessCannotOverwriteStatusForAnotherCanonicalOwner(bool samePull)
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var live = Live();
+        live.Issues[7].Closed = true;
+        live.Issues[7].PullRequestMerged = true;
+        live.Issues[7].PullRequestMergedAt = Now;
+        var state = reducer.Reconcile(MergeReady(), live).State;
+        Assert.Equal("success", Intent(state).RequiredStatus!.State);
+        state = reducer.MarkExecuting(state, Intent(state).Id, Now);
+        state.Issues[8] = new() { Number = 8, Phase = Phase.BLOCKED,
+            HeadSha = samePull ? Definition : Sha, PullRequest = samePull ? 17 : 18 };
+        var store = new Store(state);
+        using var api = new Api { Merged = true };
+        using var client = api.Client();
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => Adapter(client, store).ExecuteAsync(Intent(store.Value), default));
+
+        Assert.Equal(0, api.Posts);
+        Assert.Equal("error", RequiredStatusPolicy.Desired(store.Value, store.Value.Issues[7]).State);
     }
 
     [Theory]
@@ -1232,6 +1428,13 @@ public sealed class GitHubRequiredStatusTests
     }
     private static LiveObservation Live() => new() { ObservedAt = Now,
         Issues = new() { [7] = new() { PullRequest = 17, HeadSha = Sha, Ready = true, Labels = ["agent:review"] } } };
+    private static RepositoryState MergeReady()
+    {
+        var state = State();
+        state.Issues[7].MergeFeedback = new(1, 17, Sha, Now, Now);
+        return state;
+    }
+
     private static RepositoryState State()
     {
         var state = RepositoryState.Create("owner/repo");
@@ -1253,7 +1456,10 @@ public sealed class GitHubRequiredStatusTests
     }
 
     private sealed class Allow : IAuthorizationPolicy { public bool IsAuthorized(OrchestrationEvent message) => true; }
-    private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now; }
+    private sealed class Clock(DateTimeOffset? now = null) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now ?? Now;
+    }
     private sealed class Observations(LiveObservation? observation = null) : IObservationSource
     {
         public Task<LiveObservation> ObserveAsync(RepositoryState state, CancellationToken token) => Task.FromResult(observation ?? Live());
@@ -1302,6 +1508,8 @@ public sealed class GitHubRequiredStatusTests
 
     private sealed class Api : HttpMessageHandler
     {
+        public List<JsonElement> IssueComments { get; } = [];
+        public List<JsonElement> PullComments { get; } = [];
         public List<string> Requests { get; } = [];
         public int Posts { get; private set; }
         public string? Body { get; private set; }
@@ -1351,14 +1559,17 @@ public sealed class GitHubRequiredStatusTests
                     actor = new { id = 55 } };
             else if (path == "/users/maintainer") value = new { id = 55, login = "maintainer", type = "User" };
             else if (path.EndsWith("/collaborators/maintainer/permission", StringComparison.Ordinal))
-                value = new { permission = "write", user = new { id = 55 } };
+                value = new { permission = "write", user = new { id = 55, login = "maintainer", type = "User" } };
             else if (path.StartsWith("/users/", StringComparison.Ordinal)) value = Actor();
             else if (path.EndsWith("/issues/7", StringComparison.Ordinal))
                 value = new { id = 70, number = 7, state = Corruption == "issue-closed" ? "closed" : "open",
                     labels = Array.Empty<object>() };
+            else if (path.EndsWith("/issues/7/comments", StringComparison.Ordinal)) value = IssueComments;
+            else if (path.EndsWith("/issues/17/comments", StringComparison.Ordinal)) value = PullComments;
             else if (path.EndsWith("/pulls/17", StringComparison.Ordinal))
             {
                 value = new { number = 17, state = Merged || Corruption == "pull-closed" ? "closed" : "open", merged = Merged,
+                    merged_at = Merged ? Now : (DateTimeOffset?)null,
                     @base = new { repo = new { id = 1 } },
                     head = new { sha = Corruption == "head" ? Definition : Sha, repo = new { id = 1 } } };
                 AfterPullRead?.Invoke();

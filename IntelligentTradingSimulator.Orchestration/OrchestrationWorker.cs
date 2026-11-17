@@ -186,6 +186,8 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
                 }
                 // Later pages may contain a pause or feedback; do not authorize an effect on a partial inbox.
                 if (batch!.HasMore) continue;
+                if (CanRevoke(current, reconcileOptions) && effects is IIndependentStatusRevocation beforeStop)
+                    current = await beforeStop.RevokeRequiredStatusesAsync(store, reconcileOptions, timeProvider.GetUtcNow(), token);
                 if (recovered is not null &&
                     current.Outbox.Values.Any(OrchestrationReconciler.IsExclusiveUncertain))
                 {
@@ -198,6 +200,12 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
 
                 // Re-fetch live guards after event publication, including after any CAS conflict.
                 last = await reconciler.RunAsync(store, observations, effects, reconcileOptions, token);
+                if (!last.EffectsDisabled && CanRevoke(last.State, reconcileOptions) &&
+                    effects is IIndependentStatusRevocation afterEffect)
+                {
+                    var revoked = await afterEffect.RevokeRequiredStatusesAsync(store, reconcileOptions, timeProvider.GetUtcNow(), token);
+                    last = last with { State = revoked };
+                }
                 holdBarrierReleased |= snapshot.State.Issues.Any(pair =>
                     pair.Value.ContinuationHoldBarrier is not null &&
                     last.State.Issues.TryGetValue(pair.Key, out var currentIssue) &&
@@ -250,6 +258,18 @@ public sealed class OrchestrationWorker(OrchestrationReducer? reducer = null, Ti
             }
         }
     }
+
+    private static bool CanRevoke(RepositoryState state, ReconcileOptions options) =>
+        options.LiveEffectsEnabled && options.PrerequisiteCapabilitiesVerified && options.CostApproved &&
+        (options.AllowedEffectKinds is null || options.AllowedEffectKinds.Contains(EffectKind.PublishRequiredStatus)) &&
+        (options.AllowedRequiredStatusStates is null || options.AllowedRequiredStatusStates.Contains("error")) &&
+        state.Outbox.Values.Any(effect => effect.Kind == EffectKind.LinkIssue &&
+            (options.ProjectionIssueNumber is null || options.ProjectionIssueNumber == effect.IssueNumber) &&
+            effect.Status is DeliveryStatus.Failed or DeliveryStatus.Unknown &&
+            state.Issues.TryGetValue(effect.IssueNumber, out var issue) && issue.Generation == effect.Generation &&
+            issue.PullRequest is > 0 && RequiredStatusPolicy.Desired(state, issue).State == "error" &&
+            (issue.RequiredStatusIntentId is null || !state.Outbox.TryGetValue(issue.RequiredStatusIntentId, out var status) ||
+             status.Status != DeliveryStatus.Succeeded || !RequiredStatusPolicy.Matches(state, issue, status)));
 
     private async Task<(bool Acquired, bool ContinuationLimitReached, int? AdmittedIssue)> AcquireLeaseAsync(
         IStateStore store, string owner, DateTimeOffset expiresAt,

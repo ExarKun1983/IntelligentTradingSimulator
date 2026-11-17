@@ -712,6 +712,48 @@ public sealed class SharedHostLifecycleIntegrationTests
         WorkflowExecutionSha = Definition
     };
 
+    [Theory]
+    [InlineData("preflight")]
+    [InlineData("lost-linked")]
+    [InlineData("lost-unlinked")]
+    public async Task LinkFailureRevokesGreenStatusBeforeWorkerStopsWithoutReplayingMutation(string failure)
+    {
+        using var taskApi = new GitHubTaskIntegrationTests.ApiFixture();
+        using var fixture = new PipelineApi(taskApi);
+        using var client = new HttpClient(fixture, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store();
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        await host.ReconcileAsync(taskApi.Notification(), "issues", "44", 1, 1, Now, [], 99, "master", 55,
+            TaskApproval, Bounded, new GitHubTaskIntegrationTests.FinalHead(), reviewApproval: ReviewApproval,
+            ciRoute: CiRoute, ciApproval: CiApproval, statusPublisher: Publisher, statusApproval: StatusApproval);
+        taskApi.RemoteState = "completed";
+        await Wake(host);
+        fixture.CiCompleted = true;
+        await Wake(host);
+        Assert.Equal("success", fixture.Statuses.Last().GetProperty("state").GetString());
+        fixture.LinkFailure = failure;
+        fixture.ReviewSubmitted = true;
+        var result = await Wake(host, autoAccept: true);
+
+        var link = Assert.Single(store.State.Outbox.Values, effect => effect.Kind == EffectKind.LinkIssue);
+        Assert.Equal(failure == "preflight" ? DeliveryStatus.Failed : DeliveryStatus.Unknown, link.Status);
+        Assert.Equal(Phase.BLOCKED, store.State.Issues[7].Phase);
+        Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+        Assert.Equal(failure == "preflight" ? 0 : 1, fixture.LinkMutations);
+        Assert.Single(taskApi.Writes, write => write.Path.StartsWith("/agents/"));
+        Assert.Null(store.State.WorkerLease);
+        if (failure != "preflight") Assert.Equal(WorkerStopReason.Blocked, result!.Reason);
+
+        fixture.LinkFailure = null;
+        await Wake(host);
+        Assert.Equal(failure == "preflight" ? DeliveryStatus.Failed :
+            failure == "lost-linked" ? DeliveryStatus.Succeeded : DeliveryStatus.Unknown,
+            store.State.Outbox[link.Id].Status);
+        Assert.Equal(failure == "preflight" ? 0 : 1, fixture.LinkMutations);
+        Assert.Equal("error", fixture.Statuses.Last().GetProperty("state").GetString());
+        Assert.Single(taskApi.Writes, write => write.Path.StartsWith("/agents/"));
+    }
+
     private static Task<WorkerResult?> Wake(GitHubOrchestrationHost host, string eventName = "schedule",
         string? finalHeadSha = null, bool autoRepair = false, bool autoAccept = false) =>
         host.ReconcileWakeAsync(JsonSerializer.SerializeToElement(new
@@ -766,6 +808,7 @@ public sealed class SharedHostLifecycleIntegrationTests
         public int ReviewRequests { get; private set; }
         public int LinkMutations { get; private set; }
         public bool IssueLinked { get; private set; }
+        public string? LinkFailure { get; set; }
         public List<JsonElement> Statuses { get; } = [];
         public List<string> StatusWrites { get; } = [];
         private readonly Dictionary<int, (string Correlation, string Sha)> ciRuns = [];
@@ -797,11 +840,15 @@ public sealed class SharedHostLifecycleIntegrationTests
                     Assert.Equal("I_7", payload.RootElement.GetProperty("variables").GetProperty("issue").GetString());
                     Assert.Equal("PR_node", payload.RootElement.GetProperty("variables").GetProperty("pull").GetString());
                     LinkMutations++;
-                    IssueLinked = true;
+                    IssueLinked = LinkFailure != "lost-unlinked";
+                    if (LinkFailure is "lost-linked" or "lost-unlinked")
+                        throw new HttpRequestException("offline lost closing-reference response");
                     response = new { data = new { addCloseIssueReferences = new { issue = new { id = "I_7" } } } };
                 }
                 else if (query.Contains("closingIssuesReferences", StringComparison.Ordinal))
-                    response = new { data = new { node = new { id = "PR_node", closingIssuesReferences = new
+                    response = LinkFailure == "preflight" ? (object)new { errors = new[] { new { message = "offline refusal" } } } :
+                        new { data = new { node = new { id = "PR_node", number = 17,
+                        repository = new { nameWithOwner = "owner/repo" }, closingIssuesReferences = new
                     {
                         nodes = IssueLinked ? new[] { new { id = "I_7" } } : [],
                         pageInfo = new { hasNextPage = false }

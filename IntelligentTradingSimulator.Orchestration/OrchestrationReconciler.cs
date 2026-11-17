@@ -11,7 +11,8 @@ public enum EffectFailureCode
     OperatorAbandonedUnknownReview,
     OperatorAbandonedUnknownTaskLaunch,
     ExecutionException,
-    RecoveryException
+    RecoveryException,
+    IssueLinkNotStarted
 }
 
 public sealed record EffectOutcome(DeliveryStatus Status, string? ExternalId = null,
@@ -27,6 +28,12 @@ public interface IEffectAdapter
     Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken cancellationToken);
     // Must look up the persisted idempotency key and operation identity, never launch a replacement.
     Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken cancellationToken);
+}
+
+public interface IIndependentStatusRevocation
+{
+    Task<RepositoryState> RevokeRequiredStatusesAsync(IStateStore store, ReconcileOptions options, DateTimeOffset now,
+        CancellationToken token);
 }
 
 // Only deliberately injected offline fakes may simulate agent launch effects.
@@ -200,8 +207,11 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                diagnostics?.ReportEffectFailure(pending.Kind, EffectFailureCode.ExecutionException, exception);
-                outcome = new(DeliveryStatus.Unknown, FailureCode: EffectFailureCode.ExecutionException);
+                var notStarted = exception is IssueLinkNotStartedException;
+                var code = notStarted ? EffectFailureCode.IssueLinkNotStarted : EffectFailureCode.ExecutionException;
+                diagnostics?.ReportEffectFailure(pending.Kind, code,
+                    notStarted ? exception.InnerException! : exception);
+                outcome = new(notStarted ? DeliveryStatus.Failed : DeliveryStatus.Unknown, FailureCode: code);
             }
             // Once execution started, a lost result must never cause another Execute call.
             diagnostics?.Mark(GitHubLiveStage.EffectOutcomeSave);

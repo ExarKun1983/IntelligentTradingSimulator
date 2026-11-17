@@ -2211,8 +2211,16 @@ other closing Issues, incomplete pagination or GraphQL errors stop the projectio
 for reconciliation without changing those links. The isolated status-test profile
 does not plan this effect. No PR description is overwritten, no Issue is directly
 closed and no PR is approved or merged. The separate human merge closes the linked
-Issue through GitHub. Interrupted mutations remain lookup-only, never retried on
-an absent read result. Linking and merge are not transactional: verify the link in
+Issue through GitHub. Versioned link intents persist the original Issue/PR node
+identities and an exclusively owned mutation boundary before sending the request.
+Proven pre-mutation refusals are definite failures, not repository-wide uncertain
+writes. Once a request may have been sent, recovery looks up those saved nodes,
+even after a push, retarget or canonical lifecycle change; an absent read result
+never authorizes another mutation. Legacy intents without this protocol remain
+uncertain. Before the worker stops on a failed or uncertain link, an independently
+approved, status-only revocation path publishes the held head's error without
+replaying link or agent effects or clearing the hold. Linking and merge are not
+transactional: verify the link in
 Development before the manual merge, especially if a concurrent edit or merge
 interrupts projection. This does not retrofit already-merged PRs or close old
 unlinked Issues.
@@ -2227,10 +2235,22 @@ and [linking documentation](https://docs.github.com/en/issues/tracking-your-work
 
 After a confirmed merge, `Agent managed CI` reports terminal success only when
 the latest terminal record matches the current generation, PR and head, the
+recorded final-approval handoff was eligible before closure, the
 completed task and exact-head CI evidence still match, the review is accepted
 with all findings resolved, and no pause, pending feedback or uncertain
-non-status effect remains. Publication rechecks that the live PR is closed and
-actually merged, and revalidates the trusted CI run. Its description reports a
+non-status effect remains, and no other canonical Issue owns that PR or SHA.
+Closing or merging never clears an earlier safety hold or restores invalidated
+approval evidence after head drift. An otherwise eligible closed Issue with a
+still-open PR continues to collect authorized Issue/PR feedback. Terminal success
+also requires a complete
+feedback read through the live merge timestamp, recorded durably before projection;
+partial reads cannot seal that boundary. Current revisions of comments created
+before merge are treated conservatively as feedback, including edits after merge.
+This is not a lossless history of deleted comments or earlier revisions. A sealed
+closed lifecycle is not polled indefinitely for post-merge comments. Historical
+records without the new evidence fail closed, without fabricated approval.
+Publication rechecks that the live PR is closed and actually merged at the
+recorded boundary, and revalidates the trusted CI run. Its description reports a
 verified merge rather than asking for human approval again. Unmerged/unknown
 closures and missing or contradictory evidence remain errors. The terminal
 projection barrier accepts this verified merged result without reopening work.

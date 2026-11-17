@@ -46,7 +46,7 @@ public sealed class GitHubIssueLinkTests
         using var api = new Api { Corruption = corruption };
         using var client = api.Client();
 
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
+        await Assert.ThrowsAsync<IssueLinkNotStartedException>(() =>
             new GitHubIssueLinkAdapter(new(client, "owner/repo", 1), store, true)
                 .ExecuteAsync(Intent(store.State), default));
 
@@ -83,7 +83,7 @@ public sealed class GitHubIssueLinkTests
         if (change == "disabled")
             await Assert.ThrowsAsync<InvalidOperationException>(() => adapter.ExecuteAsync(Intent(store.State), default));
         else
-            await Assert.ThrowsAsync<InvalidDataException>(() => adapter.ExecuteAsync(Intent(store.State), default));
+            await Assert.ThrowsAsync<IssueLinkNotStartedException>(() => adapter.ExecuteAsync(Intent(store.State), default));
 
         Assert.Empty(api.Requests);
     }
@@ -117,10 +117,119 @@ public sealed class GitHubIssueLinkTests
         using var api = new Api { OnLookup = () => store.State.Issues[7].PendingFeedbackEventIds.Add("new-feedback") };
         using var client = api.Client();
 
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
+        await Assert.ThrowsAsync<IssueLinkNotStartedException>(() =>
             new GitHubIssueLinkAdapter(new(client, "owner/repo", 1), store, true)
                 .ExecuteAsync(Intent(store.State), default));
 
+        Assert.Equal(0, api.Mutations);
+    }
+
+    [Theory]
+    [InlineData("head")]
+    [InlineData("feedback")]
+    public async Task ProvenPreMutationRefusalFailsWithoutBlockingOtherIssueAdmission(string change)
+    {
+        var reducer = new OrchestrationReducer();
+        var store = new GitHubTaskIntegrationTests.Store(reducer.Reconcile(State(), Live()).State);
+        using var api = new Api { Corruption = change == "head" ? "head" : null,
+            OnLookup = change == "feedback" ? () => store.State.Issues[7].PendingFeedbackEventIds.Add("new") : null };
+        using var client = api.Client();
+        var result = await new OrchestrationReconciler().RunAsync(store, new Observations(),
+            new GitHubIssueLinkAdapter(new(client, "owner/repo", 1), store, true), new(false, true, true, true));
+
+        Assert.Equal(DeliveryStatus.Failed, Intent(result.State).Status);
+        Assert.Equal(EffectFailureCode.IssueLinkNotStarted, Intent(result.State).FailureCode);
+        Assert.Null(Intent(result.State).IssueLinkBoundary);
+        Assert.DoesNotContain(result.State.Outbox.Values, OrchestrationReconciler.IsExclusiveUncertain);
+        Assert.Equal(0, api.Mutations);
+        var next = result.State;
+        next.Issues[8] = new() { Number = 8, Ready = true, ReadyAt = Now };
+        var live = Live();
+        live.Issues[8] = new() { Ready = true };
+        next = reducer.Reconcile(next, live).State;
+        Assert.Equal(8, next.AdmittedIssue);
+        Assert.Contains(next.Outbox.Values, effect => effect.IssueNumber == 8 && effect.Kind == EffectKind.LaunchTask);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BoundaryPublicationFailureNeverSendsMutationAndRecordsDefiniteFailure(bool committed)
+    {
+        var reducer = new OrchestrationReducer();
+        var inner = new GitHubTaskIntegrationTests.Store(reducer.Reconcile(State(), Live()).State);
+        var store = new BoundaryFailureStore(inner, committed);
+        using var api = new Api();
+        using var client = api.Client();
+        var result = await new OrchestrationReconciler().RunAsync(store, new Observations(),
+            new GitHubIssueLinkAdapter(new(client, "owner/repo", 1), store, true), new(false, true, true, true));
+
+        Assert.Equal(DeliveryStatus.Failed, Intent(result.State).Status);
+        Assert.Equal(EffectFailureCode.IssueLinkNotStarted, Intent(result.State).FailureCode);
+        Assert.Equal(committed, Intent(result.State).IssueLinkBoundary is not null);
+        Assert.Equal(0, api.Mutations);
+    }
+
+    [Theory]
+    [InlineData("head")]
+    [InlineData("base")]
+    [InlineData("canonical-generation")]
+    [InlineData("canonical-mapping")]
+    [InlineData("multiple-links")]
+    [InlineData("pagination")]
+    public async Task RecoveryUsesPersistedNodesAfterLiveOrCanonicalContextChanges(string change)
+    {
+        var store = Executing();
+        using var api = new Api { LoseMutationResponse = true };
+        using var client = api.Client();
+        var adapter = new GitHubIssueLinkAdapter(new(client, "owner/repo", 1), store, true);
+        var intent = Intent(store.State);
+        await Assert.ThrowsAsync<HttpRequestException>(() => adapter.ExecuteAsync(intent, default));
+        Assert.NotNull(Intent(store.State).IssueLinkBoundary);
+        api.Corruption = change;
+        if (change == "canonical-generation") store.State.Issues[7].Generation++;
+        if (change == "canonical-mapping") store.State.Issues[7].PullRequest = 18;
+        var before = api.Requests.Count;
+
+        Assert.Equal(new(DeliveryStatus.Succeeded, "PR_17"), await adapter.ReconcileAsync(intent, default));
+        Assert.DoesNotContain(api.Requests.Skip(before), path => path.Contains("/pulls/") || path.Contains("/issues/"));
+        Assert.Equal(1, api.Mutations);
+    }
+
+    [Fact]
+    public async Task AnotherExecutorsBoundaryCannotBeClassifiedAsProvenUnsent()
+    {
+        var reducer = new OrchestrationReducer();
+        var store = new GitHubTaskIntegrationTests.Store(reducer.Reconcile(State(), Live()).State);
+        using var api = new Api { OnLookup = () =>
+        {
+            Intent(store.State).IssueLinkBoundary = new(1, 7, 17, "I_7", "PR_17", Now, "another-executor");
+            store.State.Issues[7].PendingFeedbackEventIds.Add("new-feedback");
+        } };
+        using var client = api.Client();
+        var result = await new OrchestrationReconciler().RunAsync(store, new Observations(),
+            new GitHubIssueLinkAdapter(new(client, "owner/repo", 1), store, true), new(false, true, true, true));
+
+        Assert.Equal(DeliveryStatus.Unknown, Intent(result.State).Status);
+        Assert.Equal(EffectFailureCode.ExecutionException, Intent(result.State).FailureCode);
+        Assert.Equal("another-executor", Intent(result.State).IssueLinkBoundary!.OwnerId);
+        Assert.Equal(0, api.Mutations);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MissingBoundaryIsDefiniteOnlyForVersionedProtocol(bool legacy)
+    {
+        var store = Executing();
+        if (legacy) Intent(store.State).IssueLink = null;
+        using var api = new Api();
+        using var client = api.Client();
+        var outcome = await new GitHubIssueLinkAdapter(new(client, "owner/repo", 1), store, true)
+            .ReconcileAsync(Intent(store.State), default);
+
+        Assert.Equal(legacy ? DeliveryStatus.Unknown : DeliveryStatus.Failed, outcome.Status);
+        Assert.Empty(api.Requests);
         Assert.Equal(0, api.Mutations);
     }
 
@@ -208,6 +317,27 @@ public sealed class GitHubIssueLinkTests
         return state;
     }
 
+    private sealed class Observations : IObservationSource
+    {
+        public Task<LiveObservation> ObserveAsync(RepositoryState state, CancellationToken token) => Task.FromResult(Live());
+    }
+
+    private sealed class BoundaryFailureStore(IStateStore inner, bool committed) : IStateStore
+    {
+        private bool failed;
+        public Task<StateSnapshot> LoadAsync(CancellationToken token) => inner.LoadAsync(token);
+        public async Task<bool> TrySaveAsync(StateSnapshot expected, RepositoryState state, CancellationToken token)
+        {
+            if (!failed && state.Outbox.Values.Any(effect => effect.IssueLinkBoundary is not null))
+            {
+                failed = true;
+                if (committed) Assert.True(await inner.TrySaveAsync(expected, state, token));
+                throw new IOException("offline boundary acknowledgement failure");
+            }
+            return await inner.TrySaveAsync(expected, state, token);
+        }
+    }
+
     private sealed class Api : HttpMessageHandler
     {
         public string? Corruption { get; set; }
@@ -247,7 +377,8 @@ public sealed class GitHubIssueLinkTests
                 {
                     OnLookup?.Invoke();
                     value = Corruption == "graphql-error" ? (object)new { errors = new[] { new { message = "offline error" } } } :
-                        new { data = new { node = new { id = "PR_17", closingIssuesReferences = new
+                        new { data = new { node = new { id = "PR_17", number = 17,
+                            repository = new { nameWithOwner = "owner/repo" }, closingIssuesReferences = new
                         {
                             nodes = Corruption == "multiple-links" ? new[] { new { id = "I_7" }, new { id = "I_8" } } :
                                 Corruption == "other-link" ? new[] { new { id = "I_8" } } :

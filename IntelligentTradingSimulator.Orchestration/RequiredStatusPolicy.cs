@@ -8,29 +8,20 @@ public static class RequiredStatusPolicy
     public static RequiredStatusPayload Desired(RepositoryState state, IssueState issue)
     {
         var ci = issue.Ci;
-        var acceptedReview = issue.Review is { Classification: ReviewClassification.Accepted } review &&
-            review.TaskId == issue.ActiveTaskId && review.Sha == issue.HeadSha && review.Round == issue.Round &&
-            review.Findings.All(finding => review.Responses.Any(response => response.FindingId == finding.Id &&
-                response.Resolved && !string.IsNullOrWhiteSpace(response.Evidence)));
+        var acceptedReview = AcceptedReviewMatches(issue);
         var finalApprovalHold = issue.Phase == Phase.HUMAN_REVIEW &&
             issue.HoldReason == "Awaiting human approval." && acceptedReview;
-        var merged = IsRecordedMerge(issue) && acceptedReview &&
-            issue.Review?.LifecycleState == ReviewLifecycleState.Completed &&
-            !state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number &&
-                effect.Kind != EffectKind.PublishRequiredStatus &&
-                effect.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown);
+        var terminal = issue.TerminalHistory.LastOrDefault();
+        var merged = IsRecordedMerge(issue) && terminal?.Approval is { } approval &&
+            FinalApprovalMatches(state, issue, approval) &&
+            issue.MergeFeedback is { } feedback && feedback.Generation == issue.Generation &&
+            feedback.PullRequest == issue.PullRequest && feedback.Sha == issue.HeadSha &&
+            feedback.MergedAt == terminal.MergedAt && feedback.ObservedAt >= feedback.MergedAt &&
+            !state.Issues.Values.Any(other => other.Number != issue.Number &&
+                (other.HeadSha == issue.HeadSha || other.PullRequest == issue.PullRequest));
         var eligiblePhase = merged || finalApprovalHold || issue.Phase == Phase.REVIEW_PENDING &&
             issue.ActiveAuthorized && !issue.ReactivationRequired && issue.HoldReason is null;
-        var verifiedCi = !issue.Paused && !issue.ClosurePending &&
-            issue.PendingFeedbackEventIds.Count == 0 && ci is { Green: true, TerminalStopReason: null } &&
-            ci.Sha == issue.HeadSha && ci.TaskId == issue.ActiveTaskId && ci.Round == issue.Round &&
-            issue.Tasks.TryGetValue(ci.TaskId, out var task) && task.Status == TaskStatus.Completed &&
-            task.LaunchConfirmed && task.FinalSha == ci.Sha && task.Round == ci.Round &&
-            ci.DispatchBoundary is { RunId: { } runId } && ci.RunId == runId.ToString(System.Globalization.CultureInfo.InvariantCulture) &&
-            state.Outbox.TryGetValue(ci.IntentId, out var dispatch) && dispatch.Kind == EffectKind.RunCi &&
-            dispatch.Status == DeliveryStatus.Succeeded && dispatch.ExternalId == ci.RunId &&
-            dispatch.IssueNumber == issue.Number && dispatch.Generation == issue.Generation &&
-            dispatch.TaskId == ci.TaskId && dispatch.Sha == ci.Sha && dispatch.Round == ci.Round;
+        var verifiedCi = VerifiedCiMatches(state, issue);
         var green = eligiblePhase && verifiedCi;
         var awaitingClassification = verifiedCi && issue.Phase == Phase.BLOCKED &&
             issue.ReactivationRequired && !issue.ActiveAuthorized &&
@@ -63,6 +54,50 @@ public static class RequiredStatusPolicy
         issue.TerminalHistory.LastOrDefault() is { Outcome: TerminalOutcome.Merged } terminal &&
         terminal.Generation == issue.Generation && terminal.PullRequest == issue.PullRequest &&
         terminal.Sha == issue.HeadSha;
+
+    internal static FinalApprovalEvidence? CaptureFinalApproval(RepositoryState state, IssueState issue)
+    {
+        if (issue.Phase != Phase.HUMAN_REVIEW || issue.HoldReason != "Awaiting human approval." ||
+            issue.ActiveAuthorized || !issue.ReactivationRequired || issue.CurrentHandoffId is not { } id ||
+            issue.Review?.ReviewId is not { } review || issue.Ci?.RunId is not { } run)
+            return null;
+        var evidence = new FinalApprovalEvidence(id, issue.ActiveTaskId!, review,
+            issue.Ci.IntentId, run, issue.Round, issue.HeadSha!);
+        return FinalApprovalMatches(state, issue, evidence) ? evidence : null;
+    }
+
+    internal static bool FinalApprovalMatches(RepositoryState state, IssueState issue, FinalApprovalEvidence evidence) =>
+        VerifiedCiMatches(state, issue) && AcceptedReviewMatches(issue) &&
+        issue.Review?.LifecycleState == ReviewLifecycleState.Completed &&
+        evidence.HandoffId == issue.CurrentHandoffId && evidence.TaskId == issue.ActiveTaskId &&
+        evidence.ReviewId == issue.Review.ReviewId && evidence.Round == issue.Round && evidence.Sha == issue.HeadSha &&
+        evidence.CiIntentId == issue.Ci!.IntentId && evidence.CiRunId == issue.Ci.RunId &&
+        issue.Handoffs.TryGetValue(evidence.HandoffId, out var handoff) &&
+        handoff.Id == evidence.HandoffId && handoff.Generation == issue.Generation &&
+        handoff.Reason == "Awaiting human approval." && handoff.TaskId == evidence.TaskId &&
+        handoff.ReviewId == evidence.ReviewId && handoff.Round == evidence.Round && handoff.Sha == evidence.Sha &&
+        !state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number &&
+            effect.Kind != EffectKind.PublishRequiredStatus &&
+            effect.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown);
+
+    private static bool AcceptedReviewMatches(IssueState issue) =>
+        issue.Review is { Classification: ReviewClassification.Accepted } review &&
+        review.TaskId == issue.ActiveTaskId && review.Sha == issue.HeadSha && review.Round == issue.Round &&
+        review.Findings.All(finding => review.Responses.Any(response => response.FindingId == finding.Id &&
+            response.Resolved && !string.IsNullOrWhiteSpace(response.Evidence)));
+
+    private static bool VerifiedCiMatches(RepositoryState state, IssueState issue) =>
+        !issue.Paused && !issue.ClosurePending && issue.PendingFeedbackEventIds.Count == 0 &&
+        issue.Ci is { Green: true, TerminalStopReason: null } ci &&
+        ci.Sha == issue.HeadSha && ci.TaskId == issue.ActiveTaskId && ci.Round == issue.Round &&
+        issue.Tasks.TryGetValue(ci.TaskId, out var task) && task.Status == TaskStatus.Completed &&
+        task.LaunchConfirmed && task.FinalSha == ci.Sha && task.Round == ci.Round &&
+        ci.DispatchBoundary is { RunId: { } runId } &&
+        ci.RunId == runId.ToString(System.Globalization.CultureInfo.InvariantCulture) &&
+        state.Outbox.TryGetValue(ci.IntentId, out var dispatch) && dispatch.Kind == EffectKind.RunCi &&
+        dispatch.Status == DeliveryStatus.Succeeded && dispatch.ExternalId == ci.RunId &&
+        dispatch.IssueNumber == issue.Number && dispatch.Generation == issue.Generation &&
+        dispatch.TaskId == ci.TaskId && dispatch.Sha == ci.Sha && dispatch.Round == ci.Round;
 
     public static bool Matches(RepositoryState state, IssueState issue, EffectIntent intent) =>
         intent.Kind == EffectKind.PublishRequiredStatus && issue.RequiredStatusIntentId == intent.Id &&

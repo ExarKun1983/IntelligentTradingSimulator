@@ -137,7 +137,8 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
         {
             var merged = RequiredStatusPolicy.IsRecordedMerge(issue);
             if (merged
-                ? pr.GetProperty("state").GetString() != "closed" || !pr.GetProperty("merged").GetBoolean()
+                ? pr.GetProperty("state").GetString() != "closed" || !pr.GetProperty("merged").GetBoolean() ||
+                  pr.GetProperty("merged_at").GetDateTimeOffset() != issue.TerminalHistory.Last().MergedAt
                 : liveIssue.RootElement.GetProperty("state").GetString() != "open" ||
                   pr.GetProperty("state").GetString() != "open")
                 throw new InvalidDataException("Closed work cannot publish success.");
