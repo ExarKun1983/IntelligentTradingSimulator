@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 810,
+  "Version": 811,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "task-pr-mapped:1277929203:1:46243aaf-25b4-4589-b5d0-05aa0d077634:315:3a69dc05ea02f6bce2fe0f924d280505aa29e93b:2026-11-18T14:05:42.8275963\u002B00:00",
@@ -1539,7 +1539,7 @@
       "SchemaVersion": 1,
       "Number": 314,
       "Generation": 1,
-      "Version": 12,
+      "Version": 13,
       "LastEventId": "task-pr-mapped:1277929203:1:46243aaf-25b4-4589-b5d0-05aa0d077634:315:3a69dc05ea02f6bce2fe0f924d280505aa29e93b:2026-11-18T14:05:42.8275963\u002B00:00",
       "Phase": "CODING",
       "Ready": false,
@@ -1597,7 +1597,7 @@
       "Reactivations": {},
       "Classifications": {},
       "ProjectionDigest": "845CD333380895E1961B0074627A3E89BCD360FA28E3D5A7F90C54ED2B85CE4B",
-      "ObservedProjectionDigest": "D56352742C984F1855638D1119AA4CE1C6F0927B24C52FDB302FC61D46B0CC02",
+      "ObservedProjectionDigest": "845CD333380895E1961B0074627A3E89BCD360FA28E3D5A7F90C54ED2B85CE4B",
       "StatusProjectionDigest": null,
       "RequiredStatusSequence": 1,
       "RequiredStatusIntentId": "required-status:314:1:1"
