@@ -29,6 +29,28 @@ public sealed class RelativeStrengthCalculatorTests
     }
 
     [Fact]
+    public void Calculate_PreservesFractionalPositiveRelativeStrength()
+    {
+        var result = _calculator.Calculate(
+            [Candle(0, 80m), Candle(1, 81m)],
+            [Candle(0, 160m), Candle(1, 161m)],
+            Start, Start.AddDays(1));
+
+        Assert.Equal(0.625m, result);
+    }
+
+    [Fact]
+    public void Calculate_PreservesFractionalNegativeRelativeStrength()
+    {
+        var result = _calculator.Calculate(
+            [Candle(0, 160m), Candle(1, 161m)],
+            [Candle(0, 80m), Candle(1, 81m)],
+            Start, Start.AddDays(1));
+
+        Assert.Equal(-0.625m, result);
+    }
+
+    [Fact]
     public void Calculate_UsesStockEffectiveEndpoints_NotBenchmarkOuterDates()
     {
         var result = _calculator.Calculate(
