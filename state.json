@@ -1,10 +1,10 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 819,
+  "Version": 820,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
-  "LastEventId": "task-pr-mapped:1277929203:1:46243aaf-25b4-4589-b5d0-05aa0d077634:315:06d5ac0ba7a8aa9b16ac8c803e4dcb9264801722:2026-11-18T14:05:58.1000168\u002B00:00",
+  "LastEventId": "task-completed:1277929203:1:46243aaf-25b4-4589-b5d0-05aa0d077634",
   "AdmittedIssue": 314,
   "WorkerLease": {
     "Owner": "cb56cbeb4a28484c890df63f8a4dca9d",
@@ -1539,8 +1539,8 @@
       "SchemaVersion": 1,
       "Number": 314,
       "Generation": 1,
-      "Version": 21,
-      "LastEventId": "task-pr-mapped:1277929203:1:46243aaf-25b4-4589-b5d0-05aa0d077634:315:06d5ac0ba7a8aa9b16ac8c803e4dcb9264801722:2026-11-18T14:05:58.1000168\u002B00:00",
+      "Version": 22,
+      "LastEventId": "task-completed:1277929203:1:46243aaf-25b4-4589-b5d0-05aa0d077634",
       "Phase": "CODING",
       "Ready": false,
       "ActiveAuthorized": true,
@@ -1566,18 +1566,28 @@
           "AutomaticContinuations": 0,
           "ContinuationPending": false,
           "Kind": "Coding",
-          "Status": "Running",
+          "Status": "AwaitingHeadConfirmation",
           "ParentTaskId": null,
           "Round": 1,
           "LaunchSource": "UnmappedIssue",
           "SourceSha": null,
-          "FinalSha": null,
+          "FinalSha": "06d5ac0ba7a8aa9b16ac8c803e4dcb9264801722",
           "LaunchConfirmed": true,
           "ExternalId": "46243aaf-25b4-4589-b5d0-05aa0d077634",
           "TerminalEvidence": null,
           "OperatorResolution": null,
           "UncertainLaunchResolution": null,
-          "CandidateShaEvidence": null,
+          "CandidateShaEvidence": {
+            "Version": 1,
+            "Policy": "bounded-candidate-sha-v1",
+            "TaskId": "task:314:1:1:1",
+            "ExternalTaskId": "46243aaf-25b4-4589-b5d0-05aa0d077634",
+            "SessionIds": [
+              "da8fdac5-a62a-413d-b56f-85270bdfea05"
+            ],
+            "PullRequest": 315,
+            "ObservedHeadSha": "06d5ac0ba7a8aa9b16ac8c803e4dcb9264801722"
+          },
           "ReviewBlockers": [],
           "CiBlockers": [],
           "FeedbackEventIds": []
@@ -2275,6 +2285,14 @@
       "ReceivedAt": "2026-11-18T14:05:58.1000168+00:00",
       "CompletedAt": "2026-11-18T14:05:58.1000168+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022task-pr-mapped:1277929203:1:46243aaf-25b4-4589-b5d0-05aa0d077634:315:06d5ac0ba7a8aa9b16ac8c803e4dcb9264801722:2026-11-18T14:05:58.1000168\\u002B00:00\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:314,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022github-task-api\u0022,\u0022Kind\u0022:1,\u0022Id\u0022:null,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-18T14:05:58.1000168\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022task-pr-mapped\u0022,\u0022TaskId\u0022:\u0022task:314:1:1:1\u0022,\u0022PullRequest\u0022:315,\u0022ObservedHead\u0022:\u002206d5ac0ba7a8aa9b16ac8c803e4dcb9264801722\u0022}}"
+    },
+    "task-completed:1277929203:1:46243aaf-25b4-4589-b5d0-05aa0d077634": {
+      "Id": "task-completed:1277929203:1:46243aaf-25b4-4589-b5d0-05aa0d077634",
+      "Digest": "9085B263C37DC4AECD3788F58BAA4DE1CB6BF2B70D3981FE12801C5D0F8C6462",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-18T14:08:33.3499479+00:00",
+      "CompletedAt": "2026-11-18T14:08:33.3499479+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022task-completed:1277929203:1:46243aaf-25b4-4589-b5d0-05aa0d077634\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:314,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022github-task-api\u0022,\u0022Kind\u0022:1,\u0022Id\u0022:null,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-18T14:08:33.3499479\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022task-completed\u0022,\u0022TaskId\u0022:\u0022task:314:1:1:1\u0022,\u0022PullRequest\u0022:315,\u0022Sha\u0022:\u002206d5ac0ba7a8aa9b16ac8c803e4dcb9264801722\u0022,\u0022Evidence\u0022:{\u0022Version\u0022:1,\u0022Policy\u0022:\u0022bounded-candidate-sha-v1\u0022,\u0022TaskId\u0022:\u0022task:314:1:1:1\u0022,\u0022ExternalTaskId\u0022:\u002246243aaf-25b4-4589-b5d0-05aa0d077634\u0022,\u0022SessionIds\u0022:[\u0022da8fdac5-a62a-413d-b56f-85270bdfea05\u0022],\u0022PullRequest\u0022:315,\u0022ObservedHeadSha\u0022:\u002206d5ac0ba7a8aa9b16ac8c803e4dcb9264801722\u0022}}}"
     }
   },
   "Outbox": {
