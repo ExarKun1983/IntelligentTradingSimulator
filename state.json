@@ -1,11 +1,11 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 847,
+  "Version": 848,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
-  "LastEventId": "copilot-review-pending:1277929203:1:RequestReview:314:1:task:314:1:1:1:1",
-  "AdmittedIssue": 314,
+  "LastEventId": "review-observed:1277929203:1:RequestReview:314:1:task:314:1:1:1:1",
+  "AdmittedIssue": null,
   "WorkerLease": {
     "Owner": "cb56cbeb4a28484c890df63f8a4dca9d",
     "ExpiresAt": "2026-11-18T14:36:14.5563504+00:00"
@@ -1539,16 +1539,16 @@
       "SchemaVersion": 1,
       "Number": 314,
       "Generation": 1,
-      "Version": 49,
-      "LastEventId": "copilot-review-pending:1277929203:1:RequestReview:314:1:task:314:1:1:1:1",
-      "Phase": "REVIEW_PENDING",
+      "Version": 50,
+      "LastEventId": "review-observed:1277929203:1:RequestReview:314:1:task:314:1:1:1:1",
+      "Phase": "HUMAN_REVIEW",
       "Ready": false,
-      "ActiveAuthorized": true,
+      "ActiveAuthorized": false,
       "ReadyAt": "2026-11-18T14:04:02+00:00",
       "FeedbackSince": "2026-11-18T14:04:02+00:00",
-      "ReactivationRequired": false,
+      "ReactivationRequired": true,
       "Paused": false,
-      "HoldReason": null,
+      "HoldReason": "Awaiting human approval.",
       "PullRequest": 315,
       "HeadSha": "06d5ac0ba7a8aa9b16ac8c803e4dcb9264801722",
       "Round": 1,
@@ -1618,8 +1618,8 @@
         "TaskId": "task:314:1:1:1",
         "Round": 1,
         "Sha": "06d5ac0ba7a8aa9b16ac8c803e4dcb9264801722",
-        "Classification": null,
-        "LifecycleState": "Pending",
+        "Classification": "Accepted",
+        "LifecycleState": "Completed",
         "CopilotRequestNodeId": "RR_kwDOTCum887x4Oj7",
         "ReviewRequestedAt": "2026-11-18T14:11:22.2883433+00:00",
         "ReviewDeadlineAt": "2026-11-18T14:26:22.2883433+00:00",
@@ -1637,7 +1637,7 @@
           "DeadlineAt": "2026-11-18T14:26:22.2883433+00:00",
           "AlreadyPending": false
         },
-        "SourceEvidence": null,
+        "SourceEvidence": "{\u0022reason\u0022:\u0022Opt-in fresh exact-head clean review accepted for final human approval; provider request-to-submission correlation is not asserted.\u0022,\u0022policy\u0022:\u0022exact-head-clean-review-v1\u0022,\u0022classifiedAt\u0022:\u00222026-11-18T14:13:13.1886594\u002B00:00\u0022,\u0022request\u0022:\u0022review-request:RequestReview:314:1:task:314:1:1:1:1\u0022,\u0022observedReviews\u0022:[{\u0022id\u0022:5958301245,\u0022node_id\u0022:\u0022PRR_kwDOTCum888AAAABYyR2PQ\u0022,\u0022user\u0022:{\u0022login\u0022:\u0022copilot-pull-request-reviewer[bot]\u0022,\u0022id\u0022:175728472,\u0022node_id\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022avatar_url\u0022:\u0022https://avatars.githubusercontent.com/in/946600?v=4\u0022,\u0022gravatar_id\u0022:\u0022\u0022,\u0022url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D\u0022,\u0022html_url\u0022:\u0022https://github.com/apps/copilot-pull-request-reviewer\u0022,\u0022followers_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/followers\u0022,\u0022following_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/following{/other_user}\u0022,\u0022gists_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/gists{/gist_id}\u0022,\u0022starred_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/starred{/owner}{/repo}\u0022,\u0022subscriptions_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/subscriptions\u0022,\u0022organizations_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/orgs\u0022,\u0022repos_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/repos\u0022,\u0022events_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/events{/privacy}\u0022,\u0022received_events_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/received_events\u0022,\u0022type\u0022:\u0022Bot\u0022,\u0022user_view_type\u0022:\u0022public\u0022,\u0022site_admin\u0022:false},\u0022body\u0022:\u0022\\u003C!-- ccr-overview-v2 --\\u003E\\n\\n### \\uD83D\\uDFE2 Approval recommended\\n\\nNo active review issues remain for the fractional relative-strength regression test additions.\\n\\n**No open issues** \\uD83C\\uDF89\\n\\n\\u003Cdetails\\u003E\\n\\u003Csummary\\u003E\\u003Cstrong\\u003EWhat changed in this PR\\u003C/strong\\u003E\\u003C/summary\\u003E\\n\\nAdds regression coverage for fractional relative-strength results, verifying that equal price gains from different starting prices produce the expected difference in percentage returns.\\n\\n**Changes:**\\n- Asserts exact results of \\u00600.625m\\u0060 and \\u0060-0.625m\\u0060 when stock and benchmark series are swapped.\\n- Reuses the existing candle helper with matching dates across two sessions.\\n\\n| File | Description |\\r\\n| ---- | ----------- |\\r\\n| IntelligentTradingSimulator.Tests/\\u200BRelativeStrengthCalculatorTests.cs | Adds positive and negative fractional relative-strength tests. |\\n\\u003C/details\\u003E\\n\\n\\u003Csub\\u003EReview effort: Balanced\\u003C/sub\\u003E\u0022,\u0022state\u0022:\u0022COMMENTED\u0022,\u0022html_url\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/315#pullrequestreview-5958301245\u0022,\u0022pull_request_url\u0022:\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/315\u0022,\u0022author_association\u0022:\u0022NONE\u0022,\u0022is_copilot_code_review\u0022:true,\u0022copilot_code_review_effort\u0022:\u0022balanced\u0022,\u0022_links\u0022:{\u0022html\u0022:{\u0022href\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/315#pullrequestreview-5958301245\u0022},\u0022pull_request\u0022:{\u0022href\u0022:\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/315\u0022}},\u0022submitted_at\u0022:\u00222026-11-18T14:12:43Z\u0022,\u0022commit_id\u0022:\u002206d5ac0ba7a8aa9b16ac8c803e4dcb9264801722\u0022}],\u0022observedComments\u0022:[]}",
         "OperatorResolution": null
       },
       "FeedbackEventIds": [],
@@ -1645,8 +1645,20 @@
       "ClosurePending": false,
       "TerminalOutcome": "None",
       "TerminalHistory": [],
-      "CurrentHandoffId": null,
-      "Handoffs": {},
+      "CurrentHandoffId": "handoff:314:1:review-observed:1277929203:1:RequestReview:314:1:task:314:1:1:1:1",
+      "Handoffs": {
+        "handoff:314:1:review-observed:1277929203:1:RequestReview:314:1:task:314:1:1:1:1": {
+          "Id": "handoff:314:1:review-observed:1277929203:1:RequestReview:314:1:task:314:1:1:1:1",
+          "Generation": 1,
+          "ReviewId": "review-request:RequestReview:314:1:task:314:1:1:1:1",
+          "TaskId": "task:314:1:1:1",
+          "Round": 1,
+          "Sha": "06d5ac0ba7a8aa9b16ac8c803e4dcb9264801722",
+          "Reason": "Awaiting human approval.",
+          "CreatedAt": "2026-11-18T14:11:13.6920863+00:00",
+          "ClassificationEventId": null
+        }
+      },
       "Feedback": {},
       "PendingFeedbackEventIds": [],
       "Reactivations": {},
@@ -2354,6 +2366,14 @@
       "ReceivedAt": "2026-11-18T14:11:35.6779247+00:00",
       "CompletedAt": "2026-11-18T14:11:35.6779247+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022copilot-review-pending:1277929203:1:RequestReview:314:1:task:314:1:1:1:1\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:314,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022copilot-pull-request-reviewer[bot]\u0022,\u0022Kind\u0022:3,\u0022Id\u0022:175728472,\u0022NodeId\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022Type\u0022:\u0022Bot\u0022},\u0022OccurredAt\u0022:\u00222026-11-18T14:11:35.6779247\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022review-pending\u0022,\u0022IntentId\u0022:\u0022RequestReview:314:1:task:314:1:1:1:1\u0022,\u0022PullRequest\u0022:315,\u0022Sha\u0022:\u002206d5ac0ba7a8aa9b16ac8c803e4dcb9264801722\u0022}}"
+    },
+    "review-observed:1277929203:1:RequestReview:314:1:task:314:1:1:1:1": {
+      "Id": "review-observed:1277929203:1:RequestReview:314:1:task:314:1:1:1:1",
+      "Digest": "3AEC9E8C68ED983F959D21E36631E26CC0C16257D3650D89C5FCE636DD99F4D0",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-18T14:11:13.6920863+00:00",
+      "CompletedAt": "2026-11-18T14:11:13.6920863+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022review-observed:1277929203:1:RequestReview:314:1:task:314:1:1:1:1\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:314,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022copilot-pull-request-reviewer[bot]\u0022,\u0022Kind\u0022:3,\u0022Id\u0022:175728472,\u0022NodeId\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022Type\u0022:\u0022Bot\u0022},\u0022OccurredAt\u0022:\u00222026-11-18T14:11:13.6920863\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022review-result\u0022,\u0022ReviewId\u0022:\u0022review-request:RequestReview:314:1:task:314:1:1:1:1\u0022,\u0022TaskId\u0022:\u0022task:314:1:1:1\u0022,\u0022Round\u0022:1,\u0022PullRequest\u0022:315,\u0022Sha\u0022:\u002206d5ac0ba7a8aa9b16ac8c803e4dcb9264801722\u0022,\u0022Classification\u0022:0,\u0022Findings\u0022:[],\u0022Responses\u0022:[],\u0022SourceEvidence\u0022:\u0022{\\u0022reason\\u0022:\\u0022Opt-in fresh exact-head clean review accepted for final human approval; provider request-to-submission correlation is not asserted.\\u0022,\\u0022policy\\u0022:\\u0022exact-head-clean-review-v1\\u0022,\\u0022classifiedAt\\u0022:\\u00222026-11-18T14:13:13.1886594\\u002B00:00\\u0022,\\u0022request\\u0022:\\u0022review-request:RequestReview:314:1:task:314:1:1:1:1\\u0022,\\u0022observedReviews\\u0022:[{\\u0022id\\u0022:5958301245,\\u0022node_id\\u0022:\\u0022PRR_kwDOTCum888AAAABYyR2PQ\\u0022,\\u0022user\\u0022:{\\u0022login\\u0022:\\u0022copilot-pull-request-reviewer[bot]\\u0022,\\u0022id\\u0022:175728472,\\u0022node_id\\u0022:\\u0022BOT_kgDOCnlnWA\\u0022,\\u0022avatar_url\\u0022:\\u0022https://avatars.githubusercontent.com/in/946600?v=4\\u0022,\\u0022gravatar_id\\u0022:\\u0022\\u0022,\\u0022url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D\\u0022,\\u0022html_url\\u0022:\\u0022https://github.com/apps/copilot-pull-request-reviewer\\u0022,\\u0022followers_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/followers\\u0022,\\u0022following_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/following{/other_user}\\u0022,\\u0022gists_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/gists{/gist_id}\\u0022,\\u0022starred_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/starred{/owner}{/repo}\\u0022,\\u0022subscriptions_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/subscriptions\\u0022,\\u0022organizations_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/orgs\\u0022,\\u0022repos_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/repos\\u0022,\\u0022events_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/events{/privacy}\\u0022,\\u0022received_events_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/received_events\\u0022,\\u0022type\\u0022:\\u0022Bot\\u0022,\\u0022user_view_type\\u0022:\\u0022public\\u0022,\\u0022site_admin\\u0022:false},\\u0022body\\u0022:\\u0022\\\\u003C!-- ccr-overview-v2 --\\\\u003E\\\\n\\\\n### \\\\uD83D\\\\uDFE2 Approval recommended\\\\n\\\\nNo active review issues remain for the fractional relative-strength regression test additions.\\\\n\\\\n**No open issues** \\\\uD83C\\\\uDF89\\\\n\\\\n\\\\u003Cdetails\\\\u003E\\\\n\\\\u003Csummary\\\\u003E\\\\u003Cstrong\\\\u003EWhat changed in this PR\\\\u003C/strong\\\\u003E\\\\u003C/summary\\\\u003E\\\\n\\\\nAdds regression coverage for fractional relative-strength results, verifying that equal price gains from different starting prices produce the expected difference in percentage returns.\\\\n\\\\n**Changes:**\\\\n- Asserts exact results of \\\\u00600.625m\\\\u0060 and \\\\u0060-0.625m\\\\u0060 when stock and benchmark series are swapped.\\\\n- Reuses the existing candle helper with matching dates across two sessions.\\\\n\\\\n| File | Description |\\\\r\\\\n| ---- | ----------- |\\\\r\\\\n| IntelligentTradingSimulator.Tests/\\\\u200BRelativeStrengthCalculatorTests.cs | Adds positive and negative fractional relative-strength tests. |\\\\n\\\\u003C/details\\\\u003E\\\\n\\\\n\\\\u003Csub\\\\u003EReview effort: Balanced\\\\u003C/sub\\\\u003E\\u0022,\\u0022state\\u0022:\\u0022COMMENTED\\u0022,\\u0022html_url\\u0022:\\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/315#pullrequestreview-5958301245\\u0022,\\u0022pull_request_url\\u0022:\\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/315\\u0022,\\u0022author_association\\u0022:\\u0022NONE\\u0022,\\u0022is_copilot_code_review\\u0022:true,\\u0022copilot_code_review_effort\\u0022:\\u0022balanced\\u0022,\\u0022_links\\u0022:{\\u0022html\\u0022:{\\u0022href\\u0022:\\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/315#pullrequestreview-5958301245\\u0022},\\u0022pull_request\\u0022:{\\u0022href\\u0022:\\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/315\\u0022}},\\u0022submitted_at\\u0022:\\u00222026-11-18T14:12:43Z\\u0022,\\u0022commit_id\\u0022:\\u002206d5ac0ba7a8aa9b16ac8c803e4dcb9264801722\\u0022}],\\u0022observedComments\\u0022:[]}\u0022}}"
     }
   },
   "Outbox": {
