@@ -1651,10 +1651,14 @@ existing manual-acceptance behavior.
 The repository variable `ORCHESTRATION_AUTO_REPAIR_REVIEW_FINDINGS=true` opts
 into the narrower `exact-head-inline-findings-v1` policy. A confirmed fresh
 request (not a `409` already-pending response), exactly one new submitted Copilot
-code review on the task's current SHA, and fresh, unedited top-level inline
+code review on the task's current SHA, and fresh top-level inline
 comments on right-side current lines can produce `Blocking` automatically.
 Reviewer identity, review/comment ownership, PR URL, current/original commit,
-timestamps, completed coding and green CI are checked. The review-scoped comment
+timestamps, completed coding and green CI are checked. Comment creation must be
+at or after request acceptance, and creation and last update must be at or before
+review submission, with the last update no earlier than creation. Updates while
+the review is being prepared, including at its submission timestamp, are eligible;
+post-submission edits are not. The review-scoped comment
 list can omit current `line`/`side`, so the opt-in adapter retrieves each comment
 via `GET /repos/{owner}/{repo}/pulls/comments/{comment_id}` and revalidates its
 ID, parent review, PR and author before classifying the detailed evidence.
@@ -1667,8 +1671,8 @@ request-round correlation. The stable finding ID is
 Existing unresolved findings are retained. The usual task budgets, single-pass
 limits, human holds and no-merge boundary still apply.
 
-Missing metadata, replies, outdated/left-side comments, edited comments,
-multiple submissions and timeout remain human-gated. A no-finding result
+Missing metadata, replies, outdated/left-side comments, post-submission edits,
+invalid timestamp ordering, multiple submissions and timeout remain human-gated. A no-finding result
 requires human classification unless it independently satisfies the clean-review
 policy above.
 Malformed identities stop observation rather than authorizing work. Never use
