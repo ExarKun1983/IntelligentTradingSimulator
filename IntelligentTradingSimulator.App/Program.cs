@@ -13,6 +13,12 @@ using IntelligentTradingSimulator.Infrastructure.Reporting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
+return await TradingSimulatorCommandLine.RunAsync(args);
+
+internal static class TradingSimulatorCommandLine
+{
+    internal static async Task<int> RunAsync(string[] args, Action<IServiceCollection>? configureServices = null)
+    {
 using var consoleProgress = new ConsoleWorkflowProgress();
 IWorkflowProgress progress = Array.Exists(args,
     a => a.Equals("--no-progress", StringComparison.OrdinalIgnoreCase))
@@ -33,15 +39,13 @@ if (!MarketDataSyncCommandLineParser.TryParse(
     args, out var synchronizeMarketData, out var syncFrom, out var syncTo, out var syncSymbols, out var syncError))
 {
     Console.WriteLine(syncError);
-    Environment.ExitCode = 1;
-    return;
+    return 1;
 }
 
 if (!StrategyTuningCommandLineParser.TryParse(args, out var tuningInput, out var tuningOutput, out var tuningError))
 {
     Console.WriteLine(tuningError);
-    Environment.ExitCode = 1;
-    return;
+    return 1;
 }
 
 if (tuningInput is not null)
@@ -57,28 +61,29 @@ if (tuningInput is not null)
                                     System.Text.Json.JsonException or ArgumentException)
     {
         Console.WriteLine($"Tuning analysis failed: {exception.Message}");
-        Environment.ExitCode = 1;
+        FinishCommand("Workflow failed");
+        return 1;
     }
-    FinishCommand(Environment.ExitCode == 0 ? "Workflow completed" : "Workflow failed");
-    return;
+    FinishCommand("Workflow completed");
+    return 0;
 }
 
 if (!BacktestSummaryCsvCommandLineParser.TryParse(args, out var csvFilePath, out var csvError))
 {
     Console.WriteLine(csvError);
-    return;
+    return 0;
 }
 
 if (!BacktestSnapshotCsvCommandLineParser.TryParse(args, out var snapshotCsvFilePath, out var snapshotCsvError))
 {
     Console.WriteLine(snapshotCsvError);
-    return;
+    return 0;
 }
 
 if (!StrategyComparisonCsvCommandLineParser.TryParse(args, out var comparisonCsvFilePath, out var comparisonCsvError))
 {
     Console.WriteLine(comparisonCsvError);
-    return;
+    return 0;
 }
 
 var configuration =
@@ -129,6 +134,8 @@ services.AddScoped<IBacktestEngine, BacktestEngine>();
 services.AddScoped<IStrategyVariantRunner, StrategyVariantRunner>();
 services.AddSingleton<IStrategyComparisonReportService, StrategyComparisonReportService>();
 
+configureServices?.Invoke(services);
+
 await using var provider = services.BuildServiceProvider();
 
 using var scope = provider.CreateScope();
@@ -143,7 +150,7 @@ if (synchronizeMarketData)
         Console.WriteLine($"{symbol}: {candles.Count} candles available for {syncFrom:yyyy-MM-dd} to {syncTo:yyyy-MM-dd}.");
     }
     FinishCommand("Market-data synchronization completed");
-    return;
+    return 0;
 }
 
 var backtestRunIdArg = Array.Find(
@@ -158,7 +165,7 @@ if (backtestRunIdArg is not null &&
     var reportCompleted = await scope.ServiceProvider.GetRequiredService<BacktestReportWorkflow>()
         .RunAsync(backtestRunId, csvFilePath, snapshotCsvFilePath);
     FinishCommand(reportCompleted ? "Workflow completed" : "Workflow failed");
-    return;
+    return 0;
 }
 
 var runBacktestArg = Array.Find(
@@ -215,17 +222,14 @@ if (runBacktestArg is not null)
     if (engineResult.Status == BacktestRunStatus.Failed)
     {
         Console.WriteLine($"Backtest failed: {engineResult.ErrorMessage}");
-        Environment.ExitCode = Math.Max(
-            Environment.ExitCode,
-            BacktestCommandExitCode.ForBacktestResult(engineResult.Status));
         FinishCommand("Workflow failed");
-        return;
+        return 1;
     }
 
     var reportCompleted = await scope.ServiceProvider.GetRequiredService<BacktestReportWorkflow>()
         .RunAsync(engineResult.RunId, csvFilePath, snapshotCsvFilePath);
     FinishCommand(reportCompleted ? "Workflow completed" : "Workflow failed");
-    return;
+    return 0;
 }
 
 var runVariantsArg = Array.Find(
@@ -238,7 +242,7 @@ if (runVariantsArg is not null)
         args, out var comparisonSortBy, out var comparisonBenchmark, out var comparisonError))
     {
         Console.WriteLine(comparisonError);
-        return;
+        return 0;
     }
 
     var variantsStartDateArg = Array.Find(
@@ -263,7 +267,7 @@ if (runVariantsArg is not null)
     {
         Console.WriteLine(
             $"Error: --backtest-start ({variantsStartDate:yyyy-MM-dd}) must not be after --backtest-end ({variantsEndDate:yyyy-MM-dd}).");
-        return;
+        return 0;
     }
 
     var allVariants = StrategyConfigurationLoader.LoadAll(configuration);
@@ -339,17 +343,15 @@ if (runVariantsArg is not null)
     await scope.ServiceProvider.GetRequiredService<StrategyComparisonReportWorkflow>()
         .RunAsync(summaries, comparisonSortBy, comparisonBenchmark, comparisonCsvFilePath);
 
-    Environment.ExitCode = Math.Max(
-        Environment.ExitCode,
-        BacktestCommandExitCode.ForVariantResults(allSucceeded));
     FinishCommand(allSucceeded ? "Workflow completed" : "Workflow completed with variant failures");
-    return;
+    return allSucceeded ? 0 : 1;
 }
 
 var runner = scope.ServiceProvider.GetRequiredService<SimulationRunner>();
 
 await runner.RunAsync();
 FinishCommand("Workflow completed");
+return 0;
 }
 catch (OperationCanceledException)
 {
@@ -360,4 +362,6 @@ catch
 {
     FinishCommand("Workflow failed");
     throw;
+}
+    }
 }

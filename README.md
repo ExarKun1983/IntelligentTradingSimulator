@@ -220,6 +220,8 @@ The future loader must validate the manifest against its supported schema, requi
 
 `MarketObservationAnalyzer` wraps AI adapter exceptions in `AiScoringException`. `MarketDataWorkflow` and `BacktestDayProcessor` propagate this failure instead of taking their ordinary per-symbol catch-and-continue paths; `BacktestEngine` stops processing and marks the run `Failed`, never `Completed`. Offline workflow-level regressions inject artifact, contract, and inference failures after a successful score, verify no partial results from the failing invocation or day are published, and confirm the failed backtest status. Ordinary data skips and explicit disqualifications remain distinct from model failures. Direct offline evaluation continues to propagate adapter exceptions unchanged. Artifact loading and ONNX inference are not implemented; when added, invalid artifacts must fail before a workflow can publish results.
 
+A failed `--run-backtest` exits with code `1`. `--run-variants` still processes the other variants and prints the comparison, but exits with code `1` if any variant fails.
+
 ### Future roadmap (not implemented)
 
 1. **Reproducible external training:** implement point-in-time splits, training-only preprocessing, and versioned ONNX artifact generation under the decision above. There is currently no trainer or model registry.
