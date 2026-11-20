@@ -1,10 +1,10 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 968,
+  "Version": 969,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
-  "LastEventId": "task-pr-mapped:1277929203:1:45f24a10-81da-4f88-9210-14e292039d81:316:bb24d9caff73348dbb321b280e1e11ec06fe52d5:2026-11-20T13:08:34.7874690\u002B00:00",
+  "LastEventId": "task-completed:1277929203:1:45f24a10-81da-4f88-9210-14e292039d81",
   "AdmittedIssue": 204,
   "WorkerLease": {
     "Owner": "c2504774e21d4e56bfc2d40bcedc8df6",
@@ -1701,8 +1701,8 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 1,
-      "Version": 85,
-      "LastEventId": "task-pr-mapped:1277929203:1:45f24a10-81da-4f88-9210-14e292039d81:316:bb24d9caff73348dbb321b280e1e11ec06fe52d5:2026-11-20T13:08:34.7874690\u002B00:00",
+      "Version": 86,
+      "LastEventId": "task-completed:1277929203:1:45f24a10-81da-4f88-9210-14e292039d81",
       "Phase": "FIX_PENDING",
       "Ready": false,
       "ActiveAuthorized": true,
@@ -1759,18 +1759,28 @@
           "AutomaticContinuations": 0,
           "ContinuationPending": false,
           "Kind": "ReviewRepair",
-          "Status": "Running",
+          "Status": "AwaitingHeadConfirmation",
           "ParentTaskId": "task:204:1:1:1",
           "Round": 1,
           "LaunchSource": "PullRequestHead",
           "SourceSha": "768b4648778479a5d00abe1e6cb9aecd1f221287",
-          "FinalSha": null,
+          "FinalSha": "bb24d9caff73348dbb321b280e1e11ec06fe52d5",
           "LaunchConfirmed": true,
           "ExternalId": "45f24a10-81da-4f88-9210-14e292039d81",
           "TerminalEvidence": null,
           "OperatorResolution": null,
           "UncertainLaunchResolution": null,
-          "CandidateShaEvidence": null,
+          "CandidateShaEvidence": {
+            "Version": 1,
+            "Policy": "bounded-candidate-sha-v1",
+            "TaskId": "task:204:1:1:2",
+            "ExternalTaskId": "45f24a10-81da-4f88-9210-14e292039d81",
+            "SessionIds": [
+              "987e915b-585c-4257-94be-6a8168e7ebff"
+            ],
+            "PullRequest": 316,
+            "ObservedHeadSha": "bb24d9caff73348dbb321b280e1e11ec06fe52d5"
+          },
           "ReviewBlockers": [
             {
               "Id": "copilot-review-comment:4642710265",
@@ -2727,6 +2737,14 @@
       "ReceivedAt": "2026-11-20T13:08:34.787469+00:00",
       "CompletedAt": "2026-11-20T13:08:34.787469+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022task-pr-mapped:1277929203:1:45f24a10-81da-4f88-9210-14e292039d81:316:bb24d9caff73348dbb321b280e1e11ec06fe52d5:2026-11-20T13:08:34.7874690\\u002B00:00\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:204,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022github-task-api\u0022,\u0022Kind\u0022:1,\u0022Id\u0022:null,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-20T13:08:34.787469\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022task-pr-mapped\u0022,\u0022TaskId\u0022:\u0022task:204:1:1:2\u0022,\u0022PullRequest\u0022:316,\u0022ObservedHead\u0022:\u0022bb24d9caff73348dbb321b280e1e11ec06fe52d5\u0022}}"
+    },
+    "task-completed:1277929203:1:45f24a10-81da-4f88-9210-14e292039d81": {
+      "Id": "task-completed:1277929203:1:45f24a10-81da-4f88-9210-14e292039d81",
+      "Digest": "76A60436217B79E073B45E250FA38704A6E11A859FA02B07D033FF63B68596F3",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-20T13:11:58.6534645+00:00",
+      "CompletedAt": "2026-11-20T13:11:58.6534645+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022task-completed:1277929203:1:45f24a10-81da-4f88-9210-14e292039d81\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:204,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022github-task-api\u0022,\u0022Kind\u0022:1,\u0022Id\u0022:null,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-20T13:11:58.6534645\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022task-completed\u0022,\u0022TaskId\u0022:\u0022task:204:1:1:2\u0022,\u0022PullRequest\u0022:316,\u0022Sha\u0022:\u0022bb24d9caff73348dbb321b280e1e11ec06fe52d5\u0022,\u0022Evidence\u0022:{\u0022Version\u0022:1,\u0022Policy\u0022:\u0022bounded-candidate-sha-v1\u0022,\u0022TaskId\u0022:\u0022task:204:1:1:2\u0022,\u0022ExternalTaskId\u0022:\u002245f24a10-81da-4f88-9210-14e292039d81\u0022,\u0022SessionIds\u0022:[\u0022987e915b-585c-4257-94be-6a8168e7ebff\u0022],\u0022PullRequest\u0022:316,\u0022ObservedHeadSha\u0022:\u0022bb24d9caff73348dbb321b280e1e11ec06fe52d5\u0022}}}"
     }
   },
   "Outbox": {
