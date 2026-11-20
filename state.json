@@ -1,20 +1,17 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1222,
+  "Version": 1223,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "task-pr-mapped:1277929203:1:b43c2827-cc57-49d8-97cd-7f5f935a923c:316:27c531c1145e15a36dc5005711b72f3b3297589c:2026-11-20T15:13:22.2889212\u002B00:00",
   "AdmittedIssue": 204,
-  "WorkerLease": {
-    "Owner": "42531a00ce2b4bb786b6febca36ae622",
-    "ExpiresAt": "2026-11-20T15:20:47.161062+00:00"
-  },
+  "WorkerLease": null,
   "Continuation": {
     "Id": "continue:1:1147",
     "RepositoryGeneration": 1,
-    "DueAt": "2026-11-20T14:54:47.9843222+00:00",
-    "Reason": "Invocation in flight.",
+    "DueAt": "2026-11-20T15:24:47.7094116+00:00",
+    "Reason": "Automatic work remains.",
     "Pending": true
   },
   "Issues": {
@@ -1955,7 +1952,7 @@
         "task:204:1:1:6": {
           "Id": "task:204:1:1:6",
           "AutomaticContinuations": 0,
-          "ContinuationPending": false,
+          "ContinuationPending": true,
           "Kind": "ReviewRepair",
           "Status": "Running",
           "ParentTaskId": "task:204:1:1:5",
