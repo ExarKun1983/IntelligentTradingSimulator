@@ -1,10 +1,10 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1101,
+  "Version": 1102,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
-  "LastEventId": "actions:1277929203:44752543155",
+  "LastEventId": "task-completed:1277929203:1:3ba948f6-d963-4adf-99b5-c70825fe173f",
   "AdmittedIssue": 204,
   "WorkerLease": {
     "Owner": "1944fdbf17cb44caa9565f2407c419be",
@@ -1701,8 +1701,8 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 1,
-      "Version": 210,
-      "LastEventId": "actions:1277929203:44752543155",
+      "Version": 211,
+      "LastEventId": "task-completed:1277929203:1:3ba948f6-d963-4adf-99b5-c70825fe173f",
       "Phase": "FIX_PENDING",
       "Ready": false,
       "ActiveAuthorized": true,
@@ -1863,18 +1863,28 @@
           "AutomaticContinuations": 0,
           "ContinuationPending": false,
           "Kind": "ReviewRepair",
-          "Status": "Running",
+          "Status": "AwaitingHeadConfirmation",
           "ParentTaskId": "task:204:1:1:3",
           "Round": 1,
           "LaunchSource": "PullRequestHead",
           "SourceSha": "80d17e0d8a252362cce4b42745d477069002a2ff",
-          "FinalSha": null,
+          "FinalSha": "491028e138b24a341397c4ed7298bc1981dc1ea8",
           "LaunchConfirmed": true,
           "ExternalId": "3ba948f6-d963-4adf-99b5-c70825fe173f",
           "TerminalEvidence": null,
           "OperatorResolution": null,
           "UncertainLaunchResolution": null,
-          "CandidateShaEvidence": null,
+          "CandidateShaEvidence": {
+            "Version": 1,
+            "Policy": "bounded-candidate-sha-v1",
+            "TaskId": "task:204:1:1:4",
+            "ExternalTaskId": "3ba948f6-d963-4adf-99b5-c70825fe173f",
+            "SessionIds": [
+              "a2593495-1da4-4504-ad6b-5c5d4d830eb9"
+            ],
+            "PullRequest": 316,
+            "ObservedHeadSha": "491028e138b24a341397c4ed7298bc1981dc1ea8"
+          },
           "ReviewBlockers": [
             {
               "Id": "copilot-review-comment:4642952156",
@@ -3057,6 +3067,14 @@
       "ReceivedAt": "2026-11-20T14:20:43+00:00",
       "CompletedAt": "2026-11-20T14:20:43+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022actions:1277929203:44752543155\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:204,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u00226195946\u0022,\u0022Kind\u0022:0,\u0022Id\u0022:6195946,\u0022NodeId\u0022:null,\u0022Type\u0022:\u0022User\u0022},\u0022OccurredAt\u0022:\u00222026-11-20T14:20:43\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022human-classification\u0022,\u0022HandoffId\u0022:\u0022handoff:204:1:review-observed:1277929203:1:RequestReview:204:1:task:204:1:1:3:1\u0022,\u0022Round\u0022:1,\u0022PullRequest\u0022:316,\u0022Sha\u0022:\u002280d17e0d8a252362cce4b42745d477069002a2ff\u0022,\u0022Classification\u0022:1,\u0022Reason\u0022:\u0022User requested resumption of PR #316. Third review still lists workflow failure handling as an open finding. Verify it against the current fail-closed documentation and respond in the review thread, making only necessary documentation-contract changes within Issue #204; runtime inference and workflow implementation remain out of scope. Score findings are resolved by current-head review and manifest-authenticity wording is resolved by inspected README evidence.\u0022,\u0022Findings\u0022:[{\u0022Id\u0022:\u0022copilot-review-comment:4642952156\u0022,\u0022Description\u0022:\u0022README.md:\\nAdapter exceptions are swallowed by \\u0060MarketDataWorkflow\\u0060 and \\u0060BacktestDayProcessor\\u0060, allowing partial rankings and a completed backtest. Require artifact, contract and inference failures to abort these workflows, and add workflow-level regression tests rather than only adapter tests.\u0022,\u0022Evidence\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4642952156\u0022}],\u0022Responses\u0022:[{\u0022FindingId\u0022:\u0022copilot-review-comment:4642952216\u0022,\u0022Evidence\u0022:\u0022Current-head review https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#pullrequestreview-5993680774 at 80d17e0d8a252362cce4b42745d477069002a2ff explicitly lists this finding under \\u00272 resolved since last review\\u0027.\u0022,\u0022Resolved\u0022:true},{\u0022FindingId\u0022:\u0022copilot-review-comment:4642952260\u0022,\u0022Evidence\u0022:\u0022Current-head review https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#pullrequestreview-5993680774 at 80d17e0d8a252362cce4b42745d477069002a2ff explicitly lists this finding under \\u00272 resolved since last review\\u0027.\u0022,\u0022Resolved\u0022:true},{\u0022FindingId\u0022:\u0022copilot-review:5993373840:manifest-expected-digest\u0022,\u0022Evidence\u0022:\u0022Verified README.md at commit 80d17e0d8a252362cce4b42745d477069002a2ff: loader verifies model.onnx and training.lock hashes against the manifest; the contract explicitly states these check consistency, not authenticity of the manifest or bundle. https://github.com/ExarKun1983/IntelligentTradingSimulator/blob/80d17e0d8a252362cce4b42745d477069002a2ff/README.md\u0022,\u0022Resolved\u0022:true}]}}"
+    },
+    "task-completed:1277929203:1:3ba948f6-d963-4adf-99b5-c70825fe173f": {
+      "Id": "task-completed:1277929203:1:3ba948f6-d963-4adf-99b5-c70825fe173f",
+      "Digest": "F602DE904BCB58897B40DD65417FF9A1B823F88404C189BC095DD157C451DFB7",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-20T14:30:25.8806643+00:00",
+      "CompletedAt": "2026-11-20T14:30:25.8806643+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022task-completed:1277929203:1:3ba948f6-d963-4adf-99b5-c70825fe173f\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:204,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022github-task-api\u0022,\u0022Kind\u0022:1,\u0022Id\u0022:null,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-20T14:30:25.8806643\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022task-completed\u0022,\u0022TaskId\u0022:\u0022task:204:1:1:4\u0022,\u0022PullRequest\u0022:316,\u0022Sha\u0022:\u0022491028e138b24a341397c4ed7298bc1981dc1ea8\u0022,\u0022Evidence\u0022:{\u0022Version\u0022:1,\u0022Policy\u0022:\u0022bounded-candidate-sha-v1\u0022,\u0022TaskId\u0022:\u0022task:204:1:1:4\u0022,\u0022ExternalTaskId\u0022:\u00223ba948f6-d963-4adf-99b5-c70825fe173f\u0022,\u0022SessionIds\u0022:[\u0022a2593495-1da4-4504-ad6b-5c5d4d830eb9\u0022],\u0022PullRequest\u0022:316,\u0022ObservedHeadSha\u0022:\u0022491028e138b24a341397c4ed7298bc1981dc1ea8\u0022}}}"
     }
   },
   "Outbox": {
