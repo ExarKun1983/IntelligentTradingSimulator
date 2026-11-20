@@ -1,10 +1,10 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1079,
+  "Version": 1080,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
-  "LastEventId": "review-observed:1277929203:1:RequestReview:204:1:task:204:1:1:3:1",
+  "LastEventId": "actions:1277929203:44752543155",
   "AdmittedIssue": null,
   "WorkerLease": null,
   "Continuation": {
@@ -1698,22 +1698,22 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 1,
-      "Version": 190,
-      "LastEventId": "review-observed:1277929203:1:RequestReview:204:1:task:204:1:1:3:1",
-      "Phase": "BLOCKED",
+      "Version": 191,
+      "LastEventId": "actions:1277929203:44752543155",
+      "Phase": "FIX_PENDING",
       "Ready": false,
-      "ActiveAuthorized": false,
+      "ActiveAuthorized": true,
       "ReadyAt": "2026-11-20T12:42:22+00:00",
       "FeedbackSince": "2026-11-20T12:42:22+00:00",
-      "ReactivationRequired": true,
+      "ReactivationRequired": false,
       "Paused": false,
-      "HoldReason": "Review requires human classification.",
+      "HoldReason": null,
       "PullRequest": 316,
       "HeadSha": "80d17e0d8a252362cce4b42745d477069002a2ff",
       "Round": 1,
       "ConsecutiveCiFailures": 0,
       "ConsecutiveReviewFailures": 0,
-      "PendingReviewProgress": false,
+      "PendingReviewProgress": true,
       "CiBudget": 3,
       "ReviewBudget": 5,
       "MaxRepairTasks": 5,
@@ -1881,7 +1881,7 @@
         "TaskId": "task:204:1:1:3",
         "Round": 1,
         "Sha": "80d17e0d8a252362cce4b42745d477069002a2ff",
-        "Classification": "NeedsHuman",
+        "Classification": "Blocking",
         "LifecycleState": "Completed",
         "CopilotRequestNodeId": "RR_kwDOTCum887y9yiL",
         "ReviewRequestedAt": "2026-11-20T13:38:28.0581782+00:00",
@@ -1892,21 +1892,6 @@
             "Id": "copilot-review-comment:4642952156",
             "Description": "README.md:\nAdapter exceptions are swallowed by \u0060MarketDataWorkflow\u0060 and \u0060BacktestDayProcessor\u0060, allowing partial rankings and a completed backtest. Require artifact, contract and inference failures to abort these workflows, and add workflow-level regression tests rather than only adapter tests.",
             "Evidence": "https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4642952156"
-          },
-          {
-            "Id": "copilot-review-comment:4642952216",
-            "Description": "README.md:\nObservation scores are stored as \u0060decimal(18,4)\u0060, but this contract only requires a representable .NET decimal. Raw output 0 with a penalty of 50.49999 yields 0.00001, which recommendations accept but observation storage rounds to zero; a score near -999 can also round to the sentinel after validation. Define one post-penalty rounding policy used by every consumer, and validate the rounded score before returning it.",
-            "Evidence": "https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4642952216"
-          },
-          {
-            "Id": "copilot-review-comment:4642952260",
-            "Description": "README.md:\nA valid \u0060QualityPenalty\u0060 of 1050 maps raw output 0 to -999.5, below the disqualification sentinel. Market and persisted rankings then place disqualified rows above this eligible row. Require the final eligible score, after penalties and rounding, to be strictly greater than -999.",
-            "Evidence": "https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4642952260"
-          },
-          {
-            "Id": "copilot-review:5993373840:manifest-expected-digest",
-            "Description": "README.md:219 - Manifest hash verification has no trusted expected digest. Specify an independently supplied expected digest/signature, or narrow the documented claim to manifest schema validation and model and dependency-lock hash verification. This is an ML-stack documentation issue; do not implement the future loader or unrelated application changes.",
-            "Evidence": "https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#pullrequestreview-5993373840"
           }
         ],
         "Responses": [
@@ -1928,6 +1913,21 @@
           {
             "FindingId": "copilot-review-comment:4642710396",
             "Evidence": "Current-head Copilot review https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#pullrequestreview-5993373840 at commit bb24d9caff73348dbb321b280e1e11ec06fe52d5 explicitly lists this finding under \u00274 resolved since last review\u0027.",
+            "Resolved": true
+          },
+          {
+            "FindingId": "copilot-review-comment:4642952216",
+            "Evidence": "Current-head review https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#pullrequestreview-5993680774 at 80d17e0d8a252362cce4b42745d477069002a2ff explicitly lists this finding under \u00272 resolved since last review\u0027.",
+            "Resolved": true
+          },
+          {
+            "FindingId": "copilot-review-comment:4642952260",
+            "Evidence": "Current-head review https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#pullrequestreview-5993680774 at 80d17e0d8a252362cce4b42745d477069002a2ff explicitly lists this finding under \u00272 resolved since last review\u0027.",
+            "Resolved": true
+          },
+          {
+            "FindingId": "copilot-review:5993373840:manifest-expected-digest",
+            "Evidence": "Verified README.md at commit 80d17e0d8a252362cce4b42745d477069002a2ff: loader verifies model.onnx and training.lock hashes against the manifest; the contract explicitly states these check consistency, not authenticity of the manifest or bundle. https://github.com/ExarKun1983/IntelligentTradingSimulator/blob/80d17e0d8a252362cce4b42745d477069002a2ff/README.md",
             "Resolved": true
           }
         ],
@@ -1960,7 +1960,7 @@
       "ClosurePending": false,
       "TerminalOutcome": "None",
       "TerminalHistory": [],
-      "CurrentHandoffId": "handoff:204:1:review-observed:1277929203:1:RequestReview:204:1:task:204:1:1:3:1",
+      "CurrentHandoffId": null,
       "Handoffs": {
         "handoff:204:1:review-observed:1277929203:1:RequestReview:204:1:task:204:1:1:1:1": {
           "Id": "handoff:204:1:review-observed:1277929203:1:RequestReview:204:1:task:204:1:1:1:1",
@@ -1993,7 +1993,7 @@
           "Sha": "80d17e0d8a252362cce4b42745d477069002a2ff",
           "Reason": "Review requires human classification.",
           "CreatedAt": "2026-11-20T13:38:20.313228+00:00",
-          "ClassificationEventId": null
+          "ClassificationEventId": "actions:1277929203:44752543155"
         }
       },
       "Feedback": {},
@@ -2098,6 +2098,46 @@
             }
           ],
           "OccurredAt": "2026-11-20T13:30:49+00:00"
+        },
+        "actions:1277929203:44752543155": {
+          "EventId": "actions:1277929203:44752543155",
+          "HandoffId": "handoff:204:1:review-observed:1277929203:1:RequestReview:204:1:task:204:1:1:3:1",
+          "Author": {
+            "Login": "6195946",
+            "Kind": "Human",
+            "Id": 6195946,
+            "NodeId": null,
+            "Type": "User"
+          },
+          "Reason": "User requested resumption of PR #316. Third review still lists workflow failure handling as an open finding. Verify it against the current fail-closed documentation and respond in the review thread, making only necessary documentation-contract changes within Issue #204; runtime inference and workflow implementation remain out of scope. Score findings are resolved by current-head review and manifest-authenticity wording is resolved by inspected README evidence.",
+          "Round": 1,
+          "Sha": "80d17e0d8a252362cce4b42745d477069002a2ff",
+          "Classification": "Blocking",
+          "Findings": [
+            {
+              "Id": "copilot-review-comment:4642952156",
+              "Description": "README.md:\nAdapter exceptions are swallowed by \u0060MarketDataWorkflow\u0060 and \u0060BacktestDayProcessor\u0060, allowing partial rankings and a completed backtest. Require artifact, contract and inference failures to abort these workflows, and add workflow-level regression tests rather than only adapter tests.",
+              "Evidence": "https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4642952156"
+            }
+          ],
+          "Responses": [
+            {
+              "FindingId": "copilot-review-comment:4642952216",
+              "Evidence": "Current-head review https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#pullrequestreview-5993680774 at 80d17e0d8a252362cce4b42745d477069002a2ff explicitly lists this finding under \u00272 resolved since last review\u0027.",
+              "Resolved": true
+            },
+            {
+              "FindingId": "copilot-review-comment:4642952260",
+              "Evidence": "Current-head review https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#pullrequestreview-5993680774 at 80d17e0d8a252362cce4b42745d477069002a2ff explicitly lists this finding under \u00272 resolved since last review\u0027.",
+              "Resolved": true
+            },
+            {
+              "FindingId": "copilot-review:5993373840:manifest-expected-digest",
+              "Evidence": "Verified README.md at commit 80d17e0d8a252362cce4b42745d477069002a2ff: loader verifies model.onnx and training.lock hashes against the manifest; the contract explicitly states these check consistency, not authenticity of the manifest or bundle. https://github.com/ExarKun1983/IntelligentTradingSimulator/blob/80d17e0d8a252362cce4b42745d477069002a2ff/README.md",
+              "Resolved": true
+            }
+          ],
+          "OccurredAt": "2026-11-20T14:20:43+00:00"
         }
       },
       "ProjectionDigest": "20889BFD9052DBEF2DEF2E37B5DBEC21613732B134722417FBEB164FFB7FBD35",
@@ -2979,6 +3019,14 @@
       "ReceivedAt": "2026-11-20T13:38:20.313228+00:00",
       "CompletedAt": "2026-11-20T13:38:20.313228+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022review-observed:1277929203:1:RequestReview:204:1:task:204:1:1:3:1\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:204,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022copilot-pull-request-reviewer[bot]\u0022,\u0022Kind\u0022:3,\u0022Id\u0022:175728472,\u0022NodeId\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022Type\u0022:\u0022Bot\u0022},\u0022OccurredAt\u0022:\u00222026-11-20T13:38:20.313228\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022review-result\u0022,\u0022ReviewId\u0022:\u0022review-request:RequestReview:204:1:task:204:1:1:3:1\u0022,\u0022TaskId\u0022:\u0022task:204:1:1:3\u0022,\u0022Round\u0022:1,\u0022PullRequest\u0022:316,\u0022Sha\u0022:\u002280d17e0d8a252362cce4b42745d477069002a2ff\u0022,\u0022Classification\u0022:2,\u0022Findings\u0022:[],\u0022Responses\u0022:[],\u0022SourceEvidence\u0022:\u0022{\\u0022reason\\u0022:\\u0022Clean-review auto-acceptance is enabled, but eligibility or unambiguous clean-review evidence is missing; human classification is required.\\u0022,\\u0022policy\\u0022:\\u0022exact-head-inline-findings-v1\\u0022,\\u0022classifiedAt\\u0022:\\u00222026-11-20T13:48:24.744388\\u002B00:00\\u0022,\\u0022request\\u0022:\\u0022review-request:RequestReview:204:1:task:204:1:1:3:1\\u0022,\\u0022observedReviews\\u0022:[{\\u0022id\\u0022:5993680774,\\u0022node_id\\u0022:\\u0022PRR_kwDOTCum888AAAABZUBPhg\\u0022,\\u0022user\\u0022:{\\u0022login\\u0022:\\u0022copilot-pull-request-reviewer[bot]\\u0022,\\u0022id\\u0022:175728472,\\u0022node_id\\u0022:\\u0022BOT_kgDOCnlnWA\\u0022,\\u0022avatar_url\\u0022:\\u0022https://avatars.githubusercontent.com/in/946600?v=4\\u0022,\\u0022gravatar_id\\u0022:\\u0022\\u0022,\\u0022url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D\\u0022,\\u0022html_url\\u0022:\\u0022https://github.com/apps/copilot-pull-request-reviewer\\u0022,\\u0022followers_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/followers\\u0022,\\u0022following_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/following{/other_user}\\u0022,\\u0022gists_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/gists{/gist_id}\\u0022,\\u0022starred_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/starred{/owner}{/repo}\\u0022,\\u0022subscriptions_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/subscriptions\\u0022,\\u0022organizations_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/orgs\\u0022,\\u0022repos_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/repos\\u0022,\\u0022events_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/events{/privacy}\\u0022,\\u0022received_events_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/received_events\\u0022,\\u0022type\\u0022:\\u0022Bot\\u0022,\\u0022user_view_type\\u0022:\\u0022public\\u0022,\\u0022site_admin\\u0022:false},\\u0022body\\u0022:\\u0022\\\\u003C!-- ccr-overview-v2 --\\\\u003E\\\\n\\\\n### \\\\uD83D\\\\uDD35 Needs a closer look\\\\n\\\\nSubtle reproducibility, evaluation-boundary, and failure-handling concerns warrant human assessment of the proposed contract.\\\\n\\\\n\\\\u003Cdetails open\\\\u003E\\\\n\\\\u003Csummary\\\\u003E\\\\u003Cstrong\\\\u003E1 open issue\\\\u003C/strong\\\\u003E\\\\u003C/summary\\\\u003E\\\\n\\\\n- \\\\u003Cpicture\\\\u003E\\\\u003Csource media=\\\\u0022(prefers-color-scheme: dark)\\\\u0022 srcset=\\\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\\\\u0022\\\\u003E\\\\u003Csource media=\\\\u0022(prefers-color-scheme: light)\\\\u0022 srcset=\\\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\\\\u0022\\\\u003E\\\\u003Cimg src=\\\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\\\\u0022 alt=\\\\u0022High severity\\\\u0022 width=\\\\u002262\\\\u0022 height=\\\\u002218\\\\u0022 align=\\\\u0022texttop\\\\u0022\\\\u003E\\\\u003C/picture\\\\u003E [Workflow layers swallow inference failures and complete partial backtests](https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4642952156)\\\\n\\\\u003C/details\\\\u003E\\\\n\\\\n\\\\u003Cdetails\\\\u003E\\\\n\\\\u003Csummary\\\\u003E\\\\u003Cstrong\\\\u003E2 resolved since last review\\\\u003C/strong\\\\u003E\\\\u003C/summary\\\\u003E\\\\n\\\\n- \\\\u003Cpicture\\\\u003E\\\\u003Csource media=\\\\u0022(prefers-color-scheme: dark)\\\\u0022 srcset=\\\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\\\\u0022\\\\u003E\\\\u003Csource media=\\\\u0022(prefers-color-scheme: light)\\\\u0022 srcset=\\\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\\\\u0022\\\\u003E\\\\u003Cimg src=\\\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\\\\u0022 alt=\\\\u0022Medium severity\\\\u0022 width=\\\\u002262\\\\u0022 height=\\\\u002218\\\\u0022 align=\\\\u0022texttop\\\\u0022\\\\u003E\\\\u003C/picture\\\\u003E [Eligible penalized scores can fall below the disqualification sentinel](https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4642952260)\\\\n- \\\\u003Cpicture\\\\u003E\\\\u003Csource media=\\\\u0022(prefers-color-scheme: dark)\\\\u0022 srcset=\\\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\\\\u0022\\\\u003E\\\\u003Csource media=\\\\u0022(prefers-color-scheme: light)\\\\u0022 srcset=\\\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\\\\u0022\\\\u003E\\\\u003Cimg src=\\\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\\\\u0022 alt=\\\\u0022Medium severity\\\\u0022 width=\\\\u002262\\\\u0022 height=\\\\u002218\\\\u0022 align=\\\\u0022texttop\\\\u0022\\\\u003E\\\\u003C/picture\\\\u003E [Score rounding can turn valid scores into zero or the sentinel](https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4642952216)\\\\n\\\\u003C/details\\\\u003E\\\\n\\\\n\\\\u003Csub\\\\u003EReview effort: Balanced\\\\u003C/sub\\\\u003E\\u0022,\\u0022state\\u0022:\\u0022COMMENTED\\u0022,\\u0022html_url\\u0022:\\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#pullrequestreview-5993680774\\u0022,\\u0022pull_request_url\\u0022:\\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/316\\u0022,\\u0022author_association\\u0022:\\u0022NONE\\u0022,\\u0022is_copilot_code_review\\u0022:true,\\u0022copilot_code_review_effort\\u0022:\\u0022balanced\\u0022,\\u0022_links\\u0022:{\\u0022html\\u0022:{\\u0022href\\u0022:\\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#pullrequestreview-5993680774\\u0022},\\u0022pull_request\\u0022:{\\u0022href\\u0022:\\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/316\\u0022}},\\u0022submitted_at\\u0022:\\u00222026-11-20T13:48:00Z\\u0022,\\u0022commit_id\\u0022:\\u002280d17e0d8a252362cce4b42745d477069002a2ff\\u0022}],\\u0022observedComments\\u0022:[]}\u0022}}"
+    },
+    "actions:1277929203:44752543155": {
+      "Id": "actions:1277929203:44752543155",
+      "Digest": "E5B6898B390389FC25D4A72FE0034213FD626F75DDB122ED146E1467C24E6333",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-20T14:20:43+00:00",
+      "CompletedAt": "2026-11-20T14:20:43+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022actions:1277929203:44752543155\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:204,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u00226195946\u0022,\u0022Kind\u0022:0,\u0022Id\u0022:6195946,\u0022NodeId\u0022:null,\u0022Type\u0022:\u0022User\u0022},\u0022OccurredAt\u0022:\u00222026-11-20T14:20:43\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022human-classification\u0022,\u0022HandoffId\u0022:\u0022handoff:204:1:review-observed:1277929203:1:RequestReview:204:1:task:204:1:1:3:1\u0022,\u0022Round\u0022:1,\u0022PullRequest\u0022:316,\u0022Sha\u0022:\u002280d17e0d8a252362cce4b42745d477069002a2ff\u0022,\u0022Classification\u0022:1,\u0022Reason\u0022:\u0022User requested resumption of PR #316. Third review still lists workflow failure handling as an open finding. Verify it against the current fail-closed documentation and respond in the review thread, making only necessary documentation-contract changes within Issue #204; runtime inference and workflow implementation remain out of scope. Score findings are resolved by current-head review and manifest-authenticity wording is resolved by inspected README evidence.\u0022,\u0022Findings\u0022:[{\u0022Id\u0022:\u0022copilot-review-comment:4642952156\u0022,\u0022Description\u0022:\u0022README.md:\\nAdapter exceptions are swallowed by \\u0060MarketDataWorkflow\\u0060 and \\u0060BacktestDayProcessor\\u0060, allowing partial rankings and a completed backtest. Require artifact, contract and inference failures to abort these workflows, and add workflow-level regression tests rather than only adapter tests.\u0022,\u0022Evidence\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4642952156\u0022}],\u0022Responses\u0022:[{\u0022FindingId\u0022:\u0022copilot-review-comment:4642952216\u0022,\u0022Evidence\u0022:\u0022Current-head review https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#pullrequestreview-5993680774 at 80d17e0d8a252362cce4b42745d477069002a2ff explicitly lists this finding under \\u00272 resolved since last review\\u0027.\u0022,\u0022Resolved\u0022:true},{\u0022FindingId\u0022:\u0022copilot-review-comment:4642952260\u0022,\u0022Evidence\u0022:\u0022Current-head review https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#pullrequestreview-5993680774 at 80d17e0d8a252362cce4b42745d477069002a2ff explicitly lists this finding under \\u00272 resolved since last review\\u0027.\u0022,\u0022Resolved\u0022:true},{\u0022FindingId\u0022:\u0022copilot-review:5993373840:manifest-expected-digest\u0022,\u0022Evidence\u0022:\u0022Verified README.md at commit 80d17e0d8a252362cce4b42745d477069002a2ff: loader verifies model.onnx and training.lock hashes against the manifest; the contract explicitly states these check consistency, not authenticity of the manifest or bundle. https://github.com/ExarKun1983/IntelligentTradingSimulator/blob/80d17e0d8a252362cce4b42745d477069002a2ff/README.md\u0022,\u0022Resolved\u0022:true}]}}"
     }
   },
   "Outbox": {
