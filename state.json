@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1237,
+  "Version": 1238,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "ci-observed:1277929203:1:RunCi:204:1:task:204:1:1:6:1",
@@ -1701,7 +1701,7 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 1,
-      "Version": 340,
+      "Version": 341,
       "LastEventId": "ci-observed:1277929203:1:RunCi:204:1:task:204:1:1:6:1",
       "Phase": "REVIEW_PENDING",
       "Ready": false,
@@ -2035,16 +2035,16 @@
         }
       },
       "Review": {
-        "IntentId": "RequestReview:204:1:task:204:1:1:5:1",
-        "ReviewId": "review-request:RequestReview:204:1:task:204:1:1:5:1",
-        "TaskId": "task:204:1:1:5",
+        "IntentId": "RequestReview:204:1:task:204:1:1:6:1",
+        "ReviewId": null,
+        "TaskId": "task:204:1:1:6",
         "Round": 1,
-        "Sha": "da867ac0cb38e95c6b82a7408dd87df3cfa1669a",
-        "Classification": "Blocking",
-        "LifecycleState": "Completed",
-        "CopilotRequestNodeId": "RR_kwDOTCum887zAIvK",
-        "ReviewRequestedAt": "2026-11-20T15:04:44.2777821+00:00",
-        "ReviewDeadlineAt": "2026-11-20T15:19:44.2777821+00:00",
+        "Sha": "27c531c1145e15a36dc5005711b72f3b3297589c",
+        "Classification": null,
+        "LifecycleState": "NotRequested",
+        "CopilotRequestNodeId": null,
+        "ReviewRequestedAt": null,
+        "ReviewDeadlineAt": null,
         "RequestFailureReason": null,
         "Findings": [
           {
@@ -2115,36 +2115,8 @@
             "Resolved": true
           }
         ],
-        "RequestBoundary": {
-          "ReviewerId": 175728472,
-          "ReviewerNodeId": "BOT_kgDOCnlnWA",
-          "PreparedAt": "2026-11-20T15:04:36.6087975+00:00",
-          "ExistingReviewIds": [
-            5993064067,
-            5993218565,
-            5993218570,
-            5993218576,
-            5993218593,
-            5993373840,
-            5993501427,
-            5993501478,
-            5993501500,
-            5993680774,
-            5994245081,
-            5994403333,
-            5994698677,
-            5994698699,
-            5994698794,
-            5994698860,
-            5994698965
-          ],
-          "Confirmed": true,
-          "RequestNodeId": "RR_kwDOTCum887zAIvK",
-          "AcceptedAt": "2026-11-20T15:04:44.2777821+00:00",
-          "DeadlineAt": "2026-11-20T15:19:44.2777821+00:00",
-          "AlreadyPending": false
-        },
-        "SourceEvidence": "{\u0022reason\u0022:\u0022Opt-in exact-head inline findings require repair; provider request-to-submission correlation is not asserted.\u0022,\u0022policy\u0022:\u0022exact-head-inline-findings-v1\u0022,\u0022classifiedAt\u0022:\u00222026-11-20T15:12:42.0298931\u002B00:00\u0022,\u0022request\u0022:\u0022review-request:RequestReview:204:1:task:204:1:1:5:1\u0022,\u0022observedReviews\u0022:[{\u0022id\u0022:5994904497,\u0022node_id\u0022:\u0022PRR_kwDOTCum888AAAABZVL7sQ\u0022,\u0022user\u0022:{\u0022login\u0022:\u0022copilot-pull-request-reviewer[bot]\u0022,\u0022id\u0022:175728472,\u0022node_id\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022avatar_url\u0022:\u0022https://avatars.githubusercontent.com/in/946600?v=4\u0022,\u0022gravatar_id\u0022:\u0022\u0022,\u0022url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D\u0022,\u0022html_url\u0022:\u0022https://github.com/apps/copilot-pull-request-reviewer\u0022,\u0022followers_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/followers\u0022,\u0022following_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/following{/other_user}\u0022,\u0022gists_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/gists{/gist_id}\u0022,\u0022starred_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/starred{/owner}{/repo}\u0022,\u0022subscriptions_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/subscriptions\u0022,\u0022organizations_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/orgs\u0022,\u0022repos_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/repos\u0022,\u0022events_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/events{/privacy}\u0022,\u0022received_events_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/received_events\u0022,\u0022type\u0022:\u0022Bot\u0022,\u0022user_view_type\u0022:\u0022public\u0022,\u0022site_admin\u0022:false},\u0022body\u0022:\u0022\\u003C!-- ccr-overview-v2 --\\u003E\\n\\n### \\uD83D\\uDFE1 Changes recommended\\n\\nTests cover only exit-code helpers, leaving command-level exit codes unverified for successful and failed backtests and mixed or all-successful variant batches.\\n\\n\\u003Cdetails open\\u003E\\n\\u003Csummary\\u003E\\u003Cstrong\\u003E3 open issues\\u003C/strong\\u003E\\u003C/summary\\u003E\\n\\n- \\u003Cpicture\\u003E\\u003Csource media=\\u0022(prefers-color-scheme: dark)\\u0022 srcset=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\\u0022\\u003E\\u003Csource media=\\u0022(prefers-color-scheme: light)\\u0022 srcset=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\\u0022\\u003E\\u003Cimg src=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\\u0022 alt=\\u0022High severity\\u0022 width=\\u002262\\u0022 height=\\u002218\\u0022 align=\\u0022texttop\\u0022\\u003E\\u003C/picture\\u003E [Workflow layers swallow inference failures and complete partial backtests](https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4642952156)\\n- \\u003Cpicture\\u003E\\u003Csource media=\\u0022(prefers-color-scheme: dark)\\u0022 srcset=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\\u0022\\u003E\\u003Csource media=\\u0022(prefers-color-scheme: light)\\u0022 srcset=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\\u0022\\u003E\\u003Cimg src=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\\u0022 alt=\\u0022Medium severity\\u0022 width=\\u002262\\u0022 height=\\u002218\\u0022 align=\\u0022texttop\\u0022\\u003E\\u003C/picture\\u003E [Add command-level tests for success and failure exit codes](https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4644096285) \\u00B7 New\\n- \\u003Cpicture\\u003E\\u003Csource media=\\u0022(prefers-color-scheme: dark)\\u0022 srcset=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\\u0022\\u003E\\u003Csource media=\\u0022(prefers-color-scheme: light)\\u0022 srcset=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\\u0022\\u003E\\u003Cimg src=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\\u0022 alt=\\u0022Medium severity\\u0022 width=\\u002262\\u0022 height=\\u002218\\u0022 align=\\u0022texttop\\u0022\\u003E\\u003C/picture\\u003E [Return a nonzero exit code when backtests fail](https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4643755764)\\n\\u003C/details\\u003E\\n\\n\\u003Cdetails\\u003E\\n\\u003Csummary\\u003E\\u003Cstrong\\u003E3 resolved since last review\\u003C/strong\\u003E\\u003C/summary\\u003E\\n\\n- \\u003Cpicture\\u003E\\u003Csource media=\\u0022(prefers-color-scheme: dark)\\u0022 srcset=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\\u0022\\u003E\\u003Csource media=\\u0022(prefers-color-scheme: light)\\u0022 srcset=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\\u0022\\u003E\\u003Cimg src=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\\u0022 alt=\\u0022High severity\\u0022 width=\\u002262\\u0022 height=\\u002218\\u0022 align=\\u0022texttop\\u0022\\u003E\\u003C/picture\\u003E [Preserve queued orders when AI scoring fails](https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4643755711)\\n- \\u003Cpicture\\u003E\\u003Csource media=\\u0022(prefers-color-scheme: dark)\\u0022 srcset=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\\u0022\\u003E\\u003Csource media=\\u0022(prefers-color-scheme: light)\\u0022 srcset=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\\u0022\\u003E\\u003Cimg src=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\\u0022 alt=\\u0022Medium severity\\u0022 width=\\u002262\\u0022 height=\\u002218\\u0022 align=\\u0022texttop\\u0022\\u003E\\u003C/picture\\u003E [Include a safe failure category in backtest errors](https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4643755887)\\n- \\u003Cpicture\\u003E\\u003Csource media=\\u0022(prefers-color-scheme: dark)\\u0022 srcset=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\\u0022\\u003E\\u003Csource media=\\u0022(prefers-color-scheme: light)\\u0022 srcset=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\\u0022\\u003E\\u003Cimg src=\\u0022https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\\u0022 alt=\\u0022Medium severity\\u0022 width=\\u002262\\u0022 height=\\u002218\\u0022 align=\\u0022texttop\\u0022\\u003E\\u003C/picture\\u003E [Wrap only explicitly supplied adapter failures](https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4643755831)\\n\\u003C/details\\u003E\\n\\n\\u003Csub\\u003EReview effort: Balanced\\u003C/sub\\u003E\u0022,\u0022state\u0022:\u0022COMMENTED\u0022,\u0022html_url\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#pullrequestreview-5994904497\u0022,\u0022pull_request_url\u0022:\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/316\u0022,\u0022author_association\u0022:\u0022NONE\u0022,\u0022is_copilot_code_review\u0022:true,\u0022copilot_code_review_effort\u0022:null,\u0022_links\u0022:{\u0022html\u0022:{\u0022href\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#pullrequestreview-5994904497\u0022},\u0022pull_request\u0022:{\u0022href\u0022:\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/316\u0022}},\u0022submitted_at\u0022:\u00222026-11-20T15:12:40Z\u0022,\u0022commit_id\u0022:\u0022da867ac0cb38e95c6b82a7408dd87df3cfa1669a\u0022}],\u0022observedComments\u0022:[{\u0022url\u0022:\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/comments/4644096285\u0022,\u0022pull_request_review_id\u0022:5994904497,\u0022id\u0022:4644096285,\u0022node_id\u0022:\u0022PRRC_kwDOTCum888AAAABFM9JHQ\u0022,\u0022diff_hunk\u0022:\u0022@@ -215,6 \\u002B215,9 @@ void FinishCommand(string message)\\n     if (engineResult.Status == BacktestRunStatus.Failed)\\n     {\\n         Console.WriteLine($\\u0022Backtest failed: {engineResult.ErrorMessage}\\u0022);\\n\\u002B        Environment.ExitCode = Math.Max(\\n\\u002B            Environment.ExitCode,\\n\\u002B            BacktestCommandExitCode.ForBacktestResult(engineResult.Status));\u0022,\u0022path\u0022:\u0022IntelligentTradingSimulator.App/Program.cs\u0022,\u0022commit_id\u0022:\u0022da867ac0cb38e95c6b82a7408dd87df3cfa1669a\u0022,\u0022original_commit_id\u0022:\u0022da867ac0cb38e95c6b82a7408dd87df3cfa1669a\u0022,\u0022user\u0022:{\u0022login\u0022:\u0022Copilot\u0022,\u0022id\u0022:175728472,\u0022node_id\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022avatar_url\u0022:\u0022https://avatars.githubusercontent.com/in/946600?v=4\u0022,\u0022gravatar_id\u0022:\u0022\u0022,\u0022url\u0022:\u0022https://api.github.com/users/Copilot\u0022,\u0022html_url\u0022:\u0022https://github.com/apps/copilot-pull-request-reviewer\u0022,\u0022followers_url\u0022:\u0022https://api.github.com/users/Copilot/followers\u0022,\u0022following_url\u0022:\u0022https://api.github.com/users/Copilot/following{/other_user}\u0022,\u0022gists_url\u0022:\u0022https://api.github.com/users/Copilot/gists{/gist_id}\u0022,\u0022starred_url\u0022:\u0022https://api.github.com/users/Copilot/starred{/owner}{/repo}\u0022,\u0022subscriptions_url\u0022:\u0022https://api.github.com/users/Copilot/subscriptions\u0022,\u0022organizations_url\u0022:\u0022https://api.github.com/users/Copilot/orgs\u0022,\u0022repos_url\u0022:\u0022https://api.github.com/users/Copilot/repos\u0022,\u0022events_url\u0022:\u0022https://api.github.com/users/Copilot/events{/privacy}\u0022,\u0022received_events_url\u0022:\u0022https://api.github.com/users/Copilot/received_events\u0022,\u0022type\u0022:\u0022Bot\u0022,\u0022user_view_type\u0022:\u0022public\u0022,\u0022site_admin\u0022:false},\u0022body\u0022:\u0022The new tests call only the exit-code helpers, so removing the commands\\u0027 \\u0060Environment.ExitCode\\u0060 assignments would leave them passing. Add offline command-level regressions that assert exit codes for successful and failed backtests. Cover mixed and all-successful variant batches too; same gap in \\u0060Program.cs:342\\u2013344\\u0060.\u0022,\u0022created_at\u0022:\u00222026-11-20T15:12:40Z\u0022,\u0022updated_at\u0022:\u00222026-11-20T15:12:40Z\u0022,\u0022html_url\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4644096285\u0022,\u0022pull_request_url\u0022:\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/316\u0022,\u0022_links\u0022:{\u0022self\u0022:{\u0022href\u0022:\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/comments/4644096285\u0022},\u0022html\u0022:{\u0022href\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4644096285\u0022},\u0022pull_request\u0022:{\u0022href\u0022:\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/316\u0022}},\u0022reactions\u0022:{\u0022url\u0022:\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/comments/4644096285/reactions\u0022,\u0022total_count\u0022:0,\u0022\\u002B1\u0022:0,\u0022-1\u0022:0,\u0022laugh\u0022:0,\u0022hooray\u0022:0,\u0022confused\u0022:0,\u0022heart\u0022:0,\u0022rocket\u0022:0,\u0022eyes\u0022:0},\u0022start_line\u0022:218,\u0022original_start_line\u0022:218,\u0022start_side\u0022:\u0022RIGHT\u0022,\u0022line\u0022:220,\u0022original_line\u0022:220,\u0022side\u0022:\u0022RIGHT\u0022,\u0022author_association\u0022:\u0022NONE\u0022,\u0022original_position\u0022:6,\u0022position\u0022:6,\u0022subject_type\u0022:\u0022line\u0022,\u0022is_copilot_code_review\u0022:true,\u0022copilot_code_review_severity\u0022:\u0022medium\u0022,\u0022copilot_code_review_sources\u0022:[{\u0022kind\u0022:\u0022CUSTOM_INSTRUCTIONS\u0022,\u0022name\u0022:\u0022custom instructions\u0022,\u0022path\u0022:\u0022.github/copilot-instructions.md\u0022}]}]}",
+        "RequestBoundary": null,
+        "SourceEvidence": null,
         "OperatorResolution": null
       },
       "FeedbackEventIds": [],
@@ -2387,11 +2359,11 @@
           "OccurredAt": "2026-11-20T14:48:44+00:00"
         }
       },
-      "ProjectionDigest": "4F7E66F85917C8F306CC6C9AF540B5E37E0BA1254A7B4AF36717E50EB2E24D58",
+      "ProjectionDigest": "E69BE9AD2A065B6850878EBD5AE6A93EBE2F91537056F1EA79A23278D419D58C",
       "ObservedProjectionDigest": "4F7E66F85917C8F306CC6C9AF540B5E37E0BA1254A7B4AF36717E50EB2E24D58",
       "StatusProjectionDigest": "D3463D3BB7C538FD47403AB4A01414E789307B73E1A184E7FD5D36B196E73D68",
-      "RequiredStatusSequence": 33,
-      "RequiredStatusIntentId": "required-status:204:1:33"
+      "RequiredStatusSequence": 34,
+      "RequiredStatusIntentId": "required-status:204:1:34"
     }
   },
   "Inbox": {
@@ -10074,7 +10046,7 @@
       "IssueNumber": 204,
       "Generation": 1,
       "Kind": "ProjectLabels",
-      "Status": "Succeeded",
+      "Status": "Pending",
       "TaskId": null,
       "Round": 1,
       "Sha": "768b4648778479a5d00abe1e6cb9aecd1f221287",
@@ -11953,7 +11925,7 @@
       "IssueNumber": 204,
       "Generation": 1,
       "Kind": "PublishRequiredStatus",
-      "Status": "Pending",
+      "Status": "Cancelled",
       "TaskId": "task:204:1:1:6",
       "Round": 1,
       "Sha": "27c531c1145e15a36dc5005711b72f3b3297589c",
@@ -11973,6 +11945,76 @@
         "CiIntentId": "RunCi:204:1:task:204:1:1:6:1",
         "CiRunId": "44762456384"
       },
+      "RequiredStatusBoundary": null
+    },
+    "RequestReview:204:1:task:204:1:1:6:1": {
+      "Id": "RequestReview:204:1:task:204:1:1:6:1",
+      "Digest": "170B89828415A876C9855E4BA81C018D682E58788B9B2B7EB6CDFC69A1C7A07F",
+      "IssueNumber": 204,
+      "Generation": 1,
+      "Kind": "RequestReview",
+      "Status": "Pending",
+      "TaskId": "task:204:1:1:6",
+      "Round": 1,
+      "Sha": "27c531c1145e15a36dc5005711b72f3b3297589c",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-20T15:22:44.3209951+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": null,
+      "RequiredStatusBoundary": null
+    },
+    "required-status:204:1:34": {
+      "Id": "required-status:204:1:34",
+      "Digest": "83169AA5C8E3FA2F897D726A08EE78B39129E9A1E1E9F1A7924E1F02EE2DF4D4",
+      "IssueNumber": 204,
+      "Generation": 1,
+      "Kind": "PublishRequiredStatus",
+      "Status": "Pending",
+      "TaskId": "task:204:1:1:6",
+      "Round": 1,
+      "Sha": "27c531c1145e15a36dc5005711b72f3b3297589c",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-20T15:22:44.3209951+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": {
+        "Context": "Agent managed CI",
+        "State": "success",
+        "Description": "Exact tested head CI passed; human approval required.",
+        "TargetUrl": "https://github.com/ExarKun1983/IntelligentTradingSimulator/actions/runs/44762456384#agent-status-e4b3ceef4d4fd1f7dc68a8546ac9c11955d2dba1146c9b702b439042d4adeefd",
+        "CiIntentId": "RunCi:204:1:task:204:1:1:6:1",
+        "CiRunId": "44762456384"
+      },
+      "RequiredStatusBoundary": null
+    },
+    "status:204:1:4805E5EBD9146F3E9DF8C3DCE89288D56DE82D788396F2FBD2DA9A27102AD341": {
+      "Id": "status:204:1:4805E5EBD9146F3E9DF8C3DCE89288D56DE82D788396F2FBD2DA9A27102AD341",
+      "Digest": "D5E411FF7A1B0524F6E748B2FCD158316276A24B95836213C95DC8E56022A996",
+      "IssueNumber": 204,
+      "Generation": 1,
+      "Kind": "ProjectStatus",
+      "Status": "Pending",
+      "TaskId": null,
+      "Round": 1,
+      "Sha": "27c531c1145e15a36dc5005711b72f3b3297589c",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-20T15:22:44.3209951+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": "\u003C!-- its-agent-state:204:1 --\u003E\nAgent workflow: **REVIEW_PENDING**\n\nGeneration: 1; round: 1.\nPR: #316; head: \u003Ccode\u003E27c531c1145e15a36dc5005711b72f3b3297589c\u003C/code\u003E.\nTask: Completed.\nConsecutive CI failures: 0/3; review failures: 1/5.\nAutomation held: False; terminal outcome: None.\n\nHandoff: not captured.\n\nCanonical Git state is authoritative. Human approval is required; no automatic merge.",
+      "TaskPrompt": null,
+      "RequiredStatus": null,
       "RequiredStatusBoundary": null
     }
   }
