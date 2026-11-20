@@ -36,10 +36,11 @@ public sealed class BacktestDayProcessorTests : IDisposable
         IWorkflowProgress? progress = null,
         IBacktestSnapshotRepository? snapshotRepository = null,
         IFeatureSnapshotRepository? featureSnapshotRepository = null,
-        IMarketCandleRepository? marketCandleRepository = null)
+        IMarketCandleRepository? marketCandleRepository = null,
+        Func<StrategyConfiguration, MarketObservationAnalyzer>? analyzerFactoryOverride = null)
     {
         var historicalService = new BacktestHistoricalMarketDataService(provider, marketCandleRepository);
-        var analyzerFactory = new MarketObservationAnalyzerFactory();
+        var defaultAnalyzerFactory = new MarketObservationAnalyzerFactory();
         var allocationService = new PortfolioAllocationService();
         var tradingEngine = new TradingEngine();
         var rebalancingService = new PortfolioRebalancingService();
@@ -47,14 +48,123 @@ public sealed class BacktestDayProcessorTests : IDisposable
 
         return new BacktestDayProcessor(
             historicalService,
-            analyzerFactory,
+            defaultAnalyzerFactory,
             rebalancingService,
             allocationService,
             tradingEngine,
             performanceService,
             snapshotRepository ?? _snapshotRepository,
             featureSnapshotRepository ?? new FeatureSnapshotRepository(_dbContext),
-            progress);
+            progress,
+            analyzerFactoryOverride);
+    }
+
+    [Theory]
+    [InlineData("artifact")]
+    [InlineData("contract")]
+    [InlineData("inference")]
+    public async Task RunAsync_AiAdapterFailureAfterSuccessfulScoreMarksRunFailedWithoutPartialDay(
+        string failureKind)
+    {
+        var date = new DateTime(2024, 1, 10);
+        var provider = new FakeMarketDataProvider();
+        var candles = BuildCandles(date.AddDays(-4), 5);
+        provider.SetData("AAA", candles);
+        provider.SetData("BBB", candles);
+        var adapter = new FailingAfterFirstScoreAdapter(failureKind);
+        var processor = BuildProcessor(provider, analyzerFactoryOverride: _ =>
+            new MarketObservationAnalyzer(new AiScoringEngine(scoringAdapter: adapter)));
+        var engine = new BacktestEngine(new BacktestRunRepository(_dbContext), processor);
+
+        var result = await engine.RunAsync(new BacktestEngineRequest
+        {
+            Name = "AI failure",
+            StrategyId = "test",
+            StrategyConfiguration = new StrategyConfiguration
+            {
+                Id = "test",
+                ScoringEngine = ScoringEngineType.AI,
+                UseRelativeStrength = false
+            },
+            StartDate = date,
+            EndDate = date.AddDays(1),
+            HistoricalStartDate = date.AddDays(-4),
+            InitialCapital = 10_000m,
+            Symbols = ["AAA", "BBB"]
+        });
+
+        Assert.Equal(BacktestRunStatus.Failed, result.Status);
+        Assert.Equal(2, adapter.Calls);
+        Assert.Equal(new[] { "AAA", "BBB" }, provider.Calls);
+        var failedRun = await _dbContext.BacktestRuns.SingleAsync();
+        Assert.Equal(BacktestRunStatus.Failed, failedRun.Status);
+        Assert.Empty(await _dbContext.BacktestSnapshots.ToListAsync());
+        Assert.Empty(await _dbContext.FeatureSnapshots.ToListAsync());
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ScoringFailurePreservesPriorDayOpeningIntentForRetry()
+    {
+        var date = new DateTime(2024, 1, 10);
+        var provider = new FakeMarketDataProvider();
+        var candles = BuildCandles(date.AddDays(-4), 5);
+        provider.SetData("AAA", candles);
+        provider.SetData("BBB", candles);
+        provider.SetData("HELD", BuildCandles(date.AddDays(-4), 5));
+        var adapter = new FailOnceAfterFirstScoreAdapter();
+        var processor = BuildProcessor(provider, analyzerFactoryOverride: _ =>
+            new MarketObservationAnalyzer(new AiScoringEngine(scoringAdapter: adapter)));
+        var state = new BacktestExecutionState();
+        var portfolio = new Portfolio
+        {
+            StartingCash = 10_000m,
+            Cash = 10_000m,
+            Positions =
+            [
+                new Position
+                {
+                    Symbol = "HELD", Quantity = 1m, AveragePrice = 100m, CurrentPrice = 777m
+                }
+            ]
+        };
+        var configuration = new StrategyConfiguration
+        {
+            MaxPositions = 2,
+            MaxPositionWeight = 100m,
+            UseRelativeStrength = false
+        };
+        var priorDay = date.AddDays(-1);
+        state.GenerateAfterClose(
+            portfolio,
+            priorDay,
+            new Dictionary<string, decimal> { ["AAA"] = 100m },
+            [new StockRecommendation { Symbol = "AAA", Score = 42m, AllocationPercent = 100m }],
+            [new ObservationResult { Symbol = "AAA", Score = 42m }],
+            configuration);
+        Assert.Equal(priorDay, Assert.Single(state.Pending).Value.SignalDate);
+
+        var request = new BacktestDayRequest
+        {
+            CurrentDate = date,
+            HistoricalStartDate = date.AddDays(-4),
+            Portfolio = portfolio,
+            ExecutionState = state,
+            StrategyConfiguration = configuration,
+            Symbols = ["AAA", "BBB"]
+        };
+
+        await Assert.ThrowsAsync<AiScoringException>(() => processor.ProcessAsync(request));
+
+        Assert.Equal("AAA", Assert.Single(state.Pending).Key);
+        Assert.Empty(portfolio.Trades);
+        Assert.Equal(10_000m, portfolio.Cash);
+        Assert.Equal(777m, Assert.Single(portfolio.Positions).CurrentPrice);
+
+        var retry = await processor.ProcessAsync(request);
+
+        Assert.Equal(1, retry.Snapshot.TradesExecuted);
+        Assert.Equal(TradeActionType.Buy, Assert.Single(portfolio.Trades).Action);
+        Assert.Contains(portfolio.Positions, position => position.Symbol == "AAA");
     }
 
     [Fact]
@@ -125,6 +235,45 @@ public sealed class BacktestDayProcessorTests : IDisposable
                 Volume = 1_000_000m
             })
             .ToList();
+    }
+
+    private sealed class FailingAfterFirstScoreAdapter(string failureKind) : IScoringEngine
+    {
+        public int Calls { get; private set; }
+
+        public decimal CalculateScore(ScoringContext context)
+        {
+            Calls++;
+            if (Calls == 1)
+            {
+                return 42m;
+            }
+
+            throw failureKind switch
+            {
+                "artifact" => new System.IO.FileNotFoundException("Model artifact unavailable."),
+                "contract" => new System.IO.InvalidDataException("Model contract is invalid."),
+                _ => new InvalidOperationException("Inference failed.")
+            };
+        }
+    }
+
+    private sealed class FailOnceAfterFirstScoreAdapter : IScoringEngine
+    {
+        private int _calls;
+        private bool _failed;
+
+        public decimal CalculateScore(ScoringContext context)
+        {
+            _calls++;
+            if (!_failed && _calls == 2)
+            {
+                _failed = true;
+                throw new InvalidOperationException("Inference failed.");
+            }
+
+            return 42m;
+        }
     }
 
     [Theory]

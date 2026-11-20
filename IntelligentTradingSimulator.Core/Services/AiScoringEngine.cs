@@ -14,10 +14,13 @@ public sealed class AiScoringEngine : IScoringEngine
 {
     private readonly IScoringEngine _scoringAdapter;
 
+    internal bool HasExplicitScoringAdapter { get; }
+
     public AiScoringEngine(
         StrategyConfiguration? strategyConfiguration = null,
         IScoringEngine? scoringAdapter = null)
     {
+        HasExplicitScoringAdapter = scoringAdapter is not null;
         _scoringAdapter = scoringAdapter ?? new CompositeScoringEngine(strategyConfiguration);
     }
 

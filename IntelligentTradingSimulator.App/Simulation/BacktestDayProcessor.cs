@@ -11,7 +11,7 @@ namespace IntelligentTradingSimulator.App.Simulation;
 public sealed class BacktestDayProcessor : IBacktestDayProcessor
 {
     private readonly BacktestHistoricalMarketDataService _historicalDataService;
-    private readonly MarketObservationAnalyzerFactory _analyzerFactory;
+    private readonly Func<StrategyConfiguration, MarketObservationAnalyzer> _analyzerFactory;
     private readonly PortfolioAllocationService _allocationService;
     private readonly TradingEngine _tradingEngine;
     private readonly PortfolioPerformanceService _performanceService;
@@ -30,10 +30,11 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
         PortfolioPerformanceService performanceService,
         IBacktestSnapshotRepository snapshotRepository,
         IFeatureSnapshotRepository featureSnapshotRepository,
-        IWorkflowProgress? progress = null)
+        IWorkflowProgress? progress = null,
+        Func<StrategyConfiguration, MarketObservationAnalyzer>? analyzerFactoryOverride = null)
     {
         _historicalDataService = historicalDataService;
-        _analyzerFactory = analyzerFactory;
+        _analyzerFactory = analyzerFactoryOverride ?? analyzerFactory.Create;
         _allocationService = allocationService;
         _tradingEngine = tradingEngine;
         _performanceService = performanceService;
@@ -51,8 +52,7 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             RunId = request.BacktestRunId,
             StrategyId = request.StrategyConfiguration.Id
         };
-        var analyzer =
-            _analyzerFactory.Create(request.StrategyConfiguration);
+        var analyzer = _analyzerFactory(request.StrategyConfiguration);
         var recommendationService =
             new PortfolioRecommendationService(request.StrategyConfiguration.MaxPositions);
         var allocationEngine =
@@ -189,6 +189,35 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             }
         }
 
+        foreach (var (symbol, history) in histories)
+        {
+            try
+            {
+                observationResults.Add(analyzer.Analyze(
+                    symbol, history.Usable, history.Historical,
+                    benchmarkCandles, benchmarkSymbol, request.CurrentDate));
+                succeeded++;
+            }
+            catch (AiScoringException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"Backtest: skipping {symbol} on {request.CurrentDate:yyyy-MM-dd} — {ex.Message}");
+                failed++;
+            }
+            finally
+            {
+                _progress.Context = _progress.Context with
+                {
+                    CompletedSymbols = succeeded + skipped + failed
+                };
+                _progress.Report($"Analysis completed: {_progress.Context.CompletedSymbols} of {symbols.Count}");
+            }
+        }
+
         var portfolio = request.Portfolio;
         var previousPrices = portfolio.Positions.ToDictionary(
             x => x.Symbol, x => x.CurrentPrice, StringComparer.OrdinalIgnoreCase);
@@ -212,31 +241,6 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                 {
                     position.CurrentPrice = previousPrice;
                 }
-            }
-        }
-
-        foreach (var (symbol, history) in histories)
-        {
-            try
-            {
-                observationResults.Add(analyzer.Analyze(
-                    symbol, history.Usable, history.Historical,
-                    benchmarkCandles, benchmarkSymbol, request.CurrentDate));
-                succeeded++;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(
-                    $"Backtest: skipping {symbol} on {request.CurrentDate:yyyy-MM-dd} — {ex.Message}");
-                failed++;
-            }
-            finally
-            {
-                _progress.Context = _progress.Context with
-                {
-                    CompletedSymbols = succeeded + skipped + failed
-                };
-                _progress.Report($"Analysis completed: {_progress.Context.CompletedSymbols} of {symbols.Count}");
             }
         }
 
