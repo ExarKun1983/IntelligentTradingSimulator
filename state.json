@@ -1,10 +1,10 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 962,
+  "Version": 963,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
-  "LastEventId": "actions:1277929203:44741515859",
+  "LastEventId": "task-pr-mapped:1277929203:1:45f24a10-81da-4f88-9210-14e292039d81:316:bb24d9caff73348dbb321b280e1e11ec06fe52d5:2026-11-20T13:08:34.7874690\u002B00:00",
   "AdmittedIssue": 204,
   "WorkerLease": {
     "Owner": "c2504774e21d4e56bfc2d40bcedc8df6",
@@ -1701,8 +1701,8 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 1,
-      "Version": 79,
-      "LastEventId": "actions:1277929203:44741515859",
+      "Version": 80,
+      "LastEventId": "task-pr-mapped:1277929203:1:45f24a10-81da-4f88-9210-14e292039d81:316:bb24d9caff73348dbb321b280e1e11ec06fe52d5:2026-11-20T13:08:34.7874690\u002B00:00",
       "Phase": "FIX_PENDING",
       "Ready": false,
       "ActiveAuthorized": true,
@@ -1712,7 +1712,7 @@
       "Paused": false,
       "HoldReason": null,
       "PullRequest": 316,
-      "HeadSha": "768b4648778479a5d00abe1e6cb9aecd1f221287",
+      "HeadSha": "bb24d9caff73348dbb321b280e1e11ec06fe52d5",
       "Round": 1,
       "ConsecutiveCiFailures": 0,
       "ConsecutiveReviewFailures": 0,
@@ -2719,6 +2719,14 @@
       "ReceivedAt": "2026-11-20T13:07:14+00:00",
       "CompletedAt": "2026-11-20T13:07:14+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022actions:1277929203:44741515859\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:204,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u00226195946\u0022,\u0022Kind\u0022:0,\u0022Id\u0022:6195946,\u0022NodeId\u0022:null,\u0022Type\u0022:\u0022User\u0022},\u0022OccurredAt\u0022:\u00222026-11-20T13:07:14\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022human-classification\u0022,\u0022HandoffId\u0022:\u0022handoff:204:1:review-observed:1277929203:1:RequestReview:204:1:task:204:1:1:1:1\u0022,\u0022Round\u0022:1,\u0022PullRequest\u0022:316,\u0022Sha\u0022:\u0022768b4648778479a5d00abe1e6cb9aecd1f221287\u0022,\u0022Classification\u0022:1,\u0022Reason\u0022:\u0022User requested resumption to address all four Copilot review findings on PR #316. Automatic classification was held because the first comment timestamps differ by one second. Preserve all four findings for a review repair task.\u0022,\u0022Findings\u0022:[{\u0022Id\u0022:\u0022copilot-review-comment:4642710265\u0022,\u0022Description\u0022:\u0022README.md:202\\nMatching schema-v1 fields can still have different meanings: relative strength depends on the feature benchmark, and momentum depends on the history window. \\u0060TrainingDatasetQuery.BenchmarkSymbol\\u0060 selects the label benchmark and does not describe either setting. Record the supported feature-generation policy in the manifest and validate training rows and supplied inference metadata against it, without using metadata as predictors.\u0022,\u0022Evidence\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4642710265\u0022},{\u0022Id\u0022:\u0022copilot-review-comment:4642710309\u0022,\u0022Description\u0022:\u0022README.md:203\\nWithout the selected target and effective trainer settings, the same dataset and query can describe different training runs. Top-level version pins also permit different numerical dependencies ([scikit-learn\\u0027s default-branch requirements](https://github.com/scikit-learn/scikit-learn/blob/0ab59f9bdcefd676c185b73ffc46352a7c532e07/pyproject.toml#L7-L13)). Record the target, horizon/benchmark selection, target transformation, effective trainer settings, and a preserved dependency lock with its SHA-256 so the run can be reproduced.\u0022,\u0022Evidence\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4642710309\u0022},{\u0022Id\u0022:\u0022copilot-review-comment:4642710356\u0022,\u0022Description\u0022:\u0022README.md:204\\nIf the validation period is used to select or tune a model, its outcomes are also information used to freeze that model. The evaluation workflow above starts after \\u0060TrainingCutoff\\u0060, so passing this earlier training-data cutoff permits the validation rows to be reported as held-out results. Require final evaluation to start after the validation outcome cutoff and use that later date as the evaluator\\u0027s \\u0060TrainingCutoff\\u0060 when validation influenced model selection.\u0022,\u0022Evidence\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4642710356\u0022},{\u0022Id\u0022:\u0022copilot-review-comment:4642710396\u0022,\u0022Description\u0022:\u0022README.md:207\\nRecommendations reject non-positive scores and allocate by magnitude; offline evaluation uses score sign and treats \\u0060-999\\u0060 as disqualified. A finite ranker\\u0027s output can therefore preserve ordering but yield no recommendations, and \\u0060AiScoringEngine\\u0060 does not add eligibility checks to a supplied adapter. Define the model-to-application score mapping, sign and allocation semantics, configured eligibility policy, and reserved-sentinel handling before treating raw model scores as compatible with these consumers.\u0022,\u0022Evidence\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/316#discussion_r4642710396\u0022}],\u0022Responses\u0022:[]}}"
+    },
+    "task-pr-mapped:1277929203:1:45f24a10-81da-4f88-9210-14e292039d81:316:bb24d9caff73348dbb321b280e1e11ec06fe52d5:2026-11-20T13:08:34.7874690\u002B00:00": {
+      "Id": "task-pr-mapped:1277929203:1:45f24a10-81da-4f88-9210-14e292039d81:316:bb24d9caff73348dbb321b280e1e11ec06fe52d5:2026-11-20T13:08:34.7874690\u002B00:00",
+      "Digest": "B92A814575AD2862C92E42D0BF866C84391C4C91BF663D0A74A87EE1E09FEEE7",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-20T13:08:34.787469+00:00",
+      "CompletedAt": "2026-11-20T13:08:34.787469+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022task-pr-mapped:1277929203:1:45f24a10-81da-4f88-9210-14e292039d81:316:bb24d9caff73348dbb321b280e1e11ec06fe52d5:2026-11-20T13:08:34.7874690\\u002B00:00\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:204,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:1,\u0022Actor\u0022:{\u0022Login\u0022:\u0022github-task-api\u0022,\u0022Kind\u0022:1,\u0022Id\u0022:null,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-20T13:08:34.787469\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022task-pr-mapped\u0022,\u0022TaskId\u0022:\u0022task:204:1:1:2\u0022,\u0022PullRequest\u0022:316,\u0022ObservedHead\u0022:\u0022bb24d9caff73348dbb321b280e1e11ec06fe52d5\u0022}}"
     }
   },
   "Outbox": {
