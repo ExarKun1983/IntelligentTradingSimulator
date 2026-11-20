@@ -105,11 +105,56 @@ public sealed class MarketDataWorkflowTests : IDisposable
             () => workflow.CollectAndAnalyzeAsync(["AAA", "BBB"], date.AddDays(-4)));
 
         Assert.IsType(innerExceptionType, exception.InnerException);
+        Assert.Contains(innerExceptionType.Name, exception.Message);
         Assert.Equal(2, adapter.Calls);
         Assert.Equal(new[] { "AAA", "BBB" }, provider.Calls);
         await using var readContext = new TradingSimulatorDbContext(_options);
         Assert.Empty(await readContext.ObservationRuns.ToListAsync());
         Assert.Empty(await readContext.FeatureSnapshots.ToListAsync());
+    }
+
+    [Fact]
+    public async Task CollectAndAnalyzeAsync_DefaultAiCompositeFailureSkipsOnlyTheInputSpecificSymbol()
+    {
+        var date = new DateTime(2024, 1, 10);
+        var overflowingCandles = BuildCandles(date.AddDays(-4), 5);
+        var validCandles = BuildCandles(date.AddDays(-4), 5);
+        foreach (var candle in validCandles)
+        {
+            candle.Close = 100m;
+            candle.Open = 100m;
+            candle.High = 101m;
+            candle.Low = 99m;
+        }
+
+        var provider = new FakeMarketDataProvider(
+            new Dictionary<string, IReadOnlyList<MarketCandle>>
+            {
+                ["OVERFLOW"] = overflowingCandles,
+                ["VALID"] = validCandles
+            });
+        var strategy = new StrategyConfiguration
+        {
+            ScoringEngine = ScoringEngineType.AI,
+            MomentumScoreWeight = decimal.MaxValue,
+            UseRelativeStrength = false
+        };
+        var workflow = new MarketDataWorkflow(
+            provider,
+            new MarketObservationAnalyzer(new AiScoringEngine(strategyConfiguration: strategy)),
+            new PortfolioRecommendationService(),
+            new ObservationResultRepository(_dbContext),
+            new FeatureSnapshotRepository(_dbContext),
+            strategy,
+            timeProvider: new FixedTimeProvider(date));
+
+        var result = await workflow.CollectAndAnalyzeAsync(
+            ["OVERFLOW", "VALID"], date.AddDays(-4));
+
+        Assert.Equal("VALID", Assert.Single(result.RankedResults).Symbol);
+        Assert.Equal(new[] { "OVERFLOW", "VALID" }, provider.Calls);
+        await using var readContext = new TradingSimulatorDbContext(_options);
+        Assert.Single(await readContext.ObservationRuns.ToListAsync());
     }
 
     [Fact]

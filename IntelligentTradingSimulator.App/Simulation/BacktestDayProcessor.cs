@@ -189,32 +189,6 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             }
         }
 
-        var portfolio = request.Portfolio;
-        var previousPrices = portfolio.Positions.ToDictionary(
-            x => x.Symbol, x => x.CurrentPrice, StringComparer.OrdinalIgnoreCase);
-        var tradesBeforeOpen = portfolio.Trades.Count;
-        using (_progress.BeginOperation("Executing pending opening intents"))
-        {
-            request.ExecutionState.ExecuteOpen(
-                portfolio, request.CurrentDate, opens, allocationEngine, _tradingEngine,
-                request.StrategyConfiguration.MaxPositions);
-        }
-
-        using (_progress.BeginOperation("Marking closing prices"))
-        {
-            foreach (var position in portfolio.Positions)
-            {
-                if (prices.TryGetValue(position.Symbol, out var close))
-                {
-                    position.CurrentPrice = close;
-                }
-                else if (previousPrices.TryGetValue(position.Symbol, out var previousPrice))
-                {
-                    position.CurrentPrice = previousPrice;
-                }
-            }
-        }
-
         foreach (var (symbol, history) in histories)
         {
             try
@@ -241,6 +215,32 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                     CompletedSymbols = succeeded + skipped + failed
                 };
                 _progress.Report($"Analysis completed: {_progress.Context.CompletedSymbols} of {symbols.Count}");
+            }
+        }
+
+        var portfolio = request.Portfolio;
+        var previousPrices = portfolio.Positions.ToDictionary(
+            x => x.Symbol, x => x.CurrentPrice, StringComparer.OrdinalIgnoreCase);
+        var tradesBeforeOpen = portfolio.Trades.Count;
+        using (_progress.BeginOperation("Executing pending opening intents"))
+        {
+            request.ExecutionState.ExecuteOpen(
+                portfolio, request.CurrentDate, opens, allocationEngine, _tradingEngine,
+                request.StrategyConfiguration.MaxPositions);
+        }
+
+        using (_progress.BeginOperation("Marking closing prices"))
+        {
+            foreach (var position in portfolio.Positions)
+            {
+                if (prices.TryGetValue(position.Symbol, out var close))
+                {
+                    position.CurrentPrice = close;
+                }
+                else if (previousPrices.TryGetValue(position.Symbol, out var previousPrice))
+                {
+                    position.CurrentPrice = previousPrice;
+                }
             }
         }
 

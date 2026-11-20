@@ -142,9 +142,12 @@ public sealed class MarketObservationAnalyzer
         {
             throw;
         }
-        catch (Exception exception) when (_scoringEngine is AiScoringEngine)
+        catch (Exception exception) when (
+            _scoringEngine is AiScoringEngine { HasExplicitScoringAdapter: true })
         {
-            throw new AiScoringException("The AI scoring adapter failed.", exception);
+            throw new AiScoringException(
+                $"The AI scoring adapter failed ({exception.GetType().Name}).",
+                exception);
         }
 
         return new ObservationResult

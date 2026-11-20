@@ -244,6 +244,23 @@ public sealed class MarketObservationAnalyzerTests
     }
 
     [Fact]
+    public void Analyze_DefaultAiScoringEngineDoesNotWrapCompositeScoringFailures()
+    {
+        var configuration = new StrategyConfiguration
+        {
+            MomentumScoreWeight = decimal.MaxValue,
+            UseRelativeStrength = false
+        };
+        var analyzer = new MarketObservationAnalyzer(
+            new AiScoringEngine(strategyConfiguration: configuration));
+        var candles = Enumerable.Range(0, 6)
+            .Select(index => Candle(100m + index))
+            .ToList();
+
+        Assert.Throws<OverflowException>(() => analyzer.Analyze("TEST", candles));
+    }
+
+    [Fact]
     public void Analyze_ExposesRsi_WithoutChangingScore()
     {
         var engine = new CapturingScoringEngine(42m);

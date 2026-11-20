@@ -215,6 +215,9 @@ if (runBacktestArg is not null)
     if (engineResult.Status == BacktestRunStatus.Failed)
     {
         Console.WriteLine($"Backtest failed: {engineResult.ErrorMessage}");
+        Environment.ExitCode = Math.Max(
+            Environment.ExitCode,
+            BacktestCommandExitCode.ForBacktestResult(engineResult.Status));
         FinishCommand("Workflow failed");
         return;
     }
@@ -336,6 +339,9 @@ if (runVariantsArg is not null)
     await scope.ServiceProvider.GetRequiredService<StrategyComparisonReportWorkflow>()
         .RunAsync(summaries, comparisonSortBy, comparisonBenchmark, comparisonCsvFilePath);
 
+    Environment.ExitCode = Math.Max(
+        Environment.ExitCode,
+        BacktestCommandExitCode.ForVariantResults(allSucceeded));
     FinishCommand(allSucceeded ? "Workflow completed" : "Workflow completed with variant failures");
     return;
 }

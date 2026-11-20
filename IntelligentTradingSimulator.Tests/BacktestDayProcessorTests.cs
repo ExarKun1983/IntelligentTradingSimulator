@@ -103,6 +103,71 @@ public sealed class BacktestDayProcessorTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessAsync_ScoringFailurePreservesPriorDayOpeningIntentForRetry()
+    {
+        var date = new DateTime(2024, 1, 10);
+        var provider = new FakeMarketDataProvider();
+        var candles = BuildCandles(date.AddDays(-4), 5);
+        provider.SetData("AAA", candles);
+        provider.SetData("BBB", candles);
+        provider.SetData("HELD", BuildCandles(date.AddDays(-4), 5));
+        var adapter = new FailOnceAfterFirstScoreAdapter();
+        var processor = BuildProcessor(provider, analyzerFactoryOverride: _ =>
+            new MarketObservationAnalyzer(new AiScoringEngine(scoringAdapter: adapter)));
+        var state = new BacktestExecutionState();
+        var portfolio = new Portfolio
+        {
+            StartingCash = 10_000m,
+            Cash = 10_000m,
+            Positions =
+            [
+                new Position
+                {
+                    Symbol = "HELD", Quantity = 1m, AveragePrice = 100m, CurrentPrice = 777m
+                }
+            ]
+        };
+        var configuration = new StrategyConfiguration
+        {
+            MaxPositions = 2,
+            MaxPositionWeight = 100m,
+            UseRelativeStrength = false
+        };
+        var priorDay = date.AddDays(-1);
+        state.GenerateAfterClose(
+            portfolio,
+            priorDay,
+            new Dictionary<string, decimal> { ["AAA"] = 100m },
+            [new StockRecommendation { Symbol = "AAA", Score = 42m, AllocationPercent = 100m }],
+            [new ObservationResult { Symbol = "AAA", Score = 42m }],
+            configuration);
+        Assert.Equal(priorDay, Assert.Single(state.Pending).Value.SignalDate);
+
+        var request = new BacktestDayRequest
+        {
+            CurrentDate = date,
+            HistoricalStartDate = date.AddDays(-4),
+            Portfolio = portfolio,
+            ExecutionState = state,
+            StrategyConfiguration = configuration,
+            Symbols = ["AAA", "BBB"]
+        };
+
+        await Assert.ThrowsAsync<AiScoringException>(() => processor.ProcessAsync(request));
+
+        Assert.Equal("AAA", Assert.Single(state.Pending).Key);
+        Assert.Empty(portfolio.Trades);
+        Assert.Equal(10_000m, portfolio.Cash);
+        Assert.Equal(777m, Assert.Single(portfolio.Positions).CurrentPrice);
+
+        var retry = await processor.ProcessAsync(request);
+
+        Assert.Equal(1, retry.Snapshot.TradesExecuted);
+        Assert.Equal(TradeActionType.Buy, Assert.Single(portfolio.Trades).Action);
+        Assert.Contains(portfolio.Positions, position => position.Symbol == "AAA");
+    }
+
+    [Fact]
     public async Task ProcessAsync_ConfirmedWeekendTailKeepsPersistedSymbolAndBenchmarkAvailable()
     {
         var monday = new DateTime(2024, 1, 1);
@@ -190,6 +255,24 @@ public sealed class BacktestDayProcessorTests : IDisposable
                 "contract" => new System.IO.InvalidDataException("Model contract is invalid."),
                 _ => new InvalidOperationException("Inference failed.")
             };
+        }
+    }
+
+    private sealed class FailOnceAfterFirstScoreAdapter : IScoringEngine
+    {
+        private int _calls;
+        private bool _failed;
+
+        public decimal CalculateScore(ScoringContext context)
+        {
+            _calls++;
+            if (!_failed && _calls == 2)
+            {
+                _failed = true;
+                throw new InvalidOperationException("Inference failed.");
+            }
+
+            return 42m;
         }
     }
 
