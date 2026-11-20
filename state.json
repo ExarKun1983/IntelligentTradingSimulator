@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1055,
+  "Version": 1056,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "ci-observed:1277929203:1:RunCi:204:1:task:204:1:1:3:1",
@@ -1701,7 +1701,7 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 1,
-      "Version": 167,
+      "Version": 168,
       "LastEventId": "ci-observed:1277929203:1:RunCi:204:1:task:204:1:1:3:1",
       "Phase": "REVIEW_PENDING",
       "Ready": false,
@@ -1885,10 +1885,10 @@
         "Round": 1,
         "Sha": "80d17e0d8a252362cce4b42745d477069002a2ff",
         "Classification": null,
-        "LifecycleState": "Requesting",
-        "CopilotRequestNodeId": null,
-        "ReviewRequestedAt": null,
-        "ReviewDeadlineAt": null,
+        "LifecycleState": "Requested",
+        "CopilotRequestNodeId": "RR_kwDOTCum887y9yiL",
+        "ReviewRequestedAt": "2026-11-20T13:38:28.0581782+00:00",
+        "ReviewDeadlineAt": "2026-11-20T13:53:28.0581782+00:00",
         "RequestFailureReason": null,
         "Findings": [
           {
@@ -1949,10 +1949,10 @@
             5993501478,
             5993501500
           ],
-          "Confirmed": false,
-          "RequestNodeId": null,
-          "AcceptedAt": null,
-          "DeadlineAt": null,
+          "Confirmed": true,
+          "RequestNodeId": "RR_kwDOTCum887y9yiL",
+          "AcceptedAt": "2026-11-20T13:38:28.0581782+00:00",
+          "DeadlineAt": "2026-11-20T13:53:28.0581782+00:00",
           "AlreadyPending": false
         },
         "SourceEvidence": null,
