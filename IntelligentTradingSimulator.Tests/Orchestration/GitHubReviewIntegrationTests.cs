@@ -896,7 +896,11 @@ public sealed class GitHubReviewIntegrationTests
     [InlineData("comment-left", true)]
     [InlineData("comment-before-request", true)]
     [InlineData("comment-after-submission", true)]
-    [InlineData("comment-edited", true)]
+    [InlineData("comment-updated-before-submission", true)]
+    [InlineData("comment-updated-at-submission", true)]
+    [InlineData("comment-updated-at-submission", false)]
+    [InlineData("comment-edited-after-submission", true)]
+    [InlineData("comment-updated-before-created", true)]
     [InlineData("comment-empty", true)]
     [InlineData("duplicate-comment", true)]
     [InlineData("timed-out", true)]
@@ -938,7 +942,8 @@ public sealed class GitHubReviewIntegrationTests
 
         var message = await adapter.ReadEventAsync(store.State, store.State.Issues[7], default);
         var result = Assert.IsType<ReviewResult>(message!.Data);
-        Assert.Equal((scenario is "valid" or "CHANGES_REQUESTED") && enabled ? ReviewClassification.Blocking :
+        Assert.Equal((scenario is "valid" or "CHANGES_REQUESTED" or "comment-updated-before-submission" or
+            "comment-updated-at-submission") && enabled ? ReviewClassification.Blocking :
             ReviewClassification.NeedsHuman, result.Classification);
         if (result.Classification == ReviewClassification.Blocking)
         {
@@ -1867,7 +1872,14 @@ public sealed class GitHubReviewIntegrationTests
                     side = Corruption == "comment-left" ? "LEFT" : "RIGHT",
                     created_at = Corruption == "comment-before-request" ? Now.AddDays(-1) :
                         Corruption == "comment-after-submission" ? Now.AddSeconds(2) : Now,
-                    updated_at = Corruption == "comment-edited" ? Now.AddSeconds(1) : Now,
+                    updated_at = Corruption switch
+                    {
+                        "comment-updated-before-submission" => Now.AddMilliseconds(500),
+                        "comment-updated-at-submission" => Now.AddSeconds(1),
+                        "comment-edited-after-submission" => Now.AddSeconds(2),
+                        "comment-updated-before-created" => Now.AddSeconds(-1),
+                        _ => Now
+                    },
                     pull_request_url = Corruption == "comment-url" || detail && Corruption == "detail-url"
                         ? "https://api.github.com/repos/other/repo/pulls/17" : PullUrl };
                 var listed = JsonSerializer.SerializeToElement(comment).EnumerateObject()
