@@ -128,11 +128,24 @@ public sealed class MarketObservationAnalyzer
             Fundamentals = fundamentalData
         };
 
-        var score =
-            _scoringEngine.CalculateScore(
+        decimal? relativeStrengthScoreContribution = null;
+        IReadOnlyList<FactorScoreContribution>? factorContributions = null;
+        decimal score;
+        try
+        {
+            score = _scoringEngine.CalculateScore(
                 features.ToScoringContext(),
-                out var relativeStrengthScoreContribution,
-                out var factorContributions);
+                out relativeStrengthScoreContribution,
+                out factorContributions);
+        }
+        catch (AiScoringException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (_scoringEngine is AiScoringEngine)
+        {
+            throw new AiScoringException("The AI scoring adapter failed.", exception);
+        }
 
         return new ObservationResult
         {

@@ -36,10 +36,11 @@ public sealed class BacktestDayProcessorTests : IDisposable
         IWorkflowProgress? progress = null,
         IBacktestSnapshotRepository? snapshotRepository = null,
         IFeatureSnapshotRepository? featureSnapshotRepository = null,
-        IMarketCandleRepository? marketCandleRepository = null)
+        IMarketCandleRepository? marketCandleRepository = null,
+        Func<StrategyConfiguration, MarketObservationAnalyzer>? analyzerFactoryOverride = null)
     {
         var historicalService = new BacktestHistoricalMarketDataService(provider, marketCandleRepository);
-        var analyzerFactory = new MarketObservationAnalyzerFactory();
+        var defaultAnalyzerFactory = new MarketObservationAnalyzerFactory();
         var allocationService = new PortfolioAllocationService();
         var tradingEngine = new TradingEngine();
         var rebalancingService = new PortfolioRebalancingService();
@@ -47,14 +48,58 @@ public sealed class BacktestDayProcessorTests : IDisposable
 
         return new BacktestDayProcessor(
             historicalService,
-            analyzerFactory,
+            defaultAnalyzerFactory,
             rebalancingService,
             allocationService,
             tradingEngine,
             performanceService,
             snapshotRepository ?? _snapshotRepository,
             featureSnapshotRepository ?? new FeatureSnapshotRepository(_dbContext),
-            progress);
+            progress,
+            analyzerFactoryOverride);
+    }
+
+    [Theory]
+    [InlineData("artifact")]
+    [InlineData("contract")]
+    [InlineData("inference")]
+    public async Task RunAsync_AiAdapterFailureAfterSuccessfulScoreMarksRunFailedWithoutPartialDay(
+        string failureKind)
+    {
+        var date = new DateTime(2024, 1, 10);
+        var provider = new FakeMarketDataProvider();
+        var candles = BuildCandles(date.AddDays(-4), 5);
+        provider.SetData("AAA", candles);
+        provider.SetData("BBB", candles);
+        var adapter = new FailingAfterFirstScoreAdapter(failureKind);
+        var processor = BuildProcessor(provider, analyzerFactoryOverride: _ =>
+            new MarketObservationAnalyzer(new AiScoringEngine(scoringAdapter: adapter)));
+        var engine = new BacktestEngine(new BacktestRunRepository(_dbContext), processor);
+
+        var result = await engine.RunAsync(new BacktestEngineRequest
+        {
+            Name = "AI failure",
+            StrategyId = "test",
+            StrategyConfiguration = new StrategyConfiguration
+            {
+                Id = "test",
+                ScoringEngine = ScoringEngineType.AI,
+                UseRelativeStrength = false
+            },
+            StartDate = date,
+            EndDate = date.AddDays(1),
+            HistoricalStartDate = date.AddDays(-4),
+            InitialCapital = 10_000m,
+            Symbols = ["AAA", "BBB"]
+        });
+
+        Assert.Equal(BacktestRunStatus.Failed, result.Status);
+        Assert.Equal(2, adapter.Calls);
+        Assert.Equal(new[] { "AAA", "BBB" }, provider.Calls);
+        var failedRun = await _dbContext.BacktestRuns.SingleAsync();
+        Assert.Equal(BacktestRunStatus.Failed, failedRun.Status);
+        Assert.Empty(await _dbContext.BacktestSnapshots.ToListAsync());
+        Assert.Empty(await _dbContext.FeatureSnapshots.ToListAsync());
     }
 
     [Fact]
@@ -125,6 +170,27 @@ public sealed class BacktestDayProcessorTests : IDisposable
                 Volume = 1_000_000m
             })
             .ToList();
+    }
+
+    private sealed class FailingAfterFirstScoreAdapter(string failureKind) : IScoringEngine
+    {
+        public int Calls { get; private set; }
+
+        public decimal CalculateScore(ScoringContext context)
+        {
+            Calls++;
+            if (Calls == 1)
+            {
+                return 42m;
+            }
+
+            throw failureKind switch
+            {
+                "artifact" => new System.IO.FileNotFoundException("Model artifact unavailable."),
+                "contract" => new System.IO.InvalidDataException("Model contract is invalid."),
+                _ => new InvalidOperationException("Inference failed.")
+            };
+        }
     }
 
     [Theory]

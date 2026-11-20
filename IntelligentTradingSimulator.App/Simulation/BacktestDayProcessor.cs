@@ -11,7 +11,7 @@ namespace IntelligentTradingSimulator.App.Simulation;
 public sealed class BacktestDayProcessor : IBacktestDayProcessor
 {
     private readonly BacktestHistoricalMarketDataService _historicalDataService;
-    private readonly MarketObservationAnalyzerFactory _analyzerFactory;
+    private readonly Func<StrategyConfiguration, MarketObservationAnalyzer> _analyzerFactory;
     private readonly PortfolioAllocationService _allocationService;
     private readonly TradingEngine _tradingEngine;
     private readonly PortfolioPerformanceService _performanceService;
@@ -30,10 +30,11 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
         PortfolioPerformanceService performanceService,
         IBacktestSnapshotRepository snapshotRepository,
         IFeatureSnapshotRepository featureSnapshotRepository,
-        IWorkflowProgress? progress = null)
+        IWorkflowProgress? progress = null,
+        Func<StrategyConfiguration, MarketObservationAnalyzer>? analyzerFactoryOverride = null)
     {
         _historicalDataService = historicalDataService;
-        _analyzerFactory = analyzerFactory;
+        _analyzerFactory = analyzerFactoryOverride ?? analyzerFactory.Create;
         _allocationService = allocationService;
         _tradingEngine = tradingEngine;
         _performanceService = performanceService;
@@ -51,8 +52,7 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
             RunId = request.BacktestRunId,
             StrategyId = request.StrategyConfiguration.Id
         };
-        var analyzer =
-            _analyzerFactory.Create(request.StrategyConfiguration);
+        var analyzer = _analyzerFactory(request.StrategyConfiguration);
         var recommendationService =
             new PortfolioRecommendationService(request.StrategyConfiguration.MaxPositions);
         var allocationEngine =
@@ -223,6 +223,10 @@ public sealed class BacktestDayProcessor : IBacktestDayProcessor
                     symbol, history.Usable, history.Historical,
                     benchmarkCandles, benchmarkSymbol, request.CurrentDate));
                 succeeded++;
+            }
+            catch (AiScoringException)
+            {
+                throw;
             }
             catch (Exception ex)
             {

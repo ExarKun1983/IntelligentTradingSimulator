@@ -173,6 +173,10 @@ public sealed class MarketDataWorkflow
                 prices[symbol] = usableCandles.Last().Close;
                 succeeded++;
             }
+            catch (AiScoringException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 Console.WriteLine(
