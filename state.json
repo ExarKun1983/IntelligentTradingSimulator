@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1049,
+  "Version": 1050,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "task-completed:1277929203:1:9ea6f509-891b-47d2-aeaf-398f09cd2645",
@@ -1701,7 +1701,7 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 1,
-      "Version": 161,
+      "Version": 162,
       "LastEventId": "task-completed:1277929203:1:9ea6f509-891b-47d2-aeaf-398f09cd2645",
       "Phase": "CI_PENDING",
       "Ready": false,
@@ -10418,7 +10418,7 @@
         "ExistingStatusIds": [
           59474591960
         ],
-        "StatusId": null
+        "StatusId": 59474754870
       }
     }
   }
