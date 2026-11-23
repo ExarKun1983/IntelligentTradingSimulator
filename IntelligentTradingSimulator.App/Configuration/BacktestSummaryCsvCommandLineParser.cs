@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 
 namespace IntelligentTradingSimulator.App.Configuration;
 
@@ -39,7 +40,18 @@ public static class BacktestSummaryCsvCommandLineParser
             return false;
         }
 
-        filePath = exportArgs[0][(option.Length + 1)..];
+        var exportPath = exportArgs[0][(option.Length + 1)..];
+        try
+        {
+            _ = Path.GetFullPath(exportPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            errorMessage = "Error: summary CSV export requires a valid output path.";
+            return false;
+        }
+
+        filePath = exportPath;
         return true;
     }
 }
