@@ -44,15 +44,29 @@ public static class BacktestSnapshotCsvCommandLineParser
         }
 
         var snapshotPath = exportArgs[0][(option.Length + 1)..];
-        if (BacktestSummaryCsvCommandLineParser.TryParse(args, out var summaryPath, out _) &&
-            summaryPath is not null)
+        var hasSummaryExport = BacktestSummaryCsvCommandLineParser.TryParse(args, out var summaryPath, out _) &&
+            summaryPath is not null;
+        string snapshotFullPath;
+        try
+        {
+            snapshotFullPath = Path.GetFullPath(snapshotPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            errorMessage = hasSummaryExport
+                ? "Error: summary and snapshot CSV exports require valid output paths."
+                : "Error: snapshot CSV export requires a valid output path.";
+            return false;
+        }
+
+        if (hasSummaryExport && summaryPath is not null)
         {
             try
             {
                 var comparison = OperatingSystem.IsWindows()
                     ? StringComparison.OrdinalIgnoreCase
                     : StringComparison.Ordinal;
-                if (string.Equals(Path.GetFullPath(snapshotPath), Path.GetFullPath(summaryPath), comparison))
+                if (string.Equals(snapshotFullPath, Path.GetFullPath(summaryPath), comparison))
                 {
                     errorMessage = "Error: summary and snapshot CSV exports require different output paths.";
                     return false;
