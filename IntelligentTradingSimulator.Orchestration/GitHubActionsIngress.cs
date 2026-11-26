@@ -49,7 +49,10 @@ public static class GitHubActionsIngress
             NotificationKind.Reactivate => new Reactivate(notification.Reason!),
             NotificationKind.PrepareRestart => new PrepareRestart(
                 int.Parse(payload.GetProperty("inputs").GetProperty("pull").GetString()!, System.Globalization.CultureInfo.InvariantCulture),
-                payload.GetProperty("inputs").GetProperty("sha").GetString()!, notification.Reason!),
+                payload.GetProperty("inputs").GetProperty("sha").GetString()!, notification.Reason!)
+                {
+                    AcknowledgedUncertainStatusIntentIds = ReadRestartStatusAcknowledgements(payload.GetProperty("inputs"))
+                },
             NotificationKind.ResolveTask => new ResolveTaskTerminal(payload.GetProperty("inputs").GetProperty("task").GetString()!,
                 "", notification.Reason!),
             NotificationKind.ClassifyReview => ReadClassification(payload.GetProperty("inputs"), notification.Reason!),
@@ -191,6 +194,29 @@ public static class GitHubActionsIngress
             int.Parse(inputs.GetProperty("pull").GetString()!, System.Globalization.CultureInfo.InvariantCulture),
             inputs.GetProperty("sha").GetString() ?? throw new InvalidDataException("Missing head SHA."),
             reason);
+
+    private static List<string>? ReadRestartStatusAcknowledgements(JsonElement inputs)
+    {
+        if (!inputs.TryGetProperty("acknowledge_uncertain_status_intents", out var value) ||
+            string.IsNullOrWhiteSpace(value.GetString())) return null;
+        var text = value.GetString()!;
+        if (text.Length > 8192)
+            throw new InvalidDataException("Restart status acknowledgement exceeds capacity.");
+        List<string>? ids;
+        try
+        {
+            ids = JsonSerializer.Deserialize<List<string>>(text, StateJson.Options);
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException("Restart status acknowledgement must be a JSON array of intent IDs.", exception);
+        }
+        if (ids is null || ids.Count is < 1 or > 16 ||
+            ids.Any(id => string.IsNullOrWhiteSpace(id) || id.Length > 256) ||
+            ids.Distinct(StringComparer.Ordinal).Count() != ids.Count)
+            throw new InvalidDataException("Restart status acknowledgement requires distinct exact intent IDs.");
+        return ids;
+    }
 
     private static AbandonUncertainReview ReadReviewAbandonment(JsonElement inputs, string reason) =>
         new(inputs.GetProperty("review_intent").GetString()!,

@@ -47,6 +47,10 @@ on:
         required: true
         default: false
         type: boolean
+      acknowledge_uncertain_status_intents:
+        description: JSON array of exact historical pending-status intent IDs; explicitly accept possible late writes to discarded earlier heads
+        required: false
+        type: string
       handoff:
         description: Exact review handoff ID for classification or requested changes
         required: false

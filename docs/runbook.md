@@ -2869,7 +2869,8 @@ attempt must be discarded, not repaired on its existing branch. Unlike
    `PublishRequiredStatus` for another Issue is not exclusive: preparation neither
    recovers nor republishes it, and does not declare that historical delivery safe
    or resolved. An uncertain status for the Issue being restarted still blocks
-   preparation.
+   ordinary preparation; the narrowly audited exception below requires explicit
+   operator acknowledgement and fresh corrective-status checks.
 3. Dispatch the reviewed deployed driver with the current repository and Issue
    generations, old PR/head, and an audit reason:
 
@@ -2901,6 +2902,55 @@ That later readiness starts a new initial Coding task from the configured base
 branch and requests a new PR, without inheriting the closed PR's review blockers.
 Issue scope/exclusions still govern repair prompts; review feedback cannot expand
 the implementation contract.
+
+##### Auditing historical pending-status uncertainty on a discarded earlier head
+
+An interrupted old publisher can leave `Unknown` without a saved boundary. Do not
+infer non-delivery from that absence or cancel, delete or replay the intent. An
+operator may explicitly accept the risk of a late **pending** write to an earlier
+head of the closed, unmerged PR by supplying
+`acknowledge_uncertain_status_intents` as a JSON array of the exact canonical IDs.
+This acknowledges risk; it does not claim that the old POST did not happen.
+
+The array must identify every uncertain intent for this Issue, without duplicates
+or extras (maximum 16). Each must be a current-generation `PublishRequiredStatus`
+with `pending` payload, no boundary or receipt, a recorded outcome timestamp and
+an earlier SHA different from the discarded PR's final head. That SHA must be a
+captured completed task head on this PR with a confirmed launch in this generation.
+Prepared publications, success/error uncertainty, unknown task/CI/review effects,
+untracked heads and all executing effects remain blocking.
+
+For each earlier SHA, require a confirmed canonical corrective `error` receipt
+prepared after the uncertain outcome. Under the worker lease, the command verifies
+the trusted publisher, exact repository/SHA/payload and that the receipt is still
+the **latest** live required-context status. It also rechecks the confirmed `error`
+on the closed PR's final head. Missing receipts, newer pending/success statuses,
+publisher mismatches or missing publisher approval reject preparation before
+saving. All ordinary PR, task/session, generation and non-readiness checks still
+apply.
+
+For example, after inspecting the exact old receipts:
+
+```bash
+gh workflow run agent-state-machine.yml --repo "$REPO" --ref master \
+  -f operation=prepare-restart -f "issue=$ISSUE" \
+  -f "repository_generation=$REPOSITORY_GENERATION" \
+  -f "issue_generation=$ISSUE_GENERATION" \
+  -f "pull=$OLD_PR" -f "sha=$OLD_SHA" \
+  -f 'acknowledge_uncertain_status_intents=["required-status:ISSUE:GENERATION:SEQUENCE"]' \
+  -f "reason=$AUDIT_REASON_AND_LATE_WRITE_RISK"
+```
+
+`RestartPreparations.StatusRiskVerification` records each uncertain intent,
+corrective intent, earlier SHA, verified status ID and closed-head receipt together
+with the existing operator/reason/time audit. These identities are pinned to the
+verified command; a conflicting save cannot substitute unverified receipts.
+The old `Unknown` record remains unchanged and
+lookup-only. Only waiting-state projections are executed; no status POST or new
+Coding/CI/review task is created. The operator must not reopen the discarded PR or
+resume its sessions. Live status checks are snapshots, not an atomic guarantee
+against late writes; monitor old heads and use separately audited recovery if the
+accepted risk materializes. Add `agent:ready` only after preparation is confirmed.
 
 #### Explicit review classification
 

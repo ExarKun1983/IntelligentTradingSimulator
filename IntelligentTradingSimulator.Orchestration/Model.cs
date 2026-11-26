@@ -187,7 +187,15 @@ public sealed record ReactivationRecord(string EventId, long PreviousGeneration,
 public sealed record RestartPreparationRecord(string EventId, long PreviousGeneration, long Generation,
     int PullRequest, string Sha, string? TaskId, CiIdentity? Ci, ReviewIdentity? Review,
     List<string> PendingFeedbackEventIds, int ConsecutiveCiFailures, int ConsecutiveReviewFailures,
-    string Reason, Actor Author, DateTimeOffset OccurredAt);
+    string Reason, Actor Author, DateTimeOffset OccurredAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RestartStatusVerification? StatusRiskVerification { get; init; }
+}
+public sealed record RestartStatusAcknowledgement(string UncertainIntentId, string CorrectiveIntentId,
+    string Sha, long CorrectiveStatusId);
+public sealed record RestartStatusVerification(List<RestartStatusAcknowledgement> Acknowledgements,
+    string ClosedHeadIntentId, long ClosedHeadStatusId);
 public sealed record HumanClassificationRecord(string EventId, string HandoffId, Actor Author, string Reason,
     int Round, string Sha, ReviewClassification Classification, List<Finding> Findings,
     List<FindingResponse> Responses, DateTimeOffset OccurredAt);
@@ -386,7 +394,13 @@ public sealed record StageEdited : EventData;
 public sealed record Resume : EventData;
 public sealed record Pause(string Reason) : EventData;
 public sealed record Reactivate(string Reason) : EventData;
-public sealed record PrepareRestart(int PullRequest, string Sha, string Reason) : EventData;
+public sealed record PrepareRestart(int PullRequest, string Sha, string Reason) : EventData
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? AcknowledgedUncertainStatusIntentIds { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RestartStatusVerification? StatusRiskVerification { get; init; }
+}
 public sealed record TaskCompleted(string TaskId, int PullRequest, string Sha,
     CandidateShaEvidence? Evidence = null) : EventData;
 public sealed record TaskPrMapped(string TaskId, int PullRequest, string ObservedHead) : EventData;
