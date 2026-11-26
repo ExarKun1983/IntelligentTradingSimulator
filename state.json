@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1378,
+  "Version": 1379,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "feedback:v2:1277929203:204:2:320:7199935428:2026-11-26T17:59:55.0000000\u002B00:00",
@@ -1712,9 +1712,9 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 2,
-      "Version": 461,
+      "Version": 462,
       "LastEventId": "feedback:v2:1277929203:204:2:320:7199935428:2026-11-26T17:59:55.0000000\u002B00:00",
-      "Phase": "BLOCKED",
+      "Phase": "CLOSED",
       "Ready": false,
       "ActiveAuthorized": false,
       "ReadyAt": "2026-11-26T15:57:41+00:00",
@@ -2153,7 +2153,7 @@
       ],
       "LastFeedbackText": "Closing without merge for a user-approved clean restart of #204 after deployment of reviewed orchestration fix #321. Retain the branch and task history; do not resume the discarded sessions.",
       "ClosurePending": false,
-      "TerminalOutcome": "None",
+      "TerminalOutcome": "Unmerged",
       "TerminalHistory": [
         {
           "Generation": 1,
@@ -2170,6 +2170,14 @@
           "Sha": "27c531c1145e15a36dc5005711b72f3b3297589c",
           "ObservedAt": "2026-11-26T15:54:27.7192715+00:00",
           "PreviousHoldReason": "Reopened issue requires explicit reactivation."
+        },
+        {
+          "Generation": 2,
+          "Outcome": "Unmerged",
+          "PullRequest": 320,
+          "Sha": "ef8db28192b94dc8a82b4c6b7abefd066d8bbff2",
+          "ObservedAt": "2026-11-26T18:00:53.6503301+00:00",
+          "PreviousHoldReason": "Effect outcome is ambiguous."
         }
       ],
       "CurrentHandoffId": "handoff:204:2:feedback:v2:1277929203:204:2:320:7199935428:2026-11-26T17:59:55.0000000\u002B00:00",
@@ -2628,7 +2636,7 @@
           "OccurredAt": "2026-11-20T14:48:44+00:00"
         }
       },
-      "ProjectionDigest": "0C6FB4E07CCDF772ED6952443013494B821B7F84127D4AA2CB643AC48E54DF51",
+      "ProjectionDigest": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
       "ObservedProjectionDigest": "0C6FB4E07CCDF772ED6952443013494B821B7F84127D4AA2CB643AC48E54DF51",
       "StatusProjectionDigest": "4C1B8FD96121260ABD94F90335EE57AF8173F7799B0B04BCF639897598139F13",
       "RequiredStatusSequence": 44,
@@ -13247,6 +13255,48 @@
       "StartedAt": "2026-11-26T16:14:26.5658187+00:00",
       "CompletedAt": "2026-11-26T16:14:26.5658187+00:00",
       "StatusBody": "\u003C!-- its-agent-state:204:2 --\u003E\nAgent workflow: **BLOCKED**\n\nGeneration: 2; round: 2.\nPR: #320; head: \u003Ccode\u003Eef8db28192b94dc8a82b4c6b7abefd066d8bbff2\u003C/code\u003E.\nTask: Completed.\nConsecutive CI failures: 0/3; review failures: 1/5.\nAutomation held: True; terminal outcome: None.\n\nHandoff: not captured.\n\nCanonical Git state is authoritative. Human approval is required; no automatic merge.",
+      "TaskPrompt": null,
+      "RequiredStatus": null,
+      "RequiredStatusBoundary": null
+    },
+    "labels:204:2:E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855": {
+      "Id": "labels:204:2:E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "Digest": "41337CBAEFBBD9020D35FD7920C9B83FC8E5799A9CCA8CDF4E13743B786E293E",
+      "IssueNumber": 204,
+      "Generation": 2,
+      "Kind": "ProjectLabels",
+      "Status": "Pending",
+      "TaskId": null,
+      "Round": 2,
+      "Sha": "ef8db28192b94dc8a82b4c6b7abefd066d8bbff2",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-26T18:00:53.6503301+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": null,
+      "RequiredStatusBoundary": null
+    },
+    "status:204:2:F99BC4E8F3C746AB4D7B92BFE5B75950F2715EE9EDB502B0D47259BA9AD3E997": {
+      "Id": "status:204:2:F99BC4E8F3C746AB4D7B92BFE5B75950F2715EE9EDB502B0D47259BA9AD3E997",
+      "Digest": "B5544DFC0268A5049FA1EC01A886AE00BBEB5582B21E5C858245ACE722C698C1",
+      "IssueNumber": 204,
+      "Generation": 2,
+      "Kind": "ProjectStatus",
+      "Status": "Pending",
+      "TaskId": null,
+      "Round": 2,
+      "Sha": "ef8db28192b94dc8a82b4c6b7abefd066d8bbff2",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-26T18:00:53.6503301+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": "\u003C!-- its-agent-state:204:2 --\u003E\nAgent workflow: **CLOSED**\n\nGeneration: 2; round: 2.\nPR: #320; head: \u003Ccode\u003Eef8db28192b94dc8a82b4c6b7abefd066d8bbff2\u003C/code\u003E.\nTask: Completed.\nConsecutive CI failures: 0/3; review failures: 1/5.\nAutomation held: True; terminal outcome: Unmerged.\n\nHandoff: \u003Ccode\u003Ehandoff:204:2:feedback:v2:1277929203:204:2:320:7199935428:2026-11-26T17:59:55.0000000\u002B00:00\u003C/code\u003E.\n\nCanonical Git state is authoritative. Human approval is required; no automatic merge.",
       "TaskPrompt": null,
       "RequiredStatus": null,
       "RequiredStatusBoundary": null
