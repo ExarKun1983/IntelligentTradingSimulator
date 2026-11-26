@@ -404,7 +404,7 @@ public sealed class GitHubReviewAdapter(GitHubRepositoryApi api, IStateStore sto
                 !created.TryGetDateTimeOffset(out var createdAt) ||
                 !comment.TryGetProperty("updated_at", out var updated) || updated.ValueKind != JsonValueKind.String ||
                 !updated.TryGetDateTimeOffset(out var updatedAt) ||
-                createdAt < acceptedAt || createdAt > submitted || updatedAt != createdAt)
+                createdAt < acceptedAt || createdAt > submitted || updatedAt < createdAt || updatedAt > submitted)
                 return [];
 
             var id = comment.GetProperty("id").GetInt64();
