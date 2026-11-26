@@ -247,7 +247,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                     AllowedEffectKinds: new HashSet<EffectKind> { EffectKind.ProjectLabels, EffectKind.ProjectStatus },
                     ProjectionOnly: true) { ProjectionIssueNumber = issue.Number };
                 if (state.Outbox.Values.Any(effect => !projectionOptions.AllowsEffect(effect) &&
-                    effect.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown))
+                    (effect.Status == DeliveryStatus.Executing || OrchestrationReconciler.IsExclusiveUncertain(effect))))
                     throw new InvalidOperationException("Restart projections cannot reconcile another operation's in-flight effects.");
                 for (var attempt = 0; attempt < 8; attempt++)
                 {

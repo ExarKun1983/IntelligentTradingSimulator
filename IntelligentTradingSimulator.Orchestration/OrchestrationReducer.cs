@@ -138,9 +138,10 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                         PullRequestWasOpen: false } terminal ||
                     terminal.Generation != issue.Generation || terminal.PullRequest != restart.PullRequest ||
                     terminal.Sha != restart.Sha ||
-                    state.Outbox.Values.Any(effect =>
-                        effect.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown ||
-                        effect.IssueNumber == issue.Number && effect.Status == DeliveryStatus.Pending))
+                    state.Outbox.Values.Any(effect => effect.Status == DeliveryStatus.Executing ||
+                        OrchestrationReconciler.IsExclusiveUncertain(effect) ||
+                        effect.IssueNumber == issue.Number &&
+                        effect.Status is DeliveryStatus.Pending or DeliveryStatus.Unknown))
                     throw new InvalidOperationException("Restart preparation requires a settled, closed unmerged PR at the exact recorded head.");
                 if (state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number &&
                         effect.Kind == EffectKind.PublishRequiredStatus) &&
