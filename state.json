@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1287,
+  "Version": 1288,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "actions:1277929203:45853550147",
@@ -1712,9 +1712,9 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 1,
-      "Version": 380,
+      "Version": 381,
       "LastEventId": "actions:1277929203:45853550147",
-      "Phase": "BLOCKED",
+      "Phase": "CLOSED",
       "Ready": false,
       "ActiveAuthorized": false,
       "ReadyAt": "2026-11-20T12:42:22+00:00",
@@ -2174,6 +2174,14 @@
           "Sha": "27c531c1145e15a36dc5005711b72f3b3297589c",
           "ObservedAt": "2026-11-26T15:27:37.7191425+00:00",
           "PreviousHoldReason": "Review requires human classification."
+        },
+        {
+          "Generation": 1,
+          "Outcome": "Unmerged",
+          "PullRequest": 316,
+          "Sha": "27c531c1145e15a36dc5005711b72f3b3297589c",
+          "ObservedAt": "2026-11-26T15:54:27.7192715+00:00",
+          "PreviousHoldReason": "Reopened issue requires explicit reactivation."
         }
       ],
       "CurrentHandoffId": "handoff:204:1:review-observed:1277929203:1:RequestReview:204:1:task:204:1:1:6:1",
