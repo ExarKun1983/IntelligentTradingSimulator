@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1402,
+  "Version": 1403,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "task-pr-mapped:1277929203:3:01c8ff29-c2c2-4aed-81a8-a75ea11ecb5c:323:76d56214e4b255643f719326ff42e7b9bf10721d:2026-11-26T19:55:20.5117415\u002B00:00",
@@ -1712,7 +1712,7 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 3,
-      "Version": 481,
+      "Version": 482,
       "LastEventId": "task-pr-mapped:1277929203:3:01c8ff29-c2c2-4aed-81a8-a75ea11ecb5c:323:76d56214e4b255643f719326ff42e7b9bf10721d:2026-11-26T19:55:20.5117415\u002B00:00",
       "Phase": "BLOCKED",
       "Ready": false,
@@ -13573,7 +13573,7 @@
         "ActorType": "Bot",
         "PreparedAt": "2026-11-26T19:56:18.23692+00:00",
         "ExistingStatusIds": [],
-        "StatusId": null
+        "StatusId": 59999888600
       }
     },
     "labels:204:3:0C6FB4E07CCDF772ED6952443013494B821B7F84127D4AA2CB643AC48E54DF51": {
