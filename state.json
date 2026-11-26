@@ -1,18 +1,21 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1279,
+  "Version": 1280,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "feedback:v2:1277929203:204:1:316:7196275830:2026-11-26T15:26:44.0000000\u002B00:00",
   "AdmittedIssue": null,
-  "WorkerLease": null,
+  "WorkerLease": {
+    "Owner": "57fabc3cb5b44cd187a60c401251c65f",
+    "ExpiresAt": "2026-11-26T16:24:04.1890293+00:00"
+  },
   "Continuation": {
-    "Id": "continue:1:1267",
+    "Id": "continue:1:1280",
     "RepositoryGeneration": 1,
-    "DueAt": "2026-11-26T15:32:25.9412671+00:00",
-    "Reason": "Invocation settled or human-held.",
-    "Pending": false
+    "DueAt": "2026-11-26T15:58:04.4409054+00:00",
+    "Reason": "Invocation in flight.",
+    "Pending": true
   },
   "Issues": {
     "227": {
@@ -118,6 +121,7 @@
       "Feedback": {},
       "PendingFeedbackEventIds": [],
       "Reactivations": {},
+      "RestartPreparations": {},
       "Classifications": {},
       "ProjectionDigest": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
       "ObservedProjectionDigest": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
@@ -274,6 +278,7 @@
       "Feedback": {},
       "PendingFeedbackEventIds": [],
       "Reactivations": {},
+      "RestartPreparations": {},
       "Classifications": {},
       "ProjectionDigest": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
       "ObservedProjectionDigest": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
@@ -351,6 +356,7 @@
       "Feedback": {},
       "PendingFeedbackEventIds": [],
       "Reactivations": {},
+      "RestartPreparations": {},
       "Classifications": {},
       "ProjectionDigest": "0C6FB4E07CCDF772ED6952443013494B821B7F84127D4AA2CB643AC48E54DF51",
       "ObservedProjectionDigest": "0C6FB4E07CCDF772ED6952443013494B821B7F84127D4AA2CB643AC48E54DF51",
@@ -485,6 +491,7 @@
       "Feedback": {},
       "PendingFeedbackEventIds": [],
       "Reactivations": {},
+      "RestartPreparations": {},
       "Classifications": {},
       "ProjectionDigest": "20889BFD9052DBEF2DEF2E37B5DBEC21613732B134722417FBEB164FFB7FBD35",
       "ObservedProjectionDigest": "20889BFD9052DBEF2DEF2E37B5DBEC21613732B134722417FBEB164FFB7FBD35",
@@ -647,6 +654,7 @@
       "Feedback": {},
       "PendingFeedbackEventIds": [],
       "Reactivations": {},
+      "RestartPreparations": {},
       "Classifications": {
         "actions:1277929203:43884202602": {
           "EventId": "actions:1277929203:43884202602",
@@ -828,6 +836,7 @@
       "Feedback": {},
       "PendingFeedbackEventIds": [],
       "Reactivations": {},
+      "RestartPreparations": {},
       "Classifications": {
         "actions:1277929203:43898043974": {
           "EventId": "actions:1277929203:43898043974",
@@ -989,6 +998,7 @@
       "Feedback": {},
       "PendingFeedbackEventIds": [],
       "Reactivations": {},
+      "RestartPreparations": {},
       "Classifications": {},
       "ProjectionDigest": null,
       "ObservedProjectionDigest": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
@@ -1212,6 +1222,7 @@
           "OccurredAt": "2026-11-17T01:11:07+00:00"
         }
       },
+      "RestartPreparations": {},
       "Classifications": {},
       "ProjectionDigest": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
       "ObservedProjectionDigest": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
@@ -1363,6 +1374,7 @@
       "Feedback": {},
       "PendingFeedbackEventIds": [],
       "Reactivations": {},
+      "RestartPreparations": {},
       "Classifications": {},
       "ProjectionDigest": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
       "ObservedProjectionDigest": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
@@ -1518,6 +1530,7 @@
       "Feedback": {},
       "PendingFeedbackEventIds": [],
       "Reactivations": {},
+      "RestartPreparations": {},
       "Classifications": {},
       "ProjectionDigest": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
       "ObservedProjectionDigest": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
@@ -1680,6 +1693,7 @@
       "Feedback": {},
       "PendingFeedbackEventIds": [],
       "Reactivations": {},
+      "RestartPreparations": {},
       "Classifications": {},
       "ProjectionDigest": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
       "ObservedProjectionDigest": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
@@ -2245,6 +2259,7 @@
         "feedback:v2:1277929203:204:1:316:7196275830:2026-11-26T15:26:44.0000000\u002B00:00"
       ],
       "Reactivations": {},
+      "RestartPreparations": {},
       "Classifications": {
         "actions:1277929203:44741515859": {
           "EventId": "actions:1277929203:44741515859",
