@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1398,
+  "Version": 1399,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "task-pr-mapped:1277929203:3:01c8ff29-c2c2-4aed-81a8-a75ea11ecb5c:323:76d56214e4b255643f719326ff42e7b9bf10721d:2026-11-26T19:55:20.5117415\u002B00:00",
@@ -1712,16 +1712,16 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 3,
-      "Version": 477,
+      "Version": 478,
       "LastEventId": "task-pr-mapped:1277929203:3:01c8ff29-c2c2-4aed-81a8-a75ea11ecb5c:323:76d56214e4b255643f719326ff42e7b9bf10721d:2026-11-26T19:55:20.5117415\u002B00:00",
-      "Phase": "CODING",
+      "Phase": "BLOCKED",
       "Ready": false,
-      "ActiveAuthorized": true,
+      "ActiveAuthorized": false,
       "ReadyAt": "2026-11-26T19:54:13+00:00",
       "FeedbackSince": "2026-11-26T19:50:30+00:00",
-      "ReactivationRequired": false,
+      "ReactivationRequired": true,
       "Paused": false,
-      "HoldReason": null,
+      "HoldReason": "Effect outcome is ambiguous.",
       "PullRequest": 323,
       "HeadSha": "76d56214e4b255643f719326ff42e7b9bf10721d",
       "Round": 3,
@@ -13473,7 +13473,7 @@
       "IssueNumber": 204,
       "Generation": 3,
       "Kind": "PublishRequiredStatus",
-      "Status": "Executing",
+      "Status": "Unknown",
       "TaskId": "task:204:3:3:9",
       "Round": 3,
       "Sha": "76d56214e4b255643f719326ff42e7b9bf10721d",
@@ -13482,7 +13482,7 @@
       "FeedbackEventIds": [],
       "CreatedAt": "2026-11-26T19:55:35.6870007+00:00",
       "StartedAt": "2026-11-26T19:55:35.6870007+00:00",
-      "CompletedAt": null,
+      "CompletedAt": "2026-11-26T19:55:35.6870007+00:00",
       "StatusBody": null,
       "TaskPrompt": null,
       "RequiredStatus": {
@@ -13493,7 +13493,8 @@
         "CiIntentId": null,
         "CiRunId": null
       },
-      "RequiredStatusBoundary": null
+      "RequiredStatusBoundary": null,
+      "FailureCode": "ExecutionException"
     },
     "labels:204:3:845CD333380895E1961B0074627A3E89BCD360FA28E3D5A7F90C54ED2B85CE4B": {
       "Id": "labels:204:3:845CD333380895E1961B0074627A3E89BCD360FA28E3D5A7F90C54ED2B85CE4B",
