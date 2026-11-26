@@ -1035,6 +1035,9 @@ public sealed class GitHubTaskIntegrationTests
         public string BaseBranch { get; init; } = "master";
         public string WorkflowPath { get; init; } = ".github/workflows/agent-state-machine.yml";
         public bool Draft { get; set; }
+        public bool PullClosed { get; set; }
+        public bool PullMerged { get; set; }
+        public bool IssueClosed { get; set; }
         public string? Corruption { get; set; }
         public string RunEvent { get; set; } = "issues";
         public bool LoseLaunchResponse { get; init; }
@@ -1121,7 +1124,7 @@ public sealed class GitHubTaskIntegrationTests
                     user = new { id = PermissionMismatch ? 66 : 55, login, type = "User" } };
             }
             else if (path == prefix + "issues/7")
-                result = new { id = 70, node_id = "I_7", number = 7, state = "open", labels = labels.Distinct().Select(name => new { name }) };
+                result = new { id = 70, node_id = "I_7", number = 7, state = IssueClosed ? "closed" : "open", labels = labels.Distinct().Select(name => new { name }) };
             else if (path == prefix + "issues/237")
                 result = new { id = 2370, number = 237, state = "open", labels = labels.Distinct().Select(name => new { name }) };
             else if (path.EndsWith("/comments"))
@@ -1197,7 +1200,7 @@ public sealed class GitHubTaskIntegrationTests
         private object Pull(int number) => new
         {
             id = Corruption == "rest-database" ? ArtifactDatabaseId + 1 : ArtifactDatabaseId, node_id = "PR_node", number,
-            state = Corruption == "closed-pr" ? "closed" : "open", merged = false, draft = Draft,
+            state = PullClosed || Corruption == "closed-pr" ? "closed" : "open", merged = PullMerged, draft = Draft,
             head = new { sha = Corruption == "sha" ? "invalid" : Corruption == "later-push" ? new string('b', 40) : HeadSha,
                 @ref = Corruption == "head-ref" ? "other" : "coding",
                 repo = new { id = Corruption == "head-repository" ? 2 : 1 } },

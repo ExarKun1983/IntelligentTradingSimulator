@@ -68,7 +68,9 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             token, trustedWorkflowPath);
         var message = GitHubActionsIngress.PrepareEvent(trustedActionsPayload, eventName, runId, evidence,
             repositoryGeneration, issueGeneration, occurredAt, boundedScope?.MaxRepairTasks ?? maxRepairTasks);
-        if (commandOnly && message?.Data is not (Pause or ResolveTaskTerminal or AbandonUncertainReview))
+        if (message?.Data is PrepareRestart && (!commandOnly || boundedScope is not null || isolatedStatusTest))
+            throw new InvalidDataException("Restart preparation requires production command-only recovery.");
+        if (commandOnly && message?.Data is not (Pause or ResolveTaskTerminal or AbandonUncertainReview or PrepareRestart))
             throw new InvalidDataException("Command-only execution supports only pause or audited terminal resolution.");
         if (isolatedStatusTest && (string.IsNullOrWhiteSpace(isolatedManifestDigest) ||
             message?.Data is not (Ready or Pause)))
@@ -100,7 +102,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                 finalHeadSource, cancellationToken, reviewApproval, ciRoute, ciApproval, statusPublisher, statusApproval,
                 boundedScope?.RetiredIssueNumber, commandOnly, isolatedStatusTest, trustedWorkflowPath,
                 requireDraftPullRequest, beforeEffect, automaticContinuations);
-        if (commandOnly && message?.Data is AbandonUncertainReview or ResolveTaskTerminal)
+        if (commandOnly && message?.Data is AbandonUncertainReview or ResolveTaskTerminal or PrepareRestart)
             return await new OrchestrationWorker(timeProvider: clock, diagnostics: liveDiagnostics)
                 .RunExclusiveAsync(scopedStore, RunVerified, token);
         return await RunVerified(token);
@@ -121,6 +123,33 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             taskApi, requireDraftPullRequest: isolatedStatusTest || requireDraftPullRequest,
             launchDiagnostics: taskLaunchDiagnostics, liveDiagnostics: liveDiagnostics);
         var reviews = new GitHubReviewAdapter(api, stateStore, clock, reviewApproval, tasks, reviewRequestDiagnostics);
+        if (message?.Data is PrepareRestart restart)
+        {
+            var state = (await stateStore.LoadAsync(token)).State;
+            if (!state.Inbox.ContainsKey(message.Id))
+            {
+                if (!state.Issues.TryGetValue(message.IssueNumber, out var issue) ||
+                    issue.PullRequest != restart.PullRequest || issue.HeadSha != restart.Sha)
+                    throw new InvalidDataException("Restart preparation does not match the canonical PR and head.");
+                await tasks.ValidateRestartTasksAsync(state, issue, token);
+                using var liveIssue = await api.GetAsync($"issues/{issue.Number}", token);
+                var issueRoot = liveIssue.RootElement;
+                using var pull = await api.GetAsync($"pulls/{restart.PullRequest}", token);
+                var root = pull.RootElement;
+                if (issueRoot.GetProperty("number").GetInt32() != issue.Number ||
+                    issueRoot.GetProperty("state").GetString() != "open" ||
+                    issueRoot.TryGetProperty("pull_request", out _) ||
+                    issueRoot.GetProperty("labels").EnumerateArray()
+                        .Any(label => label.GetProperty("name").GetString() == "agent:ready") ||
+                    root.GetProperty("number").GetInt32() != restart.PullRequest ||
+                    root.GetProperty("state").GetString() != "closed" || root.GetProperty("merged").GetBoolean() ||
+                    root.GetProperty("head").GetProperty("sha").GetString() != restart.Sha ||
+                    root.GetProperty("head").GetProperty("repo").GetProperty("id").GetInt64() != api.RepositoryId ||
+                    root.GetProperty("base").GetProperty("repo").GetProperty("id").GetInt64() != api.RepositoryId ||
+                    root.GetProperty("base").GetProperty("ref").GetString() != baseBranch)
+                    throw new InvalidDataException("Restart preparation requires an open non-ready Issue and its exact closed unmerged PR.");
+            }
+        }
         if (message?.Data is HumanClassification classification)
         {
             var state = (await stateStore.LoadAsync(token)).State;
@@ -206,6 +235,35 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         }
         if (commandOnly)
         {
+            if (message?.Data is PrepareRestart)
+            {
+                var state = (await stateStore.LoadAsync(token)).State;
+                var issue = state.Issues[message.IssueNumber];
+                if (issue.Generation != message.IssueGeneration + 1 || issue.ActiveTaskId is not null || issue.Ready)
+                    return new(WorkerStopReason.EffectsDisabled, 0, new(state, [], true));
+                var projections = new GitHubProjectionAdapter(api, projectionActorId, true);
+                var reconciler = new OrchestrationReconciler();
+                var projectionOptions = new ReconcileOptions(false, true, true, true,
+                    AllowedEffectKinds: new HashSet<EffectKind> { EffectKind.ProjectLabels, EffectKind.ProjectStatus },
+                    ProjectionOnly: true) { ProjectionIssueNumber = issue.Number };
+                if (state.Outbox.Values.Any(effect => !projectionOptions.AllowsEffect(effect) &&
+                    effect.Status is DeliveryStatus.Executing or DeliveryStatus.Unknown))
+                    throw new InvalidOperationException("Restart projections cannot reconcile another operation's in-flight effects.");
+                for (var attempt = 0; attempt < 8; attempt++)
+                {
+                    var result = await reconciler.RunAsync(stateStore, new Observations(api, clock, issue.Number), projections,
+                        projectionOptions, token);
+                    if (result.ExecutedEffect is null)
+                    {
+                        if (result.State.Outbox.Values.Any(effect => effect.Generation == issue.Generation &&
+                            projectionOptions.AllowsEffect(effect) &&
+                            effect.Status is DeliveryStatus.Pending or DeliveryStatus.Executing or DeliveryStatus.Unknown or DeliveryStatus.Failed))
+                            throw new InvalidOperationException("Restart preparation saved, but label/status projection requires reconciliation.");
+                        return new(WorkerStopReason.EffectsDisabled, attempt, result);
+                    }
+                }
+                throw new InvalidOperationException("Restart preparation saved, but label/status projection did not settle.");
+            }
             async Task<WorkerResult> Revoke(CancellationToken cancellationToken)
             {
                 var state = (await stateStore.LoadAsync(cancellationToken)).State;
@@ -441,10 +499,15 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             Task.FromResult(new WorkerEventBatch(message is null ? [] : [message]));
     }
 
-    private sealed class Observations(GitHubRepositoryApi api, TimeProvider clock) : IObservationSource
+    private sealed class Observations(GitHubRepositoryApi api, TimeProvider clock, int? issueNumber = null) : IObservationSource
     {
-        public Task<LiveObservation> ObserveAsync(RepositoryState state, CancellationToken cancellationToken) =>
-            api.ObserveAsync(state, clock.GetUtcNow(), cancellationToken);
+        public Task<LiveObservation> ObserveAsync(RepositoryState state, CancellationToken cancellationToken)
+        {
+            var observed = issueNumber is { } number
+                ? new RepositoryState { Repository = state.Repository, Issues = new() { [number] = state.Issues[number] } }
+                : state;
+            return api.ObserveAsync(observed, clock.GetUtcNow(), cancellationToken);
+        }
     }
 
     private sealed class DisabledEffects : IEffectAdapter

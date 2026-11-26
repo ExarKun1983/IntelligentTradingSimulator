@@ -81,6 +81,7 @@ public sealed class IssueState
     public Dictionary<string, FeedbackRecord> Feedback { get; set; } = [];
     public List<string> PendingFeedbackEventIds { get; set; } = [];
     public Dictionary<string, ReactivationRecord> Reactivations { get; set; } = [];
+    public Dictionary<string, RestartPreparationRecord> RestartPreparations { get; set; } = [];
     public Dictionary<string, HumanClassificationRecord> Classifications { get; set; } = [];
     public string? ProjectionDigest { get; set; }
     public string? ObservedProjectionDigest { get; set; }
@@ -183,6 +184,10 @@ public sealed record FeedbackRecord(string EventId, string Text, Actor Author, D
     string? HandedOffTaskId = null, DateTimeOffset? HandedOffAt = null);
 public sealed record ReactivationRecord(string EventId, long PreviousGeneration, long Generation,
     string Reason, Actor Author, DateTimeOffset OccurredAt);
+public sealed record RestartPreparationRecord(string EventId, long PreviousGeneration, long Generation,
+    int PullRequest, string Sha, string? TaskId, CiIdentity? Ci, ReviewIdentity? Review,
+    List<string> PendingFeedbackEventIds, int ConsecutiveCiFailures, int ConsecutiveReviewFailures,
+    string Reason, Actor Author, DateTimeOffset OccurredAt);
 public sealed record HumanClassificationRecord(string EventId, string HandoffId, Actor Author, string Reason,
     int Round, string Sha, ReviewClassification Classification, List<Finding> Findings,
     List<FindingResponse> Responses, DateTimeOffset OccurredAt);
@@ -268,6 +273,7 @@ public sealed record IssueLinkBoundary(long RepositoryId, int Issue, int PullReq
 [JsonDerivedType(typeof(Resume), "resume")]
 [JsonDerivedType(typeof(Pause), "pause")]
 [JsonDerivedType(typeof(Reactivate), "reactivate")]
+[JsonDerivedType(typeof(PrepareRestart), "prepare-restart")]
 [JsonDerivedType(typeof(TaskCompleted), "task-completed")]
 [JsonDerivedType(typeof(TaskPrMapped), "task-pr-mapped")]
 [JsonDerivedType(typeof(TaskStopped), "task-stopped")]
@@ -380,6 +386,7 @@ public sealed record StageEdited : EventData;
 public sealed record Resume : EventData;
 public sealed record Pause(string Reason) : EventData;
 public sealed record Reactivate(string Reason) : EventData;
+public sealed record PrepareRestart(int PullRequest, string Sha, string Reason) : EventData;
 public sealed record TaskCompleted(string TaskId, int PullRequest, string Sha,
     CandidateShaEvidence? Evidence = null) : EventData;
 public sealed record TaskPrMapped(string TaskId, int PullRequest, string ObservedHead) : EventData;

@@ -2829,6 +2829,54 @@ CI. Missing launch receipts still require an independently verified operation
 identity/capability or an explicitly approved design decision; the API has no
 caller-intent idempotency/search contract.
 
+#### Preparing a clean attempt after closing a PR without merge
+
+Use the production-only `operation=prepare-restart` recovery command when an
+attempt must be discarded, not repaired on its existing branch. Unlike
+`reactivate`, it does **not** make the Issue ready or start coding.
+
+1. Close the old PR without merging or deleting its branch. Leave the Issue open
+   and remove `agent:ready` if present. Let reconciliation record the exact closed,
+   unmerged PR/head and finish old-head required-status revocation.
+2. Verify that every task launched in the current generation has a saved completed
+   receipt and unchanged completed remote sessions. Running, failed, uncertain or
+   incomplete task histories are not supported by this recovery path; resolve
+   those separately. No CI, review, continuation-hold publication, Issue-link
+   revocation or pending effect may remain for this Issue. Repository-wide
+   in-flight or uncertain effects must be reconciled first; pending work for
+   other Issues is left untouched.
+3. Dispatch the reviewed deployed driver with the current repository and Issue
+   generations, old PR/head, and an audit reason:
+
+   ```bash
+   gh workflow run agent-state-machine.yml --repo "$REPO" --ref master \
+     -f operation=prepare-restart -f "issue=$ISSUE" \
+     -f "repository_generation=$REPOSITORY_GENERATION" \
+     -f "issue_generation=$ISSUE_GENERATION" \
+     -f "pull=$OLD_PR" -f "sha=$OLD_SHA" -f "reason=$REASON"
+   ```
+
+The command rechecks the live open non-ready Issue, closed unmerged same-repository
+PR/head, configured base branch, and task/session snapshots under the worker lease.
+It requires confirmed status revocation before detaching anything. It increments
+the Issue generation and archives the prior task/PR/head, CI, review obligations,
+pending feedback IDs, failure counters and operator reason in `RestartPreparations`.
+Tasks, terminal records, handoffs, feedback and inbox/outbox history are preserved;
+there is no state-ref reset, forced update, branch deletion or implied resolution
+of the old PR's findings. As with other task snapshots, this does not prove that
+someone cannot manually resume an old remote session; do not resume discarded tasks.
+
+The resulting state is unmapped `READY` with `Ready=false`, no active task, and a
+fresh feedback boundary. Only label/status projections execute, scoped to this
+Issue. Replaying the same command does not increment the generation again or launch
+work. Failure budgets start afresh under the unchanged configured caps, while
+ordinary `reactivate` cannot reset the prepared attempt's repair cap.
+After checking the status comment, the maintainer must separately add `agent:ready`.
+That later readiness starts a new initial Coding task from the configured base
+branch and requests a new PR, without inheriting the closed PR's review blockers.
+Issue scope/exclusions still govern repair prompts; review feedback cannot expand
+the implementation contract.
+
 #### Explicit review classification
 
 `classify-review` uses the same authorized ingress and live open-head checks.
