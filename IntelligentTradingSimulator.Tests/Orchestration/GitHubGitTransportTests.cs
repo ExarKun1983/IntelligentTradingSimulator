@@ -75,6 +75,29 @@ public class GitHubGitTransportTests
     }
 
     [Fact]
+    public async Task FailedBoundaryWriteAfterSuccessfulRefReadDoesNotReportReadStep()
+    {
+        var state = RepositoryState.Create("owner/repo");
+        var handler = new StubHandler((request, _) => request.Method == HttpMethod.Get
+            ? Json(new { @object = new { sha = Parent } })
+            : new(HttpStatusCode.InternalServerError));
+        using var client = Client(handler);
+        using var output = new StringWriter();
+        var diagnostics = new GitHubLiveDiagnostics(output);
+        var store = new GitStateStore(
+            new GitHubGitTransport(client, "owner/repo", allowMutations: true, diagnostics: diagnostics),
+            "owner/repo", diagnostics: diagnostics);
+
+        var exception = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            store.TrySaveAsync(new StateSnapshot(Parent, state), StateJson.Clone(state), default));
+        diagnostics.ReportEffectFailure(EffectKind.PublishRequiredStatus, EffectFailureCode.ExecutionException, exception);
+
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.False(json.RootElement.GetProperty("EffectDiagnostic").TryGetProperty("StateRead", out _));
+        Assert.Equal(2, handler.Calls);
+    }
+
+    [Fact]
     public async Task CanonicalBlobUsesActualGitApiResponseShapes()
     {
         var handler = new StubHandler((request, _) => request.RequestUri!.AbsolutePath switch

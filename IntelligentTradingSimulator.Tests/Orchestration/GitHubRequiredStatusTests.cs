@@ -119,8 +119,14 @@ public sealed class GitHubRequiredStatusTests
         var saved = Intent(state);
         switch (check)
         {
-            case "Repository": state.Repository = "private/repository"; break;
-            case "IntentKind": supplied.Kind = EffectKind.RunCi; break;
+            case "Repository":
+                state.Repository = "private/repository";
+                saved.RequiredStatusBoundary = new(Publisher.ActorId, Publisher.Login, Publisher.NodeId, Publisher.Type, Now, []);
+                break;
+            case "IntentKind":
+                supplied.Kind = EffectKind.RunCi;
+                saved.RequiredStatusBoundary = new(Publisher.ActorId, Publisher.Login, Publisher.NodeId, Publisher.Type, Now, []);
+                break;
             case "IntentExists": state.Outbox.Remove(saved.Id); break;
             case "Digest": saved.Digest = "private-digest"; break;
             case "DeliveryState": saved.Status = DeliveryStatus.Pending; break;
@@ -160,7 +166,8 @@ public sealed class GitHubRequiredStatusTests
         var validation = failure.GetProperty("RequiredStatusValidation");
         Assert.Equal(check, validation.GetProperty("Check").GetString());
         Assert.Equal(state.Version, validation.GetProperty("ObservedVersion").GetInt64());
-        Assert.Equal(check == "Unprepared", validation.GetProperty("BoundaryPresent").GetBoolean());
+        Assert.Equal(check is "Repository" or "IntentKind" or "Unprepared",
+            validation.GetProperty("BoundaryPresent").GetBoolean());
         Assert.Equal(before, StateJson.Serialize(store.Value));
         Assert.Empty(api.Requests);
         Assert.Equal(0, api.Posts);

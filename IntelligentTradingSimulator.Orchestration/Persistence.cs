@@ -40,6 +40,7 @@ public sealed class GitStateStore(
         if (tip is null)
         {
             RequireExplicitInitialization();
+            diagnostics?.ClearStateRead();
             return new(null, RepositoryState.Create(repository));
         }
         Interlocked.Exchange(ref observedExistingState, 1);
@@ -62,6 +63,7 @@ public sealed class GitStateStore(
         diagnostics?.MarkStateRead(GitStateReadStep.Continuation);
         OrchestrationContinuation.Validate(state);
         Interlocked.Exchange(ref cachedCommit, commit);
+        diagnostics?.ClearStateRead();
         return new(tip, state);
     }
 
@@ -74,6 +76,7 @@ public sealed class GitStateStore(
         var current = await transport.ReadRefAsync(reference, cancellationToken);
         if (current is null) RequireExplicitInitialization();
         else Interlocked.Exchange(ref observedExistingState, 1);
+        diagnostics?.ClearStateRead();
         if (current != expected.Revision) return false;
         var blob = await transport.CreateBlobAsync(StateJson.Serialize(state), cancellationToken);
         var tree = await transport.CreateTreeAsync("state.json", blob, cancellationToken);

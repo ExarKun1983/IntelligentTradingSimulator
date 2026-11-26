@@ -160,7 +160,8 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
         diagnostics?.Mark(GitHubLiveStage.RequiredStatusCanonicalIntent);
         EffectIntent? saved = null;
         InvalidDataException Rejected(RequiredStatusIntentCheck check) =>
-            InvalidIntent(state, saved, intent, check, "Required status is not a canonical executing intent.");
+            InvalidIntent(state, saved ?? (state.Outbox.TryGetValue(intent.Id, out var observed) ? observed : null),
+                intent, check, "Required status is not a canonical executing intent.");
         if (state.Repository != api.Repository) throw Rejected(RequiredStatusIntentCheck.Repository);
         if (intent.Kind != EffectKind.PublishRequiredStatus) throw Rejected(RequiredStatusIntentCheck.IntentKind);
         if (!state.Outbox.TryGetValue(intent.Id, out saved))

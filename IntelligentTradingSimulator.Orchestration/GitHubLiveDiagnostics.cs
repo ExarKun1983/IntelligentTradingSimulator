@@ -49,6 +49,7 @@ public sealed class GitHubLiveDiagnostics(TextWriter? effectError = null)
         stateRead = null;
     }
     internal void MarkStateRead(GitStateReadStep value) => stateRead = value;
+    internal void ClearStateRead() => stateRead = null;
     internal void BeginEffectExecution(EffectKind kind, long version) =>
         expectedExecutingVersion = kind == EffectKind.PublishRequiredStatus ? version : null;
     internal void EndEffectExecution() => expectedExecutingVersion = null;
