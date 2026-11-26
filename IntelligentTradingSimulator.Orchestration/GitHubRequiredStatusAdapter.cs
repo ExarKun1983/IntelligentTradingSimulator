@@ -107,6 +107,41 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
         return new(DeliveryStatus.Succeeded, id.ToString(CultureInfo.InvariantCulture));
     }
 
+    internal async Task<RestartStatusVerification> ValidateRestartStatusAcknowledgementsAsync(
+        RepositoryState state, IssueState issue, PrepareRestart restart, CancellationToken token)
+    {
+        var acknowledgements = RequiredStatusPolicy.RestartStatusAcknowledgements(state, issue, restart);
+        if (acknowledgements.Count == 0)
+            throw new InvalidDataException("Restart status risk verification requires explicit uncertain intent identities.");
+        if (approval?.AllowsPublication != true || state.Repository != api.Repository ||
+            issue.Phase != Phase.CLOSED || issue.TerminalOutcome != TerminalOutcome.Unmerged ||
+            issue.Ready || issue.ActiveAuthorized || issue.PullRequest != restart.PullRequest ||
+            issue.HeadSha != restart.Sha ||
+            issue.RequiredStatusIntentId is not { } currentId || !state.Outbox.TryGetValue(currentId, out var current) ||
+            current.Status != DeliveryStatus.Succeeded || current.RequiredStatus?.State != "error" ||
+            !RequiredStatusPolicy.Matches(state, issue, current))
+            throw new InvalidDataException("Restart status risk validation requires a stopped attempt and confirmed closed-head revocation.");
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusPublisher);
+        ValidatePublisher(new(publisher.ActorId, publisher.Login, publisher.NodeId, publisher.Type, clock.GetUtcNow(), []));
+        await api.VerifyRepositoryAsync(token);
+        using var actor = await api.GetGlobalAsync("users/" + Uri.EscapeDataString(publisher.Login), token);
+        ValidateActor(actor.RootElement, publisher.ActorId, publisher.Login, publisher.NodeId, publisher.Type);
+        foreach (var correction in acknowledgements.Select(item => state.Outbox[item.CorrectiveIntentId]).Append(current))
+        {
+            if (correction.RequiredStatusBoundary is not { StatusId: > 0 } boundary ||
+                correction.ExternalId != boundary.StatusId.Value.ToString(CultureInfo.InvariantCulture))
+                throw new InvalidDataException("Restart requires an exact saved corrective status receipt.");
+            ValidatePublisher(boundary);
+            var statuses = await ReadStatusesAsync(correction, token);
+            var latest = statuses.Where(status => status.GetProperty("context").GetString() == RequiredStatusPolicy.Context)
+                .OrderByDescending(status => status.GetProperty("created_at").GetDateTimeOffset())
+                .ThenByDescending(status => status.GetProperty("id").GetInt64()).FirstOrDefault();
+            if (latest.ValueKind != JsonValueKind.Object || ValidateStatus(latest, correction, boundary) != boundary.StatusId)
+                throw new InvalidDataException("The latest live required status is not the acknowledged corrective error receipt.");
+        }
+        return new(acknowledgements, current.Id, current.RequiredStatusBoundary!.StatusId!.Value);
+    }
+
     private IssueState ValidateIntent(RepositoryState state, EffectIntent intent)
     {
         if (state.Repository != api.Repository || intent.Kind != EffectKind.PublishRequiredStatus ||

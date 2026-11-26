@@ -5,6 +5,47 @@ public static class RequiredStatusPolicy
 {
     public const string Context = "Agent managed CI";
 
+    internal static List<RestartStatusAcknowledgement> RestartStatusAcknowledgements(
+        RepositoryState state, IssueState issue, PrepareRestart restart)
+    {
+        var ids = restart.AcknowledgedUncertainStatusIntentIds ?? [];
+        var uncertain = state.Outbox.Values.Where(effect =>
+            effect.IssueNumber == issue.Number && effect.Status == DeliveryStatus.Unknown).ToList();
+        if (ids.Count > 16 || ids.Any(string.IsNullOrWhiteSpace) ||
+            ids.Distinct(StringComparer.Ordinal).Count() != ids.Count || ids.Count != uncertain.Count ||
+            uncertain.Any(effect => !ids.Contains(effect.Id, StringComparer.Ordinal)))
+            throw new InvalidOperationException("Restart requires exact acknowledgement of every uncertain status intent.");
+        var acknowledgements = new List<RestartStatusAcknowledgement>();
+        foreach (var effect in uncertain)
+        {
+            if (effect.Kind != EffectKind.PublishRequiredStatus || effect.Generation != issue.Generation ||
+                effect.RequiredStatus is not { State: "pending", Context: Context } ||
+                effect.RequiredStatusBoundary is not null || effect.ExternalId is not null ||
+                effect.CompletedAt is not { } completedAt || effect.Sha is not { Length: 40 } sha ||
+                !sha.All(Uri.IsHexDigit) || sha == restart.Sha ||
+                !issue.Tasks.Values.Any(task => task.Status == TaskStatus.Completed && task.LaunchConfirmed &&
+                    task.FinalSha == sha && task.CandidateShaEvidence?.PullRequest == restart.PullRequest &&
+                    state.Outbox.Values.Any(launch => launch.Kind == EffectKind.LaunchTask &&
+                        launch.IssueNumber == issue.Number && launch.Generation == issue.Generation &&
+                        launch.TaskId == task.Id && launch.Status == DeliveryStatus.Succeeded &&
+                        launch.ExternalId == task.ExternalId && !string.IsNullOrWhiteSpace(launch.ExternalId))))
+                throw new InvalidOperationException("Only unprepared pending status uncertainty on a discarded earlier task head can be acknowledged.");
+            var correction = state.Outbox.Values.Where(candidate =>
+                candidate.Kind == EffectKind.PublishRequiredStatus && candidate.IssueNumber == issue.Number &&
+                candidate.Generation == issue.Generation && candidate.Sha == sha &&
+                candidate.Status == DeliveryStatus.Succeeded &&
+                candidate.RequiredStatus is { State: "error", Context: Context } &&
+                candidate.RequiredStatusBoundary is { StatusId: > 0 } boundary &&
+                boundary.PreparedAt > completedAt &&
+                candidate.ExternalId == boundary.StatusId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                .OrderByDescending(candidate => candidate.RequiredStatusBoundary!.PreparedAt).FirstOrDefault();
+            if (correction is null)
+                throw new InvalidOperationException("Acknowledged status uncertainty requires a confirmed later corrective error on its exact SHA.");
+            acknowledgements.Add(new(effect.Id, correction.Id, sha, correction.RequiredStatusBoundary!.StatusId!.Value));
+        }
+        return acknowledgements;
+    }
+
     internal static bool RequiresIssueLinkRevocation(RepositoryState state, IssueState issue) =>
         issue.PullRequest is > 0 && HasOutstandingIssueLinkRevocation(state, issue);
 

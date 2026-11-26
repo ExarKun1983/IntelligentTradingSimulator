@@ -79,6 +79,7 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
             message = message with { Data = ready with { SinglePassTest = boundedScope.SinglePassTest } };
         message = RestoreCommittedReadyReplay(snapshot.State, message);
         message = RestoreCommittedReviewAbandonmentReplay(snapshot.State, message);
+        message = RestoreCommittedRestartReplay(snapshot.State, message);
         ValidateGeneration(snapshot.State, issueNumber,
             repositoryGeneration, issueGeneration, message);
         if (isolatedStatusTest)
@@ -126,6 +127,8 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         if (message?.Data is PrepareRestart restart)
         {
             var state = (await stateStore.LoadAsync(token)).State;
+            message = RestoreCommittedRestartReplay(state, message)!;
+            restart = (PrepareRestart)message.Data;
             if (!state.Inbox.ContainsKey(message.Id))
             {
                 if (!state.Issues.TryGetValue(message.IssueNumber, out var issue) ||
@@ -148,6 +151,14 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                     root.GetProperty("base").GetProperty("repo").GetProperty("id").GetInt64() != api.RepositoryId ||
                     root.GetProperty("base").GetProperty("ref").GetString() != baseBranch)
                     throw new InvalidDataException("Restart preparation requires an open non-ready Issue and its exact closed unmerged PR.");
+                if (restart.AcknowledgedUncertainStatusIntentIds is { Count: > 0 })
+                {
+                    if (statusPublisher is null || statusApproval?.AllowsPublication != true)
+                        throw new InvalidDataException("Restart status acknowledgement requires verified status publisher approval.");
+                    var verification = await new GitHubRequiredStatusAdapter(api, stateStore, statusPublisher, statusApproval, clock, liveDiagnostics)
+                        .ValidateRestartStatusAcknowledgementsAsync(state, issue, restart, token);
+                    message = message with { Data = restart with { StatusRiskVerification = verification } };
+                }
             }
         }
         if (message?.Data is HumanClassification classification)
@@ -421,6 +432,17 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         if (state.Generation != repositoryGeneration ||
             state.Issues.TryGetValue(issueNumber, out var issue) && issue.Generation != issueGeneration && !committedReplay)
             throw new InvalidDataException("Expected workflow generation does not match canonical state.");
+    }
+
+    private static OrchestrationEvent? RestoreCommittedRestartReplay(RepositoryState state, OrchestrationEvent? message)
+    {
+        if (message?.Data is not PrepareRestart restart ||
+            !state.Inbox.TryGetValue(message.Id, out var saved) || saved.Event is not { Data: PrepareRestart previous } committed)
+            return message;
+        if ((message with { OccurredAt = committed.OccurredAt, Data = restart with { StatusRiskVerification = null } }).Digest !=
+            (committed with { Data = previous with { StatusRiskVerification = null } }).Digest)
+            throw new InvalidDataException("Restart command replay does not match its original operator inputs.");
+        return committed;
     }
 
     private static OrchestrationEvent? RestoreCommittedReadyReplay(RepositoryState state, OrchestrationEvent? message)

@@ -126,6 +126,16 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     idOverride: LabelProjectionId(issue, readinessLabels), labels: readinessLabels);
                 break;
             case PrepareRestart restart:
+                var acknowledgedStatuses = RequiredStatusPolicy.RestartStatusAcknowledgements(state, issue, restart);
+                if (acknowledgedStatuses.Count == 0 && restart.StatusRiskVerification is not null ||
+                    acknowledgedStatuses.Count > 0 &&
+                    (restart.StatusRiskVerification is not { } verification ||
+                     !acknowledgedStatuses.SequenceEqual(verification.Acknowledgements) ||
+                     verification.ClosedHeadIntentId != issue.RequiredStatusIntentId ||
+                     !state.Outbox.TryGetValue(verification.ClosedHeadIntentId, out var verifiedClosedHead) ||
+                     verifiedClosedHead.RequiredStatusBoundary?.StatusId != verification.ClosedHeadStatusId ||
+                     verifiedClosedHead.ExternalId != verification.ClosedHeadStatusId.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+                    throw new InvalidOperationException("Restart status receipts changed after live verification.");
                 if (message.Actor.Id is not > 0 || message.Actor.Type != "User" ||
                     string.IsNullOrWhiteSpace(restart.Reason) || restart.Reason.Length > 2048 ||
                     issue.SinglePassTest || issue.Phase != Phase.CLOSED ||
@@ -141,7 +151,9 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     state.Outbox.Values.Any(effect => effect.Status == DeliveryStatus.Executing ||
                         OrchestrationReconciler.IsExclusiveUncertain(effect) ||
                         effect.IssueNumber == issue.Number &&
-                        effect.Status is DeliveryStatus.Pending or DeliveryStatus.Unknown))
+                        (effect.Status == DeliveryStatus.Pending ||
+                         effect.Status == DeliveryStatus.Unknown &&
+                         !acknowledgedStatuses.Any(acknowledgement => acknowledgement.UncertainIntentId == effect.Id))))
                     throw new InvalidOperationException("Restart preparation requires a settled, closed unmerged PR at the exact recorded head.");
                 if (state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number &&
                         effect.Kind == EffectKind.PublishRequiredStatus) &&
@@ -155,7 +167,10 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                 issue.RestartPreparations.Add(message.Id, new(message.Id, restartGeneration, issue.Generation,
                     restart.PullRequest, restart.Sha, issue.ActiveTaskId, issue.Ci, issue.Review,
                     issue.PendingFeedbackEventIds.ToList(), issue.ConsecutiveCiFailures, issue.ConsecutiveReviewFailures,
-                    restart.Reason, message.Actor, message.OccurredAt));
+                    restart.Reason, message.Actor, message.OccurredAt)
+                {
+                    StatusRiskVerification = restart.StatusRiskVerification
+                });
                 issue.PullRequest = null;
                 issue.HeadSha = null;
                 issue.ActiveTaskId = null;
