@@ -15,7 +15,155 @@ public sealed class GitHubRequiredStatusTests
     private static readonly GitHubRequiredStatusApproval Approved = new(true, true, true, true, true);
 
     [Theory]
-    [InlineData("preflight", "RequiredStatusPreflight", "HttpRequestException", 403, 0)]
+    [InlineData("actor", "RequiredStatusPublisher")]
+    [InlineData("head", "RequiredStatusLiveHead")]
+    public async Task ReadOnlyPendingStatusRejectionRetriesAndRepairContinuesToCiAndReview(string corruption, string stage)
+    {
+        var reducer = new OrchestrationReducer(new Allow(), requiredStatusEnabled: true);
+        var store = new Store(RunningRepair(reducer));
+        var rejectedId = Intent(store.Value).Id;
+        using var api = new Api { Corruption = corruption };
+        using var client = api.Client();
+        using var output = new StringWriter();
+        var diagnostics = new GitHubLiveDiagnostics(output);
+        var adapter = new GitHubRequiredStatusAdapter(new(client, "owner/repo", 1), store, Publisher, Approved,
+            new Clock(), diagnostics);
+        var reconciler = new OrchestrationReconciler(reducer, diagnostics);
+        var options = new ReconcileOptions(false, true, true, true,
+            AllowedEffectKinds: new HashSet<EffectKind> { EffectKind.PublishRequiredStatus });
+
+        await reconciler.RunAsync(store, new Observations(), new RecordingEffects(adapter), options);
+
+        Assert.Equal(DeliveryStatus.Cancelled, store.Value.Outbox[rejectedId].Status);
+        Assert.Equal(EffectFailureCode.RequiredStatusPreflightRejected, store.Value.Outbox[rejectedId].FailureCode);
+        Assert.Null(store.Value.Outbox[rejectedId].RequiredStatusBoundary);
+        Assert.Equal(0, api.Posts);
+        Assert.False(store.Value.Issues[7].ReactivationRequired);
+        Assert.Contains("RequiredStatusPreflightRejected", output.ToString());
+        Assert.Contains($"\"Stage\":\"{stage}\"", output.ToString());
+
+        api.Corruption = null;
+        await reconciler.RunAsync(store, new Observations(), new RecordingEffects(adapter), options);
+        Assert.Equal(1, api.Posts);
+        Assert.Equal(DeliveryStatus.Succeeded, Intent(store.Value).Status);
+        Assert.NotEqual(rejectedId, Intent(store.Value).Id);
+
+        var issue = store.Value.Issues[7];
+        var repair = issue.Tasks[issue.ActiveTaskId!];
+        var finalSha = new string('c', 40);
+        store.Value = reducer.Apply(store.Value, new("repair-completed", "owner/repo", 7, 1, 1,
+            new("task-api", ActorKind.TaskService), Now,
+            new TaskCompleted(repair.Id, 17, finalSha,
+                new(1, TaskTerminalRecovery.CandidateShaPolicy, repair.Id, repair.ExternalId!, ["repair-session"], 17, finalSha))));
+        var live = Live();
+        live.Issues[7].HeadSha = finalSha;
+        live.Issues[7].CompletedTaskId = repair.Id;
+        store.Value = reducer.Reconcile(store.Value, live).State;
+        Assert.Equal(Phase.CI_PENDING, store.Value.Issues[7].Phase);
+        var ci = Assert.Single(store.Value.Outbox.Values, effect => effect.Kind == EffectKind.RunCi &&
+            effect.TaskId == repair.Id);
+        Assert.Equal(finalSha, ci.Sha);
+        store.Value = reducer.MarkExecuting(store.Value, ci.Id, Now);
+        store.Value = reducer.RecordOutcome(store.Value, ci.Id, new(DeliveryStatus.Succeeded, "91"), Now);
+        store.Value = reducer.Apply(store.Value, new("repair-ci-green", "owner/repo", 7, 1, 1,
+            new("ci-api", ActorKind.CiService), Now, new CiResult("91", repair.Id, repair.Round, 17, finalSha, true)));
+        store.Value = reducer.Reconcile(store.Value, live).State;
+        var review = Assert.Single(store.Value.Outbox.Values, effect => effect.Kind == EffectKind.RequestReview &&
+            effect.TaskId == repair.Id);
+        Assert.Equal(finalSha, review.Sha);
+        Assert.Equal(DeliveryStatus.Pending, review.Status);
+    }
+
+    [Fact]
+    public async Task RepeatedReadOnlyRejectionsStopAfterThreeAttemptsWithoutPosting()
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var store = new Store(RunningRepair(reducer));
+        using var api = new Api { Corruption = "actor" };
+        using var client = api.Client();
+        var reconciler = new OrchestrationReconciler(reducer);
+        var effects = new RecordingEffects(Adapter(client, store));
+        var options = new ReconcileOptions(false, true, true, true,
+            AllowedEffectKinds: new HashSet<EffectKind> { EffectKind.PublishRequiredStatus });
+
+        for (var attempt = 0; attempt < 5; attempt++)
+            await reconciler.RunAsync(store, new Observations(), effects, options);
+
+        var rejections = store.Value.Outbox.Values.Where(effect =>
+            effect.FailureCode == EffectFailureCode.RequiredStatusPreflightRejected).ToList();
+        Assert.Equal(3, rejections.Count);
+        Assert.Equal(2, rejections.Count(effect => effect.Status == DeliveryStatus.Cancelled));
+        Assert.Single(rejections, effect => effect.Status == DeliveryStatus.Failed);
+        Assert.All(rejections, effect => Assert.Null(effect.RequiredStatusBoundary));
+        Assert.Equal(0, api.Posts);
+        Assert.Equal(Phase.BLOCKED, store.Value.Issues[7].Phase);
+    }
+
+    [Fact]
+    public async Task PendingStatusFailureAfterSavedBoundaryRemainsLookupOnly()
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var store = new Store(RunningRepair(reducer));
+        var id = Intent(store.Value).Id;
+        using var api = new Api();
+        using var client = api.Client();
+        store.RejectSave = next =>
+        {
+            if (next.Outbox[id].RequiredStatusBoundary is not null) api.Corruption = "actor";
+            return false;
+        };
+        var adapter = Adapter(client, store);
+        await new OrchestrationReconciler(reducer).RunAsync(store, new Observations(),
+            new RecordingEffects(adapter), new(false, true, true, true,
+                AllowedEffectKinds: new HashSet<EffectKind> { EffectKind.PublishRequiredStatus }));
+
+        Assert.Equal(DeliveryStatus.Unknown, store.Value.Outbox[id].Status);
+        Assert.NotNull(store.Value.Outbox[id].RequiredStatusBoundary);
+        Assert.Equal(Phase.BLOCKED, store.Value.Issues[7].Phase);
+        api.Corruption = null;
+        Assert.Equal(DeliveryStatus.Unknown, (await adapter.ReconcileAsync(store.Value.Outbox[id], default)).Status);
+        Assert.Equal(0, api.Posts);
+    }
+
+    private static RepositoryState RunningRepair(OrchestrationReducer reducer)
+    {
+        var state = State();
+        var issue = state.Issues[7];
+        issue.Phase = Phase.FIX_PENDING;
+        issue.ReactivationRequired = false;
+        issue.ActiveAuthorized = true;
+        issue.HoldReason = null;
+        issue.Review!.Classification = ReviewClassification.Blocking;
+        state = reducer.Reconcile(state, Live()).State;
+        var launch = Assert.Single(state.Outbox.Values, effect => effect.Kind == EffectKind.LaunchTask);
+        state = reducer.MarkExecuting(state, launch.Id, Now);
+        return reducer.RecordOutcome(state, launch.Id, new(DeliveryStatus.Succeeded, "repair-remote-task"), Now);
+    }
+
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("boundary")]
+    [InlineData("success")]
+    public void ReadOnlyRejectionCannotDowngradeAnUncertainPreparedOrSuccessPublication(string problem)
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var state = RunningRepair(reducer);
+        var id = Intent(state).Id;
+        state = reducer.MarkExecuting(state, id, Now);
+        var intent = state.Outbox[id];
+        if (problem == "unknown")
+            state = reducer.RecordOutcome(state, id, new(DeliveryStatus.Unknown), Now);
+        else if (problem == "boundary")
+            intent.RequiredStatusBoundary = new(Publisher.ActorId, Publisher.Login, Publisher.NodeId, Publisher.Type, Now, []);
+        else
+            intent.RequiredStatus = intent.RequiredStatus! with { State = "success" };
+
+        Assert.Throws<InvalidOperationException>(() => reducer.RecordOutcome(state, id,
+            new(DeliveryStatus.Cancelled, FailureCode: EffectFailureCode.RequiredStatusPreflightRejected), Now));
+    }
+
+    [Theory]
+    [InlineData("preflight", "RequiredStatusLiveHead", "HttpRequestException", 403, 0)]
     [InlineData("lookup", "RequiredStatusLookup", "HttpRequestException", 403, 0)]
     [InlineData("boundary", "RequiredStatusBoundary", "IOException", null, 0)]
     [InlineData("post", "RequiredStatusPublication", "HttpRequestException", null, 1)]

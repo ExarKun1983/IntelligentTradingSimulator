@@ -2245,6 +2245,26 @@ Cancellation preserves executing links as uncertain and attempts approved revoca
 with a separate 45-second cleanup token before releasing the lease. Failure to
 persist cleanup state retains the lease for explicit recovery/expiry; uncertain
 status delivery remains lookup-only.
+
+For a new `pending` required-status publication, an `InvalidDataException` during
+the initial read-only preflight is recorded as
+`FailureCode=RequiredStatusPreflightRejected`, not an uncertain POST. Only an
+executing pending intent with no saved publication boundary and no external
+receipt can take this path. The first two rejections cancel that intent; a later
+reconciliation creates a fresh intent and revalidates all prerequisites. A third
+rejection for the same Issue generation, task and SHA records `Failed` and holds
+the Issue instead of retrying indefinitely. Rejected attempts remain in the outbox;
+they do not consume coding-repair budgets or imply a delivered status.
+
+Diagnostics distinguish status eligibility, publisher identity, repository identity
+and live-head preflight stages without logging API bodies or exception messages.
+Success/error publication, transport failures, and failures after boundary
+preparation retain the existing conservative failure/uncertainty behavior.
+In particular, a saved boundary, interrupted POST or failed confirmation remains
+lookup-only, even if no receipt is found. Historical `Unknown` statuses are never
+retroactively cancelled using this new path. Existing held attempts still need
+audited recovery after checking the live task/head and corrective statuses.
+
 Linking and merge are not transactional: verify the link in Development before
 the manual merge, especially if a concurrent edit or merge
 interrupts projection. This does not retrofit already-merged PRs or close old

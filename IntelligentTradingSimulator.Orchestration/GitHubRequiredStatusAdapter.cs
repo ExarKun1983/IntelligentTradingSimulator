@@ -37,7 +37,21 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
         var issue = ValidateIntent(state, intent);
         if (intent.RequiredStatusBoundary is not null || state.Outbox[intent.Id].RequiredStatusBoundary is not null)
             throw new InvalidDataException("Prepared status publication is lookup-only.");
-        await PreflightAsync(state, issue, intent, token);
+        try
+        {
+            await PreflightAsync(state, issue, intent, token);
+        }
+        catch (InvalidDataException exception) when (intent.RequiredStatus?.State == "pending")
+        {
+            // This invocation has not prepared or sent a POST. Never apply this retry path after the boundary.
+            diagnostics?.ReportEffectFailure(intent.Kind, EffectFailureCode.RequiredStatusPreflightRejected, exception);
+            var rejected = state.Outbox.Values.Count(previous => previous.Kind == EffectKind.PublishRequiredStatus &&
+                previous.IssueNumber == intent.IssueNumber && previous.Generation == intent.Generation &&
+                previous.TaskId == intent.TaskId && previous.Sha == intent.Sha &&
+                previous.FailureCode == EffectFailureCode.RequiredStatusPreflightRejected);
+            return new(rejected < 2 ? DeliveryStatus.Cancelled : DeliveryStatus.Failed,
+                FailureCode: EffectFailureCode.RequiredStatusPreflightRejected);
+        }
         var statuses = await ReadStatusesAsync(intent, token);
         var boundary = new RequiredStatusBoundary(publisher.ActorId, publisher.Login, publisher.NodeId,
             publisher.Type, clock.GetUtcNow(), statuses.Select(item => item.GetProperty("id").GetInt64()).ToList());
@@ -115,12 +129,16 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
 
     private async Task PreflightAsync(RepositoryState state, IssueState issue, EffectIntent intent, CancellationToken token)
     {
-        diagnostics?.Mark(GitHubLiveStage.RequiredStatusPreflight);
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusEligibility);
         ValidateCurrent(state, issue, intent);
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusPublisher);
         ValidatePublisher(new(publisher.ActorId, publisher.Login, publisher.NodeId, publisher.Type, clock.GetUtcNow(), []));
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusRepository);
         await api.VerifyRepositoryAsync(token);
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusPublisher);
         using var actor = await api.GetGlobalAsync("users/" + Uri.EscapeDataString(publisher.Login), token);
         ValidateActor(actor.RootElement, publisher.ActorId, publisher.Login, publisher.NodeId, publisher.Type);
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusLiveHead);
         using var liveIssue = await api.GetAsync($"issues/{issue.Number}", token);
         using var pull = await api.GetAsync($"pulls/{issue.PullRequest}", token);
         var pr = pull.RootElement;

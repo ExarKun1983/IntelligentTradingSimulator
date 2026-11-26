@@ -11,7 +11,8 @@ public enum GitHubLiveStage
     CiJobEvidence, ReviewObservation, EventPublication, LiveObservation, ReconcileDecision,
     ReconcileStateSave, EffectRecovery, EffectSelection, EffectExecution, EffectOutcomeSave,
     WorkerLeaseRelease, RequiredStatusPreflight, RequiredStatusLookup, RequiredStatusBoundary,
-    RequiredStatusPublication, RequiredStatusConfirmation
+    RequiredStatusPublication, RequiredStatusConfirmation, RequiredStatusEligibility,
+    RequiredStatusPublisher, RequiredStatusRepository, RequiredStatusLiveHead
 }
 
 public sealed class GitHubLiveDiagnostics(TextWriter? effectError = null)

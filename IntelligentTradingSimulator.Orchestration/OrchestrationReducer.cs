@@ -913,9 +913,16 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
 
     public RepositoryState RecordOutcome(RepositoryState input, string id, EffectOutcome outcome, DateTimeOffset now)
     {
-        if (outcome.Status is not (DeliveryStatus.Succeeded or DeliveryStatus.Failed or DeliveryStatus.Unknown))
-            throw new InvalidOperationException("Invalid effect outcome.");
         var existing = input.Outbox[id];
+        var readOnlyRejection = outcome.FailureCode == EffectFailureCode.RequiredStatusPreflightRejected &&
+            existing.Kind == EffectKind.PublishRequiredStatus && existing.RequiredStatus?.State == "pending" &&
+            existing.Status == DeliveryStatus.Executing && existing.RequiredStatusBoundary is null &&
+            existing.ExternalId is null && outcome.ExternalId is null &&
+            outcome.Status is DeliveryStatus.Cancelled or DeliveryStatus.Failed;
+        if (outcome.Status is not (DeliveryStatus.Succeeded or DeliveryStatus.Failed or DeliveryStatus.Unknown) &&
+            !(outcome.Status == DeliveryStatus.Cancelled && readOnlyRejection) ||
+            outcome.FailureCode == EffectFailureCode.RequiredStatusPreflightRejected && !readOnlyRejection)
+            throw new InvalidOperationException("Invalid effect outcome.");
         if (existing.Kind == EffectKind.LinkIssue && outcome.Status == DeliveryStatus.Failed &&
             outcome.FailureCode == EffectFailureCode.IssueLinkNotStarted &&
             (outcome.IssueLinkFailure is not { } proof || existing.IssueLink is not { Version: 1 } ||
@@ -1452,7 +1459,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
     private static void PlanRequiredStatus(RepositoryState state, IssueState issue, DateTimeOffset now)
     {
         if (issue.RequiredStatusIntentId is { } previousId && state.Outbox.TryGetValue(previousId, out var previous) &&
-            RequiredStatusPolicy.Matches(state, issue, previous)) return;
+            previous.Status != DeliveryStatus.Cancelled && RequiredStatusPolicy.Matches(state, issue, previous)) return;
         foreach (var stale in state.Outbox.Values.Where(effect => effect.IssueNumber == issue.Number &&
                      effect.Kind == EffectKind.PublishRequiredStatus && effect.Status == DeliveryStatus.Pending))
             stale.Status = DeliveryStatus.Cancelled;

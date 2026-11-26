@@ -12,6 +12,7 @@ public enum EffectFailureCode
     OperatorAbandonedUnknownTaskLaunch,
     ExecutionException,
     RecoveryException,
+    RequiredStatusPreflightRejected,
     IssueLinkNotStarted,
     IssueLinkBoundaryChanged,
     Interrupted
