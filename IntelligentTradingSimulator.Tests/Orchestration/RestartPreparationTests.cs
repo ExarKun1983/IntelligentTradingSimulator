@@ -71,6 +71,8 @@ public sealed class RestartPreparationTests
     [InlineData("unknown-effect")]
     [InlineData("pending-effect")]
     [InlineData("other-uncertain")]
+    [InlineData("other-executing-status")]
+    [InlineData("own-uncertain-status")]
     [InlineData("status-not-revoked")]
     [InlineData("single-pass")]
     [InlineData("stale-generation")]
@@ -90,10 +92,26 @@ public sealed class RestartPreparationTests
             case "unknown-effect": state.Outbox["launch"].Status = DeliveryStatus.Unknown; break;
             case "pending-effect": state.Outbox["launch"].Status = DeliveryStatus.Pending; break;
             case "other-uncertain":
+            case "other-executing-status":
                 state.Issues[8] = new() { Number = 8 };
                 state.Outbox["other"] = new()
                 {
-                    Id = "other", IssueNumber = 8, Kind = EffectKind.ProjectLabels, Status = DeliveryStatus.Unknown
+                    Id = "other", IssueNumber = 8,
+                    Kind = problem == "other-uncertain" ? EffectKind.ProjectLabels : EffectKind.PublishRequiredStatus,
+                    Status = problem == "other-uncertain" ? DeliveryStatus.Unknown : DeliveryStatus.Executing
+                };
+                break;
+            case "own-uncertain-status":
+                state.Outbox["status"] = new()
+                {
+                    Id = "status", IssueNumber = 7, Kind = EffectKind.PublishRequiredStatus, Status = DeliveryStatus.Unknown
+                };
+                issue.RequiredStatusIntentId = "revoked";
+                state.Outbox["revoked"] = new()
+                {
+                    Id = "revoked", IssueNumber = 7, Generation = 1, Kind = EffectKind.PublishRequiredStatus,
+                    TaskId = issue.ActiveTaskId, Round = issue.Round, Sha = Sha, Status = DeliveryStatus.Succeeded,
+                    RequiredStatus = RequiredStatusPolicy.ForIntent(state, issue, "revoked")
                 };
                 break;
             case "status-not-revoked":
@@ -207,18 +225,26 @@ public sealed class RestartPreparationTests
             GitHubActionsIngress.PrepareEvent(payload, "workflow_dispatch", "44", evidence, 1, 1, Now));
     }
 
-    [Fact]
-    public async Task ProductionPreparationProjectsOnlyAndReplayCannotLaunchOrIncrementAgain()
+    [Theory]
+    [InlineData(DeliveryStatus.Pending, EffectKind.ProjectLabels)]
+    [InlineData(DeliveryStatus.Unknown, EffectKind.PublishRequiredStatus)]
+    public async Task ProductionPreparationProjectsOnlyAndReplayCannotLaunchOrIncrementAgain(
+        DeliveryStatus otherStatus, EffectKind otherKind)
     {
         using var fixture = Fixture();
         var store = new GitHubTaskIntegrationTests.Store(ClosedState());
-        store.State.Issues[8] = new() { Number = 8, Ready = true };
+        store.State.Issues[8] = new() { Number = 8, Generation = 2, Ready = true };
         store.State.Outbox["other"] = new()
         {
-            Id = "other", IssueNumber = 8, Kind = EffectKind.ProjectLabels, Status = DeliveryStatus.Pending,
-            Labels = ["agent:working"]
+            Id = "other", IssueNumber = 8, Generation = 1, Kind = otherKind, Status = otherStatus,
+            Sha = new string('b', 40),
+            Labels = otherKind == EffectKind.ProjectLabels ? ["agent:working"] : [],
+            RequiredStatus = otherKind == EffectKind.PublishRequiredStatus
+                ? new(RequiredStatusPolicy.Context, "pending", "Legacy unresolved delivery",
+                    "https://github.com/owner/repo/pull/18", null, null) : null
         };
         var otherIssue = JsonSerializer.Serialize(store.State.Issues[8], StateJson.Options);
+        var otherEffect = JsonSerializer.Serialize(store.State.Outbox["other"], StateJson.Options);
         using var client = fixture.Client();
         var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
         var payload = Payload();
@@ -237,7 +263,7 @@ public sealed class RestartPreparationTests
         Assert.Contains(fixture.Writes, write => write.Path.EndsWith("/issues/7/comments", StringComparison.Ordinal) &&
             write.Body!.Contains("Restart prepared; waiting for the maintainer", StringComparison.Ordinal));
         Assert.Equal(otherIssue, JsonSerializer.Serialize(store.State.Issues[8], StateJson.Options));
-        Assert.Equal(DeliveryStatus.Pending, store.State.Outbox["other"].Status);
+        Assert.Equal(otherEffect, JsonSerializer.Serialize(store.State.Outbox["other"], StateJson.Options));
         Assert.DoesNotContain(fixture.Requests, request => request.Contains("/issues/8", StringComparison.Ordinal));
         Assert.Contains(fixture.Requests, request => request == "GET /agents/repos/owner/repo/tasks/remote-task");
         Assert.DoesNotContain(store.State.Outbox.Values, effect => effect.Generation == 2 &&

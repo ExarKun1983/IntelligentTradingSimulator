@@ -2843,8 +2843,13 @@ attempt must be discarded, not repaired on its existing branch. Unlike
    incomplete task histories are not supported by this recovery path; resolve
    those separately. No CI, review, continuation-hold publication, Issue-link
    revocation or pending effect may remain for this Issue. Repository-wide
-   in-flight or uncertain effects must be reconciled first; pending work for
-   other Issues is left untouched.
+   in-flight or exclusive uncertain effects must be reconciled first; pending work
+   and historical uncertain required-status receipts for other Issues are left
+   untouched. As in normal shared reconciliation, an `Unknown`
+   `PublishRequiredStatus` for another Issue is not exclusive: preparation neither
+   recovers nor republishes it, and does not declare that historical delivery safe
+   or resolved. An uncertain status for the Issue being restarted still blocks
+   preparation.
 3. Dispatch the reviewed deployed driver with the current repository and Issue
    generations, old PR/head, and an audit reason:
 
