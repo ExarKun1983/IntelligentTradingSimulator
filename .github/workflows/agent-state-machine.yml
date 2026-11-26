@@ -17,13 +17,13 @@ on:
         required: true
         type: string
       operation:
-        description: Resume never clears a hold; uncertain review abandonment needs explicit risk acknowledgement
+        description: Resume never clears a hold; prepare-restart detaches a settled closed unmerged PR without starting work
         required: true
         default: resume
         type: choice
-        options: [resume, pause, reactivate, resolve-task, classify-review, request-changes, abandon-uncertain-review]
+        options: [resume, pause, reactivate, prepare-restart, resolve-task, classify-review, request-changes, abandon-uncertain-review]
       reason:
-        description: Required for pause, reactivation, classification, requested changes or review abandonment
+        description: Required for pause, reactivation, restart preparation, classification, requested changes or review abandonment
         required: false
         type: string
       repository_generation:
@@ -56,7 +56,7 @@ on:
         required: false
         type: string
       pull:
-        description: Mapped PR number
+        description: Exact mapped PR number (closed and unmerged for prepare-restart)
         required: false
         type: string
       sha:

@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace IntelligentTradingSimulator.Orchestration;
 
-public enum NotificationKind { Ignore, Readiness, WithdrawReadiness, Projection, Closed, Reopened, Resume, Pause, Reactivate, ResolveTask, ClassifyReview, RequestChanges, AbandonUncertainReview, AbandonUncertainTaskLaunch }
+public enum NotificationKind { Ignore, Readiness, WithdrawReadiness, Projection, Closed, Reopened, Resume, Pause, Reactivate, ResolveTask, ClassifyReview, RequestChanges, AbandonUncertainReview, AbandonUncertainTaskLaunch, PrepareRestart }
 
 public sealed record ActionsNotification(
     NotificationKind Kind, string SourceId, long RepositoryId, long IssueId, int IssueNumber,
@@ -47,6 +47,9 @@ public static class GitHubActionsIngress
             NotificationKind.Resume => new Resume(),
             NotificationKind.Pause => new Pause(notification.Reason!),
             NotificationKind.Reactivate => new Reactivate(notification.Reason!),
+            NotificationKind.PrepareRestart => new PrepareRestart(
+                int.Parse(payload.GetProperty("inputs").GetProperty("pull").GetString()!, System.Globalization.CultureInfo.InvariantCulture),
+                payload.GetProperty("inputs").GetProperty("sha").GetString()!, notification.Reason!),
             NotificationKind.ResolveTask => new ResolveTaskTerminal(payload.GetProperty("inputs").GetProperty("task").GetString()!,
                 "", notification.Reason!),
             NotificationKind.ClassifyReview => ReadClassification(payload.GetProperty("inputs"), notification.Reason!),
@@ -61,7 +64,7 @@ public static class GitHubActionsIngress
                 ActorKind.Human, notification.ActorId,
                 Type: notification.Kind is NotificationKind.ResolveTask or NotificationKind.ClassifyReview or
                     NotificationKind.RequestChanges or NotificationKind.AbandonUncertainReview or
-                    NotificationKind.AbandonUncertainTaskLaunch ? evidence.ActorType : null),
+                    NotificationKind.AbandonUncertainTaskLaunch or NotificationKind.PrepareRestart ? evidence.ActorType : null),
             occurredAt, data);
     }
 
@@ -108,6 +111,7 @@ public static class GitHubActionsIngress
                 "status-test-bootstrap" => NotificationKind.Ignore,
                 "poc-start" => NotificationKind.Readiness,
                 "reactivate" => NotificationKind.Reactivate,
+                "prepare-restart" => NotificationKind.PrepareRestart,
                 "resolve-task" => NotificationKind.ResolveTask,
                 "classify-review" => NotificationKind.ClassifyReview,
                 "request-changes" => NotificationKind.RequestChanges,
@@ -118,9 +122,16 @@ public static class GitHubActionsIngress
             var reason = inputs.TryGetProperty("reason", out var value) ? value.GetString() : null;
             if ((kind is NotificationKind.Pause or NotificationKind.Reactivate or NotificationKind.ResolveTask or
                 NotificationKind.ClassifyReview or NotificationKind.RequestChanges or NotificationKind.AbandonUncertainReview or
-                NotificationKind.AbandonUncertainTaskLaunch) &&
+                NotificationKind.AbandonUncertainTaskLaunch or NotificationKind.PrepareRestart) &&
                 string.IsNullOrWhiteSpace(reason))
                 throw new InvalidDataException("Pause/reactivation requires a reason.");
+            if (kind == NotificationKind.PrepareRestart &&
+                (!evidence.IssueOpen ||
+                 !inputs.TryGetProperty("pull", out var restartPull) ||
+                 !int.TryParse(restartPull.GetString(), out var restartNumber) || restartNumber <= 0 ||
+                 !inputs.TryGetProperty("sha", out var restartSha) ||
+                 restartSha.GetString() is not { Length: 40 } restartHead || !restartHead.All(Uri.IsHexDigit)))
+                throw new InvalidDataException("Restart preparation requires an open Issue and the exact old PR and head.");
             if (kind == NotificationKind.ResolveTask &&
                 (!inputs.TryGetProperty("task", out var task) || string.IsNullOrWhiteSpace(task.GetString()) || task.GetString()!.Length > 256))
                 throw new InvalidDataException("Terminal task resolution requires the canonical task identity.");

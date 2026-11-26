@@ -16,6 +16,8 @@ public static class StatusProjection
         $"review failures: {issue.ConsecutiveReviewFailures}/{issue.ReviewBudget}.\n" +
         $"Automation held: {issue.ReactivationRequired || issue.Paused}; terminal outcome: {issue.TerminalOutcome}.\n\n" +
         $"Handoff: {Value(issue.CurrentHandoffId)}.\n\n" +
+        (OrchestrationReducer.AwaitingRestartReadiness(issue)
+            ? "Restart prepared; waiting for the maintainer to add `agent:ready`. No task has been started.\n\n" : "") +
         ClassificationSummary(issue, isolatedProfile) +
         ClosingLinkGuidance(issue) +
         "Canonical Git state is authoritative. Human approval is required; no automatic merge.";

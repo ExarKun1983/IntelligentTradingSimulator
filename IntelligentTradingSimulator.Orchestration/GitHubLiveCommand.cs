@@ -227,7 +227,7 @@ public static class GitHubLiveCommand
     internal static bool IsRecoveryOnlyCommand(string eventName, JsonElement payload) =>
         eventName == "workflow_dispatch" &&
         payload.GetProperty("inputs").GetProperty("operation").GetString() is
-            "pause" or "resolve-task" or "abandon-uncertain-review";
+            "pause" or "resolve-task" or "abandon-uncertain-review" or "prepare-restart";
 
     private static void ValidateTestScope(RepositoryState state, GitHubLiveSettings settings, int? requestedIssue)
     {

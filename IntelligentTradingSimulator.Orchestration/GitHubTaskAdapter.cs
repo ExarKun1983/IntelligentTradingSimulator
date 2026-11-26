@@ -204,6 +204,37 @@ public sealed class GitHubTaskAdapter(
         }
     }
 
+    internal async Task ValidateRestartTasksAsync(RepositoryState state, IssueState issue, CancellationToken token)
+    {
+        var launches = state.Outbox.Values.Where(effect => effect.IssueNumber == issue.Number &&
+            effect.Generation == issue.Generation && effect.Kind == EffectKind.LaunchTask).ToList();
+        if (launches.Count == 0)
+            throw new InvalidDataException("Restart preparation requires saved completed task receipts.");
+        await api.VerifyRepositoryAsync(token);
+        foreach (var launch in launches)
+        {
+            if (launch.Status != DeliveryStatus.Succeeded || string.IsNullOrWhiteSpace(launch.ExternalId) ||
+                launch.TaskId is null || !issue.Tasks.TryGetValue(launch.TaskId, out var task) ||
+                task.Status != TaskStatus.Completed || !task.LaunchConfirmed || task.ExternalId != launch.ExternalId ||
+                task.CandidateShaEvidence is not { } evidence)
+                throw new InvalidDataException("Restart preparation cannot forget an unfinished or uncertain task.");
+            TaskTerminalRecovery.ValidateCandidateSha(evidence, task, issue.PullRequest!.Value, task.FinalSha!);
+            using var remote = await taskApi.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(launch.ExternalId), token);
+            var root = remote.RootElement;
+            ValidateTask(root, launch.ExternalId);
+            var sessions = root.GetProperty("sessions").EnumerateArray().ToList();
+            if (root.GetProperty("state").GetString() != "completed" ||
+                sessions.Count is < 1 or > 100 || root.GetProperty("session_count").GetInt32() != sessions.Count ||
+                sessions.Any(session => session.GetProperty("state").GetString() != "completed" ||
+                    session.GetProperty("task_id").GetString() != launch.ExternalId ||
+                    session.GetProperty("repository").GetProperty("id").GetInt64() != api.RepositoryId) ||
+                !sessions.Select(session => session.GetProperty("id").GetString())
+                    .OrderBy(id => id, StringComparer.Ordinal)
+                    .SequenceEqual(evidence.SessionIds.OrderBy(id => id, StringComparer.Ordinal)))
+                throw new InvalidDataException("Restart preparation requires unchanged completed task/session snapshots.");
+        }
+    }
+
     public async Task<OrchestrationEvent> ReadTerminalEventAsync(RepositoryState state, IssueState issue,
         DateTimeOffset observedAt, CancellationToken token)
     {
