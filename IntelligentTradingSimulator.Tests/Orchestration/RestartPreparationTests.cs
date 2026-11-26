@@ -91,7 +91,9 @@ public sealed class RestartPreparationTests
         var before = StateJson.Serialize(state);
         Assert.Throws<InvalidOperationException>(() => Reducer.Apply(state, Command(new PrepareRestart(17, Sha, "Audit")
         {
-            AcknowledgedUncertainStatusIntentIds = ids
+            AcknowledgedUncertainStatusIntentIds = ids,
+            StatusRiskVerification = new(
+                [new("uncertain", "corrected-earlier-head", new string('b', 40), 101)], "revoked", 102)
         })));
         Assert.Equal(before, StateJson.Serialize(state));
     }
