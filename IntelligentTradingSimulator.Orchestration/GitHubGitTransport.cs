@@ -14,10 +14,12 @@ public sealed partial class GitHubGitTransport : IGitObjectRefTransport
     private readonly bool allowMutations;
     private readonly string stateReference;
     private readonly bool allowIsolatedInitialization;
+    private readonly GitHubLiveDiagnostics? diagnostics;
     private const int MaximumStateBytes = 2 * 1024 * 1024;
 
     public GitHubGitTransport(HttpClient client, string repository, bool allowMutations = false,
-        string stateReference = "refs/heads/agent-state", bool allowIsolatedInitialization = false)
+        string stateReference = "refs/heads/agent-state", bool allowIsolatedInitialization = false,
+        GitHubLiveDiagnostics? diagnostics = null)
     {
         if (!RepositoryPattern().IsMatch(repository))
             throw new ArgumentException("Expected owner/repository.", nameof(repository));
@@ -34,6 +36,7 @@ public sealed partial class GitHubGitTransport : IGitObjectRefTransport
             throw new ArgumentException("Only the dedicated isolated test ref supports one-shot initialization.", nameof(allowIsolatedInitialization));
         this.stateReference = stateReference;
         this.allowIsolatedInitialization = allowIsolatedInitialization;
+        this.diagnostics = diagnostics;
         prefix = $"repos/{repository}/";
         if (client.DefaultRequestHeaders.UserAgent.Count == 0)
             client.DefaultRequestHeaders.UserAgent.ParseAdd("IntelligentTradingSimulator-Orchestration");
@@ -45,35 +48,40 @@ public sealed partial class GitHubGitTransport : IGitObjectRefTransport
 
     public async Task<string?> ReadRefAsync(string reference, CancellationToken cancellationToken)
     {
+        diagnostics?.MarkStateRead(GitStateReadStep.Ref);
         using var response = await client.GetAsync(prefix + "git/ref/" + RefPath(reference), cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound) return null;
         using var json = await ReadJsonAsync(response, cancellationToken);
-        return Sha(json.RootElement.GetProperty("object").GetProperty("sha").GetString());
+        return ReadSha(json.RootElement.GetProperty("object").GetProperty("sha").GetString(), GitStateReadCheck.RefIdentity);
     }
 
     public async Task<GitCommitObject> ReadCommitAsync(string commit, CancellationToken cancellationToken)
     {
-        commit = Sha(commit);
+        diagnostics?.MarkStateRead(GitStateReadStep.Commit);
+        commit = ReadSha(commit, GitStateReadCheck.RequestedCommitIdentity);
         using var response = await client.GetAsync(prefix + "git/commits/" + commit, cancellationToken);
         using var json = await ReadJsonAsync(response, cancellationToken);
-        var tree = Sha(json.RootElement.GetProperty("tree").GetProperty("sha").GetString());
+        var tree = ReadSha(json.RootElement.GetProperty("tree").GetProperty("sha").GetString(), GitStateReadCheck.TreeIdentity);
+        diagnostics?.MarkStateRead(GitStateReadStep.Tree);
         using var treeResponse = await client.GetAsync(prefix + "git/trees/" + tree, cancellationToken);
         using var treeJson = await ReadJsonAsync(treeResponse, cancellationToken);
         if (treeJson.RootElement.TryGetProperty("truncated", out var truncated) && truncated.GetBoolean())
-            throw new InvalidDataException("Truncated state tree.");
+            throw ReadFailure(GitStateReadCheck.TruncatedTree, "Truncated state tree.");
         var entries = treeJson.RootElement.GetProperty("tree").EnumerateArray()
             .Where(item => item.GetProperty("path").GetString() == "state.json").ToList();
         if (entries.Count != 1 || entries[0].GetProperty("type").GetString() != "blob" ||
             entries[0].GetProperty("mode").GetString() != "100644")
-            throw new InvalidDataException("Missing or invalid canonical state blob.");
-        var blob = Sha(entries[0].GetProperty("sha").GetString());
+            throw ReadFailure(GitStateReadCheck.StateTreeEntry, "Missing or invalid canonical state blob.");
+        var blob = ReadSha(entries[0].GetProperty("sha").GetString(), GitStateReadCheck.BlobIdentity);
+        diagnostics?.MarkStateRead(GitStateReadStep.Blob);
         using var blobResponse = await client.GetAsync(prefix + "git/blobs/" + blob, cancellationToken);
         using var blobJson = await ReadJsonAsync(blobResponse, cancellationToken);
-        if (blobJson.RootElement.GetProperty("encoding").GetString() != "base64" ||
-            blobJson.RootElement.GetProperty("size").GetInt64() > MaximumStateBytes)
-            throw new InvalidDataException("Unsupported or oversized state blob.");
+        if (blobJson.RootElement.GetProperty("encoding").GetString() != "base64")
+            throw ReadFailure(GitStateReadCheck.BlobEncoding, "Unsupported or oversized state blob.");
+        if (blobJson.RootElement.GetProperty("size").GetInt64() > MaximumStateBytes)
+            throw ReadFailure(GitStateReadCheck.BlobSize, "Unsupported or oversized state blob.");
         var content = Convert.FromBase64String(blobJson.RootElement.GetProperty("content").GetString()!);
-        if (content.Length > MaximumStateBytes) throw new InvalidDataException("Oversized state.");
+        if (content.Length > MaximumStateBytes) throw ReadFailure(GitStateReadCheck.BlobSize, "Oversized state.");
         return new GitCommitObject(commit, new UTF8Encoding(false, true).GetString(content));
     }
 
@@ -181,6 +189,17 @@ public sealed partial class GitHubGitTransport : IGitObjectRefTransport
 
     private static string Sha(string? sha) => sha is not null && ShaPattern().IsMatch(sha)
         ? sha : throw new InvalidDataException("Invalid Git object identity.");
+
+    private string ReadSha(string? sha, GitStateReadCheck check) =>
+        sha is not null && ShaPattern().IsMatch(sha) ? sha :
+            throw ReadFailure(check, "Invalid Git object identity.");
+
+    private InvalidDataException ReadFailure(GitStateReadCheck check, string message)
+    {
+        var exception = new InvalidDataException(message);
+        diagnostics?.AttachStateReadCheck(exception, check);
+        return exception;
+    }
 
     private string RefPath(string reference)
     {

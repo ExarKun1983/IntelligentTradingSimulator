@@ -157,7 +157,8 @@ public static class GitHubLiveCommand
             var taskApi = new GitHubRepositoryApi(userClient, settings.Repository, settings.RepositoryId);
             var publisher = await GitHubLiveCredentials.VerifyAsync(api, taskApi, settings.ActorId);
             var store = new GitStateStore(new GitHubGitTransport(client, settings.Repository, allowMutations: true,
-                stateReference: settings.StateReference), settings.Repository, settings.StateReference);
+                stateReference: settings.StateReference, diagnostics: diagnostics), settings.Repository,
+                settings.StateReference, diagnostics: diagnostics);
             var host = new GitHubOrchestrationHost(api, store, taskApi: taskApi, liveDiagnostics: diagnostics);
             var runId = Environment.GetEnvironmentVariable("GITHUB_RUN_ID") ?? throw new InvalidDataException("Missing run ID.");
             WorkerResult? result;

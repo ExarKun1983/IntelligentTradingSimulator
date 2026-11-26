@@ -14,6 +14,162 @@ public sealed class GitHubRequiredStatusTests
     private static readonly GitHubStatusPublisher Publisher = new(9, "trusted[bot]", "BOT_9", "Bot");
     private static readonly GitHubRequiredStatusApproval Approved = new(true, true, true, true, true);
 
+    [Fact]
+    public async Task OlderCanonicalReadReportsPendingIntentAndVersionGapWithoutRetrying()
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var original = RunningRepair(reducer);
+        var id = Intent(original).Id;
+        var store = new Store(original);
+        long? executingVersion = null;
+        store.ReadSnapshot = snapshot =>
+        {
+            if (executingVersion is not null || snapshot.State.Outbox[id].Status != DeliveryStatus.Executing)
+                return snapshot;
+            executingVersion = snapshot.State.Version;
+            return new(original.Version.ToString(), StateJson.Clone(original));
+        };
+        using var api = new Api();
+        using var client = api.Client();
+        using var output = new StringWriter();
+        var diagnostics = new GitHubLiveDiagnostics(output);
+        var adapter = new GitHubRequiredStatusAdapter(new(client, "owner/repo", 1), store, Publisher, Approved,
+            new Clock(), diagnostics);
+
+        await new OrchestrationReconciler(reducer, diagnostics).RunAsync(store, new Observations(),
+            new RecordingEffects(adapter), new(false, true, true, true,
+                AllowedEffectKinds: new HashSet<EffectKind> { EffectKind.PublishRequiredStatus }));
+
+        Assert.Equal(DeliveryStatus.Unknown, store.Value.Outbox[id].Status);
+        Assert.Equal(EffectFailureCode.ExecutionException, store.Value.Outbox[id].FailureCode);
+        Assert.Null(store.Value.Outbox[id].RequiredStatusBoundary);
+        Assert.Equal(Phase.BLOCKED, store.Value.Issues[7].Phase);
+        Assert.Empty(api.Requests);
+        Assert.Equal(0, api.Posts);
+        using var json = JsonDocument.Parse(output.ToString());
+        var failure = json.RootElement.GetProperty("EffectDiagnostic");
+        Assert.Equal("RequiredStatusCanonicalIntent", failure.GetProperty("Stage").GetString());
+        var validation = failure.GetProperty("RequiredStatusValidation");
+        Assert.Equal("DeliveryState", validation.GetProperty("Check").GetString());
+        Assert.Equal("Pending", validation.GetProperty("SavedDeliveryState").GetString());
+        Assert.Equal(executingVersion, validation.GetProperty("ExpectedExecutingVersion").GetInt64());
+        Assert.Equal(original.Version, validation.GetProperty("ObservedVersion").GetInt64());
+        Assert.True(executingVersion > original.Version);
+        Assert.False(validation.GetProperty("BoundaryPresent").GetBoolean());
+        Assert.DoesNotContain(Sha, output.ToString());
+        Assert.DoesNotContain("owner/repo", output.ToString());
+    }
+
+    [Fact]
+    public async Task InitialStateReadFailureHasItsOwnStageAndRetainsConservativeOutcome()
+    {
+        var reducer = new OrchestrationReducer(requiredStatusEnabled: true);
+        var store = new Store(RunningRepair(reducer));
+        var id = Intent(store.Value).Id;
+        var rejected = false;
+        store.ReadSnapshot = snapshot =>
+        {
+            if (rejected || snapshot.State.Outbox[id].Status != DeliveryStatus.Executing) return snapshot;
+            rejected = true;
+            throw new InvalidDataException("private invalid canonical response");
+        };
+        using var api = new Api();
+        using var client = api.Client();
+        using var output = new StringWriter();
+        var diagnostics = new GitHubLiveDiagnostics(output);
+        var adapter = new GitHubRequiredStatusAdapter(new(client, "owner/repo", 1), store, Publisher, Approved,
+            new Clock(), diagnostics);
+
+        await new OrchestrationReconciler(reducer, diagnostics).RunAsync(store, new Observations(),
+            new RecordingEffects(adapter), new(false, true, true, true,
+                AllowedEffectKinds: new HashSet<EffectKind> { EffectKind.PublishRequiredStatus }));
+
+        Assert.Equal(DeliveryStatus.Unknown, store.Value.Outbox[id].Status);
+        Assert.Equal(EffectFailureCode.ExecutionException, store.Value.Outbox[id].FailureCode);
+        Assert.Null(store.Value.Outbox[id].RequiredStatusBoundary);
+        Assert.Equal(0, api.Posts);
+        Assert.Empty(api.Requests);
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.Equal("RequiredStatusInitialStateLoad",
+            json.RootElement.GetProperty("EffectDiagnostic").GetProperty("Stage").GetString());
+        Assert.DoesNotContain("private", output.ToString());
+    }
+
+    [Theory]
+    [InlineData("Repository")]
+    [InlineData("IntentKind")]
+    [InlineData("IntentExists")]
+    [InlineData("Digest")]
+    [InlineData("DeliveryState")]
+    [InlineData("SavedKind")]
+    [InlineData("IssueNumber")]
+    [InlineData("Generation")]
+    [InlineData("Task")]
+    [InlineData("Round")]
+    [InlineData("ShaMatches")]
+    [InlineData("Payload")]
+    [InlineData("Context")]
+    [InlineData("ShaFormat")]
+    [InlineData("IssueExists")]
+    [InlineData("Unprepared")]
+    public async Task CanonicalRejectionReportsOnlyTheFailedCheckAndSafeEvidence(string check)
+    {
+        var state = Planned();
+        var supplied = Intent(StateJson.Clone(state));
+        var saved = Intent(state);
+        switch (check)
+        {
+            case "Repository": state.Repository = "private/repository"; break;
+            case "IntentKind": supplied.Kind = EffectKind.RunCi; break;
+            case "IntentExists": state.Outbox.Remove(saved.Id); break;
+            case "Digest": saved.Digest = "private-digest"; break;
+            case "DeliveryState": saved.Status = DeliveryStatus.Pending; break;
+            case "SavedKind": saved.Kind = EffectKind.RunCi; break;
+            case "IssueNumber": saved.IssueNumber = 8; break;
+            case "Generation": saved.Generation++; break;
+            case "Task": saved.TaskId = "private-task"; break;
+            case "Round": saved.Round++; break;
+            case "ShaMatches": saved.Sha = Definition; break;
+            case "Payload": saved.RequiredStatus = saved.RequiredStatus! with { TargetUrl = "private-target" }; break;
+            case "Context":
+                supplied.RequiredStatus = supplied.RequiredStatus! with { Context = "private-context" };
+                saved.RequiredStatus = supplied.RequiredStatus;
+                break;
+            case "ShaFormat": saved.Sha = supplied.Sha = "private-sha"; break;
+            case "IssueExists": state.Issues.Remove(7); break;
+            case "Unprepared":
+                saved.RequiredStatusBoundary = new(Publisher.ActorId, Publisher.Login, Publisher.NodeId, Publisher.Type, Now, []);
+                break;
+        }
+        var store = new Store(state);
+        var before = StateJson.Serialize(state);
+        using var api = new Api();
+        using var client = api.Client();
+        using var output = new StringWriter();
+        var diagnostics = new GitHubLiveDiagnostics(output);
+        var adapter = new GitHubRequiredStatusAdapter(new(client, "owner/repo", 1), store, Publisher, Approved,
+            new Clock(), diagnostics);
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => adapter.ExecuteAsync(supplied, default));
+        diagnostics.ReportEffectFailure(supplied.Kind, EffectFailureCode.ExecutionException, exception);
+
+        using var json = JsonDocument.Parse(output.ToString());
+        var failure = json.RootElement.GetProperty("EffectDiagnostic");
+        Assert.Equal(check == "Unprepared" ? "RequiredStatusPreparedCheck" : "RequiredStatusCanonicalIntent",
+            failure.GetProperty("Stage").GetString());
+        var validation = failure.GetProperty("RequiredStatusValidation");
+        Assert.Equal(check, validation.GetProperty("Check").GetString());
+        Assert.Equal(state.Version, validation.GetProperty("ObservedVersion").GetInt64());
+        Assert.Equal(check == "Unprepared", validation.GetProperty("BoundaryPresent").GetBoolean());
+        Assert.Equal(before, StateJson.Serialize(store.Value));
+        Assert.Empty(api.Requests);
+        Assert.Equal(0, api.Posts);
+        Assert.DoesNotContain("private", output.ToString());
+        Assert.DoesNotContain("owner/repo", output.ToString());
+        Assert.DoesNotContain(Sha, output.ToString());
+        Assert.DoesNotContain(supplied.Id, output.ToString());
+    }
+
     [Theory]
     [InlineData("actor", "RequiredStatusPublisher")]
     [InlineData("head", "RequiredStatusLiveHead")]
@@ -2227,8 +2383,12 @@ public sealed class GitHubRequiredStatusTests
         public RepositoryState Value { get; set; } = state;
         public bool FailSave { get; set; }
         public Func<RepositoryState, bool>? RejectSave { get; set; }
-        public Task<StateSnapshot> LoadAsync(CancellationToken token) => Task.FromResult(new StateSnapshot(
-            Value.Version.ToString(), StateJson.Deserialize(StateJson.Serialize(Value))));
+        public Func<StateSnapshot, StateSnapshot>? ReadSnapshot { get; set; }
+        public Task<StateSnapshot> LoadAsync(CancellationToken token)
+        {
+            var snapshot = new StateSnapshot(Value.Version.ToString(), StateJson.Deserialize(StateJson.Serialize(Value)));
+            return Task.FromResult(ReadSnapshot is null ? snapshot : ReadSnapshot(snapshot));
+        }
         public Task<bool> TrySaveAsync(StateSnapshot expected, RepositoryState next, CancellationToken token)
         {
             if (FailSave) throw new IOException("offline persistence failure");

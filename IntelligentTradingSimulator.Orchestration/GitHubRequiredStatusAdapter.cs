@@ -31,12 +31,15 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
     public async Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken token)
     {
         var callerStage = diagnostics?.Stage;
-        diagnostics?.Mark(GitHubLiveStage.RequiredStatusPreflight);
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusApproval);
         if (approval?.AllowsPublication != true) throw new InvalidOperationException("Required-status prerequisites are not verified.");
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusInitialStateLoad);
         var state = (await store.LoadAsync(token)).State;
         var issue = ValidateIntent(state, intent);
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusPreparedCheck);
         if (intent.RequiredStatusBoundary is not null || state.Outbox[intent.Id].RequiredStatusBoundary is not null)
-            throw new InvalidDataException("Prepared status publication is lookup-only.");
+            throw InvalidIntent(state, state.Outbox[intent.Id], intent, RequiredStatusIntentCheck.Unprepared,
+                "Prepared status publication is lookup-only.");
         try
         {
             await PreflightAsync(state, issue, intent, token);
@@ -56,9 +59,11 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
         var boundary = new RequiredStatusBoundary(publisher.ActorId, publisher.Login, publisher.NodeId,
             publisher.Type, clock.GetUtcNow(), statuses.Select(item => item.GetProperty("id").GetInt64()).ToList());
         await SaveBoundaryAsync(intent, boundary, token);
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusPreparedStateLoad);
         state = (await store.LoadAsync(token)).State;
         issue = ValidateIntent(state, intent);
         await PreflightAsync(state, issue, intent, token);
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusPreparedStateLoad);
         state = (await store.LoadAsync(token)).State;
         ValidateCurrent(state, ValidateIntent(state, intent), intent);
         var payload = intent.RequiredStatus!;
@@ -69,6 +74,7 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
         var id = ValidateStatus(receipt.RootElement, intent, boundary);
         if (boundary.ExistingStatusIds.Contains(id)) throw new InvalidDataException("Status receipt predates the creation boundary.");
         await SaveBoundaryAsync(intent, boundary with { StatusId = id }, token);
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusConfirmationStateLoad);
         state = (await store.LoadAsync(token)).State;
         issue = ValidateIntent(state, intent);
         await PreflightAsync(state, issue, intent, token);
@@ -76,6 +82,7 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
         diagnostics?.Mark(GitHubLiveStage.RequiredStatusConfirmation);
         if (confirmed.Count != 1) throw new InvalidDataException("Created status is not visible on the exact tested SHA.");
         ValidateStatus(confirmed[0], intent, boundary);
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusConfirmationStateLoad);
         state = (await store.LoadAsync(token)).State;
         ValidateCurrent(state, ValidateIntent(state, intent), intent);
         if (callerStage is { } previousStage) diagnostics?.Mark(previousStage);
@@ -85,9 +92,14 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
     public async Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken token)
     {
         var callerStage = diagnostics?.Stage;
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusRecoveryStateLoad);
         var state = (await store.LoadAsync(token)).State;
         ValidateIntent(state, intent);
-        if (state.Outbox[intent.Id].RequiredStatusBoundary is not { } boundary) return new(DeliveryStatus.Unknown);
+        if (state.Outbox[intent.Id].RequiredStatusBoundary is not { } boundary)
+        {
+            if (callerStage is { } unpreparedStage) diagnostics?.Mark(unpreparedStage);
+            return new(DeliveryStatus.Unknown);
+        }
         ValidatePublisher(boundary);
         await api.VerifyRepositoryAsync(token);
         var statuses = await ReadStatusesAsync(intent, token);
@@ -144,16 +156,41 @@ public sealed class GitHubRequiredStatusAdapter(GitHubRepositoryApi api, IStateS
 
     private IssueState ValidateIntent(RepositoryState state, EffectIntent intent)
     {
-        if (state.Repository != api.Repository || intent.Kind != EffectKind.PublishRequiredStatus ||
-            !state.Outbox.TryGetValue(intent.Id, out var saved) || saved.Digest != intent.Digest ||
-            saved.Status is not (DeliveryStatus.Executing or DeliveryStatus.Unknown) ||
-            saved.Kind != intent.Kind || saved.IssueNumber != intent.IssueNumber || saved.Generation != intent.Generation ||
-            saved.TaskId != intent.TaskId || saved.Round != intent.Round || saved.Sha != intent.Sha ||
-            saved.RequiredStatus != intent.RequiredStatus || intent.RequiredStatus?.Context != RequiredStatusPolicy.Context ||
-            intent.Sha is not { Length: 40 } || !intent.Sha.All(Uri.IsHexDigit) ||
-            !state.Issues.TryGetValue(intent.IssueNumber, out var issue))
-            throw new InvalidDataException("Required status is not a canonical executing intent.");
+        var callerStage = diagnostics?.Stage;
+        diagnostics?.Mark(GitHubLiveStage.RequiredStatusCanonicalIntent);
+        EffectIntent? saved = null;
+        InvalidDataException Rejected(RequiredStatusIntentCheck check) =>
+            InvalidIntent(state, saved, intent, check, "Required status is not a canonical executing intent.");
+        if (state.Repository != api.Repository) throw Rejected(RequiredStatusIntentCheck.Repository);
+        if (intent.Kind != EffectKind.PublishRequiredStatus) throw Rejected(RequiredStatusIntentCheck.IntentKind);
+        if (!state.Outbox.TryGetValue(intent.Id, out saved))
+            throw Rejected(RequiredStatusIntentCheck.IntentExists);
+        if (saved.Digest != intent.Digest) throw Rejected(RequiredStatusIntentCheck.Digest);
+        if (saved.Status is not (DeliveryStatus.Executing or DeliveryStatus.Unknown))
+            throw Rejected(RequiredStatusIntentCheck.DeliveryState);
+        if (saved.Kind != intent.Kind) throw Rejected(RequiredStatusIntentCheck.SavedKind);
+        if (saved.IssueNumber != intent.IssueNumber) throw Rejected(RequiredStatusIntentCheck.IssueNumber);
+        if (saved.Generation != intent.Generation) throw Rejected(RequiredStatusIntentCheck.Generation);
+        if (saved.TaskId != intent.TaskId) throw Rejected(RequiredStatusIntentCheck.Task);
+        if (saved.Round != intent.Round) throw Rejected(RequiredStatusIntentCheck.Round);
+        if (saved.Sha != intent.Sha) throw Rejected(RequiredStatusIntentCheck.ShaMatches);
+        if (saved.RequiredStatus != intent.RequiredStatus) throw Rejected(RequiredStatusIntentCheck.Payload);
+        if (intent.RequiredStatus?.Context != RequiredStatusPolicy.Context)
+            throw Rejected(RequiredStatusIntentCheck.Context);
+        if (intent.Sha is not { Length: 40 } || !intent.Sha.All(Uri.IsHexDigit))
+            throw Rejected(RequiredStatusIntentCheck.ShaFormat);
+        if (!state.Issues.TryGetValue(intent.IssueNumber, out var issue))
+            throw Rejected(RequiredStatusIntentCheck.IssueExists);
+        if (callerStage is { } previousStage) diagnostics?.Mark(previousStage);
         return issue;
+    }
+
+    private InvalidDataException InvalidIntent(RepositoryState state, EffectIntent? saved, EffectIntent supplied,
+        RequiredStatusIntentCheck check, string message)
+    {
+        var exception = new InvalidDataException(message);
+        diagnostics?.AttachRequiredStatusValidation(exception, check, state, saved, supplied);
+        return exception;
     }
 
     private static void ValidateCurrent(RepositoryState state, IssueState issue, EffectIntent intent)
