@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1546,
+  "Version": 1547,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "task-completed:1277929203:5:ce4c0b58-eeb3-4c57-af00-b3b88ef6e9e8",
@@ -1712,9 +1712,9 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 5,
-      "Version": 602,
+      "Version": 603,
       "LastEventId": "task-completed:1277929203:5:ce4c0b58-eeb3-4c57-af00-b3b88ef6e9e8",
-      "Phase": "CODING",
+      "Phase": "CI_PENDING",
       "Ready": false,
       "ActiveAuthorized": true,
       "ReadyAt": "2026-11-27T15:09:10+00:00",
@@ -2185,7 +2185,7 @@
           "AutomaticContinuations": 0,
           "ContinuationPending": false,
           "Kind": "Coding",
-          "Status": "AwaitingHeadConfirmation",
+          "Status": "Completed",
           "ParentTaskId": null,
           "Round": 5,
           "LaunchSource": "PullRequestHead",
@@ -2214,7 +2214,17 @@
           ]
         }
       },
-      "Ci": null,
+      "Ci": {
+        "IntentId": "RunCi:204:5:task:204:5:5:11:5",
+        "RunId": null,
+        "TaskId": "task:204:5:5:11",
+        "Round": 5,
+        "Sha": "87cf384ac5594996b2ef003e6fbbdf633c903c79",
+        "Green": null,
+        "TerminalStopReason": null,
+        "Blockers": [],
+        "DispatchBoundary": null
+      },
       "Review": {
         "IntentId": "RequestReview:204:4:task:204:4:4:10:4",
         "ReviewId": "review-request:RequestReview:204:4:task:204:4:4:10:4",
@@ -2926,11 +2936,11 @@
           "OccurredAt": "2026-11-20T14:48:44+00:00"
         }
       },
-      "ProjectionDigest": "845CD333380895E1961B0074627A3E89BCD360FA28E3D5A7F90C54ED2B85CE4B",
+      "ProjectionDigest": "4F7E66F85917C8F306CC6C9AF540B5E37E0BA1254A7B4AF36717E50EB2E24D58",
       "ObservedProjectionDigest": "845CD333380895E1961B0074627A3E89BCD360FA28E3D5A7F90C54ED2B85CE4B",
       "StatusProjectionDigest": "0C3A02376793397D8FFBFA52C76BD8A782C12F7F5A6E65B26C68B8D50B193DF9",
-      "RequiredStatusSequence": 56,
-      "RequiredStatusIntentId": "required-status:204:5:56"
+      "RequiredStatusSequence": 57,
+      "RequiredStatusIntentId": "required-status:204:5:57"
     }
   },
   "Inbox": {
@@ -14927,6 +14937,101 @@
       "StartedAt": "2026-11-27T15:11:51.3320758+00:00",
       "CompletedAt": "2026-11-27T15:11:51.3320758+00:00",
       "StatusBody": "\u003C!-- its-agent-state:204:5 --\u003E\nAgent workflow: **CODING**\n\nGeneration: 5; round: 5.\nPR: #326; head: \u003Ccode\u003E87cf384ac5594996b2ef003e6fbbdf633c903c79\u003C/code\u003E.\nTask: Running.\nConsecutive CI failures: 0/3; review failures: 0/5.\nAutomation held: False; terminal outcome: None.\n\nHandoff: not captured.\n\nCanonical Git state is authoritative. Human approval is required; no automatic merge.",
+      "TaskPrompt": null,
+      "RequiredStatus": null,
+      "RequiredStatusBoundary": null
+    },
+    "RunCi:204:5:task:204:5:5:11:5": {
+      "Id": "RunCi:204:5:task:204:5:5:11:5",
+      "Digest": "B35149E24D559B8201FCFF0686552043BEF5D262E6B59407070D15BA2DD437C4",
+      "IssueNumber": 204,
+      "Generation": 5,
+      "Kind": "RunCi",
+      "Status": "Pending",
+      "TaskId": "task:204:5:5:11",
+      "Round": 5,
+      "Sha": "87cf384ac5594996b2ef003e6fbbdf633c903c79",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [
+        "feedback:v2:1277929203:204:4:204:7221631050:2026-11-27T15:06:22.0000000\u002B00:00"
+      ],
+      "CreatedAt": "2026-11-27T15:13:49.0504694+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": null,
+      "RequiredStatusBoundary": null
+    },
+    "required-status:204:5:57": {
+      "Id": "required-status:204:5:57",
+      "Digest": "744DE16165674728D21C4FE5F3DF9FFCD2292EEA8111B7FB76BC80D912460960",
+      "IssueNumber": 204,
+      "Generation": 5,
+      "Kind": "PublishRequiredStatus",
+      "Status": "Pending",
+      "TaskId": "task:204:5:5:11",
+      "Round": 5,
+      "Sha": "87cf384ac5594996b2ef003e6fbbdf633c903c79",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-27T15:13:49.0504694+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": {
+        "Context": "Agent managed CI",
+        "State": "pending",
+        "Description": "Tracked coding or exact-head CI is not yet complete.",
+        "TargetUrl": "https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/326#agent-status-9186a2ac6c37312d081f3fdd2abbe18b96ef78d92ec02fab1754fe1a40e7372d",
+        "CiIntentId": "RunCi:204:5:task:204:5:5:11:5",
+        "CiRunId": null
+      },
+      "RequiredStatusBoundary": null
+    },
+    "labels:204:5:4F7E66F85917C8F306CC6C9AF540B5E37E0BA1254A7B4AF36717E50EB2E24D58": {
+      "Id": "labels:204:5:4F7E66F85917C8F306CC6C9AF540B5E37E0BA1254A7B4AF36717E50EB2E24D58",
+      "Digest": "56DB1DAA70CBF6EAD1A369CBE6B697DA8D3620526F30ADCBBDD2D6E162DBEDC3",
+      "IssueNumber": 204,
+      "Generation": 5,
+      "Kind": "ProjectLabels",
+      "Status": "Pending",
+      "TaskId": null,
+      "Round": 5,
+      "Sha": "87cf384ac5594996b2ef003e6fbbdf633c903c79",
+      "ExternalId": null,
+      "Labels": [
+        "agent:ci"
+      ],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-27T15:13:49.0504694+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": null,
+      "RequiredStatusBoundary": null
+    },
+    "status:204:5:9574886938B238111F7FFB8C40BF2B83DFDBE9D8654E66C71CC8C64C4F1F7C22": {
+      "Id": "status:204:5:9574886938B238111F7FFB8C40BF2B83DFDBE9D8654E66C71CC8C64C4F1F7C22",
+      "Digest": "FFEB9C49360D7DE1563F111C5361E9FB113652E7F1A5915E34199988C67DE5F6",
+      "IssueNumber": 204,
+      "Generation": 5,
+      "Kind": "ProjectStatus",
+      "Status": "Pending",
+      "TaskId": null,
+      "Round": 5,
+      "Sha": "87cf384ac5594996b2ef003e6fbbdf633c903c79",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-27T15:13:49.0504694+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": "\u003C!-- its-agent-state:204:5 --\u003E\nAgent workflow: **CI_PENDING**\n\nGeneration: 5; round: 5.\nPR: #326; head: \u003Ccode\u003E87cf384ac5594996b2ef003e6fbbdf633c903c79\u003C/code\u003E.\nTask: Completed.\nConsecutive CI failures: 0/3; review failures: 0/5.\nAutomation held: False; terminal outcome: None.\n\nHandoff: not captured.\n\nCanonical Git state is authoritative. Human approval is required; no automatic merge.",
       "TaskPrompt": null,
       "RequiredStatus": null,
       "RequiredStatusBoundary": null
