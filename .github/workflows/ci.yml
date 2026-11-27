@@ -100,9 +100,11 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
 
       - name: Test agent orchestrator scripts
-        run: |
-          bash .github/scripts/tests/agent-orchestrator.test.sh
-          bash .github/scripts/tests/resolve-managed-ci-head.test.sh
+        run: bash .github/scripts/tests/agent-orchestrator.test.sh
+
+      - name: Test managed CI head resolver
+        if: ${{ needs.resolve-managed-head.result == 'skipped' }}
+        run: bash .github/scripts/tests/resolve-managed-ci-head.test.sh
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
