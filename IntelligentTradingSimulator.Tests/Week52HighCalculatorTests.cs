@@ -10,7 +10,7 @@ public sealed class Week52HighCalculatorTests
         decimal? high = null) =>
         new()
         {
-            Date = DateTime.Today,
+            Date = new DateTime(2024, 1, 1),
             Open = close,
             Close = close,
             High = high ?? close,
@@ -31,6 +31,72 @@ public sealed class Week52HighCalculatorTests
         var result = calculator.Calculate(candles);
 
         Assert.Equal(150m, result.Week52High);
+    }
+
+    [Fact]
+    public void Calculate_ReturnsNullValues_WhenConfiguredWindowIsInsufficient()
+    {
+        var calculator = new Week52HighCalculator(3);
+        var candles = new[]
+        {
+            Candle(100m),
+            Candle(105m)
+        };
+
+        var result = calculator.Calculate(candles);
+
+        Assert.Null(result.Week52High);
+        Assert.Null(result.DistanceFromWeek52HighPercent);
+    }
+
+    [Fact]
+    public void Calculate_ReturnsValues_WhenExactlyConfiguredSessionsAreAvailable()
+    {
+        var calculator = new Week52HighCalculator(3);
+        var candles = new[]
+        {
+            Candle(100m, high: 110m),
+            Candle(105m, high: 120m),
+            Candle(108m, high: 115m)
+        };
+
+        var result = calculator.Calculate(candles);
+
+        Assert.Equal(120m, result.Week52High);
+        Assert.Equal(-10m, result.DistanceFromWeek52HighPercent);
+    }
+
+    [Fact]
+    public void Calculate_ExcludesHighImmediatelyOutsideConfiguredWindow()
+    {
+        var calculator = new Week52HighCalculator(3);
+        var candles = new[]
+        {
+            Candle(100m, high: 999m),
+            Candle(100m, high: 110m),
+            Candle(100m, high: 120m),
+            Candle(108m, high: 115m)
+        };
+
+        var result = calculator.Calculate(candles);
+
+        Assert.Equal(120m, result.Week52High);
+        Assert.Equal(-10m, result.DistanceFromWeek52HighPercent);
+    }
+
+    [Fact]
+    public void Calculate_UsesHighAndClose_WhenConfiguredWindowIsOneSession()
+    {
+        var calculator = new Week52HighCalculator(1);
+        var candles = new[]
+        {
+            Candle(108m, high: 120m)
+        };
+
+        var result = calculator.Calculate(candles);
+
+        Assert.Equal(120m, result.Week52High);
+        Assert.Equal(-10m, result.DistanceFromWeek52HighPercent);
     }
 
     [Fact]
@@ -114,10 +180,12 @@ public sealed class Week52HighCalculatorTests
         Assert.Throws<ArgumentNullException>(() => calculator.Calculate(null!));
     }
 
-    [Fact]
-    public void Constructor_Throws_WhenTradingSessionsIsInvalid()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Constructor_Throws_WhenTradingSessionsIsInvalid(int tradingSessions)
     {
         Assert.Throws<ArgumentOutOfRangeException>(
-            () => new Week52HighCalculator(0));
+            () => new Week52HighCalculator(tradingSessions));
     }
 }
