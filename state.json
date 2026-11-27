@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1564,
+  "Version": 1565,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "ci-observed:1277929203:5:RunCi:204:5:task:204:5:5:11:5",
@@ -1712,7 +1712,7 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 5,
-      "Version": 620,
+      "Version": 621,
       "LastEventId": "ci-observed:1277929203:5:RunCi:204:5:task:204:5:5:11:5",
       "Phase": "REVIEW_PENDING",
       "Ready": false,
@@ -2240,14 +2240,26 @@
         "Round": 5,
         "Sha": "87cf384ac5594996b2ef003e6fbbdf633c903c79",
         "Classification": null,
-        "LifecycleState": "NotRequested",
+        "LifecycleState": "Requesting",
         "CopilotRequestNodeId": null,
         "ReviewRequestedAt": null,
         "ReviewDeadlineAt": null,
         "RequestFailureReason": null,
         "Findings": [],
         "Responses": [],
-        "RequestBoundary": null,
+        "RequestBoundary": {
+          "ReviewerId": 175728472,
+          "ReviewerNodeId": "BOT_kgDOCnlnWA",
+          "PreparedAt": "2026-11-27T15:16:19.431068+00:00",
+          "ExistingReviewIds": [
+            6088366444
+          ],
+          "Confirmed": false,
+          "RequestNodeId": null,
+          "AcceptedAt": null,
+          "DeadlineAt": null,
+          "AlreadyPending": false
+        },
         "SourceEvidence": null,
         "OperatorResolution": null
       },
