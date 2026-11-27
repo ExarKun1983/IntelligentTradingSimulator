@@ -1,10 +1,10 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1525,
+  "Version": 1526,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
-  "LastEventId": "review-observed:1277929203:4:RequestReview:204:4:task:204:4:4:10:4",
+  "LastEventId": "feedback:v2:1277929203:204:4:204:7221631050:2026-11-27T15:06:22.0000000\u002B00:00",
   "AdmittedIssue": null,
   "WorkerLease": {
     "Owner": "2509f454bb0740d1b478ccdfb3222d81",
@@ -1712,8 +1712,8 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 4,
-      "Version": 583,
-      "LastEventId": "review-observed:1277929203:4:RequestReview:204:4:task:204:4:4:10:4",
+      "Version": 584,
+      "LastEventId": "feedback:v2:1277929203:204:4:204:7221631050:2026-11-27T15:06:22.0000000\u002B00:00",
       "Phase": "BLOCKED",
       "Ready": false,
       "ActiveAuthorized": false,
@@ -2230,9 +2230,10 @@
       },
       "FeedbackEventIds": [
         "feedback:v2:1277929203:204:1:316:7196275830:2026-11-26T15:26:44.0000000\u002B00:00",
-        "feedback:v2:1277929203:204:2:320:7199935428:2026-11-26T17:59:55.0000000\u002B00:00"
+        "feedback:v2:1277929203:204:2:320:7199935428:2026-11-26T17:59:55.0000000\u002B00:00",
+        "feedback:v2:1277929203:204:4:204:7221631050:2026-11-27T15:06:22.0000000\u002B00:00"
       ],
-      "LastFeedbackText": null,
+      "LastFeedbackText": "Controlled continuation of PR #326 after merging master into its branch.\n\nKeep PR #326 and its existing branch. The verified current head is 87cf384ac5594996b2ef003e6fbbdf633c903c79; its parents are the previous task head 0a446c54b2b82703be243e247c3e728d37e95a91 and reviewed master 1887323ce26262a627bced91ff4aee637d345719. This is continuation of the existing PR, not a new clean restart. Do not create another PR or reopen/reuse any discarded attempt.\n\nThe recovery task is to verify the existing README decision against Issue #204\u0027s complete documentation-only contract on this updated branch. If the decision already satisfies the contract, finish verification without making artificial code or documentation changes. Any necessary correction must remain documentation-only. Do not implement training/inference, alter application/domain/infrastructure code, tests, projects, dependencies, or workflows.\n\nComplete a new tracked Coding task on this mapped branch so the orchestrator can capture genuine terminal candidate-SHA evidence and then request fresh managed CI and Copilot review. Preserve the previous task\u0027s final SHA and all old CI/review records as history; do not substitute their evidence or claim it approves the updated head. Do not manually publish successful managed statuses, bypass protection, merge the PR, or resume discarded remote sessions.",
       "ClosurePending": false,
       "TerminalOutcome": "None",
       "TerminalHistory": [
@@ -2396,9 +2397,30 @@
           "PlannedTaskId": null,
           "HandedOffTaskId": null,
           "HandedOffAt": null
+        },
+        "feedback:v2:1277929203:204:4:204:7221631050:2026-11-27T15:06:22.0000000\u002B00:00": {
+          "EventId": "feedback:v2:1277929203:204:4:204:7221631050:2026-11-27T15:06:22.0000000\u002B00:00",
+          "Text": "Controlled continuation of PR #326 after merging master into its branch.\n\nKeep PR #326 and its existing branch. The verified current head is 87cf384ac5594996b2ef003e6fbbdf633c903c79; its parents are the previous task head 0a446c54b2b82703be243e247c3e728d37e95a91 and reviewed master 1887323ce26262a627bced91ff4aee637d345719. This is continuation of the existing PR, not a new clean restart. Do not create another PR or reopen/reuse any discarded attempt.\n\nThe recovery task is to verify the existing README decision against Issue #204\u0027s complete documentation-only contract on this updated branch. If the decision already satisfies the contract, finish verification without making artificial code or documentation changes. Any necessary correction must remain documentation-only. Do not implement training/inference, alter application/domain/infrastructure code, tests, projects, dependencies, or workflows.\n\nComplete a new tracked Coding task on this mapped branch so the orchestrator can capture genuine terminal candidate-SHA evidence and then request fresh managed CI and Copilot review. Preserve the previous task\u0027s final SHA and all old CI/review records as history; do not substitute their evidence or claim it approves the updated head. Do not manually publish successful managed statuses, bypass protection, merge the PR, or resume discarded remote sessions.",
+          "Author": {
+            "Login": "ExarKun1983",
+            "Kind": "Human",
+            "Id": 6195946,
+            "NodeId": "MDQ6VXNlcjYxOTU5NDY=",
+            "Type": "User"
+          },
+          "OccurredAt": "2026-11-27T15:06:22+00:00",
+          "Generation": 4,
+          "HandoffId": "handoff:204:4:review-observed:1277929203:4:RequestReview:204:4:task:204:4:4:10:4",
+          "Round": 4,
+          "Sha": "0a446c54b2b82703be243e247c3e728d37e95a91",
+          "PlannedTaskId": null,
+          "HandedOffTaskId": null,
+          "HandedOffAt": null
         }
       },
-      "PendingFeedbackEventIds": [],
+      "PendingFeedbackEventIds": [
+        "feedback:v2:1277929203:204:4:204:7221631050:2026-11-27T15:06:22.0000000\u002B00:00"
+      ],
       "Reactivations": {},
       "RestartPreparations": {
         "actions:1277929203:45853767056": {
@@ -4107,6 +4129,14 @@
       "ReceivedAt": "2026-11-27T12:46:47.712302+00:00",
       "CompletedAt": "2026-11-27T12:46:47.712302+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022review-observed:1277929203:4:RequestReview:204:4:task:204:4:4:10:4\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:204,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:4,\u0022Actor\u0022:{\u0022Login\u0022:\u0022copilot-pull-request-reviewer[bot]\u0022,\u0022Kind\u0022:3,\u0022Id\u0022:175728472,\u0022NodeId\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022Type\u0022:\u0022Bot\u0022},\u0022OccurredAt\u0022:\u00222026-11-27T12:46:47.712302\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022review-result\u0022,\u0022ReviewId\u0022:\u0022review-request:RequestReview:204:4:task:204:4:4:10:4\u0022,\u0022TaskId\u0022:\u0022task:204:4:4:10\u0022,\u0022Round\u0022:4,\u0022PullRequest\u0022:326,\u0022Sha\u0022:\u00220a446c54b2b82703be243e247c3e728d37e95a91\u0022,\u0022Classification\u0022:0,\u0022Findings\u0022:[],\u0022Responses\u0022:[],\u0022SourceEvidence\u0022:\u0022{\\u0022reason\\u0022:\\u0022Opt-in fresh exact-head clean review accepted for final human approval; provider request-to-submission correlation is not asserted.\\u0022,\\u0022policy\\u0022:\\u0022exact-head-clean-review-v1\\u0022,\\u0022classifiedAt\\u0022:\\u00222026-11-27T12:48:33.5726584\\u002B00:00\\u0022,\\u0022request\\u0022:\\u0022review-request:RequestReview:204:4:task:204:4:4:10:4\\u0022,\\u0022observedReviews\\u0022:[{\\u0022id\\u0022:6088366444,\\u0022node_id\\u0022:\\u0022PRR_kwDOTCum888AAAABauUZbA\\u0022,\\u0022user\\u0022:{\\u0022login\\u0022:\\u0022copilot-pull-request-reviewer[bot]\\u0022,\\u0022id\\u0022:175728472,\\u0022node_id\\u0022:\\u0022BOT_kgDOCnlnWA\\u0022,\\u0022avatar_url\\u0022:\\u0022https://avatars.githubusercontent.com/in/946600?v=4\\u0022,\\u0022gravatar_id\\u0022:\\u0022\\u0022,\\u0022url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D\\u0022,\\u0022html_url\\u0022:\\u0022https://github.com/apps/copilot-pull-request-reviewer\\u0022,\\u0022followers_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/followers\\u0022,\\u0022following_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/following{/other_user}\\u0022,\\u0022gists_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/gists{/gist_id}\\u0022,\\u0022starred_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/starred{/owner}{/repo}\\u0022,\\u0022subscriptions_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/subscriptions\\u0022,\\u0022organizations_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/orgs\\u0022,\\u0022repos_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/repos\\u0022,\\u0022events_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/events{/privacy}\\u0022,\\u0022received_events_url\\u0022:\\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/received_events\\u0022,\\u0022type\\u0022:\\u0022Bot\\u0022,\\u0022user_view_type\\u0022:\\u0022public\\u0022,\\u0022site_admin\\u0022:false},\\u0022body\\u0022:\\u0022\\\\u003C!-- ccr-overview-v2 --\\\\u003E\\\\n\\\\n### \\\\uD83D\\\\uDFE2 Approval recommended\\\\n\\\\nNo active review issues are reported for the documentation-only ML stack plan.\\\\n\\\\n**No open issues** \\\\uD83C\\\\uDF89\\\\n\\\\n\\\\u003Cdetails\\\\u003E\\\\n\\\\u003Csummary\\\\u003E\\\\u003Cstrong\\\\u003EWhat changed in this PR\\\\u003C/strong\\\\u003E\\\\u003C/summary\\\\u003E\\\\n\\\\nDocuments the planned local-first ML stack for stock-ranking models, building on existing feature and offline-evaluation foundations without implementing training or inference.\\\\n\\\\n**Changes:**\\\\n- Selects pinned Python/scikit-learn training with ONNX export and .NET 9 CPU inference via ONNX Runtime 1.28.0, initially targeting Windows and Linux x64.\\\\n- Defines a versioned model-bundle manifest covering features, preprocessing, provenance, cutoffs, compatibility, and dependency locks.\\\\n- Specifies explicit local artifact selection, offline operation, and fail-closed behavior; clarifies benchmark-relative evaluation limitations and updates the roadmap.\\\\n\\\\n| File | Description |\\\\r\\\\n| ---- | ----------- |\\\\r\\\\n| README.md | Adds the ML technology decision, artifact contract, operational boundaries, and aligned roadmap. |\\\\n\\\\u003C/details\\\\u003E\\\\n\\\\n\\\\u003Csub\\\\u003EReview effort: Balanced\\\\u003C/sub\\\\u003E\\u0022,\\u0022state\\u0022:\\u0022COMMENTED\\u0022,\\u0022html_url\\u0022:\\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/326#pullrequestreview-6088366444\\u0022,\\u0022pull_request_url\\u0022:\\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/326\\u0022,\\u0022author_association\\u0022:\\u0022NONE\\u0022,\\u0022is_copilot_code_review\\u0022:true,\\u0022copilot_code_review_effort\\u0022:\\u0022balanced\\u0022,\\u0022_links\\u0022:{\\u0022html\\u0022:{\\u0022href\\u0022:\\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/326#pullrequestreview-6088366444\\u0022},\\u0022pull_request\\u0022:{\\u0022href\\u0022:\\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/326\\u0022}},\\u0022submitted_at\\u0022:\\u00222026-11-27T12:48:10Z\\u0022,\\u0022commit_id\\u0022:\\u00220a446c54b2b82703be243e247c3e728d37e95a91\\u0022}],\\u0022observedComments\\u0022:[]}\u0022}}"
+    },
+    "feedback:v2:1277929203:204:4:204:7221631050:2026-11-27T15:06:22.0000000\u002B00:00": {
+      "Id": "feedback:v2:1277929203:204:4:204:7221631050:2026-11-27T15:06:22.0000000\u002B00:00",
+      "Digest": "4CE37327FC057322BD8D8209ABC4146E0F9155DFEA4FCE38BCC312F9AD83CEF8",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-27T15:06:22+00:00",
+      "CompletedAt": "2026-11-27T15:06:22+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022feedback:v2:1277929203:204:4:204:7221631050:2026-11-27T15:06:22.0000000\\u002B00:00\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:204,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:4,\u0022Actor\u0022:{\u0022Login\u0022:\u0022ExarKun1983\u0022,\u0022Kind\u0022:0,\u0022Id\u0022:6195946,\u0022NodeId\u0022:\u0022MDQ6VXNlcjYxOTU5NDY=\u0022,\u0022Type\u0022:\u0022User\u0022},\u0022OccurredAt\u0022:\u00222026-11-27T15:06:22\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022human-feedback\u0022,\u0022Text\u0022:\u0022Controlled continuation of PR #326 after merging master into its branch.\\n\\nKeep PR #326 and its existing branch. The verified current head is 87cf384ac5594996b2ef003e6fbbdf633c903c79; its parents are the previous task head 0a446c54b2b82703be243e247c3e728d37e95a91 and reviewed master 1887323ce26262a627bced91ff4aee637d345719. This is continuation of the existing PR, not a new clean restart. Do not create another PR or reopen/reuse any discarded attempt.\\n\\nThe recovery task is to verify the existing README decision against Issue #204\\u0027s complete documentation-only contract on this updated branch. If the decision already satisfies the contract, finish verification without making artificial code or documentation changes. Any necessary correction must remain documentation-only. Do not implement training/inference, alter application/domain/infrastructure code, tests, projects, dependencies, or workflows.\\n\\nComplete a new tracked Coding task on this mapped branch so the orchestrator can capture genuine terminal candidate-SHA evidence and then request fresh managed CI and Copilot review. Preserve the previous task\\u0027s final SHA and all old CI/review records as history; do not substitute their evidence or claim it approves the updated head. Do not manually publish successful managed statuses, bypass protection, merge the PR, or resume discarded remote sessions.\u0022,\u0022HandoffId\u0022:null,\u0022Round\u0022:null,\u0022Sha\u0022:null}}"
     }
   },
   "Outbox": {
