@@ -27,30 +27,43 @@ public sealed class GitStateStore(
     IGitObjectRefTransport transport,
     string repository,
     string reference = "refs/heads/agent-state",
-    bool allowInitialization = false) : IStateStore
+    bool allowInitialization = false,
+    GitHubLiveDiagnostics? diagnostics = null) : IStateStore
 {
     private int observedExistingState;
     private GitCommitObject? cachedCommit;
 
     public async Task<StateSnapshot> LoadAsync(CancellationToken cancellationToken)
     {
+        diagnostics?.MarkStateRead(GitStateReadStep.Ref);
         var tip = await transport.ReadRefAsync(reference, cancellationToken);
         if (tip is null)
         {
             RequireExplicitInitialization();
+            diagnostics?.ClearStateRead();
             return new(null, RepositoryState.Create(repository));
         }
         Interlocked.Exchange(ref observedExistingState, 1);
         // The ref is always read; only validated content-addressed commits are cached.
         var commit = Volatile.Read(ref cachedCommit);
         if (commit?.Id != tip)
+        {
+            diagnostics?.MarkStateRead(GitStateReadStep.Commit);
             commit = await transport.ReadCommitAsync(tip, cancellationToken);
-        if (commit.Id != tip) throw new InvalidDataException("Git commit identity mismatch.");
+        }
+        diagnostics?.MarkStateRead(GitStateReadStep.CommitIdentity);
+        if (commit.Id != tip) throw ReadFailure(GitStateReadCheck.CommitIdentity, "Git commit identity mismatch.");
+        diagnostics?.MarkStateRead(GitStateReadStep.Deserialize);
         var state = StateJson.Deserialize(commit.StateJson);
-        if (state.Repository != repository || state.SchemaVersion != 1)
-            throw new InvalidDataException("State repository or schema mismatch.");
+        diagnostics?.MarkStateRead(GitStateReadStep.RepositorySchema);
+        if (state.Repository != repository)
+            throw ReadFailure(GitStateReadCheck.Repository, "State repository or schema mismatch.");
+        if (state.SchemaVersion != 1)
+            throw ReadFailure(GitStateReadCheck.Schema, "State repository or schema mismatch.");
+        diagnostics?.MarkStateRead(GitStateReadStep.Continuation);
         OrchestrationContinuation.Validate(state);
         Interlocked.Exchange(ref cachedCommit, commit);
+        diagnostics?.ClearStateRead();
         return new(tip, state);
     }
 
@@ -63,6 +76,7 @@ public sealed class GitStateStore(
         var current = await transport.ReadRefAsync(reference, cancellationToken);
         if (current is null) RequireExplicitInitialization();
         else Interlocked.Exchange(ref observedExistingState, 1);
+        diagnostics?.ClearStateRead();
         if (current != expected.Revision) return false;
         var blob = await transport.CreateBlobAsync(StateJson.Serialize(state), cancellationToken);
         var tree = await transport.CreateTreeAsync("state.json", blob, cancellationToken);
@@ -93,6 +107,13 @@ public sealed class GitStateStore(
     private void RequireExplicitInitialization()
     {
         if (!allowInitialization || Volatile.Read(ref observedExistingState) != 0)
-            throw new InvalidDataException("Canonical state ref is missing; explicit operator bootstrap is required.");
+            throw ReadFailure(GitStateReadCheck.RefExists, "Canonical state ref is missing; explicit operator bootstrap is required.");
+    }
+
+    private InvalidDataException ReadFailure(GitStateReadCheck check, string message)
+    {
+        var exception = new InvalidDataException(message);
+        diagnostics?.AttachStateReadCheck(exception, check);
+        return exception;
     }
 }

@@ -2265,6 +2265,34 @@ lookup-only, even if no receipt is found. Historical `Unknown` statuses are neve
 retroactively cancelled using this new path. Existing held attempts still need
 audited recovery after checking the live task/head and corrective statuses.
 
+Failures before the initial preflight now distinguish
+`RequiredStatusApproval`, `RequiredStatusInitialStateLoad`,
+`RequiredStatusCanonicalIntent` and `RequiredStatusPreparedCheck`. Later loads
+are marked `RequiredStatusPreparedStateLoad`, `RequiredStatusConfirmationStateLoad`
+or `RequiredStatusRecoveryStateLoad`, so a read after boundary preparation or POST
+cannot be mistaken for an initial read.
+
+Canonical intent rejections add an optional `RequiredStatusValidation` object to
+the sanitized effect diagnostic. `Check` names the exact failed condition:
+repository, intent existence/kind/digest, saved delivery state, issue/generation,
+task/round, SHA, payload/context, or existing publication boundary. It reports
+`ExpectedExecutingVersion` (when execution was admitted by the reconciler),
+`ObservedVersion`, `SavedDeliveryState` and `BoundaryPresent`. For example, a
+`DeliveryState` rejection with `Pending` and an observed version older than the
+expected executing version identifies a stale snapshot in that invocation.
+This is evidence to investigate, not permission to retry or bypass validation;
+it does not retrospectively establish the cause of a historical failure.
+
+Canonical read failures also report optional `StateRead` and `StateReadCheck`
+fields. These distinguish ref, commit/tree/blob, decoding/schema and continuation
+steps, and identify failed Git identity, tree-entry, encoding, capacity or
+repository/schema checks. The first captured read/check is retained if later
+lease cleanup fails. No exception messages, API bodies, repository names, URLs,
+SHA values, credentials or persisted payloads are included in this evidence.
+Unrelated diagnostics retain their existing fields without these optional
+objects. The added instrumentation does not change retry limits, status outcomes,
+CAS/ref publication, uncertainty recovery or task scheduling.
+
 Linking and merge are not transactional: verify the link in Development before
 the manual merge, especially if a concurrent edit or merge
 interrupts projection. This does not retrofit already-merged PRs or close old

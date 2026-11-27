@@ -211,6 +211,7 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
             try
             {
                 diagnostics?.Mark(GitHubLiveStage.EffectExecution);
+                diagnostics?.BeginEffectExecution(pending.Kind, marked.Version);
                 outcome = await effects.ExecuteAsync(marked.Outbox[pending.Id], cancellationToken);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
@@ -221,6 +222,10 @@ public sealed class OrchestrationReconciler(OrchestrationReducer? reducer = null
                     notStarted ? exception.InnerException! : exception);
                 outcome = new(notStarted ? DeliveryStatus.Failed : DeliveryStatus.Unknown, FailureCode: code,
                     IssueLinkFailure: (exception as IssueLinkNotStartedException)?.Evidence);
+            }
+            finally
+            {
+                diagnostics?.EndEffectExecution();
             }
             // Once execution started, a lost result must never cause another Execute call.
             diagnostics?.Mark(GitHubLiveStage.EffectOutcomeSave);

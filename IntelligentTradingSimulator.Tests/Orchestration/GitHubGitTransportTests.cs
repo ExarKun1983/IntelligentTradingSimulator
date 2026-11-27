@@ -12,6 +12,58 @@ public class GitHubGitTransportTests
     private const string Tree = "cccccccccccccccccccccccccccccccccccccccc";
     private const string Blob = "dddddddddddddddddddddddddddddddddddddddd";
 
+    [Theory]
+    [InlineData("Ref", "RefIdentity")]
+    [InlineData("Commit", "TreeIdentity")]
+    [InlineData("Tree", "TruncatedTree")]
+    [InlineData("Blob", "BlobEncoding")]
+    [InlineData("RepositorySchema", "Repository")]
+    public async Task FailedCanonicalReadIdentifiesItsStepWithoutExposingResponseContent(string step, string check)
+    {
+        var state = RepositoryState.Create(step == "RepositorySchema" ? "private/repository" : "owner/repo");
+        var bytes = Encoding.UTF8.GetBytes(StateJson.Serialize(state));
+        var handler = new StubHandler((request, _) => request.RequestUri!.AbsolutePath switch
+        {
+            "/repos/owner/repo/git/ref/heads/agent-state" =>
+                Json(new { @object = new { sha = step == "Ref" ? "private-git-identity" : Parent } }),
+            $"/repos/owner/repo/git/commits/{Parent}" =>
+                Json(new { tree = new { sha = step == "Commit" ? "private-tree-identity" : Tree } }),
+            $"/repos/owner/repo/git/trees/{Tree}" => Json(new
+            {
+                truncated = step == "Tree",
+                tree = new[] { new { path = "state.json", type = "blob", mode = "100644", sha = Blob } }
+            }),
+            $"/repos/owner/repo/git/blobs/{Blob}" => Json(new
+            {
+                encoding = step == "Blob" ? "private-encoding" : "base64",
+                size = bytes.Length, content = Convert.ToBase64String(bytes)
+            }),
+            _ => throw new InvalidOperationException("Unexpected HTTP")
+        });
+        using var client = Client(handler);
+        using var output = new StringWriter();
+        var diagnostics = new GitHubLiveDiagnostics();
+        diagnostics.Mark(GitHubLiveStage.RequiredStatusInitialStateLoad);
+        var store = new GitStateStore(new GitHubGitTransport(client, "owner/repo", diagnostics: diagnostics),
+            "owner/repo", diagnostics: diagnostics);
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => store.LoadAsync(default));
+        diagnostics.Capture(exception);
+        diagnostics.Mark(GitHubLiveStage.WorkerLeaseRelease);
+        diagnostics.MarkStateRead(GitStateReadStep.Ref);
+        diagnostics.WriteFailure(output, exception);
+
+        using var json = JsonDocument.Parse(output.ToString());
+        var failure = json.RootElement.GetProperty("LiveDiagnostic");
+        Assert.Equal("RequiredStatusInitialStateLoad", failure.GetProperty("Stage").GetString());
+        Assert.Equal(step, failure.GetProperty("StateRead").GetString());
+        Assert.Equal(check, failure.GetProperty("StateReadCheck").GetString());
+        Assert.DoesNotContain("private", output.ToString());
+        Assert.DoesNotContain("owner/repo", output.ToString());
+        Assert.DoesNotContain(Parent, output.ToString());
+        Assert.DoesNotContain("state.json", output.ToString());
+    }
+
     [Fact]
     public async Task WritesAreDisabledBeforeAnyHttpRequestByDefault()
     {
@@ -20,6 +72,29 @@ public class GitHubGitTransportTests
         var transport = new GitHubGitTransport(client, "owner/repo");
         await Assert.ThrowsAsync<InvalidOperationException>(() => transport.CreateBlobAsync("{}", default));
         Assert.Equal(0, handler.Calls);
+    }
+
+    [Fact]
+    public async Task FailedBoundaryWriteAfterSuccessfulRefReadDoesNotReportReadStep()
+    {
+        var state = RepositoryState.Create("owner/repo");
+        var handler = new StubHandler((request, _) => request.Method == HttpMethod.Get
+            ? Json(new { @object = new { sha = Parent } })
+            : new(HttpStatusCode.InternalServerError));
+        using var client = Client(handler);
+        using var output = new StringWriter();
+        var diagnostics = new GitHubLiveDiagnostics(output);
+        var store = new GitStateStore(
+            new GitHubGitTransport(client, "owner/repo", allowMutations: true, diagnostics: diagnostics),
+            "owner/repo", diagnostics: diagnostics);
+
+        var exception = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            store.TrySaveAsync(new StateSnapshot(Parent, state), StateJson.Clone(state), default));
+        diagnostics.ReportEffectFailure(EffectKind.PublishRequiredStatus, EffectFailureCode.ExecutionException, exception);
+
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.False(json.RootElement.GetProperty("EffectDiagnostic").TryGetProperty("StateRead", out _));
+        Assert.Equal(2, handler.Calls);
     }
 
     [Fact]
