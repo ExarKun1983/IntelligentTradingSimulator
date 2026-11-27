@@ -114,6 +114,44 @@ public sealed class GitHubLiveCredentialsTests
     }
 
     [Fact]
+    public void OrdinaryCiBridgeKeepsStatusCredentialsAwayFromPullRequestCode()
+    {
+        var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/ci.yml")).Replace("\r\n", "\n");
+        var resolver = workflow.Split("\n  resolve-managed-head:")[1].Split("\n  pending-managed-check:")[0];
+        var pending = workflow.Split("\n  pending-managed-check:")[1].Split("\n  build-and-test:")[0];
+        var tests = workflow.Split("\n  build-and-test:")[1].Split("\n  publish-managed-check:")[0];
+        var publisher = workflow.Split("\n  publish-managed-check:")[1];
+
+        Assert.Contains("workflow_run:", workflow);
+        Assert.Contains("Agent managed CI (disabled)", workflow);
+        Assert.Contains("github.event.workflow_run.id || inputs.managed_run_id || github.ref", workflow);
+        Assert.Contains("GITHUB_REPOSITORY/.github/workflows/ci.yml@refs/heads/master", resolver);
+        Assert.Contains("ref: ${{ github.workflow_sha }}", resolver);
+        Assert.Contains("actions: read", resolver);
+        Assert.DoesNotContain("statuses: write", resolver);
+        Assert.Contains("ref: ${{ needs.resolve-managed-head.outputs.sha || github.sha }}", tests);
+        Assert.Contains("persist-credentials: false", tests);
+        Assert.Contains("Verify bridge tested SHA", tests);
+        Assert.Contains("always() && !cancelled()", tests);
+        Assert.Contains("needs.pending-managed-check.result == 'success'", tests);
+        Assert.Contains("needs.resolve-managed-head.result == 'skipped'", tests);
+        Assert.Contains("resolve-managed-ci-head.test.sh", tests);
+        Assert.DoesNotContain("GH_TOKEN:", tests);
+        Assert.DoesNotContain("statuses: write", tests);
+        Assert.Contains("statuses: write", pending);
+        Assert.Contains("-f state=pending", pending);
+        Assert.DoesNotContain("actions/checkout", pending);
+        Assert.Contains("statuses: write", publisher);
+        Assert.Contains("needs.build-and-test.result", publisher);
+        Assert.Contains("success) state=success", publisher);
+        Assert.Contains("failure) state=failure", publisher);
+        Assert.Contains("cancelled|skipped) state=error", publisher);
+        Assert.Contains("needs.pending-managed-check.result == 'success'", publisher);
+        Assert.DoesNotContain("actions/checkout", publisher);
+        Assert.DoesNotContain("Agent managed CI", publisher);
+    }
+
+    [Fact]
     public void RecoveryWorkflowRequiresExplicitAcknowledgementForUncertainReviewAbandonment()
     {
         var workflow = File.ReadAllText(Path.Combine(FindRoot(), ".github/workflows/agent-state-machine.yml")).Replace("\r\n", "\n");
