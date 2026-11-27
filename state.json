@@ -1,11 +1,11 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1428,
+  "Version": 1429,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
-  "LastEventId": "terminal-for:actions:1277929203:45999652951",
-  "AdmittedIssue": 204,
+  "LastEventId": "actions:1277929203:45999652951",
+  "AdmittedIssue": null,
   "WorkerLease": {
     "Owner": "7ef97761632441acaadea3b49610d6c0",
     "ExpiresAt": "2026-11-27T13:05:11.8329327+00:00"
@@ -1712,9 +1712,9 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 3,
-      "Version": 501,
-      "LastEventId": "terminal-for:actions:1277929203:45999652951",
-      "Phase": "CLOSED",
+      "Version": 502,
+      "LastEventId": "actions:1277929203:45999652951",
+      "Phase": "BLOCKED",
       "Ready": false,
       "ActiveAuthorized": false,
       "ReadyAt": "2026-11-26T19:54:13+00:00",
@@ -2098,7 +2098,7 @@
           "AutomaticContinuations": 0,
           "ContinuationPending": false,
           "Kind": "Coding",
-          "Status": "Running",
+          "Status": "Failed",
           "ParentTaskId": null,
           "Round": 3,
           "LaunchSource": "UnmappedIssue",
@@ -2130,7 +2130,19 @@
               "ResponseDigest": "FB75E485579AE804DF76CB91D6E652DD2848979FE28547C664302FB6699239C5"
             }
           },
-          "OperatorResolution": null,
+          "OperatorResolution": {
+            "EventId": "actions:1277929203:45999652951",
+            "EvidenceEventId": "terminal-for:actions:1277929203:45999652951",
+            "Author": {
+              "Login": "6195946",
+              "Kind": "Human",
+              "Id": 6195946,
+              "NodeId": null,
+              "Type": "User"
+            },
+            "Reason": "Discard closed unmerged PR323 after reviewed PR325. Verify ended task sessions and end local tracking without successful coding or final-head evidence; do not resume old sessions or start work.",
+            "OccurredAt": "2026-11-27T12:34:15.9137734+00:00"
+          },
           "UncertainLaunchResolution": null,
           "CandidateShaEvidence": null,
           "ReviewBlockers": [],
@@ -3873,6 +3885,14 @@
       "ReceivedAt": "2026-11-27T12:34:15.9137734+00:00",
       "CompletedAt": "2026-11-27T12:34:15.9137734+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022terminal-for:actions:1277929203:45999652951\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:204,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:3,\u0022Actor\u0022:{\u0022Login\u0022:\u0022github-task-api\u0022,\u0022Kind\u0022:1,\u0022Id\u0022:null,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-27T12:34:15.9137734\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022task-terminal-observed\u0022,\u0022TaskId\u0022:\u0022task:204:3:3:9\u0022,\u0022Evidence\u0022:{\u0022LaunchIntentId\u0022:\u0022LaunchTask:204:3:task:204:3:3:9:3\u0022,\u0022ExternalTaskId\u0022:\u002201c8ff29-c2c2-4aed-81a8-a75ea11ecb5c\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022RepositoryId\u0022:1277929203,\u0022CreatorId\u0022:6195946,\u0022State\u0022:\u0022completed\u0022,\u0022SessionCount\u0022:1,\u0022Sessions\u0022:[{\u0022Id\u0022:\u00220cb58a28-3160-40b8-ae72-3c7021b89f2b\u0022,\u0022ExternalTaskId\u0022:\u002201c8ff29-c2c2-4aed-81a8-a75ea11ecb5c\u0022,\u0022RepositoryId\u0022:1277929203,\u0022State\u0022:\u0022completed\u0022,\u0022CompletedAt\u0022:\u00222026-11-26T19:58:58\u002B00:00\u0022}],\u0022UpdatedAt\u0022:\u00222026-11-26T19:58:59.2972447\u002B00:00\u0022,\u0022ObservedAt\u0022:\u00222026-11-27T12:34:15.9137734\u002B00:00\u0022,\u0022ResponseDigest\u0022:\u0022FB75E485579AE804DF76CB91D6E652DD2848979FE28547C664302FB6699239C5\u0022}}}"
+    },
+    "actions:1277929203:45999652951": {
+      "Id": "actions:1277929203:45999652951",
+      "Digest": "93C890BA1E4EFD7E523BFB15E7563FA60DABA2E5127681318E3B5FBFA819235C",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-27T12:34:15.9137734+00:00",
+      "CompletedAt": "2026-11-27T12:34:15.9137734+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022actions:1277929203:45999652951\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:204,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:3,\u0022Actor\u0022:{\u0022Login\u0022:\u00226195946\u0022,\u0022Kind\u0022:0,\u0022Id\u0022:6195946,\u0022NodeId\u0022:null,\u0022Type\u0022:\u0022User\u0022},\u0022OccurredAt\u0022:\u00222026-11-27T12:34:15.9137734\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022resolve-task-terminal\u0022,\u0022TaskId\u0022:\u0022task:204:3:3:9\u0022,\u0022EvidenceEventId\u0022:\u0022terminal-for:actions:1277929203:45999652951\u0022,\u0022Reason\u0022:\u0022Discard closed unmerged PR323 after reviewed PR325. Verify ended task sessions and end local tracking without successful coding or final-head evidence; do not resume old sessions or start work.\u0022}}"
     }
   },
   "Outbox": {
