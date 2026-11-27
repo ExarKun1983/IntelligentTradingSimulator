@@ -8,12 +8,22 @@ on:
     branches:
       - master
   workflow_dispatch:
+    inputs:
+      managed_run_id:
+        description: Optional immutable managed CI run; dispatch this bridge only on master
+        required: false
+        type: string
+  workflow_run:
+    workflows:
+      - Agent managed CI (disabled)
+    types:
+      - completed
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.workflow_run.id || inputs.managed_run_id || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -23,17 +33,78 @@ env:
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
 
 jobs:
+  resolve-managed-head:
+    if: ${{ github.event_name == 'workflow_run' || (github.event_name == 'workflow_dispatch' && inputs.managed_run_id != '') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Require trusted bridge definition
+        run: test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/ci.yml@refs/heads/master"
+      - name: Checkout trusted bridge definition
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Resolve verified tested SHA
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANAGED_RUN_ID: ${{ github.event.workflow_run.id || inputs.managed_run_id }}
+          ORCHESTRATION_CI_WORKFLOW_ID: ${{ vars.ORCHESTRATION_CI_WORKFLOW_ID }}
+          ORCHESTRATION_CI_REF: ${{ vars.ORCHESTRATION_CI_REF }}
+          ORCHESTRATION_CI_DEFINITION_SHA: ${{ vars.ORCHESTRATION_CI_DEFINITION_SHA }}
+        run: bash .github/scripts/resolve-managed-ci-head.sh
+
+  pending-managed-check:
+    needs: resolve-managed-head
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      statuses: write
+    steps:
+      - name: Publish pending independent CI result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED_SHA: ${{ needs.resolve-managed-head.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA" --silent \
+            -f context='Build and test' -f state=pending \
+            -f description='Independent build and tests are pending.' -f target_url="$RUN_URL"
+
   build-and-test:
     name: Build and test
+    needs: [resolve-managed-head, pending-managed-check]
+    if: >-
+      ${{ always() && !cancelled() && (needs.resolve-managed-head.result == 'skipped' ||
+          (needs.resolve-managed-head.result == 'success' && needs.pending-managed-check.result == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-managed-head.outputs.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify bridge tested SHA
+        if: ${{ needs.resolve-managed-head.result == 'success' }}
+        env:
+          TESTED_SHA: ${{ needs.resolve-managed-head.outputs.sha }}
+        run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
 
       - name: Test agent orchestrator scripts
         run: bash .github/scripts/tests/agent-orchestrator.test.sh
+
+      - name: Test managed CI head resolver
+        if: ${{ needs.resolve-managed-head.result == 'skipped' }}
+        run: bash .github/scripts/tests/resolve-managed-ci-head.test.sh
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
@@ -66,3 +137,28 @@ jobs:
           path: ${{ runner.temp }}/test-results
           if-no-files-found: warn
           retention-days: 14
+
+  publish-managed-check:
+    needs: [resolve-managed-head, pending-managed-check, build-and-test]
+    if: ${{ always() && needs.resolve-managed-head.result == 'success' && needs.pending-managed-check.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      statuses: write
+    steps:
+      - name: Publish independent CI result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED_SHA: ${{ needs.resolve-managed-head.outputs.sha }}
+          CI_RESULT: ${{ needs.build-and-test.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          case "$CI_RESULT" in
+            success) state=success; description='Independent build and tests passed.' ;;
+            failure) state=failure; description='Independent build or tests failed.' ;;
+            cancelled|skipped) state=error; description='Independent CI did not complete.' ;;
+            *) echo 'Unexpected independent CI result.' >&2; exit 1 ;;
+          esac
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA" --silent \
+            -f context='Build and test' -f state="$state" \
+            -f description="$description" -f target_url="$RUN_URL"

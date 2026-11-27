@@ -3146,6 +3146,65 @@ This intentionally increases Actions usage. A successful ordinary CI run is not
 managed green proof; only the exact saved managed run can authorize lifecycle
 progress.
 
+##### Required ordinary CI for dispatched managed runs
+
+GitHub does not evaluate workflow-job checks from `workflow_dispatch` or
+`workflow_run` as required PR checks, even when the tested head SHA is correct.
+See [Troubleshooting required status checks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks#checks-from-some-workflow-jobs-are-not-evaluated).
+A successful manual `CI` run without the bridge input is therefore not a remedy
+for an Expected `Build and test` requirement.
+
+The ordinary `CI` workflow also listens for completion of
+`Agent managed CI (disabled)`. Its trusted default-branch resolver verifies the
+configured workflow ID, path, immutable tag and definition SHA, repository,
+first run attempt, terminal outcome, unique job and successful exact-SHA
+verification step. It derives the tested SHA from that job, **not** from the
+managed workflow run's `head_sha`, which identifies the trusted CI definition.
+Missing, changed, skipped or ambiguous evidence fails closed. A managed build
+failure can still trigger independent ordinary CI if its exact-SHA verification
+succeeded; it does not become a managed success.
+
+The bridge runs the existing ordinary script tests and full .NET build/tests
+again on that exact SHA. Separate credential-isolated jobs publish a
+`Build and test` **commit status**, first pending and then the actual independent
+job result. The PR-code job has only `contents: read`, no persisted checkout
+credentials and no status-write token. Publishers never check out or execute PR
+code. A failed pending publication prevents testing/publication from proceeding;
+failed, cancelled or skipped testing never publishes success. A lost or failed
+terminal publication leaves the requirement blocking or makes the workflow fail;
+do not assume a successful publication or bypass protection.
+
+This reports actual ordinary CI, not a renamed managed result or fabricated
+check. Normal `pull_request`/`push` CI remains unchanged apart from credential
+non-persistence and bridge regression tests. The bridge does not publish
+`Agent managed CI`, change canonical state, dispatch Coding or review, or
+authorize merge. Keep the existing `Build and test` requirement and publisher
+policy. If both a check run and a commit status have that name, GitHub requires
+both to pass; do not remove a failing check to substitute a status.
+
+After this workflow has been reviewed and merged to `master`, an existing
+verified managed run can be passed explicitly to the independent bridge:
+
+```bash
+gh workflow run ci.yml --repo "$REPO" --ref master -f managed_run_id="$MANAGED_RUN_ID"
+```
+
+Use the original completed, first-attempt immutable managed run, not the manual
+ordinary CI run and not a rerun of the managed workflow. The bridge refuses a
+non-default-branch definition. No managed CI tag, orchestration definition,
+activation variable or branch-protection setting needs to change. Runs already
+completed before rollout do not automatically replay.
+
+Verify the actual independent run, exact tested SHA, latest trusted commit
+status and PR merge box after rollout. Changes to `master` can also make an
+existing PR behind under strict protection: this bridge does not update its
+branch or preserve old managed approval across a head change. Coordinate any
+such update separately; never use a bypass. Automatic bridge runs add a full
+ordinary CI execution per qualifying managed run; cost and concurrency approval
+must cover that extra execution. Source-run-specific concurrency prevents one
+Issue's bridge from cancelling another Issue's bridge. Statuses remain
+commit-scoped, not an atomic PR-specific merge authorization.
+
 ##### Interim human merge gate
 
 The separately opt-in `ORCHESTRATION_MANUAL_MERGE_GATE_APPROVED=true` permits

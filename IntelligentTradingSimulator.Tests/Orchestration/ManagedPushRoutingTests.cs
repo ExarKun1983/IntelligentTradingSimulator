@@ -18,17 +18,20 @@ public sealed class ManagedPushRoutingTests
     }
 
     [Fact]
-    public void WorkflowRunsOrdinaryCiForEveryPullRequestWithoutPublishingStatuses()
+    public void WorkflowRunsOrdinaryCiForEveryPullRequestWithoutPublishingManagedStatuses()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "IntelligentTradingSimulator.sln")))
             directory = directory.Parent;
         var workflow = File.ReadAllText(Path.Combine(directory!.FullName, ".github/workflows/ci.yml")).Replace("\r\n", "\n");
         Assert.Contains("  pull_request:\n    branches:\n      - master", workflow);
-        Assert.Contains("jobs:\n  build-and-test:\n    name: Build and test\n    runs-on:", workflow);
+        var tests = workflow.Split("\n  build-and-test:")[1].Split("\n  publish-managed-check:")[0];
+        Assert.Contains("\n  build-and-test:\n    name: Build and test", workflow);
+        Assert.Contains("needs.resolve-managed-head.result == 'skipped'", tests);
         Assert.DoesNotContain("managed-route:", workflow);
         Assert.DoesNotContain("ORCHESTRATION_MANAGED_ROUTING_APPROVED", workflow);
-        Assert.DoesNotContain("statuses: write", workflow);
+        Assert.DoesNotContain("statuses: write", tests);
+        Assert.DoesNotContain("-f context='Agent managed CI'", workflow);
         Assert.DoesNotContain("secrets.", workflow);
         Assert.Contains("Test agent orchestrator scripts", workflow);
         Assert.Contains("Run tests", workflow);
