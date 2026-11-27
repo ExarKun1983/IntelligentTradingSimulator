@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1562,
+  "Version": 1563,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "ci-observed:1277929203:5:RunCi:204:5:task:204:5:5:11:5",
@@ -1712,7 +1712,7 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 5,
-      "Version": 618,
+      "Version": 619,
       "LastEventId": "ci-observed:1277929203:5:RunCi:204:5:task:204:5:5:11:5",
       "Phase": "REVIEW_PENDING",
       "Ready": false,
@@ -2234,31 +2234,21 @@
         }
       },
       "Review": {
-        "IntentId": "RequestReview:204:4:task:204:4:4:10:4",
-        "ReviewId": "review-request:RequestReview:204:4:task:204:4:4:10:4",
-        "TaskId": "task:204:4:4:10",
-        "Round": 4,
-        "Sha": "0a446c54b2b82703be243e247c3e728d37e95a91",
-        "Classification": "Accepted",
-        "LifecycleState": "Completed",
-        "CopilotRequestNodeId": "RR_kwDOTCum8871s5Xj",
-        "ReviewRequestedAt": "2026-11-27T12:46:55.202272+00:00",
-        "ReviewDeadlineAt": "2026-11-27T13:01:55.202272+00:00",
+        "IntentId": "RequestReview:204:5:task:204:5:5:11:5",
+        "ReviewId": null,
+        "TaskId": "task:204:5:5:11",
+        "Round": 5,
+        "Sha": "87cf384ac5594996b2ef003e6fbbdf633c903c79",
+        "Classification": null,
+        "LifecycleState": "NotRequested",
+        "CopilotRequestNodeId": null,
+        "ReviewRequestedAt": null,
+        "ReviewDeadlineAt": null,
         "RequestFailureReason": null,
         "Findings": [],
         "Responses": [],
-        "RequestBoundary": {
-          "ReviewerId": 175728472,
-          "ReviewerNodeId": "BOT_kgDOCnlnWA",
-          "PreparedAt": "2026-11-27T12:46:47.712302+00:00",
-          "ExistingReviewIds": [],
-          "Confirmed": true,
-          "RequestNodeId": "RR_kwDOTCum8871s5Xj",
-          "AcceptedAt": "2026-11-27T12:46:55.202272+00:00",
-          "DeadlineAt": "2026-11-27T13:01:55.202272+00:00",
-          "AlreadyPending": false
-        },
-        "SourceEvidence": "{\u0022reason\u0022:\u0022Opt-in fresh exact-head clean review accepted for final human approval; provider request-to-submission correlation is not asserted.\u0022,\u0022policy\u0022:\u0022exact-head-clean-review-v1\u0022,\u0022classifiedAt\u0022:\u00222026-11-27T12:48:33.5726584\u002B00:00\u0022,\u0022request\u0022:\u0022review-request:RequestReview:204:4:task:204:4:4:10:4\u0022,\u0022observedReviews\u0022:[{\u0022id\u0022:6088366444,\u0022node_id\u0022:\u0022PRR_kwDOTCum888AAAABauUZbA\u0022,\u0022user\u0022:{\u0022login\u0022:\u0022copilot-pull-request-reviewer[bot]\u0022,\u0022id\u0022:175728472,\u0022node_id\u0022:\u0022BOT_kgDOCnlnWA\u0022,\u0022avatar_url\u0022:\u0022https://avatars.githubusercontent.com/in/946600?v=4\u0022,\u0022gravatar_id\u0022:\u0022\u0022,\u0022url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D\u0022,\u0022html_url\u0022:\u0022https://github.com/apps/copilot-pull-request-reviewer\u0022,\u0022followers_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/followers\u0022,\u0022following_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/following{/other_user}\u0022,\u0022gists_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/gists{/gist_id}\u0022,\u0022starred_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/starred{/owner}{/repo}\u0022,\u0022subscriptions_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/subscriptions\u0022,\u0022organizations_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/orgs\u0022,\u0022repos_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/repos\u0022,\u0022events_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/events{/privacy}\u0022,\u0022received_events_url\u0022:\u0022https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/received_events\u0022,\u0022type\u0022:\u0022Bot\u0022,\u0022user_view_type\u0022:\u0022public\u0022,\u0022site_admin\u0022:false},\u0022body\u0022:\u0022\\u003C!-- ccr-overview-v2 --\\u003E\\n\\n### \\uD83D\\uDFE2 Approval recommended\\n\\nNo active review issues are reported for the documentation-only ML stack plan.\\n\\n**No open issues** \\uD83C\\uDF89\\n\\n\\u003Cdetails\\u003E\\n\\u003Csummary\\u003E\\u003Cstrong\\u003EWhat changed in this PR\\u003C/strong\\u003E\\u003C/summary\\u003E\\n\\nDocuments the planned local-first ML stack for stock-ranking models, building on existing feature and offline-evaluation foundations without implementing training or inference.\\n\\n**Changes:**\\n- Selects pinned Python/scikit-learn training with ONNX export and .NET 9 CPU inference via ONNX Runtime 1.28.0, initially targeting Windows and Linux x64.\\n- Defines a versioned model-bundle manifest covering features, preprocessing, provenance, cutoffs, compatibility, and dependency locks.\\n- Specifies explicit local artifact selection, offline operation, and fail-closed behavior; clarifies benchmark-relative evaluation limitations and updates the roadmap.\\n\\n| File | Description |\\r\\n| ---- | ----------- |\\r\\n| README.md | Adds the ML technology decision, artifact contract, operational boundaries, and aligned roadmap. |\\n\\u003C/details\\u003E\\n\\n\\u003Csub\\u003EReview effort: Balanced\\u003C/sub\\u003E\u0022,\u0022state\u0022:\u0022COMMENTED\u0022,\u0022html_url\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/326#pullrequestreview-6088366444\u0022,\u0022pull_request_url\u0022:\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/326\u0022,\u0022author_association\u0022:\u0022NONE\u0022,\u0022is_copilot_code_review\u0022:true,\u0022copilot_code_review_effort\u0022:\u0022balanced\u0022,\u0022_links\u0022:{\u0022html\u0022:{\u0022href\u0022:\u0022https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/326#pullrequestreview-6088366444\u0022},\u0022pull_request\u0022:{\u0022href\u0022:\u0022https://api.github.com/repos/ExarKun1983/IntelligentTradingSimulator/pulls/326\u0022}},\u0022submitted_at\u0022:\u00222026-11-27T12:48:10Z\u0022,\u0022commit_id\u0022:\u00220a446c54b2b82703be243e247c3e728d37e95a91\u0022}],\u0022observedComments\u0022:[]}",
+        "RequestBoundary": null,
+        "SourceEvidence": null,
         "OperatorResolution": null
       },
       "FeedbackEventIds": [
@@ -2944,11 +2934,11 @@
           "OccurredAt": "2026-11-20T14:48:44+00:00"
         }
       },
-      "ProjectionDigest": "4F7E66F85917C8F306CC6C9AF540B5E37E0BA1254A7B4AF36717E50EB2E24D58",
+      "ProjectionDigest": "E69BE9AD2A065B6850878EBD5AE6A93EBE2F91537056F1EA79A23278D419D58C",
       "ObservedProjectionDigest": "4F7E66F85917C8F306CC6C9AF540B5E37E0BA1254A7B4AF36717E50EB2E24D58",
       "StatusProjectionDigest": "9574886938B238111F7FFB8C40BF2B83DFDBE9D8654E66C71CC8C64C4F1F7C22",
-      "RequiredStatusSequence": 58,
-      "RequiredStatusIntentId": "required-status:204:5:58"
+      "RequiredStatusSequence": 59,
+      "RequiredStatusIntentId": "required-status:204:5:59"
     }
   },
   "Inbox": {
@@ -15090,6 +15080,101 @@
         ],
         "StatusId": 60058221238
       }
+    },
+    "RequestReview:204:5:task:204:5:5:11:5": {
+      "Id": "RequestReview:204:5:task:204:5:5:11:5",
+      "Digest": "20DEC9AD4B9A15BD2B25C3E8E536B9F485F073BA4C4F56B0D383CA491E07DE43",
+      "IssueNumber": 204,
+      "Generation": 5,
+      "Kind": "RequestReview",
+      "Status": "Pending",
+      "TaskId": "task:204:5:5:11",
+      "Round": 5,
+      "Sha": "87cf384ac5594996b2ef003e6fbbdf633c903c79",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [
+        "feedback:v2:1277929203:204:4:204:7221631050:2026-11-27T15:06:22.0000000\u002B00:00"
+      ],
+      "CreatedAt": "2026-11-27T15:16:02.7010314+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": null,
+      "RequiredStatusBoundary": null
+    },
+    "required-status:204:5:59": {
+      "Id": "required-status:204:5:59",
+      "Digest": "C1A3330C5FBF20C9EEA0CB04EC965743F30A2437B25870E3DE4D58EC50DBF8CC",
+      "IssueNumber": 204,
+      "Generation": 5,
+      "Kind": "PublishRequiredStatus",
+      "Status": "Pending",
+      "TaskId": "task:204:5:5:11",
+      "Round": 5,
+      "Sha": "87cf384ac5594996b2ef003e6fbbdf633c903c79",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-27T15:16:02.7010314+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": {
+        "Context": "Agent managed CI",
+        "State": "success",
+        "Description": "Exact tested head CI passed; human approval required.",
+        "TargetUrl": "https://github.com/ExarKun1983/IntelligentTradingSimulator/actions/runs/46023086031#agent-status-681e39efd334a6e95eb2cb4e31eff5bf121247821f0b82e8b6044db8d6316529",
+        "CiIntentId": "RunCi:204:5:task:204:5:5:11:5",
+        "CiRunId": "46023086031"
+      },
+      "RequiredStatusBoundary": null
+    },
+    "labels:204:5:E69BE9AD2A065B6850878EBD5AE6A93EBE2F91537056F1EA79A23278D419D58C": {
+      "Id": "labels:204:5:E69BE9AD2A065B6850878EBD5AE6A93EBE2F91537056F1EA79A23278D419D58C",
+      "Digest": "F22F4715FB09201D0A7C10CFA801C6E8AD99AA1C5EF27F38A581FBE314BBEF2E",
+      "IssueNumber": 204,
+      "Generation": 5,
+      "Kind": "ProjectLabels",
+      "Status": "Pending",
+      "TaskId": null,
+      "Round": 5,
+      "Sha": "87cf384ac5594996b2ef003e6fbbdf633c903c79",
+      "ExternalId": null,
+      "Labels": [
+        "agent:ai-review"
+      ],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-27T15:16:02.7010314+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": null,
+      "RequiredStatusBoundary": null
+    },
+    "status:204:5:6CD4A444361B0AAFD3CD679C0527DB0B1D830C66601698EAE29E877528C9BE71": {
+      "Id": "status:204:5:6CD4A444361B0AAFD3CD679C0527DB0B1D830C66601698EAE29E877528C9BE71",
+      "Digest": "F99257837B8C819A3FED414837AE737D896F0E2767B796A834F31DF393CA8A79",
+      "IssueNumber": 204,
+      "Generation": 5,
+      "Kind": "ProjectStatus",
+      "Status": "Pending",
+      "TaskId": null,
+      "Round": 5,
+      "Sha": "87cf384ac5594996b2ef003e6fbbdf633c903c79",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-27T15:16:02.7010314+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": "\u003C!-- its-agent-state:204:5 --\u003E\nAgent workflow: **REVIEW_PENDING**\n\nGeneration: 5; round: 5.\nPR: #326; head: \u003Ccode\u003E87cf384ac5594996b2ef003e6fbbdf633c903c79\u003C/code\u003E.\nTask: Completed.\nConsecutive CI failures: 0/3; review failures: 0/5.\nAutomation held: False; terminal outcome: None.\n\nHandoff: not captured.\n\nCanonical Git state is authoritative. Human approval is required; no automatic merge.",
+      "TaskPrompt": null,
+      "RequiredStatus": null,
+      "RequiredStatusBoundary": null
     }
   }
 }
