@@ -204,8 +204,10 @@ public sealed class GitHubTaskAdapter(
         }
     }
 
-    internal async Task ValidateRestartTasksAsync(RepositoryState state, IssueState issue, CancellationToken token)
+    internal async Task<List<RestartTaskVerification>> ValidateRestartTasksAsync(
+        RepositoryState state, IssueState issue, CancellationToken token)
     {
+        var resolutions = TaskTerminalRecovery.RestartResolutions(state, issue);
         var launches = state.Outbox.Values.Where(effect => effect.IssueNumber == issue.Number &&
             effect.Generation == issue.Generation && effect.Kind == EffectKind.LaunchTask).ToList();
         if (launches.Count == 0)
@@ -215,13 +217,22 @@ public sealed class GitHubTaskAdapter(
         {
             if (launch.Status != DeliveryStatus.Succeeded || string.IsNullOrWhiteSpace(launch.ExternalId) ||
                 launch.TaskId is null || !issue.Tasks.TryGetValue(launch.TaskId, out var task) ||
-                task.Status != TaskStatus.Completed || !task.LaunchConfirmed || task.ExternalId != launch.ExternalId ||
-                task.CandidateShaEvidence is not { } evidence)
+                task.Status is not (TaskStatus.Completed or TaskStatus.Failed) ||
+                !task.LaunchConfirmed || task.ExternalId != launch.ExternalId)
                 throw new InvalidDataException("Restart preparation cannot forget an unfinished or uncertain task.");
-            TaskTerminalRecovery.ValidateCandidateSha(evidence, task, issue.PullRequest!.Value, task.FinalSha!);
+            if (task.Status == TaskStatus.Completed)
+                TaskTerminalRecovery.ValidateCandidateSha(task.CandidateShaEvidence, task, issue.PullRequest!.Value, task.FinalSha!);
             using var remote = await taskApi.GetGlobalAsync(TaskPath + "/" + Uri.EscapeDataString(launch.ExternalId), token);
             var root = remote.RootElement;
             ValidateTask(root, launch.ExternalId);
+            if (task.Status == TaskStatus.Failed)
+            {
+                if (StateJson.Digest(root.GetRawText()) != task.TerminalEvidence!.Evidence.ResponseDigest ||
+                    task.TerminalEvidence.Evidence.RepositoryId != api.RepositoryId ||
+                    task.TerminalEvidence.Evidence.CreatorId != taskCreatorId)
+                    throw new InvalidDataException("Restart preparation requires an unchanged audited ended-task snapshot.");
+                continue;
+            }
             var sessions = root.GetProperty("sessions").EnumerateArray().ToList();
             if (root.GetProperty("state").GetString() != "completed" ||
                 sessions.Count is < 1 or > 100 || root.GetProperty("session_count").GetInt32() != sessions.Count ||
@@ -230,9 +241,10 @@ public sealed class GitHubTaskAdapter(
                     session.GetProperty("repository").GetProperty("id").GetInt64() != api.RepositoryId) ||
                 !sessions.Select(session => session.GetProperty("id").GetString())
                     .OrderBy(id => id, StringComparer.Ordinal)
-                    .SequenceEqual(evidence.SessionIds.OrderBy(id => id, StringComparer.Ordinal)))
+                    .SequenceEqual(task.CandidateShaEvidence!.SessionIds.OrderBy(id => id, StringComparer.Ordinal)))
                 throw new InvalidDataException("Restart preparation requires unchanged completed task/session snapshots.");
         }
+        return resolutions;
     }
 
     public async Task<OrchestrationEvent> ReadTerminalEventAsync(RepositoryState state, IssueState issue,

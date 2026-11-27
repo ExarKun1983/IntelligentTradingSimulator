@@ -126,6 +126,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     idOverride: LabelProjectionId(issue, readinessLabels), labels: readinessLabels);
                 break;
             case PrepareRestart restart:
+                if (!TaskTerminalRecovery.RestartResolutions(state, issue).SequenceEqual(restart.TaskVerifications ?? []))
+                    throw new InvalidOperationException("Restart task resolution changed after live verification.");
                 var acknowledgedStatuses = RequiredStatusPolicy.RestartStatusAcknowledgements(state, issue, restart);
                 if (acknowledgedStatuses.Count == 0 && restart.StatusRiskVerification is not null ||
                     acknowledgedStatuses.Count > 0 &&
@@ -153,6 +155,7 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                         effect.IssueNumber == issue.Number &&
                         (effect.Status == DeliveryStatus.Pending ||
                          effect.Status == DeliveryStatus.Unknown &&
+                         !RequiredStatusPolicy.IsPreviouslyAcknowledged(state, issue, effect) &&
                          !acknowledgedStatuses.Any(acknowledgement => acknowledgement.UncertainIntentId == effect.Id))))
                     throw new InvalidOperationException("Restart preparation requires a settled, closed unmerged PR at the exact recorded head.");
                 if (state.Outbox.Values.Any(effect => effect.IssueNumber == issue.Number &&
@@ -169,7 +172,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     issue.PendingFeedbackEventIds.ToList(), issue.ConsecutiveCiFailures, issue.ConsecutiveReviewFailures,
                     restart.Reason, message.Actor, message.OccurredAt)
                 {
-                    StatusRiskVerification = restart.StatusRiskVerification
+                    StatusRiskVerification = restart.StatusRiskVerification,
+                    TaskVerifications = restart.TaskVerifications
                 });
                 issue.PullRequest = null;
                 issue.HeadSha = null;

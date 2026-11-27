@@ -2887,9 +2887,9 @@ attempt must be discarded, not repaired on its existing branch. Unlike
    and remove `agent:ready` if present. Let reconciliation record the exact closed,
    unmerged PR/head and finish old-head required-status revocation.
 2. Verify that every task launched in the current generation has a saved completed
-   receipt and unchanged completed remote sessions. Running, failed, uncertain or
-   incomplete task histories are not supported by this recovery path; resolve
-   those separately. No CI, review, continuation-hold publication, Issue-link
+   receipt and unchanged completed remote sessions, or the audited discarded-task
+   resolution described below. Running, unaudited failed, uncertain or incomplete
+   task histories still block preparation. No CI, review, continuation-hold publication, Issue-link
    revocation or pending effect may remain for this Issue. Repository-wide
    in-flight or exclusive uncertain effects must be reconciled first; pending work
    and historical uncertain required-status receipts for other Issues are left
@@ -2931,6 +2931,28 @@ branch and requests a new PR, without inheriting the closed PR's review blockers
 Issue scope/exclusions still govern repair prompts; review feedback cannot expand
 the implementation contract.
 
+##### Discarding an ended task whose completion was never captured
+
+A closed PR can still have a locally `Running` task: the worker may have held the
+attempt before recording completion, and normal task mapping requires an open PR.
+Do not reopen the discarded PR or invent a `TaskCompleted` event or candidate SHA.
+Use the existing explicit `operation=resolve-task` command with the exact canonical
+task ID, current generations and an audit reason. It verifies an ended remote
+task/session snapshot and records a human decision ending local tracking. The task
+becomes `Failed`, not `Completed`; it gains no final-head evidence or CI eligibility.
+This is not proof of irreversible remote termination. Do not resume its sessions.
+
+Let ordinary reconciliation observe the closed unmerged PR again after the
+resolution hold and settle required-status revocation and projections. Then use
+`prepare-restart`. In addition to its ordinary guards, preparation requires the
+successful original launch, exact durable resolution and terminal-evidence events,
+matching identities/generations and an unchanged fresh remote task response digest.
+Resumed, changed, missing or contradictory remote sessions reject preparation.
+`RestartPreparations.TaskVerifications` archives the verified task and event
+identities/digests; a CAS retry cannot substitute different unverified evidence.
+The failed task and all original evidence remain intact. No new workflow input,
+automatic task resolution, CI/review dispatch or readiness is introduced.
+
 ##### Auditing historical pending-status uncertainty on a discarded earlier head
 
 An interrupted old publisher can leave `Unknown` without a saved boundary. Do not
@@ -2945,6 +2967,12 @@ or extras (maximum 16). Each must be a current-generation `PublishRequiredStatus
 with `pending` payload, no boundary or receipt, a recorded outcome timestamp and
 an earlier SHA different from the discarded PR's final head. That SHA must be a
 captured completed task head on this PR with a confirmed launch in this generation.
+For an audited discarded task without completion/head evidence, the alternative is
+an exact successful canonical `TaskPrMapped` event from the task service, binding
+that same task, generation, PR and earlier SHA before the pending status was created.
+The task must first pass the ended-task resolution verification above. The
+acknowledgement records the mapping event ID and digest, not a fabricated final SHA;
+changed mappings are rejected even across a conflicting save.
 Prepared publications, success/error uncertainty, unknown task/CI/review effects,
 untracked heads and all executing effects remain blocking.
 
@@ -2979,6 +3007,15 @@ Coding/CI/review task is created. The operator must not reopen the discarded PR 
 resume its sessions. Live status checks are snapshots, not an atomic guarantee
 against late writes; monitor old heads and use separately audited recovery if the
 accepted risk materializes. Add `agent:ready` only after preparation is confirmed.
+
+On a later clean restart, an older generation's `Unknown` may remain covered by its
+previous successful audited preparation. It is not included in the new command's
+acknowledgement list only when the exact durable prior command, audit and corrective
+receipt identities still agree, and the old intent remains an unprepared,
+receipt-free pending publication on that discarded earlier head. Missing or changed
+audit/receipt evidence, new uncertainty and prepared/success/error publications
+still block. This carries forward the existing accepted late-write risk; it neither
+revalidates old live statuses nor resolves, cancels or republishes the old intent.
 
 #### Explicit review classification
 

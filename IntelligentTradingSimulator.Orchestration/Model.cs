@@ -191,9 +191,19 @@ public sealed record RestartPreparationRecord(string EventId, long PreviousGener
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RestartStatusVerification? StatusRiskVerification { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<RestartTaskVerification>? TaskVerifications { get; init; }
 }
 public sealed record RestartStatusAcknowledgement(string UncertainIntentId, string CorrectiveIntentId,
-    string Sha, long CorrectiveStatusId);
+    string Sha, long CorrectiveStatusId)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MappingEventId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MappingEventDigest { get; init; }
+}
+public sealed record RestartTaskVerification(string TaskId, string ResolutionEventId,
+    string ResolutionDigest, string EvidenceEventId, string EvidenceDigest, string ResponseDigest);
 public sealed record RestartStatusVerification(List<RestartStatusAcknowledgement> Acknowledgements,
     string ClosedHeadIntentId, long ClosedHeadStatusId);
 public sealed record HumanClassificationRecord(string EventId, string HandoffId, Actor Author, string Reason,
@@ -400,6 +410,8 @@ public sealed record PrepareRestart(int PullRequest, string Sha, string Reason) 
     public List<string>? AcknowledgedUncertainStatusIntentIds { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RestartStatusVerification? StatusRiskVerification { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<RestartTaskVerification>? TaskVerifications { get; init; }
 }
 public sealed record TaskCompleted(string TaskId, int PullRequest, string Sha,
     CandidateShaEvidence? Evidence = null) : EventData;
