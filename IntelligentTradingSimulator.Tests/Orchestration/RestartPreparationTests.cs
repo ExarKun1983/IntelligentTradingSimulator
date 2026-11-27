@@ -31,6 +31,39 @@ public sealed class RestartPreparationTests
         Assert.Equal(earlierAudit, JsonSerializer.Serialize(state.Issues[7].RestartPreparations, StateJson.Options));
     }
 
+    [Fact]
+    public async Task WorkerRecoveryFailuresDoNotInvalidatePreviouslyAuditedUnknownStatus()
+    {
+        var state = RepeatedRestartState();
+        var originalCompletedAt = state.Outbox["uncertain"].CompletedAt;
+        var store = new GitHubTaskIntegrationTests.Store(state);
+        var effects = new TransientStatusRecoveryApi();
+        var worker = new OrchestrationWorker(Reducer, new Clock());
+        var options = new ReconcileOptions(false, true, true, true,
+            AllowedEffectKinds: new HashSet<EffectKind> { EffectKind.ProjectLabels, EffectKind.ProjectStatus });
+        var workerOptions = new WorkerOptions { MaximumIterations = 1, PollInterval = TimeSpan.Zero };
+
+        await worker.RunAsync(store, effects, effects, effects, options, workerOptions);
+
+        Assert.Equal(DeliveryStatus.Unknown, store.State.Outbox["uncertain"].Status);
+        Assert.Equal(EffectFailureCode.RecoveryException, store.State.Outbox["uncertain"].FailureCode);
+        Assert.Equal(originalCompletedAt, store.State.Outbox["uncertain"].CompletedAt);
+
+        effects.ThrowOnRecovery = false;
+        await worker.RunAsync(store, effects, effects, effects, options,
+            workerOptions with { MaximumIterations = 16 });
+
+        Assert.Equal(originalCompletedAt, store.State.Outbox["uncertain"].CompletedAt);
+        Assert.Equal(Phase.CLOSED, store.State.Issues[7].Phase);
+        Assert.Equal(TerminalOutcome.Unmerged, store.State.Issues[7].TerminalOutcome);
+        Assert.Null(store.State.AdmittedIssue);
+        Assert.DoesNotContain(store.State.Outbox.Values, effect => effect.IssueNumber == 7 &&
+            (effect.Status == DeliveryStatus.Pending || OrchestrationReconciler.IsExclusiveUncertain(effect)));
+        var prepared = Reducer.Apply(store.State,
+            Command(new PrepareRestart(18, new string('c', 40), "Discard next attempt."), "second-restart", 2));
+        Assert.Equal(3, prepared.Issues[7].Generation);
+    }
+
     [Theory]
     [InlineData("missing-audit")]
     [InlineData("missing-command")]
@@ -958,6 +991,37 @@ public sealed class RestartPreparationTests
         ObservedAt = Now.AddMinutes(1),
         Issues = { [7] = new() { Ready = ready } }
     };
+
+    private sealed class TransientStatusRecoveryApi : IWorkerEventSource, IObservationSource, IEffectAdapter
+    {
+        public bool ThrowOnRecovery { get; set; } = true;
+
+        public Task<WorkerEventBatch> ReadAsync(RepositoryState state, CancellationToken cancellationToken) =>
+            Task.FromResult(new WorkerEventBatch([]));
+
+        public Task<LiveObservation> ObserveAsync(RepositoryState state, CancellationToken cancellationToken) =>
+            Task.FromResult(new LiveObservation
+            {
+                ObservedAt = Now.AddMinutes(2),
+                Issues =
+                {
+                    [7] = new()
+                    {
+                        Closed = true, PullRequest = 18, HeadSha = new string('c', 40),
+                        PullRequestClosed = true, PullRequestMerged = false
+                    }
+                }
+            });
+
+        public Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken cancellationToken) =>
+            Task.FromResult(new EffectOutcome(DeliveryStatus.Succeeded, $"projection:{intent.Id}"));
+
+        public Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken cancellationToken)
+        {
+            if (intent.Id == "uncertain" && ThrowOnRecovery) throw new IOException("Transient lookup failure.");
+            return Task.FromResult(new EffectOutcome(DeliveryStatus.Unknown));
+        }
+    }
 
     private sealed class ReceiptRaceStore(GitHubTaskIntegrationTests.Store inner, string changedIntent) : IStateStore
     {

@@ -980,7 +980,8 @@ public sealed class OrchestrationReducer(IAuthorizationPolicy? authorization = n
                     status.Status is DeliveryStatus.Succeeded or DeliveryStatus.Executing or DeliveryStatus.Unknown);
             effect.Status = outcome.Status;
             effect.ExternalId = outcome.ExternalId ?? effect.ExternalId;
-            effect.CompletedAt = now;
+            effect.CompletedAt = existing.Status == DeliveryStatus.Unknown &&
+                outcome.Status == DeliveryStatus.Unknown ? effect.CompletedAt : now;
             effect.FailureCode = outcome.Status == DeliveryStatus.Succeeded ? null :
                 outcome.FailureCode ?? effect.FailureCode;
             if (outcome.Status == DeliveryStatus.Succeeded && effect.Kind != EffectKind.ProjectLabels &&
