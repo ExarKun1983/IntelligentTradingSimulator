@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1529,
+  "Version": 1530,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "actions:1277929203:46022308814",
@@ -1712,7 +1712,7 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 5,
-      "Version": 585,
+      "Version": 586,
       "LastEventId": "actions:1277929203:46022308814",
       "Phase": "READY",
       "Ready": true,
@@ -2895,11 +2895,11 @@
           "OccurredAt": "2026-11-20T14:48:44+00:00"
         }
       },
-      "ProjectionDigest": "0C6FB4E07CCDF772ED6952443013494B821B7F84127D4AA2CB643AC48E54DF51",
+      "ProjectionDigest": "D56352742C984F1855638D1119AA4CE1C6F0927B24C52FDB302FC61D46B0CC02",
       "ObservedProjectionDigest": "0C6FB4E07CCDF772ED6952443013494B821B7F84127D4AA2CB643AC48E54DF51",
       "StatusProjectionDigest": "F7F7ECCCC2746E0B7122772A46B2914FAC92A46089CA0D5F28233B823E867EAD",
-      "RequiredStatusSequence": 53,
-      "RequiredStatusIntentId": "required-status:204:4:53"
+      "RequiredStatusSequence": 54,
+      "RequiredStatusIntentId": "required-status:204:5:54"
     }
   },
   "Inbox": {
@@ -14684,6 +14684,34 @@
       "StatusBody": null,
       "TaskPrompt": null,
       "RequiredStatus": null,
+      "RequiredStatusBoundary": null
+    },
+    "required-status:204:5:54": {
+      "Id": "required-status:204:5:54",
+      "Digest": "8E0157FDC21451AFF3E0C9350212E63835D3DA3468DC103E2EF9436A2583505A",
+      "IssueNumber": 204,
+      "Generation": 5,
+      "Kind": "PublishRequiredStatus",
+      "Status": "Pending",
+      "TaskId": null,
+      "Round": 4,
+      "Sha": "87cf384ac5594996b2ef003e6fbbdf633c903c79",
+      "ExternalId": null,
+      "Labels": [],
+      "FeedbackEventIds": [],
+      "CreatedAt": "2026-11-27T15:09:58.6542895+00:00",
+      "StartedAt": null,
+      "CompletedAt": null,
+      "StatusBody": null,
+      "TaskPrompt": null,
+      "RequiredStatus": {
+        "Context": "Agent managed CI",
+        "State": "error",
+        "Description": "Automation stopped or feedback pending; not eligible.",
+        "TargetUrl": "https://github.com/ExarKun1983/IntelligentTradingSimulator/pull/326#agent-status-69298ae05e21a115935fd688497823ac75ca8000c8cb979eaf50a19fd97f2bee",
+        "CiIntentId": null,
+        "CiRunId": null
+      },
       "RequiredStatusBoundary": null
     }
   }
