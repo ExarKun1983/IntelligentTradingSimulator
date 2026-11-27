@@ -134,7 +134,9 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
                 if (!state.Issues.TryGetValue(message.IssueNumber, out var issue) ||
                     issue.PullRequest != restart.PullRequest || issue.HeadSha != restart.Sha)
                     throw new InvalidDataException("Restart preparation does not match the canonical PR and head.");
-                await tasks.ValidateRestartTasksAsync(state, issue, token);
+                var taskVerifications = await tasks.ValidateRestartTasksAsync(state, issue, token);
+                restart = restart with { TaskVerifications = taskVerifications.Count == 0 ? null : taskVerifications };
+                message = message with { Data = restart };
                 using var liveIssue = await api.GetAsync($"issues/{issue.Number}", token);
                 var issueRoot = liveIssue.RootElement;
                 using var pull = await api.GetAsync($"pulls/{restart.PullRequest}", token);
@@ -439,8 +441,9 @@ public sealed class GitHubOrchestrationHost(GitHubRepositoryApi api, IStateStore
         if (message?.Data is not PrepareRestart restart ||
             !state.Inbox.TryGetValue(message.Id, out var saved) || saved.Event is not { Data: PrepareRestart previous } committed)
             return message;
-        if ((message with { OccurredAt = committed.OccurredAt, Data = restart with { StatusRiskVerification = null } }).Digest !=
-            (committed with { Data = previous with { StatusRiskVerification = null } }).Digest)
+        if ((message with { OccurredAt = committed.OccurredAt,
+                Data = restart with { StatusRiskVerification = null, TaskVerifications = null } }).Digest !=
+            (committed with { Data = previous with { StatusRiskVerification = null, TaskVerifications = null } }).Digest)
             throw new InvalidDataException("Restart command replay does not match its original operator inputs.");
         return committed;
     }

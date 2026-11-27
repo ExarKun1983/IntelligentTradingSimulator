@@ -10,7 +10,8 @@ public static class RequiredStatusPolicy
     {
         var ids = restart.AcknowledgedUncertainStatusIntentIds ?? [];
         var uncertain = state.Outbox.Values.Where(effect =>
-            effect.IssueNumber == issue.Number && effect.Status == DeliveryStatus.Unknown).ToList();
+            effect.IssueNumber == issue.Number && effect.Status == DeliveryStatus.Unknown &&
+            !IsPreviouslyAcknowledged(state, issue, effect)).ToList();
         if (ids.Count > 16 || ids.Any(string.IsNullOrWhiteSpace) ||
             ids.Distinct(StringComparer.Ordinal).Count() != ids.Count || ids.Count != uncertain.Count ||
             uncertain.Any(effect => !ids.Contains(effect.Id, StringComparer.Ordinal)))
@@ -18,18 +19,20 @@ public static class RequiredStatusPolicy
         var acknowledgements = new List<RestartStatusAcknowledgement>();
         foreach (var effect in uncertain)
         {
+            var completedHead = issue.Tasks.Values.Any(task => task.Status == TaskStatus.Completed && task.LaunchConfirmed &&
+                task.FinalSha == effect.Sha && task.CandidateShaEvidence?.PullRequest == restart.PullRequest &&
+                state.Outbox.Values.Any(launch => launch.Kind == EffectKind.LaunchTask &&
+                    launch.IssueNumber == issue.Number && launch.Generation == issue.Generation &&
+                    launch.TaskId == task.Id && launch.Status == DeliveryStatus.Succeeded &&
+                    launch.ExternalId == task.ExternalId && !string.IsNullOrWhiteSpace(launch.ExternalId)));
+            var mappingEventId = completedHead ? null : ResolvedTaskMapping(state, issue, restart, effect);
             if (effect.Kind != EffectKind.PublishRequiredStatus || effect.Generation != issue.Generation ||
                 effect.RequiredStatus is not { State: "pending", Context: Context } ||
                 effect.RequiredStatusBoundary is not null || effect.ExternalId is not null ||
                 effect.CompletedAt is not { } completedAt || effect.Sha is not { Length: 40 } sha ||
                 !sha.All(Uri.IsHexDigit) || sha == restart.Sha ||
-                !issue.Tasks.Values.Any(task => task.Status == TaskStatus.Completed && task.LaunchConfirmed &&
-                    task.FinalSha == sha && task.CandidateShaEvidence?.PullRequest == restart.PullRequest &&
-                    state.Outbox.Values.Any(launch => launch.Kind == EffectKind.LaunchTask &&
-                        launch.IssueNumber == issue.Number && launch.Generation == issue.Generation &&
-                        launch.TaskId == task.Id && launch.Status == DeliveryStatus.Succeeded &&
-                        launch.ExternalId == task.ExternalId && !string.IsNullOrWhiteSpace(launch.ExternalId))))
-                throw new InvalidOperationException("Only unprepared pending status uncertainty on a discarded earlier task head can be acknowledged.");
+                !completedHead && mappingEventId is null)
+                throw new InvalidOperationException("Only unprepared pending status uncertainty on a proven discarded earlier task head can be acknowledged.");
             var correction = state.Outbox.Values.Where(candidate =>
                 candidate.Kind == EffectKind.PublishRequiredStatus && candidate.IssueNumber == issue.Number &&
                 candidate.Generation == issue.Generation && candidate.Sha == sha &&
@@ -41,9 +44,74 @@ public static class RequiredStatusPolicy
                 .OrderByDescending(candidate => candidate.RequiredStatusBoundary!.PreparedAt).FirstOrDefault();
             if (correction is null)
                 throw new InvalidOperationException("Acknowledged status uncertainty requires a confirmed later corrective error on its exact SHA.");
-            acknowledgements.Add(new(effect.Id, correction.Id, sha, correction.RequiredStatusBoundary!.StatusId!.Value));
+            acknowledgements.Add(new(effect.Id, correction.Id, sha, correction.RequiredStatusBoundary!.StatusId!.Value)
+            {
+                MappingEventId = mappingEventId,
+                MappingEventDigest = mappingEventId is null ? null : state.Inbox[mappingEventId].Digest
+            });
         }
         return acknowledgements;
+    }
+
+    internal static bool IsPreviouslyAcknowledged(RepositoryState state, IssueState issue, EffectIntent effect)
+    {
+        if (effect.IssueNumber != issue.Number || effect.Generation >= issue.Generation ||
+            effect.Kind != EffectKind.PublishRequiredStatus || effect.Status != DeliveryStatus.Unknown ||
+            effect.RequiredStatus is not { State: "pending", Context: Context } ||
+            effect.RequiredStatusBoundary is not null || effect.ExternalId is not null ||
+            effect.CompletedAt is not { } completedAt || effect.Sha is not { Length: 40 } earlierSha ||
+            !earlierSha.All(Uri.IsHexDigit))
+            return false;
+        return issue.RestartPreparations.Values.Any(record =>
+            record.PreviousGeneration == effect.Generation && record.Generation == effect.Generation + 1 &&
+            record.Generation <= issue.Generation && record.OccurredAt >= completedAt && record.Sha != effect.Sha &&
+            record.StatusRiskVerification is { } verification &&
+            state.Inbox.TryGetValue(record.EventId, out var saved) && saved.Status == DeliveryStatus.Succeeded &&
+            saved.Event is { Data: PrepareRestart command } message &&
+            message.Id == record.EventId && message.Digest == saved.Digest &&
+            message.Repository == state.Repository && message.RepositoryGeneration == state.Generation &&
+            message.IssueNumber == issue.Number && message.IssueGeneration == effect.Generation &&
+            message.Actor == record.Author && message.Actor.Kind == ActorKind.Human &&
+            message.Actor.Id is > 0 && message.Actor.Type == "User" &&
+            message.OccurredAt == record.OccurredAt && command.Reason == record.Reason &&
+            !string.IsNullOrWhiteSpace(command.Reason) &&
+            command.PullRequest == record.PullRequest && command.Sha == record.Sha &&
+            command.AcknowledgedUncertainStatusIntentIds?.Contains(effect.Id, StringComparer.Ordinal) == true &&
+            System.Text.Json.JsonSerializer.Serialize(command.StatusRiskVerification, StateJson.Options) ==
+                System.Text.Json.JsonSerializer.Serialize(verification, StateJson.Options) &&
+            System.Text.Json.JsonSerializer.Serialize(command.TaskVerifications, StateJson.Options) ==
+                System.Text.Json.JsonSerializer.Serialize(record.TaskVerifications, StateJson.Options) &&
+            verification.Acknowledgements.Any(ack => ack.UncertainIntentId == effect.Id && ack.Sha == effect.Sha &&
+                ConfirmedCorrection(ack.CorrectiveIntentId, ack.Sha, ack.CorrectiveStatusId)) &&
+            ConfirmedCorrection(verification.ClosedHeadIntentId, record.Sha, verification.ClosedHeadStatusId));
+
+        bool ConfirmedCorrection(string id, string sha, long statusId) =>
+            state.Outbox.TryGetValue(id, out var correction) && statusId > 0 &&
+            correction.Kind == EffectKind.PublishRequiredStatus && correction.Status == DeliveryStatus.Succeeded &&
+            correction.IssueNumber == issue.Number && correction.Generation == effect.Generation &&
+            correction.Sha == sha && correction.RequiredStatus is { State: "error", Context: Context } &&
+            correction.RequiredStatusBoundary?.StatusId == statusId &&
+            correction.RequiredStatusBoundary.PreparedAt > completedAt &&
+            correction.ExternalId == statusId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static string? ResolvedTaskMapping(RepositoryState state, IssueState issue, PrepareRestart restart,
+        EffectIntent effect)
+    {
+        if (effect.TaskId is null || !issue.Tasks.TryGetValue(effect.TaskId, out var task) ||
+            task.Status != TaskStatus.Failed || task.Round != effect.Round ||
+            !TaskTerminalRecovery.RestartResolutions(state, issue).Any(proof =>
+                proof.TaskId == task.Id && restart.TaskVerifications?.Contains(proof) == true))
+            return null;
+        return state.Inbox.Values.Where(saved => saved.Status == DeliveryStatus.Succeeded &&
+                saved.Event is { Data: TaskPrMapped mapping } message &&
+                message.Id == saved.Id && message.Digest == saved.Digest &&
+                message.Repository == state.Repository && message.RepositoryGeneration == state.Generation &&
+                message.IssueNumber == issue.Number && message.IssueGeneration == issue.Generation &&
+                message.Actor.Kind == ActorKind.TaskService &&
+                mapping.TaskId == effect.TaskId && mapping.PullRequest == restart.PullRequest &&
+                mapping.ObservedHead == effect.Sha && message.OccurredAt <= effect.CreatedAt)
+            .OrderBy(saved => saved.Id, StringComparer.Ordinal).Select(saved => saved.Id).FirstOrDefault();
     }
 
     internal static bool RequiresIssueLinkRevocation(RepositoryState state, IssueState issue) =>

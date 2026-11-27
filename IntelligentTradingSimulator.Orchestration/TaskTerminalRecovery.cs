@@ -11,6 +11,50 @@ public static class TaskTerminalRecovery
         "asserting successful coding, a final commit, or that the remote task cannot be resumed.";
     public static readonly TimeSpan MaximumEvidenceAge = TimeSpan.FromMinutes(5);
 
+    internal static RestartTaskVerification ValidateRestartResolution(
+        RepositoryState state, IssueState issue, TaskIdentity task, EffectIntent launch)
+    {
+        if (task.Status != TaskStatus.Failed || !task.LaunchConfirmed ||
+            launch.Kind != EffectKind.LaunchTask || launch.IssueNumber != issue.Number ||
+            launch.Generation != issue.Generation || launch.TaskId != task.Id || launch.Round != task.Round ||
+            launch.Status != DeliveryStatus.Succeeded || task.ExternalId != launch.ExternalId ||
+            task.OperatorResolution is not { } resolution || task.TerminalEvidence is not { } terminal ||
+            resolution.EvidenceEventId != terminal.EventId ||
+            !state.Inbox.TryGetValue(resolution.EventId, out var savedResolution) ||
+            savedResolution.Status != DeliveryStatus.Succeeded ||
+            savedResolution.Event is not { Data: ResolveTaskTerminal command } resolved ||
+            resolved.Id != resolution.EventId || resolved.Digest != savedResolution.Digest ||
+            resolved.Repository != state.Repository || resolved.RepositoryGeneration != state.Generation ||
+            resolved.IssueNumber != issue.Number || resolved.IssueGeneration != issue.Generation ||
+            resolved.Actor.Kind != ActorKind.Human || resolved.Actor.Id is not > 0 || resolved.Actor.Type != "User" ||
+            resolved.Actor != resolution.Author || resolved.OccurredAt != resolution.OccurredAt ||
+            string.IsNullOrWhiteSpace(command.Reason) || command.Reason != resolution.Reason ||
+            command.TaskId != task.Id || command.EvidenceEventId != terminal.EventId ||
+            !state.Inbox.TryGetValue(terminal.EventId, out var savedEvidence) ||
+            savedEvidence.Status != DeliveryStatus.Succeeded ||
+            savedEvidence.Event is not { Data: TaskTerminalObserved observed } evidenceEvent ||
+            evidenceEvent.Id != terminal.EventId || evidenceEvent.Digest != savedEvidence.Digest ||
+            evidenceEvent.Repository != state.Repository || evidenceEvent.RepositoryGeneration != state.Generation ||
+            evidenceEvent.IssueNumber != issue.Number || evidenceEvent.IssueGeneration != issue.Generation ||
+            evidenceEvent.Actor.Kind != ActorKind.TaskService || observed.TaskId != task.Id ||
+            evidenceEvent.OccurredAt != terminal.Evidence.ObservedAt ||
+            System.Text.Json.JsonSerializer.Serialize(observed.Evidence, StateJson.Options) !=
+                System.Text.Json.JsonSerializer.Serialize(terminal.Evidence, StateJson.Options) ||
+            resolved.OccurredAt < terminal.Evidence.ObservedAt ||
+            resolved.OccurredAt - terminal.Evidence.ObservedAt > MaximumEvidenceAge)
+            throw new InvalidDataException("Restart requires a durable audited task resolution and its exact ended-session evidence.");
+        ValidateEvidence(terminal.Evidence, state, launch);
+        return new(task.Id, resolution.EventId, savedResolution.Digest,
+            terminal.EventId, savedEvidence.Digest, terminal.Evidence.ResponseDigest);
+    }
+
+    internal static List<RestartTaskVerification> RestartResolutions(RepositoryState state, IssueState issue) =>
+        state.Outbox.Values.Where(launch => launch.IssueNumber == issue.Number &&
+                launch.Generation == issue.Generation && launch.Kind == EffectKind.LaunchTask &&
+                issue.Tasks.TryGetValue(launch.TaskId ?? "", out var task) && task.Status == TaskStatus.Failed)
+            .OrderBy(launch => launch.Id, StringComparer.Ordinal)
+            .Select(launch => ValidateRestartResolution(state, issue, issue.Tasks[launch.TaskId!], launch)).ToList();
+
     public static bool IsEndedState(string state) => state is "completed" or "failed" or "cancelled" or "timed_out";
 
     public static EffectIntent RequireSavedLaunch(RepositoryState state, IssueState issue, string taskId)

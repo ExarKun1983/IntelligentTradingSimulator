@@ -13,6 +13,367 @@ public sealed class RestartPreparationTests
     private static readonly OrchestrationReducer Reducer = new(new Allow());
 
     [Fact]
+    public void RepeatedPreparationRetainsThePreviouslyAuditedUnknownWithoutReacknowledgingIt()
+    {
+        var state = RepeatedRestartState();
+        var unknown = JsonSerializer.Serialize(state.Outbox["uncertain"], StateJson.Options);
+        var earlierAudit = JsonSerializer.Serialize(state.Issues[7].RestartPreparations, StateJson.Options);
+
+        var result = Reducer.Apply(state, Command(new PrepareRestart(18, new string('c', 40), "Discard next attempt."),
+            "second-restart", 2));
+
+        Assert.Equal(3, result.Issues[7].Generation);
+        Assert.Equal(2, result.Issues[7].RestartPreparations.Count);
+        Assert.Equal(unknown, JsonSerializer.Serialize(result.Outbox["uncertain"], StateJson.Options));
+        Assert.False(result.Issues[7].Ready);
+        Assert.Null(result.Issues[7].PullRequest);
+        Assert.Null(result.Issues[7].RestartPreparations["second-restart"].StatusRiskVerification);
+        Assert.Equal(earlierAudit, JsonSerializer.Serialize(state.Issues[7].RestartPreparations, StateJson.Options));
+    }
+
+    [Fact]
+    public async Task WorkerRecoveryFailuresDoNotInvalidatePreviouslyAuditedUnknownStatus()
+    {
+        var state = RepeatedRestartState();
+        var originalCompletedAt = state.Outbox["uncertain"].CompletedAt;
+        var store = new GitHubTaskIntegrationTests.Store(state);
+        var effects = new TransientStatusRecoveryApi();
+        var worker = new OrchestrationWorker(Reducer, new Clock());
+        var options = new ReconcileOptions(false, true, true, true,
+            AllowedEffectKinds: new HashSet<EffectKind> { EffectKind.ProjectLabels, EffectKind.ProjectStatus });
+        var workerOptions = new WorkerOptions { MaximumIterations = 1, PollInterval = TimeSpan.Zero };
+
+        await worker.RunAsync(store, effects, effects, effects, options, workerOptions);
+
+        Assert.Equal(DeliveryStatus.Unknown, store.State.Outbox["uncertain"].Status);
+        Assert.Equal(EffectFailureCode.RecoveryException, store.State.Outbox["uncertain"].FailureCode);
+        Assert.Equal(originalCompletedAt, store.State.Outbox["uncertain"].CompletedAt);
+
+        effects.ThrowOnRecovery = false;
+        await worker.RunAsync(store, effects, effects, effects, options,
+            workerOptions with { MaximumIterations = 16 });
+
+        Assert.Equal(originalCompletedAt, store.State.Outbox["uncertain"].CompletedAt);
+        Assert.Equal(Phase.CLOSED, store.State.Issues[7].Phase);
+        Assert.Equal(TerminalOutcome.Unmerged, store.State.Issues[7].TerminalOutcome);
+        Assert.Null(store.State.AdmittedIssue);
+        Assert.DoesNotContain(store.State.Outbox.Values, effect => effect.IssueNumber == 7 &&
+            (effect.Status == DeliveryStatus.Pending || OrchestrationReconciler.IsExclusiveUncertain(effect)));
+        var prepared = Reducer.Apply(store.State,
+            Command(new PrepareRestart(18, new string('c', 40), "Discard next attempt."), "second-restart", 2));
+        Assert.Equal(3, prepared.Issues[7].Generation);
+    }
+
+    [Theory]
+    [InlineData("missing-audit")]
+    [InlineData("missing-command")]
+    [InlineData("changed-command")]
+    [InlineData("changed-receipt")]
+    [InlineData("prepared-status")]
+    [InlineData("changed-payload")]
+    public void RepeatedPreparationCannotIgnoreUnauditedOrChangedHistoricalUncertainty(string problem)
+    {
+        var state = RepeatedRestartState();
+        switch (problem)
+        {
+            case "missing-audit": state.Issues[7].RestartPreparations.Clear(); break;
+            case "missing-command": state.Inbox.Remove("restart"); break;
+            case "changed-command": state.Inbox["restart"] = state.Inbox["restart"] with { Digest = "changed" }; break;
+            case "changed-receipt": state.Outbox["corrected-earlier-head"].ExternalId = "changed"; break;
+            case "prepared-status":
+                state.Outbox["uncertain"].RequiredStatusBoundary = new(9, "trusted[bot]", "BOT_9", "Bot", Now, []);
+                break;
+            case "changed-payload":
+                state.Outbox["uncertain"].RequiredStatus = state.Outbox["uncertain"].RequiredStatus! with { State = "success" };
+                break;
+        }
+        var before = StateJson.Serialize(state);
+
+        Assert.Throws<InvalidOperationException>(() => Reducer.Apply(state,
+            Command(new PrepareRestart(18, new string('c', 40), "Discard next attempt."), "second-restart", 2)));
+
+        Assert.Equal(before, StateJson.Serialize(state));
+    }
+
+    private static RepositoryState RepeatedRestartState()
+    {
+        var state = Reducer.Apply(StatusRiskState(), Command(new PrepareRestart(17, Sha, "Audit earlier risk.")
+        {
+            AcknowledgedUncertainStatusIntentIds = ["uncertain"],
+            StatusRiskVerification = new([new("uncertain", "corrected-earlier-head", new string('b', 40), 101)], "revoked", 102)
+        }));
+        var issue = state.Issues[7];
+        issue.Phase = Phase.CLOSED;
+        issue.ReactivationRequired = true;
+        issue.TerminalOutcome = TerminalOutcome.Unmerged;
+        issue.PullRequest = 18;
+        issue.HeadSha = new string('c', 40);
+        issue.ActiveTaskId = "second-task";
+        issue.Round = 2;
+        issue.TerminalHistory.Add(new(2, TerminalOutcome.Unmerged, 18, issue.HeadSha, Now));
+        issue.Tasks["second-task"] = new()
+        {
+            Id = "second-task", Kind = TaskKind.Coding, Round = 2, Status = TaskStatus.Completed,
+            LaunchConfirmed = true, ExternalId = "second-remote", FinalSha = issue.HeadSha,
+            CandidateShaEvidence = new(1, TaskTerminalRecovery.CandidateShaPolicy, "second-task", "second-remote",
+                ["second-session"], 18, issue.HeadSha)
+        };
+        state.Outbox["second-launch"] = new()
+        {
+            Id = "second-launch", IssueNumber = 7, Generation = 2, TaskId = "second-task",
+            Kind = EffectKind.LaunchTask, Status = DeliveryStatus.Succeeded, ExternalId = "second-remote", Round = 2
+        };
+        issue.RequiredStatusIntentId = "second-revoked";
+        state.Outbox["second-revoked"] = new()
+        {
+            Id = "second-revoked", IssueNumber = 7, Generation = 2, Kind = EffectKind.PublishRequiredStatus,
+            TaskId = issue.ActiveTaskId, Round = 2, Sha = issue.HeadSha, Status = DeliveryStatus.Succeeded,
+            RequiredStatus = RequiredStatusPolicy.ForIntent(state, issue, "second-revoked")
+        };
+        return state;
+    }
+
+    [Fact]
+    public async Task ProductionResolveThenPrepareDiscardsClosedAttemptWithoutReopeningItsPullRequest()
+    {
+        var state = UnfinishedDiscardedState();
+        using var fixture = Fixture();
+        using var statuses = new StatusRiskApi(fixture, state);
+        using var client = new HttpClient(statuses, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store(state);
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            sender = new { id = 55, login = "maintainer", type = "User" },
+            inputs = new { issue = "7", operation = "resolve-task", task = "old-task", reason = "Discard ended task." }
+        });
+
+        await host.ReconcileAsync(payload, "workflow_dispatch", "43", 1, 1, Now, [], 99, "master", 55,
+            new(true, true, true, true), commandOnly: true,
+            statusPublisher: new(9, "trusted[bot]", "BOT_9", "Bot"), statusApproval: new(true, true, true, true, true));
+        var resume = JsonSerializer.SerializeToElement(new
+        {
+            repository = new { id = 1, full_name = "owner/repo" },
+            sender = new { id = 55, login = "maintainer", type = "User" },
+            inputs = new { issue = "7", operation = "resume" }
+        });
+        await host.ReconcileAsync(resume, "workflow_dispatch", "44", 1, 1, Now, [], 99, "master", 55,
+            new(true, true, true, true), new() { MaximumIterations = 8, PollInterval = TimeSpan.Zero },
+            statusPublisher: new(9, "trusted[bot]", "BOT_9", "Bot"), statusApproval: new(true, true, true, true, true));
+        await PrepareAcknowledged(host, runId: "45");
+
+        Assert.Equal(2, store.State.Issues[7].Generation);
+        Assert.Equal(TaskStatus.Failed, store.State.Issues[7].Tasks["old-task"].Status);
+        Assert.Null(store.State.Issues[7].Tasks["old-task"].CandidateShaEvidence);
+        Assert.False(store.State.Issues[7].Ready);
+        Assert.Equal(DeliveryStatus.Unknown, store.State.Outbox["uncertain"].Status);
+        Assert.DoesNotContain(fixture.Writes, write => write.Path.Contains("/pulls/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ResolvedDiscardedTaskCanRestartWithoutSuccessfulCodingOrFinalHeadEvidence()
+    {
+        var state = await ResolvedDiscardedState();
+        using var fixture = Fixture();
+        using var statuses = new StatusRiskApi(fixture, state);
+        using var client = new HttpClient(statuses, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store(state);
+        var unknown = JsonSerializer.Serialize(state.Outbox["uncertain"], StateJson.Options);
+        var failedTask = JsonSerializer.Serialize(state.Issues[7].Tasks["old-task"], StateJson.Options);
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), store, new Clock());
+
+        await PrepareAcknowledged(host);
+        await PrepareAcknowledged(host);
+
+        var issue = store.State.Issues[7];
+        var audit = Assert.Single(issue.RestartPreparations.Values);
+        Assert.Equal("old-task", Assert.Single(audit.TaskVerifications!).TaskId);
+        Assert.Equal("mapped-earlier-head", Assert.Single(audit.StatusRiskVerification!.Acknowledgements).MappingEventId);
+        Assert.Equal(failedTask, JsonSerializer.Serialize(issue.Tasks["old-task"], StateJson.Options));
+        Assert.Equal(unknown, JsonSerializer.Serialize(store.State.Outbox["uncertain"], StateJson.Options));
+        Assert.Null(issue.Tasks["old-task"].CandidateShaEvidence);
+        Assert.Null(issue.Tasks["old-task"].FinalSha);
+        Assert.Equal(2, issue.Generation);
+        Assert.False(issue.Ready);
+        Assert.False(issue.ActiveAuthorized);
+        Assert.Null(issue.PullRequest);
+        Assert.DoesNotContain(store.State.Outbox.Values, effect => effect.Generation == 2 &&
+            effect.Kind is EffectKind.LaunchTask or EffectKind.RunCi or EffectKind.RequestReview or EffectKind.PublishRequiredStatus);
+        Assert.All(fixture.Writes, write => Assert.StartsWith("/repos/owner/repo/issues/7/", write.Path));
+        var roundTrip = StateJson.Deserialize(StateJson.Serialize(store.State));
+        Assert.Equal(Assert.Single(audit.TaskVerifications!),
+            Assert.Single(roundTrip.Issues[7].RestartPreparations.Values.Single().TaskVerifications!));
+    }
+
+    [Theory]
+    [InlineData("no-resolution")]
+    [InlineData("no-evidence")]
+    [InlineData("resolution-event")]
+    [InlineData("evidence-event")]
+    [InlineData("resolution-digest")]
+    [InlineData("wrong-task")]
+    [InlineData("wrong-generation")]
+    [InlineData("running-session")]
+    [InlineData("failed-launch")]
+    public async Task RestartRejectsUnauditedOrContradictoryDiscardedTask(string problem)
+    {
+        var state = await ResolvedDiscardedState();
+        var task = state.Issues[7].Tasks["old-task"];
+        switch (problem)
+        {
+            case "no-resolution": task.OperatorResolution = null; break;
+            case "no-evidence": task.TerminalEvidence = null; break;
+            case "resolution-event": state.Inbox.Remove(task.OperatorResolution!.EventId); break;
+            case "evidence-event": state.Inbox.Remove(task.TerminalEvidence!.EventId); break;
+            case "resolution-digest":
+                var id = task.OperatorResolution!.EventId;
+                state.Inbox[id] = state.Inbox[id] with { Digest = "changed" };
+                break;
+            case "wrong-task": task.Id = "another-task"; break;
+            case "wrong-generation": state.Outbox["launch"].Generation++; break;
+            case "running-session":
+                var terminal = task.TerminalEvidence!;
+                terminal.Evidence.Sessions[0] = terminal.Evidence.Sessions[0] with { State = "in_progress" };
+                break;
+            case "failed-launch": state.Outbox["launch"].Status = DeliveryStatus.Failed; break;
+        }
+        using var fixture = Fixture();
+        using var statuses = new StatusRiskApi(fixture, state);
+        using var client = new HttpClient(statuses, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store(state);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            PrepareAcknowledged(new(new(client, "owner/repo", 1), store, new Clock())));
+
+        Assert.Equal(1, store.State.Issues[7].Generation);
+        Assert.Empty(store.State.Issues[7].RestartPreparations);
+        Assert.Empty(fixture.Writes);
+    }
+
+    [Theory]
+    [InlineData("task-running")]
+    [InlineData("session")]
+    [InlineData("creator")]
+    [InlineData("session-count")]
+    public async Task ResolvedTaskMustStillMatchTheFreshRemoteEndedSnapshot(string problem)
+    {
+        var state = await ResolvedDiscardedState();
+        using var fixture = Fixture();
+        if (problem == "task-running") fixture.RemoteState = "in_progress";
+        else fixture.Corruption = problem;
+        using var statuses = new StatusRiskApi(fixture, state);
+        using var client = new HttpClient(statuses, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store(state);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            PrepareAcknowledged(new(new(client, "owner/repo", 1), store, new Clock())));
+
+        Assert.Equal(1, store.State.Issues[7].Generation);
+        Assert.Empty(fixture.Writes);
+    }
+
+    [Theory]
+    [InlineData("missing-mapping")]
+    [InlineData("mapping-after-status")]
+    [InlineData("wrong-pr")]
+    [InlineData("wrong-task")]
+    [InlineData("wrong-generation")]
+    [InlineData("wrong-actor")]
+    [InlineData("uncommitted")]
+    [InlineData("changed-digest")]
+    public async Task EarlierUncertainHeadRequiresDurableSameTaskPrMapping(string problem)
+    {
+        var state = await ResolvedDiscardedState();
+        var saved = state.Inbox["mapped-earlier-head"];
+        var message = saved.Event!;
+        var mapping = (TaskPrMapped)message.Data;
+        message = problem switch
+        {
+            "mapping-after-status" => message with { OccurredAt = Now },
+            "wrong-pr" => message with { Data = mapping with { PullRequest = 18 } },
+            "wrong-task" => message with { Data = mapping with { TaskId = "another-task" } },
+            "wrong-generation" => message with { IssueGeneration = 2 },
+            "wrong-actor" => message with { Actor = new("maintainer", ActorKind.Human) },
+            _ => message
+        };
+        state.Inbox[saved.Id] = saved with { Digest = message.Digest, PayloadJson = StateJson.SerializeEvent(message) };
+        if (problem == "missing-mapping") state.Inbox.Remove(saved.Id);
+        if (problem == "uncommitted") state.Inbox[saved.Id] = state.Inbox[saved.Id] with { Status = DeliveryStatus.Pending };
+        if (problem == "changed-digest") state.Inbox[saved.Id] = state.Inbox[saved.Id] with { Digest = "changed" };
+        using var fixture = Fixture();
+        using var statuses = new StatusRiskApi(fixture, state);
+        using var client = new HttpClient(statuses, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store(state);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            PrepareAcknowledged(new(new(client, "owner/repo", 1), store, new Clock())));
+
+        Assert.Equal(1, store.State.Issues[7].Generation);
+        Assert.Empty(fixture.Writes);
+        Assert.Equal(DeliveryStatus.Unknown, store.State.Outbox["uncertain"].Status);
+    }
+
+    [Theory]
+    [InlineData("resolution")]
+    [InlineData("mapping")]
+    public async Task SaveConflictCannotSubstituteUnverifiedDiscardEvidence(string changed)
+    {
+        var state = await ResolvedDiscardedState();
+        using var fixture = Fixture();
+        using var statuses = new StatusRiskApi(fixture, state);
+        using var client = new HttpClient(statuses, false) { BaseAddress = new("https://api.github.com/") };
+        var store = new GitHubTaskIntegrationTests.Store(state);
+        var host = new GitHubOrchestrationHost(new(client, "owner/repo", 1), new DiscardEvidenceRaceStore(store, changed), new Clock());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => PrepareAcknowledged(host));
+
+        Assert.Equal(1, store.State.Issues[7].Generation);
+        Assert.Empty(store.State.Issues[7].RestartPreparations);
+        Assert.Empty(fixture.Writes);
+        Assert.Equal(DeliveryStatus.Unknown, store.State.Outbox["uncertain"].Status);
+    }
+
+    private static async Task<RepositoryState> ResolvedDiscardedState()
+    {
+        var state = UnfinishedDiscardedState();
+        using var fixture = Fixture();
+        using var client = fixture.Client();
+        var store = new GitHubTaskIntegrationTests.Store(state);
+        var adapter = new GitHubTaskAdapter(new(client, "owner/repo", 1), store, "master", 55);
+        var observed = await adapter.ReadTerminalEventAsync(state, state.Issues[7], Now, default);
+        state = Reducer.Apply(state, observed);
+        state = Reducer.Apply(state, Command(new ResolveTaskTerminal("old-task", observed.Id, "Discard ended task."), "resolved"));
+        // The next closed-PR observation records closure again after resolution's hold.
+        state.Issues[7].Phase = Phase.CLOSED;
+        return state;
+    }
+
+    private static RepositoryState UnfinishedDiscardedState()
+    {
+        var state = StatusRiskState();
+        var issue = state.Issues[7];
+        issue.Tasks.Remove("earlier-task");
+        state.Outbox.Remove("earlier-launch");
+        issue.Ci = null;
+        issue.Review = null;
+        var task = issue.Tasks["old-task"];
+        task.Status = TaskStatus.Running;
+        task.FinalSha = null;
+        task.CandidateShaEvidence = null;
+        state.AdmittedIssue = 7;
+        var mapping = Command(new TaskPrMapped("old-task", 17, new string('b', 40)), "mapped-earlier-head") with
+        {
+            Actor = new("github-task-api", ActorKind.TaskService), OccurredAt = Now.AddMinutes(-3)
+        };
+        state.Inbox[mapping.Id] = new(mapping.Id, mapping.Digest, DeliveryStatus.Succeeded,
+            mapping.OccurredAt, mapping.OccurredAt, StateJson.SerializeEvent(mapping));
+        state.Outbox["uncertain"].CreatedAt = Now.AddMinutes(-2);
+        state.Outbox["revoked"].RequiredStatus = RequiredStatusPolicy.ForIntent(state, issue, "revoked");
+        return state;
+    }
+
+    [Fact]
     public void AcknowledgedEarlierHeadRiskIsArchivedWithoutResolvingOrReplayingTheUnknownIntent()
     {
         var original = StatusRiskState();
@@ -475,8 +836,8 @@ public sealed class RestartPreparationTests
         host.ReconcileAsync(payload, "workflow_dispatch", "44", 1, 1, Now, [], 99, "master", 55,
             new(true, true, true, true), commandOnly: true);
 
-    private static Task<WorkerResult> PrepareAcknowledged(GitHubOrchestrationHost host, bool approved = true) =>
-        host.ReconcileAsync(Payload("[\"uncertain\"]"), "workflow_dispatch", "44", 1, 1, Now, [], 99, "master", 55,
+    private static Task<WorkerResult> PrepareAcknowledged(GitHubOrchestrationHost host, bool approved = true, string runId = "44") =>
+        host.ReconcileAsync(Payload("[\"uncertain\"]"), "workflow_dispatch", runId, 1, 1, Now, [], 99, "master", 55,
             new(true, true, true, true), commandOnly: true, statusPublisher: new(9, "trusted[bot]", "BOT_9", "Bot"),
             statusApproval: new(approved, true, true, true, true));
 
@@ -583,7 +944,9 @@ public sealed class RestartPreparationTests
         {
             var path = Uri.UnescapeDataString(request.RequestUri!.AbsolutePath);
             object response;
-            if (path == "/users/trusted[bot]")
+            if (path is "/repos/owner/repo/actions/runs/43" or "/repos/owner/repo/actions/runs/45")
+                response = new { @event = "workflow_dispatch", path = ".github/workflows/agent-state-machine.yml", actor = new { id = 55 } };
+            else if (path == "/users/trusted[bot]")
                 response = new { id = 9, login = "trusted[bot]", node_id = "BOT_9", type = "Bot" };
             else if (path.EndsWith("/status", StringComparison.Ordinal))
                 response = new { sha = path.Split('/')[5], repository = new { id = 1, full_name = "owner/repo" } };
@@ -629,6 +992,37 @@ public sealed class RestartPreparationTests
         Issues = { [7] = new() { Ready = ready } }
     };
 
+    private sealed class TransientStatusRecoveryApi : IWorkerEventSource, IObservationSource, IEffectAdapter
+    {
+        public bool ThrowOnRecovery { get; set; } = true;
+
+        public Task<WorkerEventBatch> ReadAsync(RepositoryState state, CancellationToken cancellationToken) =>
+            Task.FromResult(new WorkerEventBatch([]));
+
+        public Task<LiveObservation> ObserveAsync(RepositoryState state, CancellationToken cancellationToken) =>
+            Task.FromResult(new LiveObservation
+            {
+                ObservedAt = Now.AddMinutes(2),
+                Issues =
+                {
+                    [7] = new()
+                    {
+                        Closed = true, PullRequest = 18, HeadSha = new string('c', 40),
+                        PullRequestClosed = true, PullRequestMerged = false
+                    }
+                }
+            });
+
+        public Task<EffectOutcome> ExecuteAsync(EffectIntent intent, CancellationToken cancellationToken) =>
+            Task.FromResult(new EffectOutcome(DeliveryStatus.Succeeded, $"projection:{intent.Id}"));
+
+        public Task<EffectOutcome> ReconcileAsync(EffectIntent intent, CancellationToken cancellationToken)
+        {
+            if (intent.Id == "uncertain" && ThrowOnRecovery) throw new IOException("Transient lookup failure.");
+            return Task.FromResult(new EffectOutcome(DeliveryStatus.Unknown));
+        }
+    }
+
     private sealed class ReceiptRaceStore(GitHubTaskIntegrationTests.Store inner, string changedIntent) : IStateStore
     {
         private bool changed;
@@ -642,6 +1036,32 @@ public sealed class RestartPreparationTests
                 var id = effect.RequiredStatusBoundary!.StatusId!.Value + 100;
                 effect.RequiredStatusBoundary = effect.RequiredStatusBoundary with { StatusId = id };
                 effect.ExternalId = id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                inner.State.Version++;
+            }
+            return inner.TrySaveAsync(expected, next, token);
+        }
+    }
+
+    private sealed class DiscardEvidenceRaceStore(GitHubTaskIntegrationTests.Store inner, string changedEvidence) : IStateStore
+    {
+        private bool changed;
+        public Task<StateSnapshot> LoadAsync(CancellationToken token) => inner.LoadAsync(token);
+        public Task<bool> TrySaveAsync(StateSnapshot expected, RepositoryState next, CancellationToken token)
+        {
+            if (!changed && next.Issues[7].Generation == 2)
+            {
+                changed = true;
+                var task = inner.State.Issues[7].Tasks["old-task"];
+                var id = changedEvidence == "resolution" ? task.OperatorResolution!.EventId : "mapped-earlier-head";
+                var saved = inner.State.Inbox[id];
+                var message = saved.Event!;
+                if (changedEvidence == "resolution")
+                {
+                    task.OperatorResolution = task.OperatorResolution! with { Reason = "Another audit decision." };
+                    message = message with { Data = ((ResolveTaskTerminal)message.Data) with { Reason = task.OperatorResolution.Reason } };
+                }
+                else message = message with { OccurredAt = message.OccurredAt.AddSeconds(-1) };
+                inner.State.Inbox[id] = saved with { Digest = message.Digest, PayloadJson = StateJson.SerializeEvent(message) };
                 inner.State.Version++;
             }
             return inner.TrySaveAsync(expected, next, token);
