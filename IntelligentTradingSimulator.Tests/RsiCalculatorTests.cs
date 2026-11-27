@@ -50,4 +50,52 @@ public sealed class RsiCalculatorTests
 
         Assert.Null(rsi);
     }
+
+    [Fact]
+    public void Calculate_ReturnsNeutralValue_ForFlatPrices()
+    {
+        var closingPrices = Enumerable.Repeat(42m, 15).ToList();
+
+        var rsi = _calculator.Calculate(closingPrices);
+
+        Assert.Equal(50m, rsi);
+    }
+
+    [Fact]
+    public void Calculate_AppliesWilderSmoothing_AfterCustomPeriodInitialization()
+    {
+        var calculator = new RsiCalculator(period: 3);
+        decimal[] closingPrices = [10m, 11m, 10m, 12m, 11m];
+
+        var rsi = calculator.Calculate(closingPrices);
+
+        Assert.NotNull(rsi);
+        Assert.Equal(54.545454545m, rsi.Value, 9);
+    }
+
+    [Fact]
+    public void Calculate_UsesCustomPeriodForMinimumPriceCount()
+    {
+        var calculator = new RsiCalculator(period: 3);
+
+        var rsiWithPeriodPrices = calculator.Calculate([10m, 11m, 10m]);
+        var rsiWithPeriodPlusOnePrices = calculator.Calculate([10m, 11m, 10m, 12m]);
+
+        Assert.Null(rsiWithPeriodPrices);
+        Assert.NotNull(rsiWithPeriodPlusOnePrices);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Constructor_Throws_WhenPeriodIsNotPositive(int period)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RsiCalculator(period));
+    }
+
+    [Fact]
+    public void Calculate_Throws_WhenClosingPricesAreNull()
+    {
+        Assert.Throws<ArgumentNullException>(() => _calculator.Calculate(null!));
+    }
 }
