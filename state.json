@@ -1,10 +1,10 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1412,
+  "Version": 1413,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
-  "LastEventId": "task-pr-mapping-stopped:v2:1277929203:3:01c8ff29-c2c2-4aed-81a8-a75ea11ecb5c:mapping/branch-pr-lookup/InvalidDataException:FB75E485579AE804DF76CB91D6E652DD2848979FE28547C664302FB6699239C5",
+  "LastEventId": "task-stopped:1277929203:3:01c8ff29-c2c2-4aed-81a8-a75ea11ecb5c",
   "AdmittedIssue": 204,
   "WorkerLease": {
     "Owner": "5280c7fbbc95419fb0efb927a58bed2d",
@@ -1712,8 +1712,8 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 3,
-      "Version": 489,
-      "LastEventId": "task-pr-mapping-stopped:v2:1277929203:3:01c8ff29-c2c2-4aed-81a8-a75ea11ecb5c:mapping/branch-pr-lookup/InvalidDataException:FB75E485579AE804DF76CB91D6E652DD2848979FE28547C664302FB6699239C5",
+      "Version": 490,
+      "LastEventId": "task-stopped:1277929203:3:01c8ff29-c2c2-4aed-81a8-a75ea11ecb5c",
       "Phase": "BLOCKED",
       "Ready": false,
       "ActiveAuthorized": false,
@@ -1721,7 +1721,7 @@
       "FeedbackSince": "2026-11-26T19:50:30+00:00",
       "ReactivationRequired": true,
       "Paused": false,
-      "HoldReason": "Task PR mapping is unsupported or contradictory; code=mapping/branch-pr-lookup/InvalidDataException; admission retained.",
+      "HoldReason": "Task API identity or artifact response is unsupported.",
       "PullRequest": 323,
       "HeadSha": "76d56214e4b255643f719326ff42e7b9bf10721d",
       "Round": 3,
@@ -3826,6 +3826,14 @@
       "ReceivedAt": "2026-11-26T19:58:59.2972447+00:00",
       "CompletedAt": "2026-11-26T19:58:59.2972447+00:00",
       "PayloadJson": "{\u0022Id\u0022:\u0022task-pr-mapping-stopped:v2:1277929203:3:01c8ff29-c2c2-4aed-81a8-a75ea11ecb5c:mapping/branch-pr-lookup/InvalidDataException:FB75E485579AE804DF76CB91D6E652DD2848979FE28547C664302FB6699239C5\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:204,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:3,\u0022Actor\u0022:{\u0022Login\u0022:\u0022github-task-api\u0022,\u0022Kind\u0022:1,\u0022Id\u0022:null,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-26T19:58:59.2972447\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022task-stopped\u0022,\u0022TaskId\u0022:\u0022task:204:3:3:9\u0022,\u0022Reason\u0022:\u0022Task PR mapping is unsupported or contradictory; code=mapping/branch-pr-lookup/InvalidDataException; admission retained.\u0022}}"
+    },
+    "task-stopped:1277929203:3:01c8ff29-c2c2-4aed-81a8-a75ea11ecb5c": {
+      "Id": "task-stopped:1277929203:3:01c8ff29-c2c2-4aed-81a8-a75ea11ecb5c",
+      "Digest": "700783E521130E9678EA7B090CE87AA963C1F20FC415CE3BCEA51BD561BBC8C9",
+      "Status": "Succeeded",
+      "ReceivedAt": "2026-11-26T19:58:59.2972447+00:00",
+      "CompletedAt": "2026-11-26T19:58:59.2972447+00:00",
+      "PayloadJson": "{\u0022Id\u0022:\u0022task-stopped:1277929203:3:01c8ff29-c2c2-4aed-81a8-a75ea11ecb5c\u0022,\u0022Repository\u0022:\u0022ExarKun1983/IntelligentTradingSimulator\u0022,\u0022IssueNumber\u0022:204,\u0022RepositoryGeneration\u0022:1,\u0022IssueGeneration\u0022:3,\u0022Actor\u0022:{\u0022Login\u0022:\u0022github-task-api\u0022,\u0022Kind\u0022:1,\u0022Id\u0022:null,\u0022NodeId\u0022:null,\u0022Type\u0022:null},\u0022OccurredAt\u0022:\u00222026-11-26T19:58:59.2972447\u002B00:00\u0022,\u0022Data\u0022:{\u0022type\u0022:\u0022task-stopped\u0022,\u0022TaskId\u0022:\u0022task:204:3:3:9\u0022,\u0022Reason\u0022:\u0022Task API identity or artifact response is unsupported.\u0022}}"
     }
   },
   "Outbox": {
