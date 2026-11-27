@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1581,
+  "Version": 1582,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "review-observed:1277929203:5:RequestReview:204:5:task:204:5:5:11:5",
@@ -1712,7 +1712,7 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 5,
-      "Version": 637,
+      "Version": 638,
       "LastEventId": "review-observed:1277929203:5:RequestReview:204:5:task:204:5:5:11:5",
       "Phase": "HUMAN_REVIEW",
       "Ready": false,
@@ -15253,6 +15253,15 @@
       "IssueLink": {
         "Version": 1,
         "PullRequest": 326
+      },
+      "IssueLinkBoundary": {
+        "RepositoryId": 1277929203,
+        "Issue": 204,
+        "PullRequest": 326,
+        "IssueNodeId": "I_kwDOTCum888AAAABcHukYg",
+        "PullNodeId": "PR_kwDOTCum888AAAABSWxCFQ",
+        "PreparedAt": "2026-11-27T15:18:34.407704+00:00",
+        "OwnerId": "1d70c5ef087c498b8162797190d525de"
       }
     },
     "labels:204:5:6AD23EA4B7B12BC6F254EB7F202DDDC4D9FA4092112F745901199F19496FA8AB": {
