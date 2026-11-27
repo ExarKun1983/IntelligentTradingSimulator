@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 1,
   "Generation": 1,
-  "Version": 1549,
+  "Version": 1550,
   "Repository": "ExarKun1983/IntelligentTradingSimulator",
   "IsolatedTestManifestDigest": null,
   "LastEventId": "task-completed:1277929203:5:ce4c0b58-eeb3-4c57-af00-b3b88ef6e9e8",
@@ -1712,7 +1712,7 @@
       "SchemaVersion": 1,
       "Number": 204,
       "Generation": 5,
-      "Version": 605,
+      "Version": 606,
       "LastEventId": "task-completed:1277929203:5:ce4c0b58-eeb3-4c57-af00-b3b88ef6e9e8",
       "Phase": "CI_PENDING",
       "Ready": false,
@@ -2229,7 +2229,7 @@
           "Ref": "refs/tags/agent-managed-ci-multi-v1",
           "Correlation": "managed-ci-cdcdd619c820e78c982c6c793b58a0d2ad13d5448770c5beea8cdb98fe15d406",
           "PreparedAt": "2026-11-27T15:14:09.4531991+00:00",
-          "RunId": null,
+          "RunId": 46023086031,
           "WorkflowPath": ".github/workflows/agent-managed-ci.yml"
         }
       },
